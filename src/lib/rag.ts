@@ -45,6 +45,55 @@ function generateContentHash(content: string): string {
   return createHash('sha256').update(content.trim()).digest('hex');
 }
 
+const embeddingMemoryCache = new Map<string, number[]>();
+const EMBEDDING_RETRY_COUNT = 2;
+const EMBEDDING_RETRY_BASE_DELAY_MS = 600;
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchEmbeddingWithRetry(text: string): Promise<number[] | null> {
+  let lastResult: number[] | null = null;
+
+  for (let attempt = 0; attempt <= EMBEDDING_RETRY_COUNT; attempt++) {
+    lastResult = await fetchEmbedding(text);
+    if (lastResult) {
+      return lastResult;
+    }
+
+    if (attempt < EMBEDDING_RETRY_COUNT) {
+      await delay(EMBEDDING_RETRY_BASE_DELAY_MS * 2 ** attempt);
+    }
+  }
+
+  return lastResult;
+}
+
+async function getEmbeddingForChunk(
+  chunk: string,
+  persistedEmbeddingCache: Map<string, number[]>
+): Promise<number[] | null> {
+  const contentHash = generateContentHash(chunk);
+  const memoryCached = embeddingMemoryCache.get(contentHash);
+  if (memoryCached) {
+    return memoryCached;
+  }
+
+  const persistedCached = persistedEmbeddingCache.get(contentHash);
+  if (persistedCached) {
+    embeddingMemoryCache.set(contentHash, persistedCached);
+    return persistedCached;
+  }
+
+  const embedding = await fetchEmbeddingWithRetry(chunk);
+  if (embedding) {
+    embeddingMemoryCache.set(contentHash, embedding);
+  }
+
+  return embedding;
+}
+
 /**
  * 并发控制函数 - 限制同时执行的任务数量
  */
@@ -478,31 +527,47 @@ export async function processMarkdownFile(
     const legacyFilename = filePath.split('/').pop() || filePath;
 
     // 先删除该文件的旧记录
+    const existingDocs = [
+      ...(await getVectorDocumentsByFilename(vectorDocumentKey)),
+      ...(legacyFilename !== vectorDocumentKey ? await getVectorDocumentsByFilename(legacyFilename) : []),
+    ];
+    const persistedEmbeddingCache = new Map<string, number[]>();
+    for (const doc of existingDocs) {
+      try {
+        persistedEmbeddingCache.set(generateContentHash(doc.content), JSON.parse(doc.embedding) as number[]);
+      } catch (error) {
+        handleRAGError(error, `Failed to parse cached embedding: ${doc.filename}#${doc.chunk_id}`, false);
+      }
+    }
+
     await deleteVectorDocumentsByFilename(vectorDocumentKey);
     if (legacyFilename !== vectorDocumentKey) {
       await deleteVectorDocumentsByFilename(legacyFilename);
     }
 
-    // 处理每个文本块
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
+    const indexedAt = Date.now();
+    const results = await runWithConcurrencyLimit(
+      chunks.map((chunk, index) => async () => {
+        const embedding = await getEmbeddingForChunk(chunk, persistedEmbeddingCache);
+        if (!embedding) {
+          console.error(`Failed to compute embedding for ${vectorDocumentKey} chunk ${index + 1}`);
+          return false;
+        }
 
-      // 计算嵌入向量
-      const embedding = await fetchEmbedding(chunk);
+        await upsertVectorDocument({
+          filename: vectorDocumentKey,
+          chunk_id: index,
+          content: chunk,
+          embedding: JSON.stringify(embedding),
+          updated_at: indexedAt
+        });
+        return true;
+      }),
+      2
+    );
 
-      if (!embedding) {
-        console.error(`无法计算文件 ${vectorDocumentKey} 第 ${i+1} 块的向量`);
-        continue;
-      }
-
-      // 保存到数据库
-      await upsertVectorDocument({
-        filename: vectorDocumentKey,
-        chunk_id: i,
-        content: chunk,
-        embedding: JSON.stringify(embedding),
-        updated_at: Date.now()
-      });
+    if (!results.some(Boolean)) {
+      return false;
     }
 
     return true;

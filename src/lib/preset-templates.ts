@@ -8,6 +8,10 @@ export interface PresetTemplate {
   category: TemplateCategory
 }
 
+function today(): string {
+  return new Date().toISOString().split('T')[0]
+}
+
 export const PRESET_TEMPLATES: PresetTemplate[] = [
   {
     title: '代码笔记',
@@ -15,11 +19,11 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     content: `# 代码笔记
 
 **主题：**
-**日期：** ${new Date().toISOString().split('T')[0]}
+**日期：** ${today()}
 
 ## 概述
 
-> 简要描述本次代码笔记的主题和目的
+简要描述本次代码笔记的主题和目的
 
 ## 代码片段
 
@@ -46,7 +50,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     description: '记录会议议题、决策和待办事项',
     content: `# 会议纪要
 
-**日期：** ${new Date().toISOString().split('T')[0]}
+**日期：** ${today()}
 **地点：**
 **参会人：**
 **记录人：**
@@ -87,7 +91,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     description: '本周成果、遇到的问题和下周计划',
     content: `# 周报
 
-**周期：** ${new Date().toISOString().split('T')[0]} 周
+**周期：** ${today()} 周
 
 ## 本周完成
 
@@ -108,7 +112,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 
 ## 总结
 
->`,
+一句话总结本周工作`,
     range: GenTemplateRange.Week,
     category: TemplateCategory.Work,
   },
@@ -119,7 +123,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 
 **项目名称：**
 **负责人：**
-**创建日期：** ${new Date().toISOString().split('T')[0]}
+**创建日期：** ${today()}
 
 ## 项目背景
 
@@ -157,7 +161,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     description: '每月回顾目标完成情况和关键成果',
     content: `# 月度总结
 
-**月份：** ${new Date().toISOString().split('T')[0].slice(0, 7)}
+**月份：** ${today().slice(0, 7)}
 
 ## 月度目标回顾
 
@@ -182,7 +186,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 ## 下月计划
 
 - [ ]
-- [ ] `,
+- [ ]`,
     range: GenTemplateRange.Month,
     category: TemplateCategory.Work,
   },
@@ -193,21 +197,21 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 
 **书名：**
 **作者：**
-**阅读日期：** ${new Date().toISOString().split('T')[0]}
+**阅读日期：** ${today()}
 
 ## 内容摘要
 
->
+在此填写内容摘要
 
 ## 关键要点
 
-1.
-2.
-3.
+- 要点一
+- 要点二
+- 要点三
 
 ## 精彩引用
 
->
+在此填写精彩引用
 
 ## 个人思考
 
@@ -215,7 +219,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 
 ## 行动清单
 
-- [ ] `,
+- [ ]`,
     range: GenTemplateRange.All,
     category: TemplateCategory.Study,
   },
@@ -225,7 +229,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     content: `# 学习总结
 
 **主题：**
-**周期：** ${new Date().toISOString().split('T')[0]} 周
+**周期：** ${today()} 周
 
 ## 学习内容
 
@@ -252,7 +256,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 ## 下周学习计划
 
 - [ ]
-- [ ] `,
+- [ ]`,
     range: GenTemplateRange.Week,
     category: TemplateCategory.Study,
   },
@@ -262,7 +266,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     content: `# 产品分析
 
 **产品名称：**
-**分析日期：** ${new Date().toISOString().split('T')[0]}
+**分析日期：** ${today()}
 
 ## 产品概览
 
@@ -301,7 +305,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     description: '每日思考、情绪和亮点记录',
     content: `# 日记
 
-**日期：** ${new Date().toISOString().split('T')[0]}
+**日期：** ${today()}
 **天气：**
 **心情：**
 
@@ -311,7 +315,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 
 ## 所思所想
 
->
+在此记录今天的感悟和思考
 
 ## 今日收获
 
@@ -319,7 +323,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 
 ## 明日计划
 
-- [ ] `,
+- [ ]`,
     range: GenTemplateRange.Today,
     category: TemplateCategory.Life,
   },
@@ -329,7 +333,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     content: `# 旅行记录
 
 **目的地：**
-**日期：** ${new Date().toISOString().split('T')[0]}
+**日期：** ${today()}
 **同行人：**
 
 ## 行程概览
@@ -339,8 +343,6 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 |  |  |  |
 
 ## 景点记录
-
-###
 
 -
 
@@ -368,7 +370,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     content: `# 创意灵感
 
 **灵感主题：**
-**记录日期：** ${new Date().toISOString().split('T')[0]}
+**记录日期：** ${today()}
 
 ## 灵感来源
 
@@ -376,7 +378,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 
 ## 核心想法
 
->
+在此描述创意的核心概念
 
 ## 关联拓展
 
@@ -384,9 +386,9 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 
 ## 实施思路
 
-1.
-2.
-3.
+- 步骤一
+- 步骤二
+- 步骤三
 
 ## 参考资料
 
@@ -400,19 +402,19 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
     content: `# 头脑风暴
 
 **主题：**
-**日期：** ${new Date().toISOString().split('T')[0]}
+**日期：** ${today()}
 
 ## 主题定义
 
->
+明确头脑风暴的核心主题
 
 ## 想法收集
 
-1.
-2.
-3.
-4.
-5.
+- 想法一
+- 想法二
+- 想法三
+- 想法四
+- 想法五
 
 ## 分类整理
 
@@ -433,7 +435,7 @@ export const PRESET_TEMPLATES: PresetTemplate[] = [
 ## 行动计划
 
 - [ ]
-- [ ] `,
+- [ ]`,
     range: GenTemplateRange.All,
     category: TemplateCategory.Creative,
   },

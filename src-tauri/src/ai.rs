@@ -2,7 +2,7 @@ use futures_util::StreamExt;
 use reqwest::{header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE}, multipart::{Form, Part}, Client, Method, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, str::FromStr, time::Duration};
 use tauri::{ipc::Channel, State};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -99,8 +99,17 @@ fn abort_error() -> String {
     "Request was aborted.".to_string()
 }
 
+const AI_CONNECT_TIMEOUT_SECS: u64 = 15;
+const AI_REQUEST_TIMEOUT_SECS: u64 = 120;
+const AI_STREAM_TIMEOUT_SECS: u64 = 300;
+const AI_MAX_RETRIES: usize = 2;
+const AI_RETRY_BASE_DELAY_MS: u64 = 500;
+const MAX_ERROR_BODY_CHARS: usize = 2_000;
+
 fn build_client() -> Result<Client, String> {
     Client::builder()
+        .connect_timeout(Duration::from_secs(AI_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(AI_REQUEST_TIMEOUT_SECS))
         .build()
         .map_err(|error| format!("Failed to build HTTP client: {error}"))
 }
@@ -140,16 +149,67 @@ fn build_headers(config: &AiConfigPayload, include_json_content_type: bool) -> R
     Ok(headers)
 }
 
+fn truncate_error_body(body: &str) -> String {
+    body.chars().take(MAX_ERROR_BODY_CHARS).collect()
+}
+
+fn sanitize_error_message(message: &str) -> String {
+    let mut sanitized = message.to_string();
+    for marker in ["Bearer ", "api-key=", "api_key=", "key="] {
+        let mut search_from = 0;
+        while let Some(relative_start) = sanitized[search_from..].find(marker) {
+            let value_start = search_from + relative_start + marker.len();
+            let value_end = sanitized[value_start..]
+                .find(|character: char| character.is_whitespace() || character == '&' || character == '\'' || character == '"')
+                .map(|offset| value_start + offset)
+                .unwrap_or_else(|| sanitized.len());
+            if value_end > value_start {
+                sanitized.replace_range(value_start..value_end, "[REDACTED]");
+            }
+            search_from = value_start + "[REDACTED]".len();
+        }
+    }
+    sanitized
+}
+
+fn format_http_error(status: reqwest::StatusCode, body: String) -> String {
+    sanitize_error_message(&format!(
+        "AI_HTTP_ERROR status={} retryable={} body={}",
+        status.as_u16(),
+        is_retryable_status(status),
+        truncate_error_body(&body)
+    ))
+}
+
+fn format_transport_error(error: reqwest::Error) -> String {
+    let kind = if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_decode() {
+        "decode"
+    } else {
+        "transport"
+    };
+    sanitize_error_message(&format!("AI_TRANSPORT_ERROR kind={kind} retryable=true message={error}"))
+}
+
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+
 async fn read_response_json(response: reqwest::Response) -> Result<Value, String> {
     let status = response.status();
     if !status.is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("Request failed: {status} {error_text}"));
+        return Err(format_http_error(status, error_text));
     }
     response
         .json::<Value>()
         .await
-        .map_err(|error| format!("Failed to parse JSON response: {error}"))
+        .map_err(|error| sanitize_error_message(&format!("AI_JSON_PARSE_ERROR message={error}")))
 }
 
 async fn run_json_request(
@@ -167,12 +227,7 @@ async fn run_json_request(
         None
     };
 
-    let mut builder = client.request(method, url).headers(headers);
-    if let Some(body) = request.body {
-        builder = builder.json(&body);
-    }
-
-    let send_future = builder.send();
+    let send_future = send_json_with_retry(&client, method, url, headers, request.body);
 
     let response = if let Some(token) = cancellation {
         tokio::select! {
@@ -182,12 +237,10 @@ async fn run_json_request(
                 }
                 return Err(abort_error())
             },
-            response = send_future => response.map_err(|error| format!("Request failed: {error}"))?,
+            response = send_future => response?,
         }
     } else {
-        send_future
-            .await
-            .map_err(|error| format!("Request failed: {error}"))?
+        send_future.await?
     };
 
     let result = read_response_json(response).await;
@@ -195,6 +248,52 @@ async fn run_json_request(
         manager.finish(request_id).await;
     }
     result
+}
+
+
+
+async fn retry_delay(attempt: usize) {
+    let delay_ms = AI_RETRY_BASE_DELAY_MS * 2_u64.pow(attempt as u32);
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+}
+
+async fn send_json_with_retry(
+    client: &Client,
+    method: Method,
+    url: Url,
+    headers: HeaderMap,
+    body: Option<Value>,
+) -> Result<reqwest::Response, String> {
+    let mut last_error = String::new();
+
+    for attempt in 0..=AI_MAX_RETRIES {
+        let mut builder = client.request(method.clone(), url.clone()).headers(headers.clone());
+        if let Some(body) = &body {
+            builder = builder.json(body);
+        }
+
+        match builder.send().await {
+            Ok(response) => {
+                if is_retryable_status(response.status()) && attempt < AI_MAX_RETRIES {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    last_error = format_http_error(status, body);
+                    retry_delay(attempt).await;
+                    continue;
+                }
+                return Ok(response);
+            }
+            Err(error) => {
+                last_error = format_transport_error(error);
+                if attempt < AI_MAX_RETRIES {
+                    retry_delay(attempt).await;
+                    continue;
+                }
+            }
+        }
+    }
+
+    Err(last_error)
 }
 
 struct SseDecoder {
@@ -285,12 +384,12 @@ pub async fn ai_binary_request(
                 }
                 return Err(abort_error())
             },
-            response = send_future => response.map_err(|error| format!("Request failed: {error}"))?,
+            response = send_future => response.map_err(format_transport_error)?,
         }
     } else {
         send_future
             .await
-            .map_err(|error| format!("Request failed: {error}"))?
+            .map_err(format_transport_error)?
     };
 
     let status = response.status();
@@ -299,7 +398,7 @@ pub async fn ai_binary_request(
         if let Some(request_id) = &request.request_id {
             manager.finish(request_id).await;
         }
-        return Err(format!("Request failed: {status} {error_text}"));
+        return Err(format_http_error(status, error_text));
     }
 
     let bytes = response
@@ -351,12 +450,12 @@ pub async fn ai_multipart_request(
                 }
                 return Err(abort_error())
             },
-            response = send_future => response.map_err(|error| format!("Request failed: {error}"))?,
+            response = send_future => response.map_err(format_transport_error)?,
         }
     } else {
         send_future
             .await
-            .map_err(|error| format!("Request failed: {error}"))?
+            .map_err(format_transport_error)?
     };
 
     let result = read_response_json(response).await;
@@ -386,14 +485,15 @@ pub async fn ai_chat_completion_stream(
             .post(url)
             .headers(headers)
             .json(&request.body)
-            .send() => response.map_err(|error| format!("Request failed: {error}"))?,
+            .timeout(Duration::from_secs(AI_STREAM_TIMEOUT_SECS))
+            .send() => response.map_err(format_transport_error)?,
     };
 
     if !response.status().is_success() {
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
         manager.finish(&request.request_id).await;
-        return Err(format!("Request failed: {status} {error_text}"));
+        return Err(format_http_error(status, error_text));
     }
 
     let mut decoder = SseDecoder::new();
@@ -412,7 +512,7 @@ pub async fn ai_chat_completion_stream(
             break;
         };
 
-        let chunk = item.map_err(|error| format!("Stream read failed: {error}"))?;
+        let chunk = item.map_err(|error| sanitize_error_message(&format!("AI_STREAM_READ_ERROR message={error}")))?;
         for message in decoder.push(chunk.as_ref()) {
             if message == "[DONE]" {
                 let _ = on_event.send(AiStreamEvent::Done);

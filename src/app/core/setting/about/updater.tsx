@@ -65,7 +65,7 @@ export default function Updater() {
     }
 
     function openRelease() {
-      open('https://github.com/codexu/note-gen/releases');
+      open('https://github.com/Ye-hey1/note-gen/releases');
     }
 
     async function handleIgnoreVersion() {
