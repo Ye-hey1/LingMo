@@ -35,6 +35,7 @@ export const TemplateSelectDialog = forwardRef<TemplateSelectDialogRef, Template
     const [search, setSearch] = useState('')
     const [activeCategory, setActiveCategory] = useState<TemplateCategory | 'all'>('all')
     const t = useTranslations('settings.template')
+    const tRoot = useTranslations()
 
     useImperativeHandle(ref, () => ({
       open: () => {
@@ -105,7 +106,7 @@ export const TemplateSelectDialog = forwardRef<TemplateSelectDialogRef, Template
                   className="cursor-pointer text-xs"
                   onClick={() => setActiveCategory(cat)}
                 >
-                  {getCategoryLabel(cat, t)}
+                  {getCategoryLabel(cat, tRoot)}
                 </Badge>
               ))}
             </div>
@@ -144,7 +145,7 @@ export const TemplateSelectDialog = forwardRef<TemplateSelectDialogRef, Template
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-sm">{template.title}</span>
                           <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${getCategoryColor(template.category)}`}>
-                            {getCategoryLabel(template.category, t)}
+                            {getCategoryLabel(template.category, tRoot)}
                           </span>
                         </div>
                         <div className="text-xs text-muted-foreground mt-0.5">{template.description}</div>
