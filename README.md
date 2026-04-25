@@ -1,90 +1,104 @@
 # LingMo
 
-LingMo 是一款专注于记录、写作与 AI 辅助整理的跨平台 Markdown 笔记应用。项目基于 Next.js、React、Tauri 和 SQLite 构建，目标是把碎片化记录、知识库检索、AI 对话和本地写作流程整合到一个轻量桌面应用中。
+LingMo is a cross-platform Markdown note-taking app focused on capture, writing, and AI-assisted knowledge organization. It is built with Next.js, React, Tauri, Rust, and SQLite.
 
-## 功能特性
+## Acknowledgement
 
-- **Markdown 笔记**：使用本地 Markdown 文件作为主要内容载体，便于迁移和长期保存。
-- **AI 对话**：支持接入兼容 OpenAI API 的模型服务，用于问答、总结、改写和辅助写作。
-- **RAG 知识库**：支持向量检索、BM25 与模糊检索混合召回，帮助从本地笔记中查找相关上下文。
-- **碎片记录**：支持快速记录文本、图片、待办等零散信息，并进一步整理成正式笔记。
-- **MCP 与 Skills**：支持工具扩展和技能管理，便于按场景扩展 AI 能力。
-- **多端同步**：提供 GitHub、GitLab、Gitee、S3、WebDAV 等同步相关模块。
-- **桌面应用**：基于 Tauri v2，使用 Rust 处理本地能力和高性能任务。
+LingMo is based on the open-source [NoteGen](https://github.com/codexu/note-gen) project. Thanks to the NoteGen project and its contributors for the original foundation and open-source work.
 
-## 技术栈
+This repository is a customized and optimized version of NoteGen, with branding, repository links, RAG indexing, AI request stability, and project structure adjusted for LingMo.
 
-| 模块 | 技术 |
+## Features
+
+- Markdown-first local notes.
+- AI chat with OpenAI-compatible API providers.
+- RAG knowledge retrieval with vector search, BM25, and fuzzy search.
+- Quick capture for text, images, todos, and fragmented information.
+- MCP and Skills extension support.
+- Sync-related modules for GitHub, GitLab, Gitee, S3, and WebDAV.
+- Lightweight desktop app powered by Tauri v2 and Rust.
+
+## Optimizations In This Fork
+
+- Rebranded app and repository links to LingMo.
+- Optimized RAG indexing with embedding cache, retry, and controlled batch queue.
+- Improved AI request reliability with timeout, retry, structured errors, and secret redaction.
+- Updated About, Releases, Issues, and Discussions links to this repository.
+- Removed the standalone `skills-manager-main` subproject because it is not needed by the current app.
+
+## Tech Stack
+
+| Area | Stack |
 | --- | --- |
-| 前端 | Next.js 15、React 19、TypeScript、Tailwind CSS |
-| 桌面端 | Tauri v2、Rust |
-| 数据 | SQLite、本地文件系统 |
-| 编辑器 | Tiptap、Markdown |
-| AI 能力 | OpenAI 兼容 API、Embedding、Rerank、RAG |
-| 扩展能力 | MCP、Skills |
+| Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS |
+| Desktop | Tauri v2, Rust |
+| Data | SQLite, local filesystem |
+| Editor | Tiptap, Markdown |
+| AI | OpenAI-compatible API, Embedding, Rerank, RAG |
+| Extensions | MCP, Skills |
 
-## 本地开发
+## Development
 
-### 环境要求
+### Requirements
 
 - Node.js
 - pnpm
 - Rust / Cargo
-- Tauri 依赖环境
+- Tauri system dependencies
 
-### 安装依赖
+### Install
 
 ```bash
 pnpm install
 ```
 
-### 启动 Web 开发服务
+### Web dev server
 
 ```bash
 pnpm dev
 ```
 
-### 启动 Tauri 开发模式
+### Tauri dev mode
 
 ```bash
 pnpm tauri dev
 ```
 
-### 质量检查
+### Quality check
 
 ```bash
 pnpm check
 ```
 
-### 构建
+### Build
 
 ```bash
 pnpm build
 pnpm tauri build
 ```
 
-## 项目结构
+## Project Structure
 
 ```text
 src/
-  app/                 # Next.js 页面与主要 UI
-  components/          # 通用组件
-  db/                  # SQLite 数据访问层
-  lib/                 # AI、RAG、同步、MCP、工具函数
-  stores/              # Zustand 状态管理
+  app/                 # Next.js pages and main UI
+  components/          # Shared UI components
+  db/                  # SQLite data access layer
+  lib/                 # AI, RAG, sync, MCP, and utilities
+  stores/              # Zustand stores
 src-tauri/
-  src/                 # Tauri/Rust 后端命令与本地能力
-  tauri.conf.json      # Tauri 应用配置
-messages/              # 多语言文案
-public/                # 静态资源
+  src/                 # Tauri/Rust backend commands
+  tauri.conf.json      # Tauri app config
+messages/              # i18n messages
+public/                # Static assets
 ```
 
-## 仓库地址
+## Repository
 
 - GitHub: <https://github.com/Ye-hey1/LingMo>
 - Issues: <https://github.com/Ye-hey1/LingMo/issues>
 - Releases: <https://github.com/Ye-hey1/LingMo/releases>
 
-## 说明
+## License
 
-LingMo 是在开源笔记应用基础上二次开发和定制的项目，当前重点包括品牌替换、RAG 性能优化、AI 请求层稳定性增强以及自有仓库发布流程整理。
+Please review the original NoteGen license and keep upstream attribution when redistributing this customized version.
