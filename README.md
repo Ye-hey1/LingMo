@@ -24,7 +24,6 @@ This repository is a customized and optimized version of NoteGen, with branding,
 - Optimized RAG indexing with embedding cache, retry, and controlled batch queue.
 - Improved AI request reliability with timeout, retry, structured errors, and secret redaction.
 - Updated About, Releases, Issues, and Discussions links to this repository.
-- Removed the standalone `skills-manager-main` subproject because it is not needed by the current app.
 
 ## Tech Stack
 
