@@ -1,124 +1,90 @@
-# NoteGen
+# LingMo
 
-![](https://img.shields.io/badge/free-pricing?logo=free&color=%20%23155EEF&label=pricing&labelColor=%20%23528bff)
-[![GitHub Repo stars](https://img.shields.io/github/stars/codexu/note-gen)](https://github.com/codexu/note-gen)
-[![](https://gitcode.com/codexu/note-gen/star/badge.svg)](https://gitcode.com/codexu/note-gen)
-![](https://github.com/codexu/note-gen/actions/workflows/release.yml/badge.svg?branch=release)
-[![Netlify Status](https://api.netlify.com/api/v1/badges/8f7518c3-b627-4277-bc2f-e477960f5dc4/deploy-status)](https://app.netlify.com/projects/note-gen-docs/deploys)
-![](https://img.shields.io/github/downloads/codexu/note-gen/total)
-![](https://img.shields.io/github/issues-closed/codexu/note-gen)
+LingMo 是一款专注于记录、写作与 AI 辅助整理的跨平台 Markdown 笔记应用。项目基于 Next.js、React、Tauri 和 SQLite 构建，目标是把碎片化记录、知识库检索、AI 对话和本地写作流程整合到一个轻量桌面应用中。
 
-<div>
-  <a href="https://trendshift.io/repositories/12784" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12784" alt="codexu%2Fnote-gen | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-  <a href="https://hellogithub.com/repository/0163cb946dca44cc8905dbe34c2c987b" target="_blank"><img src="https://abroad.hellogithub.com/v1/widgets/recommend.svg?rid=0163cb946dca44cc8905dbe34c2c987b&claim_uid=YJ39kIMBz1TGAvc" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" /></a>
-  <a href="https://www.producthunt.com/products/notegen-2?embed=true&utm_source=badge-featured&utm_medium=badge&utm_source=badge-notegen&#0045;2" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=956348&theme=light&t=1749194675492" alt="NoteGen - A&#0032;cross&#0045;platform&#0032;Markdown&#0032;note&#0045;taking&#0032;application | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
-</div>
+## 功能特性
 
-## Sponsor
+- **Markdown 笔记**：使用本地 Markdown 文件作为主要内容载体，便于迁移和长期保存。
+- **AI 对话**：支持接入兼容 OpenAI API 的模型服务，用于问答、总结、改写和辅助写作。
+- **RAG 知识库**：支持向量检索、BM25 与模糊检索混合召回，帮助从本地笔记中查找相关上下文。
+- **碎片记录**：支持快速记录文本、图片、待办等零散信息，并进一步整理成正式笔记。
+- **MCP 与 Skills**：支持工具扩展和技能管理，便于按场景扩展 AI 能力。
+- **多端同步**：提供 GitHub、GitLab、Gitee、S3、WebDAV 等同步相关模块。
+- **桌面应用**：基于 Tauri v2，使用 Rust 处理本地能力和高性能任务。
 
-<table>
-  <tr>
-    <td width="60%" valign="top">
-      感谢 <a href="https://www.compshare.cn/coding-plan?ytag=GPU_YY_JL_git_note-gen" target="_blank">优云智算</a> 赞助了本项目！优云智算是 UCloud 旗下 AI 云平台，提供稳定、全面的国内外模型 API，仅一个 key 即可调用。主打包月、按量的高性价比 Coding Plan 套餐，基于官方 2~5 折优惠。支持接入 Claude Code、Codex 及 API 调用。支持企业高并发、7*24 技术支持、自助开票。通过此链接注册的用户，可得免费 5 元平台体验金！
-    </td>
-    <td width="40%" align="center">
-      <a href="https://www.compshare.cn/coding-plan?ytag=GPU_YY_JL_git_note-gen" target="_blank">
-        <img src="https://files.seeusercontent.com/2026/03/30/hh6D/e9ee714402f19640e6bba5ef32c2ae8f.jpg" alt="YouYun Sponsor" width="320" />
-      </a>
-    </td>
-  </tr>
-</table>
+## 技术栈
 
-## Guide
+| 模块 | 技术 |
+| --- | --- |
+| 前端 | Next.js 15、React 19、TypeScript、Tailwind CSS |
+| 桌面端 | Tauri v2、Rust |
+| 数据 | SQLite、本地文件系统 |
+| 编辑器 | Tiptap、Markdown |
+| AI 能力 | OpenAI 兼容 API、Embedding、Rerank、RAG |
+| 扩展能力 | MCP、Skills |
 
-🖥️ Official Document: [English](https://notegen.top/en/) | [简体中文](https://notegen.top/cn/)
+## 本地开发
 
-💬 Join [WeChat/QQ Group](https://github.com/codexu/note-gen/discussions/110), [Discord](https://discord.gg/SXyVZGpbpk), [Telegram](https://t.me/notegen)
+### 环境要求
 
-NoteGen is a cross-platform `Markdown` note-taking application dedicated to using AI to bridge recording and writing, organizing fragmented knowledge into a readable note.
+- Node.js
+- pnpm
+- Rust / Cargo
+- Tauri 依赖环境
 
-![](https://s2.loli.net/2025/12/22/jlpEP2c6ogwHhIA.png)
+### 安装依赖
 
-## Features
+```bash
+pnpm install
+```
 
-- 🚀 Lightweight (25MB), free, no ads.
-- 🌐 Cross-platform support.
-- 🆓 Free AI and sync solutions.
-- 📦 Out-of-the-box RAG support.
-- 🔌 MCP support for AI tool integration.
-- 🤖 Intelligent agents for automated note processing.
-- ✍️ Quick note-taking for fragmented information.
-- 📝 Native Markdown storage format.
+### 启动 Web 开发服务
 
-## Download
+```bash
+pnpm dev
+```
 
-| ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white&style=for-the-badge) | ![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white&style=for-the-badge) | ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black&style=for-the-badge) | ![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white&style=for-the-badge) | ![iOS](https://img.shields.io/badge/iOS-000000?logo=apple&logoColor=white&style=for-the-badge) |
-| --- | --- | --- | --- | --- |
-| ✅ beta | ✅ beta | ✅ beta | 🛠️ alpha | 🛠️ alpha |
-| [Download](https://notegen.top/en/docs/download#desktop-beta) | [Download](https://notegen.top/en/docs/download#desktop-beta) | [Download](https://notegen.top/en/docs/download#desktop-beta) | [Download](https://notegen.top/en/docs/download#android) | [TestFlight](https://testflight.apple.com/join/8KjFRTCq) |
+### 启动 Tauri 开发模式
 
-> [UpgradeLink offers application upgrade and download services](http://upgrade.toolsetlink.com/upgrade/example/tauri-example.html)
+```bash
+pnpm tauri dev
+```
 
-## From Recording to Writing
+### 质量检查
 
-Traditional note-taking apps typically don't offer note-taking functionality, but NoteGen makes it easier for you to record scattered knowledge points and avoid disrupting your train of thought while taking notes.
+```bash
+pnpm check
+```
 
-NoteGen is divided into three parts: Recording, Notes, and AI Dialogue. They have the following features: 
+### 构建
 
-- You don't need to consider the order and logic of recording, AI will help you organize the notes into well-organized and coherent ones.
-- AI Dialogue is a feature that allows you to interact with AI in real-time, helping you to better understand and remember the content you are recording.
-- The note-taking feature can help you optimize the details of your notes independently.
+```bash
+pnpm build
+pnpm tauri build
+```
 
-## Contribute
+## 项目结构
 
-- [Read contribution guide](https://notegen.top/en/docs/contributing)
-- [Update plans](https://github.com/codexu/note-gen/issues/46)
-- [Submit bugs or improvement suggestions](https://github.com/codexu/note-gen/issues)
-- [Discussions](https://github.com/codexu/note-gen/discussions)
+```text
+src/
+  app/                 # Next.js 页面与主要 UI
+  components/          # 通用组件
+  db/                  # SQLite 数据访问层
+  lib/                 # AI、RAG、同步、MCP、工具函数
+  stores/              # Zustand 状态管理
+src-tauri/
+  src/                 # Tauri/Rust 后端命令与本地能力
+  tauri.conf.json      # Tauri 应用配置
+messages/              # 多语言文案
+public/                # 静态资源
+```
 
-## Contributors
+## 仓库地址
 
-<a href="https://github.com/codexu/note-gen/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=codexu/note-gen" />
-</a>
+- GitHub: <https://github.com/Ye-hey1/LingMo>
+- Issues: <https://github.com/Ye-hey1/LingMo/issues>
+- Releases: <https://github.com/Ye-hey1/LingMo/releases>
 
-## Thanks
+## 说明
 
-Special thanks to our technology partners who make NoteGen better:
-
-**[SiliconFlow](https://cloud.siliconflow.cn/i/O2ciJeZw)** - Providing free AI model services, powering NoteGen's intelligent features with high-quality AI capabilities.
-
-<a href="https://cloud.siliconflow.cn/i/O2ciJeZw" target="_blank">
-  <img width="240" src="https://s2.loli.net/2025/09/10/KWPOA5XhIGmYTV9.png" />
-</a>
-
-**[UpgradeLink](http://upgrade.toolsetlink.com/upgrade/example/tauri-example.html)** - Providing reliable installation and upgrade services, ensuring seamless software updates for users.
-
-<a href="http://upgrade.toolsetlink.com/upgrade/example/tauri-example.html" target="_blank">
-  <img width="240" src="https://s2.loli.net/2025/09/10/Ks4EayU9HguXDMF.png" />
-</a>
-
----
-
-We also thank other partners for their service support
-
-<div>
-  <a href="https://www.qiniu.com/products/ai-token-api?utm_source=NoteGen" target="_blank">
-    <img src="https://s2.loli.net/2025/06/11/OKJq542lTs7U9xg.png" />
-  </a>
-  <a href="https://share.302.ai/jfFrIP" target="_blank">
-    <img src="https://s2.loli.net/2025/07/01/dPlkU1tejnDyV4S.png" />
-  </a>
-  <a href="https://www.shengsuanyun.com/?from=CH_KAFLGC9O" target="_blank">
-    <img src="https://s2.loli.net/2025/09/15/CcVRbTUBtf7ZvNl.png" />
-  </a>
-  <a href="https://ai.gitee.com/" target="_blank">
-    <img src="https://s2.loli.net/2025/09/15/wmnBWfyACMz9pVc.png" />
-  </a>
-  <a href="https://www.netlify.com" target="_blank">
-    <img src="https://s2.loli.net/2025/09/16/yJ64xIlrhdABt9o.png" />
-  </a>
-  <a href="https://skywork.ai/p/bY47ky" target="_blank">
-    <img src="https://s2.loli.net/2025/09/16/mTzMCQ8tZLfJNk5.png" />
-  </a>
-</div>
+LingMo 是在开源笔记应用基础上二次开发和定制的项目，当前重点包括品牌替换、RAG 性能优化、AI 请求层稳定性增强以及自有仓库发布流程整理。
