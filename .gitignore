@@ -1,0 +1,80 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules
+
+./dist
+dist-ssr
+src-tauri/gen/*
+!src-tauri/gen/android/
+src-tauri/gen/android/**
+!src-tauri/gen/android/app/
+!src-tauri/gen/android/app/src/
+!src-tauri/gen/android/app/src/main/
+!src-tauri/gen/android/app/src/main/AndroidManifest.xml
+!src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
+*.local
+target/*
+.claude/*
+.superpowers/*
+.agents/*
+/docs/*/*
+skills-lock.json
+
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+*.test.*
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# Android signing keys
+*.keystore
+*.jks
+android-app.keystore
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+docs/.vitepress/dist
+docs/.vitepress/cache
+
+.idea
+
+# Exclude all markdown files in root directory except README.md
+/*.md
+!README.md
+
+# backup files
+*.backup
+.backup
+
+# worktrees
+.worktrees

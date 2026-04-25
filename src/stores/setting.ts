@@ -1,0 +1,1189 @@
+import { Store } from '@tauri-apps/plugin-store'
+import { create } from 'zustand'
+import { getVersion } from '@tauri-apps/api/app'
+import { AiConfig } from '@/app/core/setting/config'
+import { GitlabInstanceType } from '@/lib/sync/gitlab.types'
+import { GiteaInstanceType } from '@/lib/sync/gitea.types'
+import { noteGenDefaultModels, noteGenModelKeys } from '@/app/model-config'
+import { CustomThemeColors } from '@/types/theme'
+import { applyThemeColors, removeThemeColors } from '@/lib/theme-utils'
+import { getNormalizedImageHosting } from '@/lib/image-hosting-config'
+import { normalizeSpeechMode } from '@/lib/speech/preferences'
+import type { SpeechMode } from '@/lib/speech/types'
+
+export enum GenTemplateRange {
+  All = 'all',
+  Today = 'today',
+  Week = 'week',
+  Month = 'month',
+  ThreeMonth = 'threeMonth',
+  Year = 'year',
+}
+
+export enum TemplateCategory {
+  Note = 'note',
+  Work = 'work',
+  Study = 'study',
+  Life = 'life',
+  Creative = 'creative',
+}
+
+export interface GenTemplate {
+  id: string
+  title: string
+  status: boolean
+  content: string
+  range: GenTemplateRange
+  category?: TemplateCategory
+}
+
+interface SettingState {
+  initSettingData: () => Promise<void>
+
+  version: string
+  setVersion: () => Promise<void>
+
+  autoUpdate: boolean
+  setAutoUpdate: (autoUpdate: boolean) => void
+
+  language: string
+  setLanguage: (language: string) => void
+
+  // setting - ai - 当前选择的模型 key
+  currentAi: string
+  setCurrentAi: (currentAi: string) => void
+
+  aiModelList: AiConfig[]
+  setAiModelList: (aiModelList: AiConfig[]) => void
+
+  primaryModel: string
+  setPrimaryModel: (primaryModel: string) => void
+
+  placeholderModel: string
+  setPlaceholderModel: (placeholderModel: string) => Promise<void>
+
+  completionModel: string
+  setCompletionModel: (completionModel: string) => Promise<void>
+
+  markDescModel: string
+  setMarkDescModel: (markDescModel: string) => Promise<void>
+
+  commitModel: string
+  setCommitModel: (commitModel: string) => Promise<void>
+
+  embeddingModel: string
+  setEmbeddingModel: (embeddingModel: string) => Promise<void>
+
+  rerankingModel: string
+  setRerankingModel: (rerankingModel: string) => Promise<void>
+
+  imageMethodModel: string
+  setImageMethodModel: (imageMethodModel: string) => Promise<void>
+
+  audioModel: string
+  setAudioModel: (audioModel: string) => Promise<void>
+
+  sttModel: string
+  setSttModel: (sttModel: string) => Promise<void>
+
+  textToSpeechMode: SpeechMode
+  setTextToSpeechMode: (mode: SpeechMode) => Promise<void>
+
+  speechToTextMode: SpeechMode
+  setSpeechToTextMode: (mode: SpeechMode) => Promise<void>
+
+  condenseModel: string
+  setCondenseModel: (condenseModel: string) => Promise<void>
+
+  inspirationModel: string
+  setInspirationModel: (inspirationModel: string) => Promise<void>
+
+  templateList: GenTemplate[]
+  setTemplateList: (templateList: GenTemplate[]) => Promise<void>
+
+  darkMode: string
+  setDarkMode: (darkMode: string) => void
+
+  previewTheme: string
+  setPreviewTheme: (previewTheme: string) => void
+
+  codeTheme: string
+  setCodeTheme: (codeTheme: string) => void
+
+  tesseractList: string
+  setTesseractList: (tesseractList: string) => void
+
+  // Github 相关设置
+  githubUsername: string
+  setGithubUsername: (githubUsername: string) => Promise<void>
+
+  accessToken: string
+  setAccessToken: (accessToken: string) => void
+
+  jsdelivr: boolean
+  setJsdelivr: (jsdelivr: boolean) => void
+
+  useImageRepo: boolean
+  setUseImageRepo: (useImageRepo: boolean) => Promise<void>
+
+  autoSync: string
+  setAutoSync: (autoSync: string) => Promise<void>
+
+  // 自动拉取相关设置
+  autoPullOnOpen: boolean
+  setAutoPullOnOpen: (autoPullOnOpen: boolean) => Promise<void>
+
+  autoPullOnSwitch: boolean
+  setAutoPullOnSwitch: (autoPullOnSwitch: boolean) => Promise<void>
+
+  // Gitee 相关设置
+  giteeAccessToken: string
+  setGiteeAccessToken: (giteeAccessToken: string) => void
+
+  giteeAutoSync: string
+  setGiteeAutoSync: (giteeAutoSync: string) => Promise<void>
+
+  // Gitlab 相关设置
+  gitlabInstanceType: GitlabInstanceType
+  setGitlabInstanceType: (instanceType: GitlabInstanceType) => Promise<void>
+
+  gitlabCustomUrl: string
+  setGitlabCustomUrl: (customUrl: string) => Promise<void>
+
+  gitlabAccessToken: string
+  setGitlabAccessToken: (gitlabAccessToken: string) => void
+
+  gitlabAutoSync: string
+  setGitlabAutoSync: (gitlabAutoSync: string) => Promise<void>
+
+  gitlabUsername: string
+  setGitlabUsername: (gitlabUsername: string) => Promise<void>
+
+  // Gitea 相关设置
+  giteaInstanceType: GiteaInstanceType
+  setGiteaInstanceType: (instanceType: GiteaInstanceType) => Promise<void>
+
+  giteaCustomUrl: string
+  setGiteaCustomUrl: (customUrl: string) => Promise<void>
+
+  giteaAccessToken: string
+  setGiteaAccessToken: (giteaAccessToken: string) => void
+
+  giteaAutoSync: string
+  setGiteaAutoSync: (giteaAutoSync: string) => Promise<void>
+
+  giteaUsername: string
+  setGiteaUsername: (giteaUsername: string) => Promise<void>
+
+  // 主要备份方式设置
+  primaryBackupMethod: 'github' | 'gitee' | 'gitlab' | 'gitea' | 's3' | 'webdav'
+  setPrimaryBackupMethod: (method: 'github' | 'gitee' | 'gitlab' | 'gitea' | 's3' | 'webdav') => Promise<void>
+
+  lastSettingPage: string
+  setLastSettingPage: (page: string) => Promise<void>
+
+  workspacePath: string
+  setWorkspacePath: (path: string) => Promise<void>
+
+  // 工作区历史路径
+  workspaceHistory: string[]
+  addWorkspaceHistory: (path: string) => Promise<void>
+  removeWorkspaceHistory: (path: string) => Promise<void>
+  clearWorkspaceHistory: () => Promise<void>
+
+  assetsPath: string
+  setAssetsPath: (path: string) => Promise<void>
+
+  // 图床设置
+  githubImageAccessToken: string
+  setGithubImageAccessToken: (githubImageAccessToken: string) => Promise<void>
+
+  // 自定义仓库名称设置
+  githubCustomSyncRepo: string
+  setGithubCustomSyncRepo: (repo: string) => Promise<void>
+
+  giteeCustomSyncRepo: string
+  setGiteeCustomSyncRepo: (repo: string) => Promise<void>
+
+  gitlabCustomSyncRepo: string
+  setGitlabCustomSyncRepo: (repo: string) => Promise<void>
+
+  giteaCustomSyncRepo: string
+  setGiteaCustomSyncRepo: (repo: string) => Promise<void>
+
+  githubCustomImageRepo: string
+  setGithubCustomImageRepo: (repo: string) => Promise<void>
+
+  // 图片识别设置
+  enableImageRecognition: boolean
+  setEnableImageRecognition: (enable: boolean) => Promise<void>
+  primaryImageMethod: 'ocr' | 'vlm'
+  setPrimaryImageMethod: (method: 'ocr' | 'vlm') => Promise<void>
+
+  // 界面缩放设置
+  uiScale: number
+  setUiScale: (scale: number) => Promise<void>
+
+  // 正文文字大小缩放设置
+  contentTextScale: number
+  setContentTextScale: (scale: number) => Promise<void>
+
+  // 文件管理器文字大小设置
+  fileManagerTextSize: string
+  setFileManagerTextSize: (size: string) => Promise<void>
+
+  // 记录文字大小设置
+  recordTextSize: string
+  setRecordTextSize: (size: string) => Promise<void>
+
+  // 自定义主题颜色设置
+  customThemeColors: CustomThemeColors
+  setCustomThemeColors: (colors: CustomThemeColors) => Promise<void>
+  resetCustomThemeColors: () => Promise<void>
+
+  // 聊天工具栏配置 - PC 端
+  chatToolbarConfigPc: ChatToolbarItem[]
+  setChatToolbarConfigPc: (config: ChatToolbarItem[]) => Promise<void>
+
+  // 聊天工具栏配置 - 移动端
+  chatToolbarConfigMobile: ChatToolbarItem[]
+  setChatToolbarConfigMobile: (config: ChatToolbarItem[]) => Promise<void>
+
+  // 记录工具栏配置
+  recordToolbarConfig: RecordToolbarItem[]
+  setRecordToolbarConfig: (config: RecordToolbarItem[]) => Promise<void>
+
+  // 编辑器撤销/重做按钮显示设置
+  showEditorUndoRedo: boolean
+  setShowEditorUndoRedo: (show: boolean) => Promise<void>
+
+  // 摘要设置
+  enableCondense: boolean
+  setEnableCondense: (enabled: boolean) => Promise<void>
+  keepLatestCount: number
+  setKeepLatestCount: (count: number) => Promise<void>
+  condenseMaxLength: number
+  setCondenseMaxLength: (length: number) => Promise<void>
+}
+
+export interface ChatToolbarItem {
+  id: string
+  enabled: boolean
+  order: number
+}
+
+export interface RecordToolbarItem {
+  id: string
+  enabled: boolean
+  order: number
+}
+
+
+const useSettingStore = create<SettingState>((set, get) => ({
+  initSettingData: async () => {
+    const store = await Store.load('store.json');
+    await get().setVersion()
+
+    // 初始化图床配置
+    const savedUseImageRepo = await store.get<boolean>('useImageRepo')
+    if (savedUseImageRepo !== undefined && savedUseImageRepo !== null) {
+      set({ useImageRepo: savedUseImageRepo })
+    }
+
+    // 初始化默认的灵墨模型配置
+    const existingAiModelList = (await store.get('aiModelList') as AiConfig[]) || []
+    const hasNoteGenModels = existingAiModelList.some(config => 
+      config.key === 'note-gen-free' || 
+      noteGenModelKeys.includes(config.key) ||
+      config.models?.some(model => noteGenModelKeys.includes(model.id))
+    )
+    
+    let finalAiModelList = existingAiModelList
+    if (!hasNoteGenModels) {
+      finalAiModelList = [...existingAiModelList, ...noteGenDefaultModels]
+      await store.set('aiModelList', finalAiModelList)
+      set({ aiModelList: finalAiModelList })
+    }
+
+    // 检查是否设置了主要模型，如果没有且存在note-gen-chat，则设置为主要模型
+    const currentPrimaryModel = await store.get('primaryModel') as string
+    const hasNoteGenChat = finalAiModelList.some(config => 
+      config.models?.some(model => model.id === 'note-gen-chat') || config.key === 'note-gen-chat'
+    )
+    
+    if (!currentPrimaryModel && hasNoteGenChat) {
+      const noteGenFreeConfig = finalAiModelList.find(config => config.key === 'note-gen-free')
+      if (noteGenFreeConfig?.models?.some(model => model.id === 'note-gen-chat')) {
+        await store.set('primaryModel', 'note-gen-chat')
+        set({ primaryModel: 'note-gen-chat' })
+      } else {
+        await store.set('primaryModel', 'note-gen-chat')
+        set({ primaryModel: 'note-gen-chat' })
+      }
+    }
+
+    // 检查是否设置了嵌入模型，如果没有且存在note-gen-embedding，则设置为默认嵌入模型
+    const currentEmbeddingModel = await store.get('embeddingModel') as string
+    const hasNoteGenEmbedding = finalAiModelList.some(config => 
+      config.models?.some(model => model.id === 'note-gen-embedding') || config.key === 'note-gen-embedding'
+    )
+    
+    if (!currentEmbeddingModel && hasNoteGenEmbedding) {
+      const noteGenFreeConfig = finalAiModelList.find(config => config.key === 'note-gen-free')
+      if (noteGenFreeConfig?.models?.some(model => model.id === 'note-gen-embedding')) {
+        await store.set('embeddingModel', 'note-gen-embedding')
+        set({ embeddingModel: 'note-gen-embedding' })
+      } else {
+        await store.set('embeddingModel', 'note-gen-embedding')
+        set({ embeddingModel: 'note-gen-embedding' })
+      }
+    }
+
+    // 检查是否设置了视觉语言模型，如果没有且存在note-gen-vlm，则设置为默认视觉语言模型
+    const currentImageMethodModel = await store.get('imageMethodModel') as string
+    const hasNoteGenVlm = finalAiModelList.some(config => 
+      config.models?.some(model => model.id === 'note-gen-vlm') || config.key === 'note-gen-vlm'
+    )
+    
+    if (!currentImageMethodModel && hasNoteGenVlm) {
+      const noteGenFreeConfig = finalAiModelList.find(config => config.key === 'note-gen-free')
+      if (noteGenFreeConfig?.models?.some(model => model.id === 'note-gen-vlm')) {
+        await store.set('imageMethodModel', 'note-gen-vlm')
+        set({ imageMethodModel: 'note-gen-vlm' })
+      } else {
+        await store.set('imageMethodModel', 'note-gen-vlm')
+        set({ imageMethodModel: 'note-gen-vlm' })
+      }
+    }
+
+    // 检查是否设置了TTS模型，如果没有且存在note-gen-tts，则设置为默认TTS模型
+    const currentAudioModel = await store.get('audioModel') as string
+    const hasNoteGenTTS = finalAiModelList.some(config => 
+      config.models?.some(model => model.modelType === 'tts') || config.modelType === 'tts'
+    )
+    
+    if (!currentAudioModel && hasNoteGenTTS) {
+      // 查找第一个可用的TTS模型
+      for (const config of finalAiModelList) {
+        if (config.models && config.models.length > 0) {
+          const ttsModel = config.models.find(model => model.modelType === 'tts')
+          if (ttsModel) {
+            await store.set('audioModel', `${config.key}-${ttsModel.id}`)
+            set({ audioModel: `${config.key}-${ttsModel.id}` })
+            break
+          }
+        } else if (config.modelType === 'tts') {
+          await store.set('audioModel', config.key)
+          set({ audioModel: config.key })
+          break
+        }
+      }
+    }
+
+    // 检查是否设置了STT模型，如果没有且存在note-gen-stt，则设置为默认STT模型
+    const currentSttModel = await store.get('sttModel') as string
+    const hasNoteGenSTT = finalAiModelList.some(config => 
+      config.models?.some(model => model.modelType === 'stt') || config.modelType === 'stt'
+    )
+    
+    if (!currentSttModel && hasNoteGenSTT) {
+      // 查找第一个可用的STT模型
+      for (const config of finalAiModelList) {
+        if (config.models && config.models.length > 0) {
+          const sttModel = config.models.find(model => model.modelType === 'stt')
+          if (sttModel) {
+            await store.set('sttModel', `${config.key}-${sttModel.id}`)
+            set({ sttModel: `${config.key}-${sttModel.id}` })
+            break
+          }
+        } else if (config.modelType === 'stt') {
+          await store.set('sttModel', config.key)
+          set({ sttModel: config.key })
+          break
+        }
+      }
+    }
+
+    const currentTextToSpeechMode = await store.get('textToSpeechMode')
+    set({ textToSpeechMode: normalizeSpeechMode(currentTextToSpeechMode) })
+
+    const currentSpeechToTextMode = await store.get('speechToTextMode')
+    set({ speechToTextMode: normalizeSpeechMode(currentSpeechToTextMode) })
+
+    // 检查并初始化其他模型类型
+    const modelTypes = [
+      { storeKey: 'completionModel', modelType: 'chat' },
+      { storeKey: 'markDescModel', modelType: 'chat' },
+      { storeKey: 'commitModel', modelType: 'chat' },
+      { storeKey: 'condenseModel', modelType: 'chat' },
+      { storeKey: 'inspirationModel', modelType: 'chat' }
+    ]
+
+    for (const { storeKey, modelType } of modelTypes) {
+      const currentModel = await store.get(storeKey) as string
+      if (!currentModel) {
+        // 查找第一个可用的聊天模型作为默认值
+        const noteGenFreeConfig = finalAiModelList.find(config => config.key === 'note-gen-free')
+        if (noteGenFreeConfig?.models?.some(model => model.id === 'note-gen-chat' && model.modelType === modelType)) {
+          await store.set(storeKey, 'note-gen-chat')
+          set({ [storeKey]: 'note-gen-chat' })
+        } else {
+          // 查找其他可用的聊天模型
+          for (const config of finalAiModelList) {
+            if (config.models && config.models.length > 0) {
+              const chatModel = config.models.find(model => model.modelType === modelType)
+              if (chatModel) {
+                await store.set(storeKey, `${config.key}-${chatModel.id}`)
+                set({ [storeKey]: `${config.key}-${chatModel.id}` })
+                break
+              }
+            } else if (config.modelType === modelType || !config.modelType) {
+              await store.set(storeKey, config.key)
+              set({ [storeKey]: config.key })
+              break
+            }
+          }
+        }
+      }
+    }
+
+    Object.entries(get()).forEach(async ([key, value]) => {
+      const res = await store.get(key)
+
+      if (typeof value === 'function') return
+      if (res !== undefined && key !== 'version') {
+        if (key === 'templateList') {
+          set({ [key]: [] })
+          setTimeout(() => {
+            set({ [key]: res as GenTemplate[] })
+          }, 0);
+        } else if (key === 'aiModelList' && hasNoteGenModels) {
+          // 如果已经有灵墨模型，使用存储的配置
+          set({ [key]: res as AiConfig[] })
+        } else if (key === 'recordToolbarConfig') {
+          // 确保包含所有工具，如果缺少新工具则自动添加
+          const storedConfig = res as RecordToolbarItem[]
+          const defaultConfig = value as RecordToolbarItem[]
+
+          // 检查是否有缺失的工具
+          const missingTools = defaultConfig.filter(
+            defaultItem => !storedConfig.some(stored => stored.id === defaultItem.id)
+          )
+
+          if (missingTools.length > 0) {
+            // 合并配置：保留用户的顺序和启用状态，添加新工具
+            const mergedConfig = [...storedConfig]
+            let maxOrder = Math.max(...storedConfig.map(item => item.order), 0)
+
+            missingTools.forEach(tool => {
+              mergedConfig.push({ ...tool, order: ++maxOrder })
+            })
+
+            await store.set(key, mergedConfig)
+            set({ [key]: mergedConfig })
+          } else {
+            set({ [key]: res as RecordToolbarItem[] })
+          }
+        } else if (key === 'chatToolbarConfigPc' || key === 'chatToolbarConfigMobile') {
+          // 确保聊天工具栏包含所有工具，如果缺少新工具则自动添加
+          const storedConfig = res as ChatToolbarItem[]
+          const defaultConfig = value as ChatToolbarItem[]
+
+          // 检查是否有缺失的工具
+          const missingTools = defaultConfig.filter(
+            defaultItem => !storedConfig.some(stored => stored.id === defaultItem.id)
+          )
+
+          if (missingTools.length > 0) {
+            // 合并配置：保留用户的顺序和启用状态，添加新工具
+            const mergedConfig = [...storedConfig]
+            let maxOrder = Math.max(...storedConfig.map(item => item.order), 0)
+
+            missingTools.forEach(tool => {
+              mergedConfig.push({ ...tool, order: ++maxOrder })
+            })
+
+            await store.set(key, mergedConfig)
+            set({ [key]: mergedConfig })
+          } else {
+            set({ [key]: res as ChatToolbarItem[] })
+          }
+        } else if (key !== 'aiModelList') {
+          set({ [key]: res })
+        }
+      } else {
+        await store.set(key, value)
+      }
+    })
+  },
+
+  version: '',
+  setVersion: async () => {
+    const version = await getVersion()
+    set({ version })
+  },
+
+  autoUpdate: true,
+  setAutoUpdate: (autoUpdate) => set({ autoUpdate }),
+
+  language: '简体中文',
+  setLanguage: (language) => set({ language }),
+
+  currentAi: '',
+  setCurrentAi: (currentAi) => set({ currentAi }),
+
+  aiModelList: [],
+  setAiModelList: (aiModelList) => set({ aiModelList }),
+
+  primaryModel: '',
+  setPrimaryModel: (primaryModel) => set({ primaryModel }),
+
+  placeholderModel: '',
+  setPlaceholderModel: async (placeholderModel) => {
+    const store = await Store.load('store.json');
+    await store.set('placeholderModel', placeholderModel)
+    set({ placeholderModel })
+  },
+
+  completionModel: '',
+  setCompletionModel: async (completionModel) => {
+    const store = await Store.load('store.json');
+    await store.set('completionModel', completionModel)
+    set({ completionModel })
+  },
+
+  markDescModel: '',
+  setMarkDescModel: async (markDescModel) => {
+    const store = await Store.load('store.json');
+    await store.set('markDescModel', markDescModel)
+    set({ markDescModel })
+  },
+
+  commitModel: '',
+  setCommitModel: async (commitModel) => {
+    const store = await Store.load('store.json');
+    await store.set('commitModel', commitModel)
+    set({ commitModel })
+  },
+
+  embeddingModel: '',
+  setEmbeddingModel: async (embeddingModel) => {
+    const store = await Store.load('store.json');
+    await store.set('embeddingModel', embeddingModel)
+    set({ embeddingModel })
+  },
+
+  rerankingModel: '',
+  setRerankingModel: async (rerankingModel) => {
+    const store = await Store.load('store.json');
+    await store.set('rerankingModel', rerankingModel)
+    set({ rerankingModel })
+  },
+
+  imageMethodModel: '',
+  setImageMethodModel: async (imageMethodModel) => {
+    const store = await Store.load('store.json');
+    await store.set('imageMethodModel', imageMethodModel)
+    set({ imageMethodModel })
+  },
+
+  audioModel: '',
+  setAudioModel: async (audioModel) => {
+    const store = await Store.load('store.json');
+    await store.set('audioModel', audioModel)
+    set({ audioModel })
+  },
+
+  sttModel: '',
+  setSttModel: async (sttModel) => {
+    const store = await Store.load('store.json');
+    await store.set('sttModel', sttModel)
+    set({ sttModel })
+  },
+
+  textToSpeechMode: 'auto',
+  setTextToSpeechMode: async (mode) => {
+    const normalizedMode = normalizeSpeechMode(mode)
+    const store = await Store.load('store.json')
+    await store.set('textToSpeechMode', normalizedMode)
+    set({ textToSpeechMode: normalizedMode })
+  },
+
+  speechToTextMode: 'auto',
+  setSpeechToTextMode: async (mode) => {
+    const normalizedMode = normalizeSpeechMode(mode)
+    const store = await Store.load('store.json')
+    await store.set('speechToTextMode', normalizedMode)
+    set({ speechToTextMode: normalizedMode })
+  },
+
+  condenseModel: '',
+  setCondenseModel: async (condenseModel) => {
+    const store = await Store.load('store.json');
+    await store.set('condenseModel', condenseModel)
+    set({ condenseModel })
+  },
+
+  inspirationModel: '',
+  setInspirationModel: async (inspirationModel) => {
+    const store = await Store.load('store.json');
+    await store.set('inspirationModel', inspirationModel)
+    set({ inspirationModel })
+  },
+
+  templateList: [
+    {
+      id: '0',
+      title: '笔记',
+      content: `整理成一篇详细完整的笔记。
+满足以下格式要求：
+- 如果是代码，必须完整保留，不要随意生成。
+- 文字复制的内容尽量不要修改，只处理格式化后的内容。`,
+      status: true,
+      range: GenTemplateRange.All,
+      category: TemplateCategory.Note
+    },
+    {
+      id: '1',
+      title: '周报',
+      content: '最近一周的记录整理成一篇周报，将每条记录形成一句总结，每条不超过50字。',
+      status: true,
+      range: GenTemplateRange.Week,
+      category: TemplateCategory.Work
+    }
+  ],
+  setTemplateList: async (templateList) => {
+    set({ templateList })
+    const store = await Store.load('store.json')
+    await store.set('templateList', templateList)
+  },
+
+  darkMode: 'system',
+  setDarkMode: (darkMode) => set({ darkMode }),
+
+  previewTheme: 'github',
+  setPreviewTheme: (previewTheme) => set({ previewTheme }),
+
+  codeTheme: 'github',
+  setCodeTheme: (codeTheme) => set({ codeTheme }),
+
+  tesseractList: 'eng,chi_sim',
+  setTesseractList: (tesseractList) => set({ tesseractList }),
+
+  githubUsername: '',
+  setGithubUsername: async (githubUsername) => {
+    set({ githubUsername })
+    const store = await Store.load('store.json');
+    store.set('githubUsername', githubUsername)
+  },
+
+  accessToken: '',
+  setAccessToken: async (accessToken) => {
+    const store = await Store.load('store.json');
+    const hasAccessToken = await store.get('accessToken') === accessToken
+    if (!hasAccessToken) {
+      await get().setGithubUsername('')
+    }
+    set({ accessToken })
+  },
+
+  jsdelivr: true,
+  setJsdelivr: async (jsdelivr: boolean) => {
+    set({ jsdelivr })
+    const store = await Store.load('store.json');
+    await store.set('jsdelivr', jsdelivr)
+  },
+
+  useImageRepo: false,
+  setUseImageRepo: async (useImageRepo: boolean) => {
+    set({ useImageRepo })
+    const store = await Store.load('store.json');
+    await store.set('useImageRepo', useImageRepo)
+    if (useImageRepo) {
+      const normalizedImageHosting = getNormalizedImageHosting(await store.get<string>('mainImageHosting'))
+      if (normalizedImageHosting.shouldPersist) {
+        await store.set('mainImageHosting', normalizedImageHosting.value)
+      }
+    }
+    await store.save()
+  },
+
+  autoSync: 'disabled',
+  setAutoSync: async (autoSync: string) => {
+    set({ autoSync })
+    const store = await Store.load('store.json');
+    await store.set('autoSync', autoSync)
+  },
+
+  // 自动拉取相关设置 - 默认关闭
+  autoPullOnOpen: false,
+  setAutoPullOnOpen: async (autoPullOnOpen: boolean) => {
+    set({ autoPullOnOpen })
+    const store = await Store.load('store.json');
+    await store.set('autoPullOnOpen', autoPullOnOpen)
+
+    // 同步更新 sync-manager 的配置
+    try {
+      const { getSyncManager } = await import('@/lib/sync/sync-manager')
+      const manager = getSyncManager()
+      await manager.updateConfig({ autoPullOnOpen })
+    } catch {
+      // 静默处理
+    }
+  },
+
+  autoPullOnSwitch: false,
+  setAutoPullOnSwitch: async (autoPullOnSwitch: boolean) => {
+    set({ autoPullOnSwitch })
+    const store = await Store.load('store.json');
+    await store.set('autoPullOnSwitch', autoPullOnSwitch)
+
+    // 同步更新 sync-manager 的配置
+    try {
+      const { getSyncManager } = await import('@/lib/sync/sync-manager')
+      const manager = getSyncManager()
+      await manager.updateConfig({ autoPullOnSwitch })
+    } catch {
+      // 静默处理
+    }
+  },
+
+  lastSettingPage: 'ai',
+  setLastSettingPage: async (page: string) => {
+    set({ lastSettingPage: page })
+    const store = await Store.load('store.json');
+    await store.set('lastSettingPage', page)
+  },
+
+  workspacePath: '',
+  setWorkspacePath: async (path: string) => {
+    set({ workspacePath: path })
+    const store = await Store.load('store.json');
+    await store.set('workspacePath', path)
+    
+    // 如果路径不为空且不在历史记录中，则添加到历史记录
+    if (path && !get().workspaceHistory.includes(path)) {
+      await get().addWorkspaceHistory(path)
+    }
+  },
+
+  // 工作区历史路径管理
+  workspaceHistory: [],
+  addWorkspaceHistory: async (path: string) => {
+    const currentHistory = get().workspaceHistory
+    const newHistory = [path, ...currentHistory.filter(p => p !== path)].slice(0, 10) // 最多保存10个历史路径
+    set({ workspaceHistory: newHistory })
+    const store = await Store.load('store.json')
+    await store.set('workspaceHistory', newHistory)
+    await store.save()
+  },
+  removeWorkspaceHistory: async (path: string) => {
+    const newHistory = get().workspaceHistory.filter(p => p !== path)
+    set({ workspaceHistory: newHistory })
+    const store = await Store.load('store.json')
+    await store.set('workspaceHistory', newHistory)
+    await store.save()
+  },
+  clearWorkspaceHistory: async () => {
+    set({ workspaceHistory: [] })
+    const store = await Store.load('store.json')
+    await store.set('workspaceHistory', [])
+    await store.save()
+  },
+
+  // Gitee 相关设置
+  giteeAccessToken: '',
+  setGiteeAccessToken: async (giteeAccessToken: string) => {
+    set({ giteeAccessToken })
+    const store = await Store.load('store.json');
+    await store.set('giteeAccessToken', giteeAccessToken)
+  },
+
+  giteeAutoSync: 'disabled',
+  setGiteeAutoSync: async (giteeAutoSync: string) => {
+    set({ giteeAutoSync })
+    const store = await Store.load('store.json');
+    await store.set('giteeAutoSync', giteeAutoSync)
+  },
+
+  // Gitlab 相关设置
+  gitlabInstanceType: GitlabInstanceType.OFFICIAL,
+  setGitlabInstanceType: async (instanceType: GitlabInstanceType) => {
+    const store = await Store.load('store.json')
+    await store.set('gitlabInstanceType', instanceType)
+    await store.save()
+    set({ gitlabInstanceType: instanceType })
+  },
+
+  gitlabCustomUrl: '',
+  setGitlabCustomUrl: async (customUrl: string) => {
+    const store = await Store.load('store.json')
+    await store.set('gitlabCustomUrl', customUrl)
+    await store.save()
+    set({ gitlabCustomUrl: customUrl })
+  },
+
+  gitlabAccessToken: '',
+  setGitlabAccessToken: (gitlabAccessToken: string) => {
+    set({ gitlabAccessToken })
+  },
+
+  gitlabAutoSync: 'disabled',
+  setGitlabAutoSync: async (gitlabAutoSync: string) => {
+    const store = await Store.load('store.json')
+    await store.set('gitlabAutoSync', gitlabAutoSync)
+    await store.save()
+    set({ gitlabAutoSync })
+  },
+
+  gitlabUsername: '',
+  setGitlabUsername: async (gitlabUsername: string) => {
+    const store = await Store.load('store.json')
+    await store.set('gitlabUsername', gitlabUsername)
+    await store.save()
+    set({ gitlabUsername })
+  },
+
+  // Gitea 相关实现
+  giteaInstanceType: GiteaInstanceType.OFFICIAL,
+  setGiteaInstanceType: async (instanceType: GiteaInstanceType) => {
+    const store = await Store.load('store.json')
+    await store.set('giteaInstanceType', instanceType)
+    await store.save()
+    set({ giteaInstanceType: instanceType })
+  },
+
+  giteaCustomUrl: '',
+  setGiteaCustomUrl: async (customUrl: string) => {
+    const store = await Store.load('store.json')
+    await store.set('giteaCustomUrl', customUrl)
+    await store.save()
+    set({ giteaCustomUrl: customUrl })
+  },
+
+  giteaAccessToken: '',
+  setGiteaAccessToken: (giteaAccessToken: string) => {
+    set({ giteaAccessToken })
+  },
+
+  giteaAutoSync: 'disabled',
+  setGiteaAutoSync: async (giteaAutoSync: string) => {
+    set({ giteaAutoSync })
+    const store = await Store.load('store.json');
+    await store.set('giteaAutoSync', giteaAutoSync)
+    await store.save()
+  },
+
+  giteaUsername: '',
+  setGiteaUsername: async (giteaUsername: string) => {
+    const store = await Store.load('store.json')
+    await store.set('giteaUsername', giteaUsername)
+    await store.save()
+    set({ giteaUsername })
+  },
+
+  giteaCustomSyncRepo: '',
+  setGiteaCustomSyncRepo: async (repo: string) => {
+    set({ giteaCustomSyncRepo: repo })
+    const store = await Store.load('store.json');
+    await store.set('giteaCustomSyncRepo', repo)
+    await store.save()
+  },
+
+  // 默认使用 GitHub 作为主要备份方式
+  primaryBackupMethod: 'github',
+  setPrimaryBackupMethod: async (method: 'github' | 'gitee' | 'gitlab' | 'gitea' | 's3' | 'webdav') => {
+    const store = await Store.load('store.json')
+    await store.set('primaryBackupMethod', method)
+    await store.save()
+    set({ primaryBackupMethod: method })
+  },
+
+  assetsPath: 'assets',
+  setAssetsPath: async (path: string) => {
+    set({ assetsPath: path })
+    const store = await Store.load('store.json');
+    await store.set('assetsPath', path)
+    await store.save()
+  },
+
+  // 图床设置
+  githubImageAccessToken: '',
+  setGithubImageAccessToken: async (githubImageAccessToken: string) => {
+    set({ githubImageAccessToken })
+    const store = await Store.load('store.json');
+    await store.set('githubImageAccessToken', githubImageAccessToken)
+    await store.save()
+  },
+
+  // 图片识别设置
+  enableImageRecognition: true,
+  setEnableImageRecognition: async (enable: boolean) => {
+    set({ enableImageRecognition: enable })
+    const store = await Store.load('store.json');
+    await store.set('enableImageRecognition', enable)
+    await store.save()
+  },
+  primaryImageMethod: 'vlm',
+  setPrimaryImageMethod: async (method: 'ocr' | 'vlm') => {
+    set({ primaryImageMethod: method })
+    const store = await Store.load('store.json');
+    await store.set('primaryImageMethod', method)
+    await store.save()
+  },
+
+  // 界面缩放设置 (75%, 100%, 125%, 150%)
+  uiScale: 100,
+  setUiScale: async (scale: number) => {
+    set({ uiScale: scale })
+    const store = await Store.load('store.json');
+    await store.set('uiScale', scale)
+    await store.save()
+    
+    // 使用fontSize实现基于rem的缩放
+    document.documentElement.style.fontSize = `${scale}%`
+  },
+
+  // 正文文字大小缩放设置 (75%, 100%, 125%, 150%)
+  contentTextScale: 100,
+  setContentTextScale: async (scale: number) => {
+    set({ contentTextScale: scale })
+    const store = await Store.load('store.json');
+    await store.set('contentTextScale', scale)
+    await store.save()
+  },
+
+  // 文件管理器文字大小设置 (xs, sm, md, lg, xl)
+  fileManagerTextSize: 'sm',
+  setFileManagerTextSize: async (size: string) => {
+    set({ fileManagerTextSize: size })
+    const store = await Store.load('store.json');
+    await store.set('fileManagerTextSize', size)
+    await store.save()
+  },
+
+  // 记录文字大小设置 (xs, sm, md, lg, xl)
+  recordTextSize: 'sm',
+  setRecordTextSize: async (size: string) => {
+    set({ recordTextSize: size })
+    const store = await Store.load('store.json');
+    await store.set('recordTextSize', size)
+    await store.save()
+  },
+
+  // 自定义主题颜色设置
+  customThemeColors: {
+    light: {
+      background: null,
+      foreground: null,
+      card: null,
+      cardForeground: null,
+      primary: null,
+      primaryForeground: null,
+      secondary: null,
+      secondaryForeground: null,
+      third: null,
+      thirdForeground: null,
+      muted: null,
+      mutedForeground: null,
+      accent: null,
+      accentForeground: null,
+      border: null,
+      shadow: null,
+    },
+    dark: {
+      background: null,
+      foreground: null,
+      card: null,
+      cardForeground: null,
+      primary: null,
+      primaryForeground: null,
+      secondary: null,
+      secondaryForeground: null,
+      third: null,
+      thirdForeground: null,
+      muted: null,
+      mutedForeground: null,
+      accent: null,
+      accentForeground: null,
+      border: null,
+      shadow: null,
+    },
+  },
+  setCustomThemeColors: async (colors: CustomThemeColors) => {
+    set({ customThemeColors: colors })
+    const store = await Store.load('store.json');
+    await store.set('customThemeColors', colors)
+    await store.save()
+
+    // 应用主题颜色（同时应用亮色和暗色主题）
+    applyThemeColors(colors)
+  },
+  resetCustomThemeColors: async () => {
+    const defaultColors: CustomThemeColors = {
+      light: {
+        background: null,
+        foreground: null,
+        card: null,
+        cardForeground: null,
+        primary: null,
+        primaryForeground: null,
+        secondary: null,
+        secondaryForeground: null,
+        third: null,
+        thirdForeground: null,
+        muted: null,
+        mutedForeground: null,
+        accent: null,
+        accentForeground: null,
+        border: null,
+        shadow: null,
+      },
+      dark: {
+        background: null,
+        foreground: null,
+        card: null,
+        cardForeground: null,
+        primary: null,
+        primaryForeground: null,
+        secondary: null,
+        secondaryForeground: null,
+        third: null,
+        thirdForeground: null,
+        muted: null,
+        mutedForeground: null,
+        accent: null,
+        accentForeground: null,
+        border: null,
+        shadow: null,
+      },
+    }
+    set({ customThemeColors: defaultColors })
+    const store = await Store.load('store.json');
+    await store.set('customThemeColors', defaultColors)
+    await store.save()
+
+    // 清除自定义主题颜色
+    removeThemeColors()
+  },
+
+  // 自定义仓库名称设置
+  githubCustomSyncRepo: '',
+  setGithubCustomSyncRepo: async (repo: string) => {
+    set({ githubCustomSyncRepo: repo })
+    const store = await Store.load('store.json');
+    await store.set('githubCustomSyncRepo', repo)
+    await store.save()
+  },
+
+  giteeCustomSyncRepo: '',
+  setGiteeCustomSyncRepo: async (repo: string) => {
+    set({ giteeCustomSyncRepo: repo })
+    const store = await Store.load('store.json');
+    await store.set('giteeCustomSyncRepo', repo)
+    await store.save()
+  },
+
+  gitlabCustomSyncRepo: '',
+  setGitlabCustomSyncRepo: async (repo: string) => {
+    set({ gitlabCustomSyncRepo: repo })
+    const store = await Store.load('store.json');
+    await store.set('gitlabCustomSyncRepo', repo)
+    await store.save()
+  },
+
+  githubCustomImageRepo: '',
+  setGithubCustomImageRepo: async (repo: string) => {
+    set({ githubCustomImageRepo: repo })
+    const store = await Store.load('store.json');
+    await store.set('githubCustomImageRepo', repo)
+    await store.save()
+  },
+
+  // 聊天工具栏配置 - PC 端
+  chatToolbarConfigPc: [
+    // 底部工具栏（可排序）
+    { id: 'modelSelect', enabled: true, order: 0 },
+    { id: 'promptSelect', enabled: true, order: 1 },
+    { id: 'mcpButton', enabled: true, order: 2 },
+    { id: 'ragSwitch', enabled: true, order: 3 },
+    { id: 'clipboardMonitor', enabled: true, order: 4 },
+    // 顶部工具栏 - 右侧（不参与排序）
+    { id: 'newChat', enabled: true, order: 5 },
+  ],
+  setChatToolbarConfigPc: async (config: ChatToolbarItem[]) => {
+    set({ chatToolbarConfigPc: config })
+    const store = await Store.load('store.json');
+    await store.set('chatToolbarConfigPc', config)
+    await store.save()
+  },
+
+  // 聊天工具栏配置 - 移动端
+  chatToolbarConfigMobile: [
+    { id: 'modelSelect', enabled: true, order: 0 },
+    { id: 'promptSelect', enabled: true, order: 1 },
+    { id: 'mcpButton', enabled: true, order: 2 },
+    { id: 'ragSwitch', enabled: true, order: 3 },
+    { id: 'clipboardMonitor', enabled: true, order: 4 },
+    { id: 'newChat', enabled: true, order: 5 },
+  ],
+  setChatToolbarConfigMobile: async (config: ChatToolbarItem[]) => {
+    set({ chatToolbarConfigMobile: config })
+    const store = await Store.load('store.json');
+    await store.set('chatToolbarConfigMobile', config)
+    await store.save()
+  },
+
+  // 记录工具栏配置
+  recordToolbarConfig: [
+    { id: 'text', enabled: true, order: 0 },
+    { id: 'recording', enabled: true, order: 1 },
+    { id: 'scan', enabled: true, order: 2 },
+    { id: 'image', enabled: true, order: 3 },
+    { id: 'link', enabled: true, order: 4 },
+    { id: 'file', enabled: true, order: 5 },
+    { id: 'todo', enabled: true, order: 6 },
+  ],
+  setRecordToolbarConfig: async (config: RecordToolbarItem[]) => {
+    set({ recordToolbarConfig: config })
+    const store = await Store.load('store.json');
+    await store.set('recordToolbarConfig', config)
+    await store.save()
+  },
+
+  // 摘要设置
+  enableCondense: true,
+  setEnableCondense: async (enabled: boolean) => {
+    set({ enableCondense: enabled })
+    const store = await Store.load('store.json');
+    await store.set('enableCondense', enabled)
+    await store.save()
+  },
+
+  keepLatestCount: 4,
+  setKeepLatestCount: async (count: number) => {
+    set({ keepLatestCount: count })
+    const store = await Store.load('store.json');
+    await store.set('keepLatestCount', count)
+    await store.save()
+  },
+
+  condenseMaxLength: 100,
+  setCondenseMaxLength: async (length: number) => {
+    set({ condenseMaxLength: length })
+    const store = await Store.load('store.json');
+    await store.set('condenseMaxLength', length)
+    await store.save()
+  },
+
+  // 编辑器撤销/重做按钮显示设置 - 默认开启
+  showEditorUndoRedo: true,
+  setShowEditorUndoRedo: async (show: boolean) => {
+    set({ showEditorUndoRedo: show })
+    const store = await Store.load('store.json');
+    await store.set('showEditorUndoRedo', show)
+    await store.save()
+  },
+}))
+
+export default useSettingStore
