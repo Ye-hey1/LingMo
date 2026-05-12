@@ -68,7 +68,18 @@ const useTagStore = create<TagState>((set, get) => ({
   deleteTag: async (id: number) => {
     await delTag(id)
     await get().fetchTags()
-    await get().setCurrentTagId(get().tags[0].id)
+    const tags = get().tags
+    const currentTagExists = tags.some(tag => tag.id === get().currentTagId)
+
+    if (tags.length === 0) {
+      set({ currentTag: undefined })
+      return
+    }
+
+    if (!currentTagExists) {
+      await get().setCurrentTagId(tags[0].id)
+    }
+    get().getCurrentTag()
   },
 
   // 同步

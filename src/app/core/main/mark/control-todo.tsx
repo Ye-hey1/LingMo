@@ -30,6 +30,7 @@ import { handleRecordComplete } from '@/lib/record-navigation'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { isMobileDevice as checkIsMobileDevice } from '@/lib/check'
 import { TodoForm, TodoFormData } from "./todo-form"
+import { GoalPanel } from "./goal-settings-button"
 
 export function ControlTodo() {
   const t = useTranslations();
@@ -54,7 +55,10 @@ export function ControlTodo() {
     const todoData = {
       title: formData.title.trim(),
       description: formData.description.trim(),
-      priority: formData.priority
+      priority: formData.priority,
+      completed: false,
+      dueDate: formData.dueDate || undefined,
+      subtasks: formData.subtasks || undefined,
     }
 
     await insertMark({
@@ -74,7 +78,9 @@ export function ControlTodo() {
     setFormData({
       title: '',
       description: '',
-      priority: 'medium'
+      priority: 'medium',
+      dueDate: undefined,
+      subtasks: undefined,
     })
     setOpen(false)
   }
@@ -127,7 +133,8 @@ export function ControlTodo() {
                 {t('record.mark.todo.description')}
               </DrawerDescription>
             </DrawerHeader>
-            <div className="px-4">
+            <div className="space-y-4 px-4">
+              <GoalPanel />
               {formContent}
             </div>
             <DrawerFooter>
@@ -147,14 +154,17 @@ export function ControlTodo() {
           <DialogTrigger asChild>
             <TooltipButton icon={<CheckSquare />} tooltipText={t('record.mark.type.todo')} />
           </DialogTrigger>
-          <DialogContent className="min-w-full md:min-w-[650px]">
-            <DialogHeader>
+          <DialogContent className="min-w-full md:min-w-[640px]">
+            <DialogHeader className="pb-0">
               <DialogTitle>{t('record.mark.todo.title')}</DialogTitle>
               <DialogDescription>
                 {t('record.mark.todo.description')}
               </DialogDescription>
             </DialogHeader>
-            {formContent}
+            <div className="space-y-4">
+              <GoalPanel />
+              {formContent}
+            </div>
             <DialogFooter>
               <Button
                 type="submit"

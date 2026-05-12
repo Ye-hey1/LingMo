@@ -11,19 +11,21 @@ import { webdavListObjects } from '@/lib/sync/webdav'
 import { S3Config, WebDAVConfig } from '@/types/sync'
 import { hasNetworkConnection, ensureDirectoryExists, pullRemoteFile, saveLocalFile } from '@/lib/sync/auto-sync'
 import { syncOnOpen } from '@/lib/sync/sync-manager'
-import { sanitizeFilePath, hasInvalidFileNameChars } from '@/lib/sync/filename-utils'
+import { sanitizeFilePath } from '@/lib/sync/filename-utils'
 import { getCurrentFolder, computedParentPath } from '@/lib/path'
 import useVectorStore from './vector'
 import { join, appDataDir } from '@tauri-apps/api/path'
-import { BaseDirectory, DirEntry, exists, mkdir, readDir, readTextFile, writeTextFile, stat } from '@tauri-apps/plugin-fs'
+import { BaseDirectory, DirEntry, exists, mkdir, readDir, readFile, readTextFile, writeTextFile, stat } from '@tauri-apps/plugin-fs'
 import { Store } from '@tauri-apps/plugin-store'
 import { cloneDeep, uniq } from 'lodash-es'
 import { create } from 'zustand'
 import { getFilePathOptions, getWorkspacePath, toWorkspaceRelativePath } from '@/lib/workspace'
+import { readWorkspaceTextFile } from '@/lib/file-binary'
 import emitter from '@/lib/emitter'
 import { isSkillsFolder } from '@/lib/skills/utils'
 import { buildVectorIndexedMap, getVectorDocumentKey } from '@/lib/vector-document-key'
 import { buildRemotePathsToLoad } from './article-remote-sync'
+import { useNoteIndexStore } from './note-index'
 
 // 缓存 Store 实例，避免每次都重新加载
 let storeInstance: Store | null = null
@@ -290,11 +292,13 @@ interface NoteState {
   // 向量计算相关
   vectorCalcTimer: NodeJS.Timeout | null
   vectorCalcProgressInterval: NodeJS.Timeout | null
+  topicExtractionTimer: NodeJS.Timeout | null
   vectorCalcProgress: number
   isVectorCalculating: boolean
   lastEditTime: number
   pendingVectorContent: { path: string; content: string } | null
   scheduleVectorCalculation: (path: string, content: string) => void
+  scheduleTopicExtraction: (path: string, content: string) => void
   executeVectorCalculation: () => Promise<void>
   cancelVectorCalculation: () => void
   triggerVectorCalculation: () => Promise<void> // 手动触发向量计算
@@ -863,23 +867,19 @@ const useArticleStore = create<NoteState>((set, get) => ({
         }))
     }
     
-    // 为已展开的文件夹加载子内容
-    const collapsibleList = get().collapsibleList
-    if (collapsibleList.length > 0) {
-      // 只加载根级别已展开的文件夹
-      const rootExpandedFolders = dirs.filter(dir => dir.isDirectory && collapsibleList.includes(dir.name))
-      for (const folder of rootExpandedFolders) {
-        await loadFolderChildren(workspace, folder)
-      }
+    // 递归加载所有子文件夹内容（确保知识图谱能收集到所有文件）
+    const rootFolders = dirs.filter(dir => dir.isDirectory)
+    for (const folder of rootFolders) {
+      await loadFolderChildren(workspace, folder)
     }
-    
-    // 递归加载已展开文件夹的子内容
+
+    // 递归加载文件夹的子内容
     async function loadFolderChildren(workspace: any, folder: DirTree, parentPath: string = '') {
       const folderPath = parentPath ? `${parentPath}/${folder.name}` : folder.name
       const fullPath = await join(workspace.path, folderPath)
-      
+
       let children: DirTree[] = []
-      
+
       // 检查目录是否存在
       let dirExists = false
       try {
@@ -893,7 +893,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
       } catch {
         dirExists = false
       }
-      
+
       // 如果目录存在，加载本地文件
       if (dirExists) {
         try {
@@ -928,12 +928,12 @@ const useArticleStore = create<NoteState>((set, get) => ({
           // 读取失败，使用空数组
         }
       }
-      
+
       folder.children = children
-      
-      // 递归加载子文件夹中已展开的文件夹
+
+      // 递归加载所有子文件夹
       for (const child of children) {
-        if (child.isDirectory && collapsibleList.includes(`${folderPath}/${child.name}`)) {
+        if (child.isDirectory) {
           await loadFolderChildren(workspace, child, folderPath)
         }
       }
@@ -948,6 +948,9 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
     // 初始化向量索引状态（异步，不阻塞界面）
     get().initVectorIndexedFiles()
+
+    // 构建笔记反向链接索引（异步，不阻塞界面）
+    useNoteIndexStore.getState().buildIndex(sortedDirs)
 
     // 异步加载远程同步文件（不阻塞界面）
     if (!options?.skipRemoteSync) {
@@ -1276,7 +1279,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
       try {
         if (workspace.isCustom) {
           children = (await readDir(fullFolderPath))
-            .filter(file => file.name !== '.DS_Store' && !file.name.startsWith('.') && (file.isDirectory || file.name.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg)$/i)))
+            .filter(file => file.name !== '.DS_Store' && !file.name.startsWith('.') && (file.isDirectory || file.name.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)))
             .map(file => ({
               ...file,
               parent: currentFolder,
@@ -1291,7 +1294,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
           const dirRelative = await toWorkspaceRelativePath(fullFolderPath)
           const pathOptions = await getFilePathOptions(dirRelative)
           children = (await readDir(pathOptions.path, { baseDir: pathOptions.baseDir }))
-            .filter(file => file.name !== '.DS_Store' && !file.name.startsWith('.') && (file.isDirectory || file.name.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg)$/i)))
+            .filter(file => file.name !== '.DS_Store' && !file.name.startsWith('.') && (file.isDirectory || file.name.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)))
             .map(file => ({
               ...file,
               parent: currentFolder,
@@ -1595,6 +1598,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
     }
 
     // 更新树
+    const now = new Date().toISOString()
     const node = {
       name: file,
       isFile: true,
@@ -1604,6 +1608,8 @@ const useArticleStore = create<NoteState>((set, get) => ({
       isLocale: true,
       parent: currentFolder,
       sha: '',
+      createdAt: now,
+      modifiedAt: now,
       children: []
     }
 
@@ -1657,7 +1663,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
     const res = await store.get<string[]>('collapsibleList')
     const activeFilePath = await store.get<string>('activeFilePath')
     set({
-      collapsibleList: res ? uniq(res.filter(item => !item.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg)$/i))) : [],
+      collapsibleList: res ? uniq(res.filter(item => !item.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i))) : [],
       collapsibleListInitialized: true
     })
 
@@ -1665,7 +1671,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
       set({ activeFilePath })
 
       // 检查是否是文件夹（所有支持的文件扩展名都是文件，不是文件夹）
-      if (!activeFilePath.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg)$/i)) {
+      if (!activeFilePath.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)) {
         // 文件夹：确保展开并加载内容
         if (!get().collapsibleList.includes(activeFilePath)) {
           await get().setCollapsibleList(activeFilePath, true)
@@ -1690,7 +1696,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
     }
     const store = await getStore();
     await store.set('collapsibleList', collapsibleList)
-    set({ collapsibleList: uniq(collapsibleList).filter(item => !item.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg)$/i)) })
+    set({ collapsibleList: uniq(collapsibleList).filter(item => !item.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)) })
   },
   
   expandAllFolders: async () => {
@@ -1753,6 +1759,18 @@ const useArticleStore = create<NoteState>((set, get) => ({
   },
 
   readArticle: async (path: string, sha?: string, autoSync = true) => {
+    // 跳过图片等二进制文件
+    if (/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i.test(path)) {
+      set({ currentArticle: '', loading: false })
+      return
+    }
+
+    // PDF 文件使用原生预览器打开，避免在前端打包 PDF.js 触发运行时错误
+    if (/\.pdf$/i.test(path)) {
+      set({ currentArticle: '[PDF 文件]', loading: false })
+      return
+    }
+
     get().setLoading(true)
 
     // 设置当前正在读取的文件路径，用于避免竞态条件
@@ -1760,10 +1778,12 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
     // 处理文件名兼容性问题
     let actualPath = path
-    if (hasInvalidFileNameChars(path)) {
-      actualPath = sanitizeFilePath(path)
-      // 更新活动文件路径为清理后的路径
-      await get().setActiveFilePath(actualPath)
+    const normalizedPath = sanitizeFilePath(path)
+    if (normalizedPath !== path) {
+      actualPath = normalizedPath
+      if (get().activeFilePath !== actualPath) {
+        await get().setActiveFilePath(actualPath)
+      }
     }
 
     // 优先加载本地内容（快速响应）
@@ -1785,13 +1805,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
     }
 
     try {
-      const workspace = await getWorkspacePath()
-      const pathOptions = await getFilePathOptions(actualPath)
-      if (workspace.isCustom) {
-        localContent = await readTextFile(pathOptions.path)
-      } else {
-        localContent = await readTextFile(pathOptions.path, { baseDir: pathOptions.baseDir })
-      }
+      localContent = await readWorkspaceTextFile(actualPath)
 
       // 检查是否是远程文件且本地内容为空
       const fileTree = get().fileTree
@@ -1952,6 +1966,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
   // 向量计算相关状态
   vectorCalcTimer: null as NodeJS.Timeout | null,
   vectorCalcProgressInterval: null as NodeJS.Timeout | null,
+  topicExtractionTimer: null as NodeJS.Timeout | null,
   vectorCalcProgress: 0, // 0-100，表示距离自动计算的进度
   isVectorCalculating: false,
   lastEditTime: 0,
@@ -2100,11 +2115,13 @@ const useArticleStore = create<NoteState>((set, get) => ({
         }
 
         // 更新缓存树
-        if (!isLocale) {
-          const cacheTree = cloneDeep(get().fileTree)
-          const current = savePath.includes('/') ? getCurrentFolder(savePath, cacheTree) : cacheTree.find(item => item.name === savePath)
-          if (current) {
+        const cacheTree = cloneDeep(get().fileTree)
+        const current = savePath.includes('/') ? getCurrentFolder(savePath, cacheTree) : cacheTree.find(item => item.name === savePath)
+        if (current) {
+          const now = new Date().toISOString()
+          if (!isLocale) {
             current.isLocale = true
+            current.createdAt = now
 
             // 更新父文件夹链的 isLocale 状态
             const updateParentFolders = async (node: DirTree | undefined) => {
@@ -2140,12 +2157,17 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
             await updateParentFolders(current.parent)
           }
+          current.modifiedAt = now
           set({ fileTree: cacheTree })
         }
 
         // 触发防抖向量计算
         if (savePath.endsWith('.md')) {
           get().scheduleVectorCalculation(savePath, saveContent)
+          // 增量更新反向链接索引
+          useNoteIndexStore.getState().updateFileIndex(savePath, saveContent)
+          // 异步提取关键词主题
+          get().scheduleTopicExtraction(savePath, saveContent)
         }
 
         // 更新 currentArticle
@@ -2213,10 +2235,29 @@ const useArticleStore = create<NoteState>((set, get) => ({
       get().executeVectorCalculation()
     }, 5000)
     
-    set({ 
+    set({
       vectorCalcTimer: timer as any,
       vectorCalcProgressInterval: progressInterval as any
     })
+  },
+
+  // 安排关键词主题提取（防抖2秒）
+  scheduleTopicExtraction: (path: string, content: string) => {
+    const state = get()
+    if (state.topicExtractionTimer) {
+      clearTimeout(state.topicExtractionTimer)
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const { extractAndStoreTopics } = await import('@/lib/topic-extractor')
+        await extractAndStoreTopics(path, content)
+      } catch (error) {
+        console.error('[TopicExtraction] Failed:', error)
+      }
+    }, 2000)
+
+    set({ topicExtractionTimer: timer as any })
   },
 
   // 执行向量计算

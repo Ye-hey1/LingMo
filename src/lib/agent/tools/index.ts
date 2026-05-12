@@ -1,4 +1,5 @@
 import { Tool } from '../types'
+import { getToolRiskLevel, isDestructiveTool, isExecuteTool, getBaseToolName } from '../tool-policy'
 import { noteTools } from './note-tools'
 import { chatTools } from './chat-tools'
 import { tagTools } from './tag-tools'
@@ -7,6 +8,12 @@ import { folderTools } from './folder-tools'
 import { systemTools } from './system-tools'
 import { memoryTools } from './memory-tools'
 import { editorTools } from './editor-tools'
+import { diagramTools } from './diagram-tools'
+import { safeTools } from './safe-tools'
+import { flashcardTools } from './flashcard-tools'
+import { activityTools } from './activity-tools'
+import { favoriteTools } from './favorite-tools'
+import { knowledgeGraphTools } from './knowledge-graph-tools'
 
 export const allTools: Tool[] = [
   ...noteTools,
@@ -16,7 +23,13 @@ export const allTools: Tool[] = [
   ...folderTools,
   ...systemTools,
   ...memoryTools,
+  ...activityTools,
   ...editorTools,
+  ...diagramTools,
+  ...flashcardTools,
+  ...favoriteTools,
+  ...knowledgeGraphTools,
+  ...safeTools,
 ]
 
 /**
@@ -36,15 +49,44 @@ function convertMcpToolToAgentTool(serverId: string, tool: any): Tool {
 
   // Enhance tool description to help AI better understand the tool's purpose
   const enhancedDescription = tool.description || tool.name
+  const agentToolName = `${serverId}__${tool.name}`
+  const risk = getToolRiskLevel(agentToolName, 'mcp')
+  const baseName = getBaseToolName(agentToolName)
+  const capabilities: Tool['capabilities'] = []
+
+  if (risk === 'low') {
+    capabilities.push('read')
+  }
+  if (risk !== 'low') {
+    capabilities.push('write')
+  }
+  if (isDestructiveTool(agentToolName)) {
+    capabilities.push('delete')
+  }
+  if (isExecuteTool(agentToolName)) {
+    capabilities.push('execute')
+  }
+  if (/web|http|url|fetch|search|browser|request|api/i.test(`${baseName} ${enhancedDescription}`)) {
+    capabilities.push('network')
+  }
 
   return {
-    name: `${serverId}__${tool.name}`,
+    name: agentToolName,
     description: enhancedDescription,
     parameters,
-    requiresConfirmation: false,
+    requiresConfirmation: risk !== 'low',
     category: 'mcp',
-    execute: async (params: Record<string, any>) => {
+    risk,
+    capabilities,
+    execute: async (params: Record<string, any>, context) => {
       try {
+        if (context?.abortSignal?.aborted) {
+          return {
+            success: false,
+            error: 'Tool execution cancelled before MCP call started.',
+          }
+        }
+
         const { callTool } = await import('@/lib/mcp/tools')
         const result = await callTool(serverId, tool.name, params)
 
@@ -174,6 +216,8 @@ export function getToolDescriptions(): string {
     return `### ${tool.name}
 ${tool.description}
 Category: ${tool.category}
+Risk: ${tool.risk || getToolRiskLevel(tool.name, tool.category)}
+Capabilities: ${tool.capabilities?.join(', ') || 'unspecified'}
 Requires Confirmation: ${tool.requiresConfirmation ? 'Yes' : 'No'}
 Parameters:
 ${params || '  None'}
@@ -189,3 +233,7 @@ export * from './folder-tools'
 export * from './system-tools'
 export * from './memory-tools'
 export * from './editor-tools'
+export * from './diagram-tools'
+export * from './safe-tools'
+export * from './flashcard-tools'
+export * from './activity-tools'

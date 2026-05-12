@@ -8,11 +8,14 @@ import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import CharacterCount from '@tiptap/extension-character-count'
 import Highlight from '@tiptap/extension-highlight'
+import { Color, TextStyle } from '@tiptap/extension-text-style'
 import Underline from '@tiptap/extension-underline'
 import TextAlign from '@tiptap/extension-text-align'
 import Typography from '@tiptap/extension-typography'
 import Dropcursor from '@tiptap/extension-dropcursor'
 import { Table } from '@tiptap/extension-table'
+import { WikiLinkExtension } from '@/lib/wikilink-extension'
+import { WikiLinkSuggestionExtension } from '@/lib/wikilink-suggestion-extension'
 import { TableRow } from '@tiptap/extension-table-row'
 import { TableCell } from '@tiptap/extension-table-cell'
 import { TableHeader } from '@tiptap/extension-table-header'
@@ -26,6 +29,7 @@ import { Plugin, TextSelection } from '@tiptap/pm/state'
 import 'katex/dist/katex.min.css'
 import { InlineMath, BlockMath } from './math-extension'
 import { MermaidDiagram } from './mermaid-extension'
+import { DiagramLink } from './diagram-link-extension'
 import { MathEditorDialog } from './math-editor-dialog'
 import { SearchReplacePanel } from './search-replace-panel'
 import { useEffect, useRef, useCallback, useState } from 'react'
@@ -39,6 +43,7 @@ import { isMobileDevice } from '@/lib/check'
 import { useTranslations } from 'next-intl'
 import { replaceLinesInRange } from '@/lib/agent/react-diff-helpers'
 import { BubbleMenu as BubbleMenuComponent } from './bubble-menu'
+import { EmptyLineBlockMenu } from './empty-line-block-menu'
 import { ImageBubbleMenu } from './image-bubble-menu'
 import { toast } from '@/hooks/use-toast'
 import { FloatingTableMenu } from './floating-table-menu'
@@ -55,6 +60,8 @@ import emitter from '@/lib/emitter'
 import { QuoteMark } from './quote-mark'
 import { MarkdownParagraph, normalizeMarkdownPlaceholders } from './markdown-paragraph'
 import { StableCodeBlockLowlight } from './code-block-extension'
+import { EmptyBlockBackspace } from './empty-block-backspace'
+import { HeadingCollapse } from './heading-collapse-extension'
 import { shouldTransformImageSrcToWorkspaceAsset } from './image-src'
 import useSettingStore from '@/stores/setting'
 import useChatStore from '@/stores/chat'
@@ -66,11 +73,51 @@ import { MobileEditorMoreSheet } from './mobile-editor-more-sheet'
 import { shouldRestorePendingQuote } from './quote-session'
 import { getEditorContentContainerClass } from '@/lib/editor-layout-styles'
 import { getResultIndexToFocus } from './search-navigation'
-import { isOutlineOnLeft, type OutlinePosition } from '@/lib/outline-preferences'
-import { OUTLINE_PANEL_PADDING_CLASS } from '@/lib/outline-styles'
+import { type OutlinePosition } from '@/lib/outline-preferences'
+import { FlashcardCreateDialog } from '@/components/flashcard-create-dialog'
 import './style.css'
 
 const lowlight = createLowlight(common)
+
+const tableCellAttributes = {
+  align: {
+    default: null,
+    parseHTML: (element: HTMLElement) => element.getAttribute('data-align') || element.style.textAlign || null,
+    renderHTML: (attributes: { align?: string | null }) => (
+      attributes.align ? { 'data-align': attributes.align } : {}
+    ),
+  },
+  backgroundColor: {
+    default: null,
+    parseHTML: (element: HTMLElement) => element.getAttribute('data-cell-background') || element.style.backgroundColor || null,
+    renderHTML: (attributes: { backgroundColor?: string | null }) => (
+      attributes.backgroundColor
+        ? {
+          'data-cell-background': attributes.backgroundColor,
+          style: `background-color: ${attributes.backgroundColor}`,
+        }
+        : {}
+    ),
+  },
+}
+
+const RichTableCell = TableCell.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      ...tableCellAttributes,
+    }
+  },
+})
+
+const RichTableHeader = TableHeader.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      ...tableCellAttributes,
+    }
+  },
+})
 
 // 自定义扩展：处理粘贴 Markdown 文本
 const PasteMarkdown = Extension.create({
@@ -101,10 +148,12 @@ const PasteMarkdown = Extension.create({
               return true
             }
 
+            const markdownText = normalizePastedMarkdown(text)
+
             // 检查文本是否看起来像 Markdown
-            if (looksLikeMarkdown(text)) {
+            if (looksLikeMarkdown(markdownText)) {
               // 使用 editor.commands.insertContent 插入 Markdown 内容
-              editor.commands.insertContent(text, { contentType: 'markdown' })
+              editor.commands.insertContent(markdownText, { contentType: 'markdown' })
               return true
             }
 
@@ -117,20 +166,365 @@ const PasteMarkdown = Extension.create({
 })
 
 
+function normalizePastedMarkdown(text: string): string {
+  const normalized = text
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+
+  return normalizePastedMarkdownTables(
+    normalizePastedImplicitHeadings(
+      normalizeBoxDrawingTables(unwrapPastedMarkdownFence(normalized)),
+    ),
+  )
+}
+
+function unwrapPastedMarkdownFence(text: string): string {
+  const trimmed = text.trim()
+  const match = trimmed.match(/^```(?:markdown|md|text)\s*\n([\s\S]*?)\n```$/i)
+
+  return match ? match[1] : text
+}
+
+function normalizeBoxDrawingTables(text: string): string {
+  const lines = text.split('\n')
+  const output: string[] = []
+
+  for (let index = 0; index < lines.length;) {
+    const table = readBoxDrawingTable(lines, index)
+
+    if (table) {
+      output.push(...formatMarkdownTableRows(table.rows))
+      index += table.consumed
+      continue
+    }
+
+    output.push(lines[index])
+    index++
+  }
+
+  return output.join('\n')
+}
+
+function readBoxDrawingTable(lines: string[], startIndex: number): { rows: string[][]; consumed: number } | null {
+  const rows: string[][] = []
+  let sawBorder = false
+  let index = startIndex
+
+  while (index < lines.length) {
+    const line = lines[index]
+
+    if (line.trim() === '') {
+      const nextIndex = findNextNonEmptyLineIndex(lines, index + 1)
+      const hasMoreTableLikeLines =
+        nextIndex != null &&
+        (isBoxDrawingBorderLine(lines[nextIndex]) || isBoxDrawingContentLine(lines[nextIndex]))
+
+      if (hasMoreTableLikeLines && (sawBorder || rows.length > 0)) {
+        index++
+        continue
+      }
+
+      break
+    }
+
+    if (isBoxDrawingBorderLine(line)) {
+      sawBorder = true
+      index++
+      continue
+    }
+
+    if (isBoxDrawingContentLine(line)) {
+      rows.push(splitPastedTableRow(line))
+      index++
+      continue
+    }
+
+    break
+  }
+
+  if (!sawBorder || rows.length < 2) {
+    return null
+  }
+
+  return {
+    rows,
+    consumed: Math.max(1, index - startIndex),
+  }
+}
+
+function isBoxDrawingBorderLine(line: string): boolean {
+  const trimmed = line.trim()
+
+  return (
+    /[\u2500-\u257F]/.test(trimmed) &&
+    /[\u2500\u2501\u2550]/.test(trimmed) &&
+    /^[\s|+\-\u2500-\u257F]+$/.test(trimmed)
+  )
+}
+
+function isBoxDrawingContentLine(line: string): boolean {
+  const trimmed = line.trim()
+
+  if (!trimmed || isBoxDrawingBorderLine(trimmed)) {
+    return false
+  }
+
+  return (
+    /[|\u2502\u2503\u2551]/.test(trimmed) &&
+    splitPastedTableRow(trimmed).length >= 2
+  )
+}
+
+function splitPastedTableRow(line: string): string[] {
+  return splitMarkdownTableCells(
+    line
+      .trim()
+      .replace(/[\u2502\u2503\u2551]/g, '|'),
+  ).map(cell => cell.trim().replace(/\s+/g, ' '))
+}
+
+function formatMarkdownTableRows(rows: string[][]): string[] {
+  const columnCount = Math.max(...rows.map(row => row.length))
+  const normalizedRows = rows.map(row => {
+    const normalized = row.slice(0, columnCount)
+
+    while (normalized.length < columnCount) {
+      normalized.push('')
+    }
+
+    return normalized
+  })
+
+  return [
+    formatMarkdownTableRow(normalizedRows[0]),
+    formatMarkdownTableDelimiter(columnCount),
+    ...normalizedRows.slice(1).map(formatMarkdownTableRow),
+  ]
+}
+
+function formatMarkdownTableRow(cells: string[]): string {
+  return `| ${cells.map(escapeMarkdownTableCell).join(' | ')} |`
+}
+
+function formatMarkdownTableDelimiter(columnCount: number): string {
+  return `| ${Array.from({ length: columnCount }, () => '---').join(' | ')} |`
+}
+
+function escapeMarkdownTableCell(cell: string): string {
+  return cell.replace(/\\/g, '\\\\').replace(/\|/g, '\\|')
+}
+
+function normalizePastedImplicitHeadings(text: string): string {
+  if (/(^|\n)\s{0,3}#{1,6}\s+\S/.test(text)) {
+    return text
+  }
+
+  const lines = text.split('\n')
+  const implicitHeadingCount = lines.filter(isImplicitPastedHeadingLine).length
+
+  if (implicitHeadingCount === 0) {
+    return text
+  }
+
+  return lines.map((line) => (
+    isImplicitPastedHeadingLine(line)
+      ? `${line.match(/^\s*/)?.[0] || ''}## ${line.trim()}`
+      : line
+  )).join('\n')
+}
+
+function isImplicitPastedHeadingLine(line: string): boolean {
+  const trimmed = line.trim()
+
+  if (
+    !trimmed ||
+    trimmed.length > 90 ||
+    trimmed.includes('|') ||
+    /[。；;:]$/.test(trimmed)
+  ) {
+    return false
+  }
+
+  return /^(?:第?[一二三四五六七八九十百千万]+[章节部分]?|[0-9]{1,2})[、．.]\s*\S/.test(trimmed)
+}
+
+function normalizePastedMarkdownTables(text: string): string {
+  const lines = text.split('\n')
+  const output: string[] = []
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = normalizeMarkdownTableDelimiterLine(lines[index])
+
+    if (line.trim() === '' && shouldDropBlankLineInsideTable(output, lines, index)) {
+      continue
+    }
+
+    output.push(line)
+  }
+
+  return output.join('\n')
+}
+
+function shouldDropBlankLineInsideTable(output: string[], lines: string[], blankLineIndex: number): boolean {
+  const previous = findPreviousNonEmptyLine(output)
+  const nextIndex = findNextNonEmptyLineIndex(lines, blankLineIndex + 1)
+
+  if (!previous || nextIndex == null) {
+    return false
+  }
+
+  const next = lines[nextIndex]
+  const nextNextIndex = findNextNonEmptyLineIndex(lines, nextIndex + 1)
+  const nextStartsNewTable =
+    nextNextIndex != null &&
+    isPotentialMarkdownTableRow(next) &&
+    isMarkdownTableDelimiter(lines[nextNextIndex])
+
+  if (isPotentialMarkdownTableRow(previous) && isMarkdownTableDelimiter(next)) {
+    return true
+  }
+
+  if (isMarkdownTableDelimiter(previous) && isPotentialMarkdownTableRow(next)) {
+    return true
+  }
+
+  if (
+    isPotentialMarkdownTableRow(previous) &&
+    isPotentialMarkdownTableRow(next) &&
+    hasTableDelimiterBefore(output) &&
+    !nextStartsNewTable
+  ) {
+    return true
+  }
+
+  return false
+}
+
+function findPreviousNonEmptyLine(lines: string[]): string | null {
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (lines[index].trim() !== '') {
+      return lines[index]
+    }
+  }
+
+  return null
+}
+
+function findNextNonEmptyLineIndex(lines: string[], startIndex: number): number | null {
+  for (let index = startIndex; index < lines.length; index++) {
+    if (lines[index].trim() !== '') {
+      return index
+    }
+  }
+
+  return null
+}
+
+function hasTableDelimiterBefore(lines: string[]): boolean {
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index]
+
+    if (line.trim() === '') {
+      continue
+    }
+
+    if (isMarkdownTableDelimiter(line)) {
+      return true
+    }
+
+    if (!isPotentialMarkdownTableRow(line)) {
+      return false
+    }
+  }
+
+  return false
+}
+
+function normalizeMarkdownTableDelimiterLine(line: string): string {
+  if (!isMarkdownTableDelimiter(line)) {
+    return line
+  }
+
+  const leadingWhitespace = line.match(/^\s*/)?.[0] || ''
+  const trimmed = line.trim()
+  const hasLeadingPipe = trimmed.startsWith('|')
+  const hasTrailingPipe = trimmed.endsWith('|')
+  const cells = splitMarkdownTableCells(trimmed).map(cell => {
+    const value = cell.trim()
+    const alignLeft = value.startsWith(':')
+    const alignRight = value.endsWith(':')
+
+    if (alignLeft && alignRight) return ' :---: '
+    if (alignRight) return ' ---: '
+    if (alignLeft) return ' :--- '
+    return ' --- '
+  })
+
+  return `${leadingWhitespace}${hasLeadingPipe ? '|' : ''}${cells.join('|')}${hasTrailingPipe ? '|' : ''}`.trimEnd()
+}
+
+function splitMarkdownTableCells(line: string): string[] {
+  const trimmed = line.trim()
+  const withoutLeadingPipe = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed
+  const withoutTrailingPipe = withoutLeadingPipe.endsWith('|')
+    ? withoutLeadingPipe.slice(0, -1)
+    : withoutLeadingPipe
+
+  return withoutTrailingPipe.split('|')
+}
+
+function isMarkdownTableDelimiter(line: string): boolean {
+  const cells = splitMarkdownTableCells(line)
+
+  return (
+    cells.length >= 2 &&
+    cells.every(cell => /^:?\s*[-\u2013\u2014]{2,}\s*:?$/.test(cell.trim()))
+  )
+}
+
+function isPotentialMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim()
+
+  if (!trimmed.includes('|') || isMarkdownTableDelimiter(trimmed)) {
+    return false
+  }
+
+  const cells = splitMarkdownTableCells(trimmed)
+
+  return cells.length >= 2 && cells.some(cell => cell.trim().length > 0)
+}
+
+function hasMarkdownTable(text: string): boolean {
+  const lines = text.split('\n')
+
+  for (let index = 0; index < lines.length - 1; index++) {
+    if (
+      isPotentialMarkdownTableRow(lines[index]) &&
+      isMarkdownTableDelimiter(lines[index + 1])
+    ) {
+      return true
+    }
+  }
+
+  return false
+}
+
 // 简单的启发式函数：检查文本是否看起来像 Markdown
 function looksLikeMarkdown(text: string): boolean {
+  const blockPattern = /(^|\n)\s{0,3}(#{1,6}\s+\S|[-*+]\s+\S|\d+[.)]\s+\S|>\s+\S|```|---+\s*$)/
+
   return (
-    /^#{1,6}\s/.test(text) || // 标题
+    blockPattern.test(text) || // 标题、列表、引用、代码块、分隔线
     /\*\*[^*]+\*\*/.test(text) || // 粗体
+    /__[^_]+__/.test(text) || // 粗体
     /\*[^*]+\*/.test(text) || // 斜体
+    /_[^_\n]+_/.test(text) || // 斜体
     /\[.+\]\(.+\)/.test(text) || // 链接
-    /^[-*+]\s/.test(text) || // 无序列表
-    /^\d+\.\s/.test(text) || // 有序列表
-    /^>\s/.test(text) || // 引用
-    /^```[\s\S]*```$/.test(text) || // 代码块
     /`[^`]+`/.test(text) || // 行内代码
     /\$\$[\s\S]+?\$\$/.test(text) || // 块级公式
-    /(^|[^\$])\$[^\$\n]+\$(?!\$)/.test(text) // 行内公式
+    /(^|[^\$])\$[^\$\n]+\$(?!\$)/.test(text) || // 行内公式
+    hasMarkdownTable(text) // 表格
   )
 }
 
@@ -160,6 +554,14 @@ interface TipTapEditorProps {
   autoScroll?: boolean
   showOverlay?: boolean
   onTerminate?: () => void
+}
+
+interface FlashcardSelectionContext {
+  text: string
+  fileName: string
+  notePath: string
+  startLine: number
+  endLine: number
 }
 
 type MobileSelectionContext =
@@ -241,6 +643,8 @@ export function TipTapEditor({
   const [mobileContext, setMobileContext] = useState<MobileSelectionContext>(null)
   const [mobileSheetMode, setMobileSheetMode] = useState<MobileSheetMode>(null)
   const [mobileOutlineOpen, setMobileOutlineOpen] = useState(false)
+  const [flashcardDialogOpen, setFlashcardDialogOpen] = useState(false)
+  const [flashcardSelectionContext, setFlashcardSelectionContext] = useState<FlashcardSelectionContext | null>(null)
   const [imageSrcDraft, setImageSrcDraft] = useState('')
   const [imageAltDraft, setImageAltDraft] = useState('')
   const aiActionHandlersRef = useRef({
@@ -306,6 +710,7 @@ export function TipTapEditor({
         underline: false,
       }),
       MarkdownParagraph,
+      EmptyBlockBackspace,
       Placeholder.configure({
         placeholder: placeholderText,
         showOnlyCurrent: true,
@@ -321,6 +726,8 @@ export function TipTapEditor({
         lowlight,
       }),
       CharacterCount,
+      TextStyle,
+      Color,
       Highlight.configure({
         multicolor: true,
       }),
@@ -333,10 +740,13 @@ export function TipTapEditor({
       Dropcursor,
       Table.configure({
         resizable: true,
+        handleWidth: 8,
+        cellMinWidth: 96,
+        lastColumnResizable: true,
       }),
       TableRow,
-      TableHeader,
-      TableCell,
+      RichTableHeader,
+      RichTableCell,
       Markdown.configure({
         indentation: {
           style: 'space',
@@ -352,9 +762,50 @@ export function TipTapEditor({
         attributeName: 'data-id',
         types: ['paragraph', 'heading', 'blockquote', 'codeBlock', 'listItem', 'bulletList', 'orderedList', 'taskItem', 'table', 'tableRow', 'tableCell', 'tableHeader'],
       }),
+      HeadingCollapse,
       InlineMath,
       BlockMath,
       MermaidDiagram,
+      DiagramLink,
+      WikiLinkExtension.configure({
+        onClick: (target) => {
+          // 在文件树中查找匹配的文件并打开
+          const { fileTree, setActiveFilePath } = useArticleStore.getState()
+          const findFile = (items: any[], prefix = ''): string | null => {
+            for (const item of items) {
+              const itemPath = prefix ? `${prefix}/${item.name}` : item.name
+              const baseName = item.name.replace(/\.md$/, '')
+              if (item.isFile && baseName === target) return itemPath
+              if (item.children) {
+                const found = findFile(item.children, itemPath)
+                if (found) return found
+              }
+            }
+            return null
+          }
+          const found = findFile(fileTree)
+          if (found) setActiveFilePath(found)
+        },
+      }),
+      WikiLinkSuggestionExtension.configure({
+        getFiles: () => {
+          const { fileTree } = useArticleStore.getState()
+          const files: Array<{ path: string; name: string }> = []
+          const collectFiles = (items: any[], prefix = '') => {
+            for (const item of items) {
+              const itemPath = prefix ? `${prefix}/${item.name}` : item.name
+              if (item.isFile && item.name.endsWith('.md')) {
+                files.push({ path: itemPath, name: item.name.replace(/\.md$/, '') })
+              }
+              if (item.children) {
+                collectFiles(item.children, itemPath)
+              }
+            }
+          }
+          collectFiles(fileTree)
+          return files
+        },
+      }),
       Image.extend({
         addAttributes() {
           return {
@@ -559,6 +1010,7 @@ export function TipTapEditor({
     const selectionFrom = clampSelectionPosition(savedViewState.selectionFrom, docSize)
     const selectionTo = clampSelectionPosition(savedViewState.selectionTo, docSize)
     const wantedSelection = Math.max(savedViewState.selectionFrom, savedViewState.selectionTo)
+    const cursorPosition = Math.max(selectionFrom, selectionTo)
 
     if (docSize < wantedSelection && attempt < 5) {
       setTimeout(() => {
@@ -572,9 +1024,11 @@ export function TipTapEditor({
         return
       }
 
+      // 只恢复光标位置，避免打开文档时自动恢复“文本高亮选区”
+      // 导致顶部 BubbleMenu 在未主动选中文本时意外出现
       editor.chain().focus().setTextSelection({
-        from: selectionFrom,
-        to: selectionTo,
+        from: cursorPosition,
+        to: cursorPosition,
       }).run()
 
       requestAnimationFrame(() => {
@@ -586,8 +1040,8 @@ export function TipTapEditor({
         restoredViewPathRef.current = path
         lastViewStateRef.current = {
           path,
-          selectionFrom,
-          selectionTo,
+          selectionFrom: cursorPosition,
+          selectionTo: cursorPosition,
           scrollTop: savedViewState.scrollTop,
         }
       })
@@ -776,6 +1230,51 @@ export function TipTapEditor({
     setMobileSheetMode(null)
   }, [editor, isMobile])
 
+  const getFlashcardSelectionContext = useCallback((): FlashcardSelectionContext | null => {
+    if (!editor || !activeFilePath) {
+      return null
+    }
+
+    const { from, to } = editor.state.selection
+    if (from === to) {
+      return null
+    }
+
+    const text = editor.state.doc.textBetween(from, to).trim()
+    if (!text) {
+      return null
+    }
+
+    const fileName = activeFilePath.split('/').pop() || activeFilePath
+    const textBeforeFrom = editor.state.doc.textBetween(0, from, '\n', '\n')
+    const startLine = (textBeforeFrom.match(/\n/g)?.length || 0) + 1
+    const textBeforeTo = editor.state.doc.textBetween(0, to, '\n', '\n')
+    const endLine = (textBeforeTo.match(/\n/g)?.length || 0) + 1
+
+    return {
+      text,
+      fileName,
+      notePath: activeFilePath,
+      startLine,
+      endLine,
+    }
+  }, [activeFilePath, editor])
+
+  const openFlashcardDialogFromSelection = useCallback(() => {
+    const selectionContext = getFlashcardSelectionContext()
+    if (!selectionContext) {
+      toast({
+        title: '请先选中一段文本',
+        description: '闪卡生成需要基于当前选区内容。',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setFlashcardSelectionContext(selectionContext)
+    setFlashcardDialogOpen(true)
+  }, [getFlashcardSelectionContext, toast])
+
   const runMobileEditorAction = useCallback((action: string) => {
     if (!editor || !mobileContext) return
 
@@ -846,6 +1345,12 @@ export function TipTapEditor({
           void aiActionHandlersRef.current.expand()
         }
         return
+      case 'ai-flashcard':
+        if (restoreMobileContextSelection()) {
+          setMobileSheetMode(null)
+          openFlashcardDialogFromSelection()
+        }
+        return
       case 'italic':
         if (restoreMobileContextSelection()) editor.chain().focus().toggleItalic().run()
         return
@@ -910,6 +1415,7 @@ export function TipTapEditor({
     editor,
     mobileContext,
     onQuoteToChat,
+    openFlashcardDialogFromSelection,
     restoreMobileContextSelection,
     updateMobileContext,
   ])
@@ -997,6 +1503,133 @@ export function TipTapEditor({
       editorDom.removeEventListener('click', handleMobileImageClick)
     }
   }, [editor, isMobile, updateMobileContext])
+
+  useEffect(() => {
+    if (!editor || isMobile) return
+
+    const editorDom = editor.view.dom
+    let resizeGuide: HTMLDivElement | null = null
+    let activeResizeTable: HTMLTableElement | null = null
+    let dragging = false
+
+    const ensureResizeGuide = () => {
+      if (resizeGuide) return resizeGuide
+
+      resizeGuide = document.createElement('div')
+      resizeGuide.className = 'table-column-resize-guide'
+      document.body.appendChild(resizeGuide)
+      return resizeGuide
+    }
+
+    const clearColumnTarget = () => {
+      resizeGuide?.remove()
+      resizeGuide = null
+      activeResizeTable = null
+      editorDom.classList.remove('table-column-resize-ready', 'table-column-resizing')
+    }
+
+    const getVisibleTableRect = (table: HTMLTableElement) => {
+      const editorRoot = editorDom.closest('#aritcle-md-editor') as HTMLElement | null
+      const editorRect = (editorRoot || editorDom).getBoundingClientRect()
+      const tableWrapper = table.closest('.tableWrapper') as HTMLElement | null
+      const wrapperRect = tableWrapper?.getBoundingClientRect() || table.getBoundingClientRect()
+      const tableRect = table.getBoundingClientRect()
+      const left = Math.max(wrapperRect.left, editorRect.left)
+      const right = Math.min(wrapperRect.right, editorRect.right)
+      const top = Math.max(tableRect.top, editorRect.top)
+      const bottom = Math.min(tableRect.bottom, editorRect.bottom)
+
+      if (right <= left || bottom <= top) return null
+
+      return {
+        left,
+        right,
+        top,
+        bottom,
+        height: bottom - top,
+      }
+    }
+
+    const markColumnTarget = (cell: HTMLTableCellElement, clientX: number, isDragging: boolean) => {
+      const table = cell.closest('table')
+      if (!table) return
+
+      activeResizeTable = table
+      const visibleRect = getVisibleTableRect(table)
+      if (!visibleRect) return
+
+      const guide = ensureResizeGuide()
+      const cellRight = cell.getBoundingClientRect().right
+      const guideLeft = Math.min(Math.max(isDragging ? clientX : cellRight, visibleRect.left), visibleRect.right)
+      guide.style.left = `${guideLeft}px`
+      guide.style.top = `${visibleRect.top}px`
+      guide.style.height = `${visibleRect.height}px`
+      guide.classList.toggle('is-dragging', isDragging)
+      editorDom.classList.toggle('table-column-resize-ready', !isDragging)
+      editorDom.classList.toggle('table-column-resizing', isDragging)
+    }
+
+    const getResizeCell = (event: MouseEvent) => {
+      const cell = (event.target as HTMLElement | null)?.closest('td, th') as HTMLTableCellElement | null
+      if (!cell) return null
+
+      const rect = cell.getBoundingClientRect()
+      const nearRightEdge = rect.right - event.clientX <= 10 && rect.right - event.clientX >= -4
+      return nearRightEdge ? cell : null
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (dragging) {
+        const visibleRect = activeResizeTable ? getVisibleTableRect(activeResizeTable) : null
+        if (!visibleRect) return
+
+        const guide = ensureResizeGuide()
+        guide.style.left = `${Math.min(Math.max(event.clientX, visibleRect.left), visibleRect.right)}px`
+        guide.style.top = `${visibleRect.top}px`
+        guide.style.height = `${visibleRect.height}px`
+        guide.classList.add('is-dragging')
+        return
+      }
+
+      const cell = getResizeCell(event)
+      if (!cell) {
+        clearColumnTarget()
+        return
+      }
+
+      markColumnTarget(cell, event.clientX, false)
+    }
+
+    const handleMouseDown = (event: MouseEvent) => {
+      const cell = getResizeCell(event)
+      if (!cell) return
+
+      dragging = true
+      markColumnTarget(cell, event.clientX, true)
+    }
+
+    const handleMouseUp = () => {
+      dragging = false
+      clearColumnTarget()
+    }
+
+    const handleMouseLeave = () => {
+      if (!dragging) clearColumnTarget()
+    }
+
+    editorDom.addEventListener('mousemove', handleMouseMove)
+    editorDom.addEventListener('mousedown', handleMouseDown)
+    editorDom.addEventListener('mouseleave', handleMouseLeave)
+    window.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      editorDom.removeEventListener('mousemove', handleMouseMove)
+      editorDom.removeEventListener('mousedown', handleMouseDown)
+      editorDom.removeEventListener('mouseleave', handleMouseLeave)
+      window.removeEventListener('mouseup', handleMouseUp)
+      clearColumnTarget()
+    }
+  }, [editor, isMobile])
 
   // Auto scroll to bottom when content changes and autoScroll is enabled
   useEffect(() => {
@@ -2016,6 +2649,32 @@ export function TipTapEditor({
 
   // Handle drag and drop from marks
   const handleEditorDrop = useCallback((e: React.DragEvent) => {
+    const fileDragData = e.dataTransfer.getData('application/x-note-gen-file')
+    const fileText = e.dataTransfer.getData('text/plain')
+    const draggedFile = fileDragData || fileText
+
+    if (draggedFile) {
+      let droppedPath = ''
+
+      try {
+        const parsed = JSON.parse(fileDragData) as { path?: string; isDirectory?: boolean } | null
+        if (parsed?.path && !parsed.isDirectory) {
+          droppedPath = parsed.path
+        }
+      } catch {
+        droppedPath = fileText
+      }
+
+      if (droppedPath) {
+        useArticleStore.getState().setActiveFilePath(droppedPath)
+        toast({
+          title: '已打开文件',
+          description: droppedPath.split('/').pop() || droppedPath,
+        })
+        return
+      }
+    }
+
     const markData = e.dataTransfer.getData('application/json')
     if (markData) {
       try {
@@ -2385,6 +3044,154 @@ export function TipTapEditor({
       })
     }
 
+    const findCitationSelectionByText = (
+      searchText?: string,
+    ): { from: number; to: number } | null => {
+      const currentEditor = editor
+      if (!currentEditor) {
+        return null
+      }
+
+      const raw = (searchText || '').trim()
+      if (!raw) {
+        return null
+      }
+
+      const candidates = Array.from(new Set([
+        raw,
+        raw.split('\n').map(item => item.trim()).find(Boolean) || '',
+        raw.replace(/\s+/g, ' ').trim(),
+      ])).filter(Boolean)
+
+      type TextSegment = { text: string; pos: number; start: number; end: number }
+      const segments: TextSegment[] = []
+      let linearCursor = 0
+
+      currentEditor.state.doc.descendants((node, pos) => {
+        if (!node.isText || !node.text) {
+          return true
+        }
+
+        const text = node.text
+        const start = linearCursor
+        linearCursor += text.length
+        segments.push({
+          text,
+          pos,
+          start,
+          end: linearCursor,
+        })
+
+        return true
+      })
+
+      if (segments.length === 0) {
+        return null
+      }
+
+      const linearText = segments.map(item => item.text).join('')
+
+      const locateEditorPos = (offset: number) => {
+        if (offset <= 0) {
+          return segments[0].pos
+        }
+
+        for (const segment of segments) {
+          if (offset < segment.end) {
+            return segment.pos + (offset - segment.start)
+          }
+        }
+
+        const last = segments[segments.length - 1]
+        return last.pos + last.text.length
+      }
+
+      for (const candidate of candidates) {
+        const index = linearText.toLowerCase().indexOf(candidate.toLowerCase())
+        if (index < 0) {
+          continue
+        }
+
+        const from = locateEditorPos(index)
+        const to = locateEditorPos(index + candidate.length)
+
+        if (to >= from) {
+          return { from, to }
+        }
+      }
+
+      return null
+    }
+
+    const handleFocusCitation = (payload: {
+      filePath?: string
+      startLine?: number
+      endLine?: number
+      from?: number
+      to?: number
+      searchText?: string
+    }) => {
+      const currentEditor = editor
+      if (!currentEditor) {
+        return
+      }
+
+      const targetPath = payload.filePath?.trim()
+      if (targetPath && activeFilePath && targetPath !== activeFilePath) {
+        return
+      }
+
+      const docSize = currentEditor.state.doc.content.size
+      let nextFrom = typeof payload.from === 'number' ? payload.from : undefined
+      let nextTo = typeof payload.to === 'number' ? payload.to : undefined
+
+      if (
+        typeof nextFrom !== 'number'
+        || typeof nextTo !== 'number'
+        || nextTo < nextFrom
+      ) {
+        const byText = findCitationSelectionByText(payload.searchText)
+        if (byText) {
+          nextFrom = byText.from
+          nextTo = byText.to
+        }
+      }
+
+      if (
+        (typeof nextFrom !== 'number' || typeof nextTo !== 'number')
+        && typeof payload.startLine === 'number'
+        && payload.startLine > 0
+      ) {
+        const markdown = normalizeMarkdownPlaceholders(currentEditor.getMarkdown())
+        const markdownLines = markdown.split('\n')
+        const start = Math.min(payload.startLine, markdownLines.length)
+        const end = Math.max(start, Math.min(payload.endLine || start, markdownLines.length))
+        const lineSnippet = markdownLines.slice(start - 1, end).join('\n').trim().slice(0, 160)
+        const byLineSnippet = findCitationSelectionByText(lineSnippet)
+        if (byLineSnippet) {
+          nextFrom = byLineSnippet.from
+          nextTo = byLineSnippet.to
+        }
+      }
+
+      if (typeof nextFrom !== 'number' || typeof nextTo !== 'number') {
+        currentEditor.commands.focus()
+        return
+      }
+
+      const safeFrom = clampSelectionPosition(Math.max(1, nextFrom), docSize)
+      const safeTo = clampSelectionPosition(Math.max(safeFrom, nextTo), docSize)
+
+      runDeferredEditorCommand(() => {
+        currentEditor
+          .chain()
+          .focus()
+          .setTextSelection({ from: safeFrom, to: safeTo })
+          .scrollIntoView()
+          .run()
+      }, () => {})
+    }
+
     // Defer emitter and document listener registration to avoid flushSync conflict during React render
     const setupListeners = () => {
       // Check if editor is initialized before registering listeners
@@ -2399,6 +3206,7 @@ export function TipTapEditor({
       emitter.on('editor-redo', handleRedo)
       emitter.on('mobile-editor-toggle-outline', handleMobileToggleOutline)
       emitter.on('editor-can-undo-redo', handleCanUndoRedo)
+      emitter.on('editor-focus-citation', handleFocusCitation)
       document.addEventListener('tiptap-insert-mermaid', handleInsertMermaid as EventListener)
       listenersSetup = true
     }
@@ -2413,6 +3221,7 @@ export function TipTapEditor({
       emitter.off('editor-redo', handleRedo)
       emitter.off('mobile-editor-toggle-outline', handleMobileToggleOutline)
       emitter.off('editor-can-undo-redo', handleCanUndoRedo)
+      emitter.off('editor-focus-citation', handleFocusCitation)
       // Only remove event listener if it was actually added
       if (listenersSetup) {
         document.removeEventListener('tiptap-insert-mermaid', handleInsertMermaid as EventListener)
@@ -2463,21 +3272,16 @@ export function TipTapEditor({
           className={getEditorContentContainerClass({
             centeredContent,
             isMobile,
-            outlineOpen: !!outlineOpen,
+            outlineOpen: false,
             outlinePosition,
           })}
-          style={
-            !isMobile && outlineOpen
-              ? {
-                [isOutlineOnLeft(outlinePosition) ? 'paddingLeft' : 'paddingRight']: OUTLINE_PANEL_PADDING_CLASS,
-              }
-              : undefined
-          }
         >
         <EditorContent editor={editor} className="h-full relative">
           {!isMobile && <ImageBubbleMenu editor={editor} />}
 
           <AISuggestionFloating editor={editor} />
+
+          {!isMobile && <EmptyLineBlockMenu editor={editor} />}
 
           {!isMobile && <FloatingTableMenu editor={editor} />}
 
@@ -2489,6 +3293,7 @@ export function TipTapEditor({
               onAIExpand={handleAIExpand}
               onAITranslate={handleAITranslate}
               onQuoteToChat={onQuoteToChat}
+              onCreateFlashcard={openFlashcardDialogFromSelection}
             />
           )}
         </EditorContent>
@@ -2564,6 +3369,20 @@ export function TipTapEditor({
         onInsert={handleMathInsert}
         type={mathType}
         title={mathType === 'inline' ? '插入行内公式' : '插入块级公式'}
+      />
+      <FlashcardCreateDialog
+        open={flashcardDialogOpen}
+        onOpenChange={setFlashcardDialogOpen}
+        onCreated={() => {
+          toast({ title: '闪卡已创建' })
+          setFlashcardSelectionContext(null)
+        }}
+        initialDraft={flashcardSelectionContext ? {
+          type: 'basic',
+          front: flashcardSelectionContext.text,
+          notePath: flashcardSelectionContext.notePath,
+        } : null}
+        selectionContext={flashcardSelectionContext}
       />
     </div>
   )

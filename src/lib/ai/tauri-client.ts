@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import type OpenAI from 'openai'
 import type { ModelsPage } from 'openai/resources/models'
 import type { AiConfig } from '@/app/core/setting/config'
@@ -33,6 +34,8 @@ interface MultipartRequestPayload {
   }
   requestId?: string
 }
+
+type AiTransportConfig = JsonRequestPayload['config']
 
 type StreamEvent<T> =
   | { type: 'chunk'; data: T }
@@ -107,7 +110,7 @@ function createRequestId() {
     : `${Date.now()}-${Math.random()}`
 }
 
-function normalizeConfig(aiConfig?: AiConfig) {
+function normalizeConfig(aiConfig?: AiConfig): AiTransportConfig {
   return {
     baseUrl: aiConfig?.baseURL || '',
     apiKey: aiConfig?.apiKey,
@@ -121,6 +124,95 @@ function toAbortError(error: unknown) {
   }
   if (error instanceof Error) return error
   return new Error(String(error))
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isRetryableTransportError(error: unknown) {
+  const message = getErrorMessage(error)
+  return /AI_TRANSPORT_ERROR|error sending request|Failed to fetch|NetworkError|Load failed/i.test(message) &&
+    !/Request was aborted/i.test(message)
+}
+
+function buildRequestUrl(config: AiTransportConfig, path: string) {
+  const normalizedBase = config.baseUrl.trim().replace(/\/+$/, '')
+  const normalizedPath = path.trim().replace(/^\/+/, '')
+  return `${normalizedBase}/${normalizedPath}`
+}
+
+function buildRequestHeaders(config: AiTransportConfig, includeJsonContentType: boolean) {
+  const headers: Record<string, string> = {}
+
+  if (config.apiKey?.trim()) {
+    headers.Authorization = `Bearer ${config.apiKey.trim()}`
+  }
+
+  if (includeJsonContentType) {
+    headers['Content-Type'] = 'application/json'
+  }
+
+  if (config.customHeaders) {
+    for (const [key, value] of Object.entries(config.customHeaders)) {
+      headers[key] = value
+    }
+  }
+
+  return headers
+}
+
+function truncateErrorBody(body: string, maxLength = 2000) {
+  return body.length > maxLength ? body.slice(0, maxLength) : body
+}
+
+function formatHttpError(status: number, body: string) {
+  const retryable = status === 429 || status >= 500
+  return `AI_HTTP_ERROR status=${status} retryable=${retryable} body=${truncateErrorBody(body)}`
+}
+
+async function requestJsonViaPluginHttp<T = JsonValue>(
+  payload: Omit<JsonRequestPayload, 'requestId'>,
+  signal?: AbortSignal
+): Promise<T> {
+  const response = await tauriFetch(buildRequestUrl(payload.config, payload.path), {
+    method: payload.method || 'POST',
+    headers: buildRequestHeaders(payload.config, payload.body !== undefined),
+    body: payload.body === undefined ? undefined : JSON.stringify(payload.body),
+    connectTimeout: 15000,
+    signal,
+  })
+  const text = await response.text()
+
+  if (!response.ok) {
+    throw new Error(formatHttpError(response.status, text))
+  }
+
+  return (text ? JSON.parse(text) : {}) as T
+}
+
+function createSyntheticStreamChunk(
+  completion: OpenAI.Chat.ChatCompletion
+): OpenAI.Chat.Completions.ChatCompletionChunk {
+  const firstChoice = completion.choices?.[0]
+  const content = typeof firstChoice?.message?.content === 'string'
+    ? firstChoice.message.content
+    : ''
+
+  return {
+    id: completion.id || createRequestId(),
+    object: 'chat.completion.chunk',
+    created: completion.created || Math.floor(Date.now() / 1000),
+    model: completion.model || '',
+    choices: [{
+      index: firstChoice?.index ?? 0,
+      delta: {
+        role: 'assistant',
+        content,
+      },
+      finish_reason: firstChoice?.finish_reason || null,
+    }],
+  }
 }
 
 async function cancelRequest(requestId: string) {
@@ -159,7 +251,15 @@ export async function invokeAiJson<T = JsonValue>(
       },
     })
   } catch (error) {
-    throw toAbortError(error)
+    const normalizedError = toAbortError(error)
+    if (isRetryableTransportError(normalizedError)) {
+      try {
+        return await requestJsonViaPluginHttp<T>(payload, signal)
+      } catch (fallbackError) {
+        throw new Error(`${normalizedError.message}; plugin-http fallback failed: ${getErrorMessage(fallbackError)}`)
+      }
+    }
+    throw normalizedError
   } finally {
     detachAbort()
   }
@@ -216,8 +316,10 @@ function createStreamingIterable<T>(
 ) {
   const queue = new AsyncQueue<T>()
   const detachAbort = attachAbort(signal, request.requestId)
+  let receivedAnyChunk = false
   const channel = new Channel<StreamEvent<T>>((event) => {
     if (event.type === 'chunk') {
+      receivedAnyChunk = true
       queue.push(event.data)
       return
     }
@@ -234,7 +336,26 @@ function createStreamingIterable<T>(
   }).then(() => {
     queue.close()
   }).catch((error) => {
-    queue.fail(toAbortError(error))
+    const normalizedError = toAbortError(error)
+    if (!receivedAnyChunk && isRetryableTransportError(normalizedError)) {
+      const fallbackBody = {
+        ...(request.body as Record<string, unknown>),
+        stream: false,
+      }
+      requestJsonViaPluginHttp<OpenAI.Chat.ChatCompletion>({
+        config: request.config,
+        path: '/chat/completions',
+        method: 'POST',
+        body: fallbackBody,
+      }, signal).then((completion) => {
+        queue.push(createSyntheticStreamChunk(completion) as T)
+        queue.close()
+      }).catch((fallbackError) => {
+        queue.fail(new Error(`${normalizedError.message}; plugin-http fallback failed: ${getErrorMessage(fallbackError)}`))
+      })
+      return
+    }
+    queue.fail(normalizedError)
   }).finally(() => {
     detachAbort()
   })

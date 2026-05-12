@@ -31,7 +31,7 @@ export function TooltipButton(
     <TooltipProvider>
       <Tooltip {...props}>
         <TooltipTrigger asChild>
-          <Button id={buttonId} className={cn("relative", buttonClassName)} disabled={disabled} size={size} variant={variant} onClick={onClick}>
+          <Button id={buttonId} className={cn("relative", buttonClassName)} disabled={disabled} size={size} variant={variant} onClick={onClick} aria-label={tooltipText}>
             {icon}
           </Button>
         </TooltipTrigger>

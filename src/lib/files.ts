@@ -34,6 +34,19 @@ export function isLinkedFolder(resource: LinkedResource): resource is LinkedFold
   return 'fileCount' in resource;
 }
 
+function isPathNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const lowerMessage = message.toLowerCase();
+  return (
+    lowerMessage.includes("no such file") ||
+    lowerMessage.includes("not found") ||
+    lowerMessage.includes("os error 2") ||
+    lowerMessage.includes("os error 3") ||
+    message.includes("系统找不到指定的文件") ||
+    message.includes("系统找不到指定的路径")
+  );
+}
+
 // 收集文件夹下的所有 Markdown 文件
 export async function collectMarkdownFiles(folderPath: string): Promise<Array<{path: string, name: string}>> {
   const files: Array<{path: string, name: string}> = [];
@@ -70,6 +83,9 @@ export async function collectMarkdownFiles(folderPath: string): Promise<Array<{p
         }
       }
     } catch (error) {
+      if (isPathNotFoundError(error)) {
+        return;
+      }
       console.error(`读取目录 ${dirPath} 失败:`, error);
     }
   };

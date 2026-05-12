@@ -98,6 +98,15 @@ interface SettingState {
   inspirationModel: string
   setInspirationModel: (inspirationModel: string) => Promise<void>
 
+  tavilyApiKey: string
+  setTavilyApiKey: (apiKey: string) => Promise<void>
+
+  tavilySearchDepth: 'basic' | 'advanced'
+  setTavilySearchDepth: (depth: 'basic' | 'advanced') => Promise<void>
+
+  webSearchEnabled: boolean
+  setWebSearchEnabled: (enabled: boolean) => Promise<void>
+
   templateList: GenTemplate[]
   setTemplateList: (templateList: GenTemplate[]) => Promise<void>
 
@@ -631,6 +640,31 @@ const useSettingStore = create<SettingState>((set, get) => ({
     set({ inspirationModel })
   },
 
+  tavilyApiKey: '',
+  setTavilyApiKey: async (tavilyApiKey) => {
+    const store = await Store.load('store.json')
+    await store.set('tavilyApiKey', tavilyApiKey)
+    await store.save()
+    set({ tavilyApiKey })
+  },
+
+  tavilySearchDepth: 'basic',
+  setTavilySearchDepth: async (tavilySearchDepth) => {
+    const normalizedDepth = tavilySearchDepth === 'advanced' ? 'advanced' : 'basic'
+    const store = await Store.load('store.json')
+    await store.set('tavilySearchDepth', normalizedDepth)
+    await store.save()
+    set({ tavilySearchDepth: normalizedDepth })
+  },
+
+  webSearchEnabled: false,
+  setWebSearchEnabled: async (webSearchEnabled) => {
+    const store = await Store.load('store.json')
+    await store.set('webSearchEnabled', webSearchEnabled)
+    await store.save()
+    set({ webSearchEnabled })
+  },
+
   templateList: [
     {
       id: '0',
@@ -1103,13 +1137,16 @@ const useSettingStore = create<SettingState>((set, get) => ({
   // 聊天工具栏配置 - PC 端
   chatToolbarConfigPc: [
     // 底部工具栏（可排序）
-    { id: 'modelSelect', enabled: true, order: 0 },
-    { id: 'promptSelect', enabled: true, order: 1 },
-    { id: 'mcpButton', enabled: true, order: 2 },
-    { id: 'ragSwitch', enabled: true, order: 3 },
-    { id: 'clipboardMonitor', enabled: true, order: 4 },
-    // 顶部工具栏 - 右侧（不参与排序）
-    { id: 'newChat', enabled: true, order: 5 },
+      { id: 'modelSelect', enabled: true, order: 0 },
+      { id: 'promptSelect', enabled: true, order: 1 },
+      { id: 'promptEnhancer', enabled: true, order: 2 },
+      { id: 'mcpButton', enabled: true, order: 3 },
+      { id: 'ragSwitch', enabled: true, order: 4 },
+      { id: 'clipboardMonitor', enabled: true, order: 5 },
+      { id: 'skillsPopover', enabled: true, order: 6 },
+      { id: 'webSearch', enabled: true, order: 7 },
+      // 顶部工具栏 - 右侧（不参与排序）
+      { id: 'newChat', enabled: true, order: 8 },
   ],
   setChatToolbarConfigPc: async (config: ChatToolbarItem[]) => {
     set({ chatToolbarConfigPc: config })
@@ -1120,12 +1157,15 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   // 聊天工具栏配置 - 移动端
   chatToolbarConfigMobile: [
-    { id: 'modelSelect', enabled: true, order: 0 },
-    { id: 'promptSelect', enabled: true, order: 1 },
-    { id: 'mcpButton', enabled: true, order: 2 },
-    { id: 'ragSwitch', enabled: true, order: 3 },
-    { id: 'clipboardMonitor', enabled: true, order: 4 },
-    { id: 'newChat', enabled: true, order: 5 },
+      { id: 'modelSelect', enabled: true, order: 0 },
+      { id: 'promptSelect', enabled: true, order: 1 },
+      { id: 'promptEnhancer', enabled: true, order: 2 },
+      { id: 'mcpButton', enabled: true, order: 3 },
+      { id: 'ragSwitch', enabled: true, order: 4 },
+      { id: 'clipboardMonitor', enabled: true, order: 5 },
+      { id: 'skillsPopover', enabled: true, order: 6 },
+      { id: 'webSearch', enabled: true, order: 7 },
+      { id: 'newChat', enabled: true, order: 8 },
   ],
   setChatToolbarConfigMobile: async (config: ChatToolbarItem[]) => {
     set({ chatToolbarConfigMobile: config })

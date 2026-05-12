@@ -1,5 +1,9 @@
 use futures_util::StreamExt;
-use reqwest::{header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE}, multipart::{Form, Part}, Client, Method, Url};
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE},
+    multipart::{Form, Part},
+    Client, Method, Url,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, str::FromStr, time::Duration};
@@ -121,7 +125,10 @@ fn build_url(base_url: &str, path: &str) -> Result<Url, String> {
     Url::parse(&full_url).map_err(|error| format!("Invalid request URL `{full_url}`: {error}"))
 }
 
-fn build_headers(config: &AiConfigPayload, include_json_content_type: bool) -> Result<HeaderMap, String> {
+fn build_headers(
+    config: &AiConfigPayload,
+    include_json_content_type: bool,
+) -> Result<HeaderMap, String> {
     let mut headers = HeaderMap::new();
     if let Some(api_key) = &config.api_key {
         if !api_key.is_empty() {
@@ -160,7 +167,12 @@ fn sanitize_error_message(message: &str) -> String {
         while let Some(relative_start) = sanitized[search_from..].find(marker) {
             let value_start = search_from + relative_start + marker.len();
             let value_end = sanitized[value_start..]
-                .find(|character: char| character.is_whitespace() || character == '&' || character == '\'' || character == '"')
+                .find(|character: char| {
+                    character.is_whitespace()
+                        || character == '&'
+                        || character == '\''
+                        || character == '"'
+                })
                 .map(|offset| value_start + offset)
                 .unwrap_or_else(|| sanitized.len());
             if value_end > value_start {
@@ -193,7 +205,9 @@ fn format_transport_error(error: reqwest::Error) -> String {
     } else {
         "transport"
     };
-    sanitize_error_message(&format!("AI_TRANSPORT_ERROR kind={kind} retryable=true message={error}"))
+    sanitize_error_message(&format!(
+        "AI_TRANSPORT_ERROR kind={kind} retryable=true message={error}"
+    ))
 }
 
 fn is_retryable_status(status: reqwest::StatusCode) -> bool {
@@ -250,8 +264,6 @@ async fn run_json_request(
     result
 }
 
-
-
 async fn retry_delay(attempt: usize) {
     let delay_ms = AI_RETRY_BASE_DELAY_MS * 2_u64.pow(attempt as u32);
     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -267,7 +279,9 @@ async fn send_json_with_retry(
     let mut last_error = String::new();
 
     for attempt in 0..=AI_MAX_RETRIES {
-        let mut builder = client.request(method.clone(), url.clone()).headers(headers.clone());
+        let mut builder = client
+            .request(method.clone(), url.clone())
+            .headers(headers.clone());
         if let Some(body) = &body {
             builder = builder.json(body);
         }
@@ -387,9 +401,7 @@ pub async fn ai_binary_request(
             response = send_future => response.map_err(format_transport_error)?,
         }
     } else {
-        send_future
-            .await
-            .map_err(format_transport_error)?
+        send_future.await.map_err(format_transport_error)?
     };
 
     let status = response.status();
@@ -453,9 +465,7 @@ pub async fn ai_multipart_request(
             response = send_future => response.map_err(format_transport_error)?,
         }
     } else {
-        send_future
-            .await
-            .map_err(format_transport_error)?
+        send_future.await.map_err(format_transport_error)?
     };
 
     let result = read_response_json(response).await;
@@ -512,7 +522,9 @@ pub async fn ai_chat_completion_stream(
             break;
         };
 
-        let chunk = item.map_err(|error| sanitize_error_message(&format!("AI_STREAM_READ_ERROR message={error}")))?;
+        let chunk = item.map_err(|error| {
+            sanitize_error_message(&format!("AI_STREAM_READ_ERROR message={error}"))
+        })?;
         for message in decoder.push(chunk.as_ref()) {
             if message == "[DONE]" {
                 let _ = on_event.send(AiStreamEvent::Done);
@@ -559,7 +571,10 @@ mod tests {
         assert!(first.is_empty());
 
         let second = decoder.push(b"\n\ndata: [DONE]\n\n");
-        assert_eq!(second, vec![r#"{"id":"1"}"#.to_string(), "[DONE]".to_string()]);
+        assert_eq!(
+            second,
+            vec![r#"{"id":"1"}"#.to_string(), "[DONE]".to_string()]
+        );
     }
 
     #[test]

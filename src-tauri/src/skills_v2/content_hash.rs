@@ -1,5 +1,5 @@
+use sha2::{Digest, Sha256};
 use std::path::Path;
-use sha2::{Sha256, Digest};
 use walkdir::WalkDir;
 
 pub fn hash_directory(dir: &Path) -> Option<String> {
@@ -16,9 +16,9 @@ pub fn hash_directory(dir: &Path) -> Option<String> {
             let path = e.path();
             let rel = path.strip_prefix(dir).unwrap_or(path);
             let rel_str = rel.to_string_lossy();
-            !rel_str.starts_with(".git") &&
-            !rel_str.contains("node_modules") &&
-            !rel_str.contains(".hub")
+            !rel_str.starts_with(".git")
+                && !rel_str.contains("node_modules")
+                && !rel_str.contains(".hub")
         })
         .collect();
 

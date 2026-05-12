@@ -64,10 +64,7 @@ fn parse_leaderboard_html(html: &str) -> Result<Vec<SkillsShSkill>, String> {
 
 fn parse_next_data(html: &str) -> Result<Vec<SkillsShSkill>, String> {
     let marker = r#"<script id="__NEXT_DATA__" type="application/json">"#;
-    let start = html
-        .find(marker)
-        .ok_or("__NEXT_DATA__ not found")?
-        + marker.len();
+    let start = html.find(marker).ok_or("__NEXT_DATA__ not found")? + marker.len();
 
     let end = html[start..]
         .find("</script>")

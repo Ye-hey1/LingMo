@@ -19,13 +19,17 @@ import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
 import { CheckSquare } from "lucide-react"
 
-type Priority = 'low' | 'medium' | 'high'
+import { Subtask, Priority as PriorityType } from "./todo-form"
+
+type Priority = PriorityType
 
 interface TodoData {
   title: string
   description: string
   completed: boolean
   priority: Priority
+  dueDate?: string
+  subtasks?: Subtask[]
 }
 
 interface TodoEditDialogProps {
@@ -42,6 +46,7 @@ export function TodoEditDialog({ mark, open, onOpenChange }: TodoEditDialogProps
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [priority, setPriority] = useState<Priority>('medium')
+  const [dueDate, setDueDate] = useState('')
 
   useEffect(() => {
     if (open && mark) {
@@ -50,6 +55,7 @@ export function TodoEditDialog({ mark, open, onOpenChange }: TodoEditDialogProps
         setTitle(todoData.title || '')
         setDescription(todoData.description || '')
         setPriority(todoData.priority || 'medium')
+        setDueDate(todoData.dueDate || '')
       } catch {
         setTitle(mark.desc || '')
         setDescription('')
@@ -63,11 +69,15 @@ export function TodoEditDialog({ mark, open, onOpenChange }: TodoEditDialogProps
       return
     }
 
+    // 保持原有的 completed、dueDate、subtasks 状态
+    const original: TodoData = JSON.parse(mark.content || '{}')
     const todoData: TodoData = {
       title: title.trim(),
       description: description.trim(),
       priority,
-      completed: false // 编辑后重置完成状态
+      completed: original.completed ?? false,
+      dueDate: dueDate || undefined,
+      subtasks: original.subtasks,
     }
 
     await updateMark({
@@ -136,8 +146,18 @@ export function TodoEditDialog({ mark, open, onOpenChange }: TodoEditDialogProps
               </TabsList>
             </Tabs>
           </div>
-        </div>
 
+          <div>
+            <Label htmlFor="edit-todo-due-date">{t('record.mark.todo.dueDate')}</Label>
+            <Input
+              id="edit-todo-due-date"
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="mt-1.5"
+            />
+          </div>
+        </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t('common.cancel')}

@@ -64,6 +64,7 @@ export function MobileEditorMoreSheet({
               <ActionButton label="润色选中文本" onClick={() => onAction('ai-polish')} />
               <ActionButton label="精简选中文本" onClick={() => onAction('ai-concise')} />
               <ActionButton label="扩写选中文本" onClick={() => onAction('ai-expand')} />
+              <ActionButton label="生成闪卡" onClick={() => onAction('ai-flashcard')} />
             </>
           )}
 

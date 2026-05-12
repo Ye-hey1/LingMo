@@ -4,6 +4,8 @@ const DEFAULT_COUNTS: Record<ActivitySource, number> = Object.freeze({
   record: 0,
   chat: 0,
   writing: 0,
+  ai: 0,
+  memory: 0,
 })
 
 function formatDayKey(timestamp: number, timeZone?: string) {
@@ -20,6 +22,8 @@ function cloneCounts(): Record<ActivitySource, number> {
     record: DEFAULT_COUNTS.record,
     chat: DEFAULT_COUNTS.chat,
     writing: DEFAULT_COUNTS.writing,
+    ai: DEFAULT_COUNTS.ai,
+    memory: DEFAULT_COUNTS.memory,
   }
 }
 

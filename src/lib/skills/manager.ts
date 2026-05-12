@@ -120,18 +120,22 @@ class SkillManager {
    */
   private async discoverGlobalSkills(): Promise<void> {
     try {
-      const skillsDirExists = await this.directoryExists('skills', 'global')
-      if (!skillsDirExists) {
-        return
-      }
+      const globalSkillRoots = ['skills', 'skills-v2/skills']
 
-      const skillDirs = await this.listSkillDirectories('skills', 'global')
+      for (const root of globalSkillRoots) {
+        const skillsDirExists = await this.directoryExists(root, 'global')
+        if (!skillsDirExists) {
+          continue
+        }
 
-      for (const dirName of skillDirs) {
-        try {
-          await this.loadSkillFromDirectory('skills', dirName, 'global')
-        } catch (error) {
-          console.error(`加载全局 Skill 失败: ${dirName}`, error)
+        const skillDirs = await this.listSkillDirectories(root, 'global')
+
+        for (const dirName of skillDirs) {
+          try {
+            await this.loadSkillFromDirectory(root, dirName, 'global')
+          } catch (error) {
+            console.error(`加载全局 Skill 失败: ${root}/${dirName}`, error)
+          }
         }
       }
     } catch (error) {
@@ -588,9 +592,7 @@ class SkillManager {
    * 获取所有已加载的 Skills（移除启用/禁用判断，直接返回所有）
    */
   async getEnabledSkills(): Promise<SkillContent[]> {
-    // 直接返回所有已加载的 Skills，不进行启用/禁用过滤
-    const allSkills = this.getAllSkills()
-    return allSkills
+    return this.getAllSkills().filter(skill => skill.metadata.enabled !== false)
   }
 
   /**
@@ -598,7 +600,7 @@ class SkillManager {
    */
   getUserInvocableSkills(): SkillContent[] {
     return this.getAllSkills().filter(
-      (skill) => skill.metadata.userInvocable !== false
+      (skill) => skill.metadata.enabled !== false && skill.metadata.userInvocable !== false
     )
   }
 

@@ -1,4 +1,4 @@
-use tauri::{Manager, WindowEvent, AppHandle};
+use tauri::{AppHandle, Manager, WindowEvent};
 
 pub fn setup_window_events(app: &AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("main") {
@@ -12,7 +12,11 @@ pub fn setup_window_events(app: &AppHandle) -> tauri::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn handle_window_event(event: &WindowEvent, window: &tauri::WebviewWindow, _app_handle: &AppHandle) {
+fn handle_window_event(
+    event: &WindowEvent,
+    window: &tauri::WebviewWindow,
+    _app_handle: &AppHandle,
+) {
     match event {
         WindowEvent::CloseRequested { api, .. } => {
             // 有托盘：隐藏到托盘
@@ -24,7 +28,11 @@ fn handle_window_event(event: &WindowEvent, window: &tauri::WebviewWindow, _app_
 }
 
 #[cfg(not(target_os = "macos"))]
-fn handle_window_event(event: &WindowEvent, window: &tauri::WebviewWindow, _app_handle: &AppHandle) {
+fn handle_window_event(
+    event: &WindowEvent,
+    window: &tauri::WebviewWindow,
+    _app_handle: &AppHandle,
+) {
     match event {
         WindowEvent::CloseRequested { api, .. } => {
             // 有托盘：隐藏到托盘

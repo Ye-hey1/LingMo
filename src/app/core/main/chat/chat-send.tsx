@@ -9,14 +9,22 @@ import { useTranslations } from "next-intl"
 import useVectorStore from "@/stores/vector"
 import { getContextForQuery, getContextForQueryInFolder } from '@/lib/rag'
 import { invoke } from "@tauri-apps/api/core"
-import { LinkedResource, isLinkedFolder } from "@/lib/files"
+import { type LinkedResource, isLinkedFolder } from "@/lib/files"
 import { readTextFile } from "@tauri-apps/plugin-fs"
 import { getFilePathOptions, getWorkspacePath } from "@/lib/workspace"
 import { AgentHandler } from "@/lib/agent/agent-handler"
 import { getToolByName } from "@/lib/agent/tools"
 import { getSessionApprovalScope, matchesSessionApproval } from "@/lib/agent/session-approval"
+import {
+  findMatchingPersistentAgentApproval,
+  getPersistentApprovalOptions,
+  recordPersistentApprovalHistory,
+} from "@/lib/agent/persistent-approval"
 import { ImageAttachment } from "./image-attachments"
 import type { RagSource } from "@/lib/rag"
+import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
+import { toast } from "@/hooks/use-toast"
+import { ToastAction } from "@/components/ui/toast"
 
 interface QuoteData {
   quote: string
@@ -33,11 +41,198 @@ interface ChatSendProps {
   inputValue: string;
   onSent?: () => void;
   linkedResource?: LinkedResource | null;
+  linkedResources?: LinkedResource[];
+  linkedResourcePreviews?: Record<string, string | null>;
   attachedImages?: ImageAttachment[];
   quoteData?: QuoteData | null;
+  webSearchEnabled?: boolean;
+  allowAutoCurrentFileContext?: boolean;
 }
 
-export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ inputValue, onSent, linkedResource, attachedImages = [], quoteData = null }, ref) => {
+type ChatCitationSource = RagSource & {
+  sourceType?: 'rag' | 'current' | 'linked' | 'quote'
+  startLine?: number
+  endLine?: number
+  from?: number
+  to?: number
+}
+
+const CITATION_CONTENT_LIMIT = 1600
+const MIN_AUTO_EXTRACT_CHAR_COUNT = 500
+const AGENT_CONTEXT_TOTAL_LIMIT = 70000
+const AGENT_CURRENT_NOTE_CONTEXT_LIMIT = 18000
+const AGENT_LINKED_FILE_CONTEXT_LIMIT = 16000
+const AGENT_RAG_CONTEXT_LIMIT = 24000
+const AGENT_QUOTE_CONTEXT_LIMIT = 10000
+const AGENT_PREVIEW_CONTEXT_LIMIT = 4000
+
+type AgentContextBudget = {
+  remaining: number
+}
+
+function takeAgentContextContent(
+  content: string,
+  perSectionLimit: number,
+  budget: AgentContextBudget,
+  label: string
+): string {
+  const normalized = content.replace(/\r\n/g, '\n').trim()
+  if (!normalized) {
+    return ''
+  }
+
+  const allowed = Math.max(0, Math.min(perSectionLimit, budget.remaining))
+  if (allowed <= 0) {
+    return `[Context omitted: ${label}; total context budget exhausted.]`
+  }
+
+  budget.remaining -= Math.min(normalized.length, allowed)
+  if (normalized.length <= allowed) {
+    return normalized
+  }
+
+  return `${normalized.slice(0, allowed).trim()}\n\n[Context truncated: ${label}; ${normalized.length - allowed} characters omitted.]`
+}
+
+function buildAutoNoteTitle(userInput: string) {
+  const normalized = userInput
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '')
+
+  const fallback = `对话要点-${new Date().toISOString().slice(0, 10)}`
+  return (normalized || fallback).slice(0, 28)
+}
+
+function hasActionableStructure(content: string) {
+  return /(^|\n)\s*[-*]\s+/.test(content)
+    || /(^|\n)\s*(#+\s+)/.test(content)
+    || /(^|\n)\s*(\d+\.\s+)/.test(content)
+}
+
+function isLikelyErrorContent(content: string) {
+  return /^工具 .+执行失败[:：]|^工具 .+执行出错[:：]|^Error:/.test(content.trim())
+}
+
+/** 判断内容是否包含值得沉淀的知识性结构（而非简单问答/闲聊） */
+function hasKnowledgeRichContent(content: string): boolean {
+  // 多个列表项（知识点罗列）
+  const listMatches = content.match(/(^|\n)\s*[-*]\s+/g)
+  if (listMatches && listMatches.length >= 3) return true
+  // 多个标题层级（系统性内容）
+  const headingMatches = content.match(/(^|\n)\s*#{1,3}\s+/g)
+  if (headingMatches && headingMatches.length >= 2) return true
+  // 代码块（技术教程）
+  if (/```[\s\S]*?```/.test(content)) return true
+  // 步骤/流程
+  if (/(^|\n)\s*(第一步|第二步|步骤\s*\d|Step\s*\d)/i.test(content)) return true
+  // 对比/因果
+  if (/对比|比较|区别|优势|劣势|原理|原因|因为.*所以|如果.*那么/.test(content)) return true
+  return false
+}
+
+function shouldSuggestExtractToNote(content: string, hasSuccessfulToolCall: boolean) {
+  const trimmed = cleanAssistantGeneratedContent(content || '').trim()
+  if (!trimmed) return false
+  if (isLikelyErrorContent(trimmed)) return false
+
+  // 短内容直接跳过（简单问答不需要沉淀）
+  if (trimmed.length < 300) return false
+
+  // 长内容 + 知识性结构 → 值得沉淀
+  if (trimmed.length >= MIN_AUTO_EXTRACT_CHAR_COUNT && hasKnowledgeRichContent(trimmed)) return true
+
+  // 工具调用产生了实际结果（创建文件等），内容较长时提示
+  if (hasSuccessfulToolCall && trimmed.length >= 400) return true
+
+  return false
+}
+
+function getLinkedResourceKey(resource: LinkedResource): string {
+  return resource.relativePath || resource.path || resource.name
+}
+
+function getLinkedFileName(path: unknown): string {
+  const normalized = typeof path === 'string' ? path.trim() : ''
+  return normalized.split('/').pop() || normalized
+}
+
+function matchesLinkedResourcePath(candidate: unknown, resource: LinkedResource): boolean {
+  const normalized = typeof candidate === 'string' ? candidate.trim() : ''
+  if (!normalized) {
+    return false
+  }
+
+  const linkedPaths = new Set([
+    resource.relativePath,
+    resource.path,
+    resource.name,
+    getLinkedFileName(resource.relativePath),
+    getLinkedFileName(resource.path),
+  ].filter(Boolean))
+
+  return linkedPaths.has(normalized) || linkedPaths.has(getLinkedFileName(normalized))
+}
+
+function normalizeCitationContent(content: unknown): string {
+  if (typeof content !== 'string') {
+    return ''
+  }
+
+  const normalized = content.replace(/\r\n/g, '\n').trim()
+  if (normalized.length <= CITATION_CONTENT_LIMIT) {
+    return normalized
+  }
+
+  return `${normalized.slice(0, CITATION_CONTENT_LIMIT).trim()}\n...`
+}
+
+function addCitationSource(
+  sources: string[],
+  details: ChatCitationSource[],
+  detail: ChatCitationSource
+) {
+  const filepath = detail.filepath?.trim() || ''
+  const filename = detail.filename?.trim() || getLinkedFileName(filepath)
+  const content = normalizeCitationContent(detail.content)
+
+  if (!filename && !filepath) {
+    return
+  }
+
+  const nextDetail: ChatCitationSource = {
+    ...detail,
+    filepath,
+    filename,
+    content,
+  }
+
+  const exists = details.some((item) =>
+    (item.filepath || item.filename) === (nextDetail.filepath || nextDetail.filename)
+    && (item.sourceType || 'rag') === (nextDetail.sourceType || 'rag')
+    && normalizeCitationContent(item.content).slice(0, 120) === content.slice(0, 120)
+  )
+
+  if (!exists) {
+    details.push(nextDetail)
+  }
+
+  if (filename && !sources.includes(filename)) {
+    sources.push(filename)
+  }
+}
+
+export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, options?: { maxTokens?: number; temperature?: number }) => void }, ChatSendProps>(({
+  inputValue,
+  onSent,
+  linkedResource,
+  linkedResources = [],
+  linkedResourcePreviews = {},
+  attachedImages = [],
+  quoteData = null,
+  webSearchEnabled = false,
+  allowAutoCurrentFileContext = true,
+}, ref) => {
   const { primaryModel } = useSettingStore()
   const { currentTagId } = useTagStore()
   const {
@@ -52,7 +247,17 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
   const { isRagEnabled } = useVectorStore()
   const abortControllerRef = useRef<AbortController | null>(null)
   const agentHandlerRef = useRef<AgentHandler | null>(null)
+  const lastAutoSuggestMessageIdRef = useRef<number | null>(null)
+  // 冷却：同一对话只提示一次可沉淀，记录已提示的 conversationId
+  const suggestedConversationIds = useRef<Set<number | undefined>>(new Set())
   const t = useTranslations()
+  const effectiveLinkedResources = linkedResources.length > 0
+    ? linkedResources
+    : linkedResource
+      ? [linkedResource]
+      : []
+  const linkedFolders = effectiveLinkedResources.filter(isLinkedFolder)
+  const linkedFiles = effectiveLinkedResources.filter(resource => !isLinkedFolder(resource))
 
   // 跟踪上一次的 loading 状态
   const wasLoadingRef = useRef(false)
@@ -145,19 +350,103 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
     if (leadingActionIndex === 0) {
       const finalAnswerMatch = trimmed.match(/Final Answer[:：]\s*([\s\S]*)/i)
       if (finalAnswerMatch) {
-        return finalAnswerMatch[1].trim()
+        return cleanAssistantGeneratedContent(finalAnswerMatch[1].trim())
       }
     }
 
-    return trimmed.slice(0, cutoff).trim()
+    return cleanAssistantGeneratedContent(trimmed.slice(0, cutoff).trim())
+  }
+
+  const triggerAutoExtractSuggestion = async (params: {
+    finalContent: string
+    placeholderMessageId: number
+    conversationId?: number
+    userInput: string
+    hasSuccessfulToolCall: boolean
+  }) => {
+    const {
+      finalContent,
+      placeholderMessageId,
+      conversationId,
+      userInput,
+      hasSuccessfulToolCall,
+    } = params
+
+    if (lastAutoSuggestMessageIdRef.current === placeholderMessageId) {
+      return
+    }
+
+    // 同一对话只提示一次
+    if (suggestedConversationIds.current.has(conversationId)) {
+      return
+    }
+
+    if (!shouldSuggestExtractToNote(finalContent, hasSuccessfulToolCall)) {
+      return
+    }
+
+    lastAutoSuggestMessageIdRef.current = placeholderMessageId
+    suggestedConversationIds.current.add(conversationId)
+    const title = buildAutoNoteTitle(userInput)
+
+    toast({
+      title: '检测到可沉淀内容',
+      description: '可一键保存为笔记，后续可被知识库检索复用。',
+      action: (
+        <ToastAction
+          altText="保存对话要点"
+          onClick={() => {
+            void (async () => {
+              const extractTool = getToolByName('extract_to_note')
+              if (!extractTool) {
+                toast({
+                  title: '保存失败',
+                  description: '未找到 extract_to_note 工具',
+                  variant: 'destructive',
+                })
+                return
+              }
+
+              const extractResult = await extractTool.execute({
+                title,
+                folderPath: 'agent-notes',
+                format: 'summary',
+                maxMessages: 40,
+                conversationId,
+              })
+
+              if (!extractResult.success) {
+                toast({
+                  title: '保存失败',
+                  description: extractResult.error || '提取对话要点失败',
+                  variant: 'destructive',
+                })
+                return
+              }
+
+              toast({
+                title: '已保存对话要点',
+                description: extractResult.data?.filePath
+                  ? `笔记路径：${extractResult.data.filePath}`
+                  : '已生成笔记并完成索引',
+              })
+            })()
+          }}
+        >
+          保存要点
+        </ToastAction>
+      ),
+    })
   }
 
   useImperativeHandle(ref, () => ({
-    sendChat: handleSubmit
+    sendChat: (instructionOverride?: string, _options?: { maxTokens?: number; temperature?: number }) => {
+      void handleSubmit(instructionOverride)
+    },
   }))
 
   // Agent 确认回调 - 使用内联确认而不是弹窗
-  const requestConfirmation = (
+  const requestConfirmation = async (
     toolName: string,
     params: Record<string, any>,
     context?: {
@@ -170,6 +459,7 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
     const tool = getToolByName(toolName)
     const sessionApprovalScope = getSessionApprovalScope(toolName, tool, params)
     const canApproveForSession = !!sessionApprovalScope
+    const persistentApprovalOptions = getPersistentApprovalOptions(toolName, tool, params)
 
     const currentChatState = useChatStore.getState()
     const activeConversationId = currentChatState.currentConversationId
@@ -182,10 +472,46 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
       autoApproveRuntimeSkillId,
       sessionApprovalScope
     )) {
-      return Promise.resolve(true)
+      try {
+        await recordPersistentApprovalHistory({
+          toolName,
+          params,
+          status: 'confirmed',
+          timestamp: Date.now(),
+          scope: 'conversation',
+          sessionApprovalType: sessionApprovalScope?.type,
+          sessionApprovalSkillId: sessionApprovalScope?.skillId,
+        }, activeConversationId)
+      } catch (error) {
+        console.error('[Agent Approval] Failed to record session approval history:', error)
+      }
+      return true
+    }
+
+    let persistentRule = null
+    try {
+      persistentRule = await findMatchingPersistentAgentApproval(toolName, tool, params)
+    } catch (error) {
+      console.error('[Agent Approval] Failed to read persistent approval rules:', error)
+    }
+    if (persistentRule) {
+      try {
+        await recordPersistentApprovalHistory({
+          toolName,
+          params,
+          status: 'confirmed',
+          timestamp: Date.now(),
+          scope: persistentRule.scope,
+        }, activeConversationId)
+      } catch (error) {
+        console.error('[Agent Approval] Failed to record persistent approval history:', error)
+      }
+      return true
     }
 
     return new Promise((resolve) => {
+      const requestedAt = Date.now()
+
       // 将确认请求保存到 store，在对话中显示
       setAgentState({
         pendingConfirmation: {
@@ -196,6 +522,7 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
           canApproveForSession,
           sessionApprovalType: sessionApprovalScope?.type,
           sessionApprovalSkillId: sessionApprovalScope?.skillId,
+          persistentApprovalOptions,
         }
       })
       
@@ -206,15 +533,29 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
         // 如果 pendingConfirmation 被清除，说明用户已操作
         if (!currentState.agentState.pendingConfirmation) {
           clearInterval(checkInterval)
-          // 如果 Agent 仍在运行，说明用户确认了
-          resolve(currentState.agentState.isRunning)
+          const decision = [...currentState.agentState.confirmationHistory]
+            .reverse()
+            .find(record =>
+              record.timestamp >= requestedAt &&
+              record.toolName === toolName &&
+              JSON.stringify(record.params) === JSON.stringify(params)
+            )
+          resolve(decision?.status === 'confirmed')
+          return
+        }
+
+        if (!currentState.agentState.isRunning) {
+          clearInterval(checkInterval)
+          setAgentState({ pendingConfirmation: undefined })
+          resolve(false)
         }
       }, 100)
     })
   }
 
   // Agent 模式处理
-  async function handleAgentMode(imageUrls: string[]) {
+  async function handleAgentMode(imageUrls: string[], instructionOverride?: string) {
+    const effectiveInstruction = instructionOverride ?? inputValue
     // 先创建一个占位的 AI 消息
     const placeholderMessage = await insert({
       tagId: currentTagId,
@@ -233,6 +574,7 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
     // 每次都创建新的 AgentHandler，使用当前的 placeholderMessage
     const agentHandler = new AgentHandler({
       activeChatId: placeholderMessage.id,
+      webSearchEnabled,
       requestConfirmation,
       currentQuote: quoteData
         ? {
@@ -256,10 +598,15 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
       onComplete: async (result, steps, stopped) => {
         // 获取 Agent 执行历史，保存完整的 ReAct 步骤
         const { agentState } = useChatStore.getState()
-        // 使用 agentState.completedSteps 而不是 steps 参数，因为 completedSteps 包含 duration 信息
+        const completedSteps = steps && steps.length > 0
+          ? steps
+          : agentState.completedSteps || []
         const agentHistory = {
-          steps: agentState.completedSteps || [], // 保存完整的 ReAct 步骤（包含 thought, action, observation, duration）
+          steps: completedSteps,
           toolCalls: agentState.toolCalls,
+          events: agentState.agentEvents,
+          contextSnapshot: agentState.agentContextSnapshot,
+          runId: agentState.agentRunId,
           iterations: agentState.currentIteration,
         }
 
@@ -267,10 +614,10 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
         let finalContent = result
         if (stopped) {
           // 保留已产生的步骤，并添加终止信息
-          const stepCount = agentState.completedSteps?.length || 0
+          const stepCount = completedSteps.length
           if (stepCount > 0) {
             // 有已完成的步骤，显示这些步骤的内容
-            finalContent = `${t('record.chat.input.stopped')}\n\n已完成 ${stepCount} 个步骤：\n${agentState.completedSteps!.map((step, i) =>
+            finalContent = `${t('record.chat.input.stopped')}\n\n已完成 ${stepCount} 个步骤：\n${completedSteps.map((step, i) =>
               `${i + 1}. ${step.action?.tool || '思考'}`
             ).join('\n')}`
           } else {
@@ -308,6 +655,17 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
           content: finalContent,
           agentHistory: JSON.stringify(agentHistory),
         }, true)
+
+        if (!stopped) {
+          const hasSuccessfulToolCall = agentState.toolCalls.some(call => call.result?.success)
+          await triggerAutoExtractSuggestion({
+            finalContent,
+            placeholderMessageId: placeholderMessage.id,
+            conversationId: placeholderMessage.conversationId,
+            userInput: inputValue,
+            hasSuccessfulToolCall,
+          })
+        }
 
         // 清空 Final Answer 模式状态
         setAgentState({
@@ -357,15 +715,36 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
     try {
       // 构建上下文信息
       let context = ''
-      let ragSources: string[] = []
-      let ragSourceDetails: RagSource[] = []
+      const contextBudget: AgentContextBudget = { remaining: AGENT_CONTEXT_TOTAL_LIMIT }
+      const ragSources: string[] = []
+      const ragSourceDetails: ChatCitationSource[] = []
+
+      if (webSearchEnabled) {
+        context += `## 联网搜索\n\n用户已为本轮对话开启联网搜索。请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或 Tavily Extract 不可用时再使用 web_fetch。搜索与提取结果来自 Tavily Search API。\n\n`
+      }
 
       // 1. 如果有当前打开的笔记，自动传入其内容
       const useArticleStore = (await import('@/stores/article')).default
       const articleStore = useArticleStore.getState()
 
-      if (articleStore.activeFilePath && articleStore.currentArticle) {
-        context = `## 当前打开的笔记\n文件路径: ${articleStore.activeFilePath}\n\n内容:\n${articleStore.currentArticle}\n\n`
+      const activeFileAlreadyLinked = linkedFiles.some(resource =>
+        matchesLinkedResourcePath(articleStore.activeFilePath, resource)
+      )
+
+      if (allowAutoCurrentFileContext && articleStore.activeFilePath && articleStore.currentArticle && !activeFileAlreadyLinked) {
+        const currentArticleContext = takeAgentContextContent(
+          articleStore.currentArticle,
+          AGENT_CURRENT_NOTE_CONTEXT_LIMIT,
+          contextBudget,
+          `current note ${articleStore.activeFilePath}`
+        )
+        context += `## 当前打开的笔记\n文件路径: ${articleStore.activeFilePath}\n\n内容:\n${currentArticleContext}\n\n`
+        addCitationSource(ragSources, ragSourceDetails, {
+          filepath: articleStore.activeFilePath,
+          filename: getLinkedFileName(articleStore.activeFilePath),
+          content: articleStore.currentArticle,
+          sourceType: 'current',
+        })
       }
 
       // 2. 如果启用 RAG，获取知识库相关上下文
@@ -384,30 +763,48 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
             // 根据关联资源类型选择检索方式
             let ragResult: { context: string; sources: string[]; sourceDetails: RagSource[] }
 
-            if (linkedResource && isLinkedFolder(linkedResource)) {
+            const linkedFolder = linkedFolders[0]
+
+            if (linkedFolder) {
               // 文件夹关联：限定检索范围到文件夹
-              ragResult = await getContextForQueryInFolder(keywords, linkedResource.relativePath)
+              ragResult = await getContextForQueryInFolder(keywords, linkedFolder.relativePath)
             } else {
               // 文件关联或无关联：全局检索
               ragResult = await getContextForQuery(keywords)
             }
 
-            ragSources = ragResult.sources
-            ragSourceDetails = ragResult.sourceDetails
+            ragResult.sourceDetails.forEach(sourceDetail => {
+              addCitationSource(ragSources, ragSourceDetails, {
+                ...sourceDetail,
+                sourceType: 'rag',
+              })
+            })
+            ragResult.sources.forEach(source => {
+              if (!ragSources.includes(source)) {
+                ragSources.push(source)
+              }
+            })
 
             // 设置到 agentState，用于实时显示
             setAgentState({
-              ragSources,
-              ragSourceDetails,
+              ragSources: ragResult.sources,
+              ragSourceDetails: ragResult.sourceDetails,
             })
 
             if (ragResult.context) {
               // 找到相关内容
-              context += `## 知识库检索结果\n\n已在知识库中找到与用户问题相关的笔记内容。请优先使用以下信息回答用户问题：\n\n${ragResult.context}\n`
+              const ragContext = takeAgentContextContent(
+                ragResult.context,
+                AGENT_RAG_CONTEXT_LIMIT,
+                contextBudget,
+                'RAG results'
+              )
+              context += `## 知识库检索结果\n\n已在知识库中找到与用户问题相关的笔记内容。请优先使用以下信息回答用户问题：\n\n${ragContext}\n`
             } else {
               // 未找到相关内容
-              const searchScope = linkedResource && isLinkedFolder(linkedResource)
-                ? `在关联文件夹"${linkedResource.name}"中`
+              const linkedFolder = linkedFolders[0]
+              const searchScope = linkedFolder
+                ? `在关联文件夹"${linkedFolder.name}"中`
                 : '在知识库中'
 
               context += `## 知识库检索结果\n\n${searchScope}未找到与用户问题相关的笔记内容。\n\n请根据情况处理：\n- 如果用户询问的是具体笔记内容，请告知用户${searchScope}可能没有相关资料\n- 如果问题可以基于一般知识回答，请使用你的知识回答\n- 如果需要更多信息，可以请用户提供更具体的关键词或问题\n`
@@ -420,36 +817,77 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
         }
       }
 
-      // 保存 RAG 来源到消息中（在 Agent 执行前保存，这样引用文件会在最上方显示）
-      if (ragSources.length > 0) {
-        await saveChat({
-          ...placeholderMessage,
-          ragSources: JSON.stringify(ragSources),
-          ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
-        }, true)
-      }
+      // 3. 如果有关联文件（非文件夹），注入内容作为 Agent 上下文
+      if (linkedFiles.length > 0) {
+        const workspace = await getWorkspacePath()
 
-      // 3. 如果有关联文件（非文件夹），始终注入完整内容作为 Agent 上下文
-      if (linkedResource && !isLinkedFolder(linkedResource)) {
-        try {
-          const workspace = await getWorkspacePath()
-          let linkedFileContent = ''
-          if (workspace.isCustom) {
-            linkedFileContent = await readTextFile(linkedResource.path)
-          } else {
-            const { path, baseDir } = await getFilePathOptions(linkedResource.path)
-            linkedFileContent = await readTextFile(path, { baseDir })
-          }
+        for (const [index, resource] of linkedFiles.entries()) {
+          try {
+            const resourceKey = getLinkedResourceKey(resource)
+            const resourcePath = resource.relativePath || resource.path
+            const isActiveResource = matchesLinkedResourcePath(articleStore.activeFilePath, resource)
+            const preview = linkedResourcePreviews[resourceKey] ?? (index === 0 ? linkedResourcePreview : null)
+            const isPdf = /\.pdf$/i.test(resourcePath)
 
-          if (linkedResourcePreview) {
-            context += `\n${linkedResourcePreview}\n`
-          }
+            if (preview) {
+              context += `\n${takeAgentContextContent(
+                preview,
+                AGENT_PREVIEW_CONTEXT_LIMIT,
+                contextBudget,
+                `linked preview ${resource.name || resourcePath}`
+              )}\n`
+            }
 
-          if (linkedFileContent) {
-            context += `\n## 关联文件完整内容\n\nThe full content of the linked file "${linkedResource.name}" (${linkedResource.relativePath}) is already included below. Do not call tools to read or check this same file again unless the user explicitly asks to refresh it.\n\n---\n${linkedFileContent}\n---\n`
+            if (isPdf) {
+              // PDF 文件：使用已提取的文本（articleStore.currentArticle），不读取二进制
+              if (isActiveResource && articleStore.currentArticle) {
+                const pdfContext = takeAgentContextContent(
+                  articleStore.currentArticle,
+                  AGENT_LINKED_FILE_CONTEXT_LIMIT,
+                  contextBudget,
+                  `linked PDF ${resource.name || resourcePath}`
+                )
+                context += `\n## 关联文件内容 ${index + 1}（PDF 文本提取）\n\n文件: "${resource.name}" (${resource.relativePath})\n\n---\n${pdfContext}\n---\n`
+                addCitationSource(ragSources, ragSourceDetails, {
+                  filepath: resource.relativePath || resource.path,
+                  filename: resource.name || getLinkedFileName(resource.relativePath || resource.path),
+                  content: articleStore.currentArticle,
+                  sourceType: 'linked',
+                })
+              }
+              continue
+            }
+
+            let linkedFileContent = ''
+            if (isActiveResource && articleStore.currentArticle) {
+              linkedFileContent = articleStore.currentArticle
+            } else if (workspace.isCustom) {
+              linkedFileContent = await readTextFile(resource.path)
+            } else {
+              const { path, baseDir } = await getFilePathOptions(resource.path || resource.relativePath)
+              linkedFileContent = baseDir
+                ? await readTextFile(path, { baseDir })
+                : await readTextFile(path)
+            }
+
+            if (linkedFileContent) {
+              const linkedContext = takeAgentContextContent(
+                linkedFileContent,
+                AGENT_LINKED_FILE_CONTEXT_LIMIT,
+                contextBudget,
+                `linked file ${resource.name || resourcePath}`
+              )
+              context += `\n## 关联文件内容 ${index + 1}\n\nContent from linked file "${resource.name}" (${resource.relativePath}) is included below. If it is truncated, only call tools to read more when the user task requires missing parts.\n\n---\n${linkedContext}\n---\n`
+              addCitationSource(ragSources, ragSourceDetails, {
+                filepath: resource.relativePath || resource.path,
+                filename: resource.name || getLinkedFileName(resource.relativePath || resource.path),
+                content: linkedFileContent,
+                sourceType: 'linked',
+              })
+            }
+          } catch (error) {
+            console.error('Failed to read linked file in Agent mode:', error)
           }
-        } catch (error) {
-          console.error('Failed to read linked file in Agent mode:', error)
         }
       }
 
@@ -468,12 +906,19 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
           }
         }
 
+        const quoteContext = takeAgentContextContent(
+          fullContent,
+          AGENT_QUOTE_CONTEXT_LIMIT,
+          contextBudget,
+          `quote ${fileName}`
+        )
+
         context += `\n## 📌 用户引用内容
 
 用户引用了笔记 "${fileName}" ${lineInfo}的以下内容：
 
 ---
-${fullContent}
+${quoteContext}
 ---
 
 ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才允许编辑**。
@@ -512,8 +957,7 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
 - 禁止在解释/分析类请求中调用编辑工具
 - 禁止改动选区之外的内容
 - 禁止获取整个文档后再重写整篇
-- 禁止把 startLine/endLine 擅自改成 1/1` : hasValidLineNumbers ? `**🚨 必须使用行号修改**: 当用户引用内容并要求修改时，你必须使用 replace_editor_content 工具的 line-based 模式，传入精确的行号：
-` : hasValidLineNumbers ? `**仅在用户明确要求修改/改写/补充/插入时才允许编辑**。
+- 禁止把 startLine/endLine 擅自改成 1/1` : hasValidLineNumbers ? `**仅在用户明确要求修改/改写/补充/插入时才允许编辑**。
 
 如果用户是在提问、解释、总结、分析、翻译、润色建议、代码说明，应该直接基于这段引用内容回答，**不要调用任何编辑工具**。
 
@@ -531,6 +975,29 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
 请基于这段引用内容回答用户的问题。
 
 `
+        addCitationSource(ragSources, ragSourceDetails, {
+          filepath: quoteData.articlePath,
+          filename: fileName,
+          content: fullContent,
+          sourceType: 'quote',
+          startLine,
+          endLine,
+          from,
+          to,
+        })
+      }
+
+      // 保存本轮上下文来源到 AI 消息中，最终在回答底部展示为可点击引用。
+      if (ragSources.length > 0 || ragSourceDetails.length > 0) {
+        const normalizedSources = ragSources.length > 0
+          ? ragSources
+          : ragSourceDetails.map(source => source.filename).filter((source): source is string => !!source)
+
+        await saveChat({
+          ...placeholderMessage,
+          ragSources: normalizedSources.length > 0 ? JSON.stringify(normalizedSources) : undefined,
+          ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+        }, true)
       }
 
       // 5. 构建消息数组，包含对话历史（使用压缩摘要替代已压缩的消息）
@@ -544,17 +1011,17 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
         chats,
         undefined, // systemPrompt - Agent 会自己构建
         context,   // additionalContext - 包含文章、RAG、关联文件、引用等
-        inputValue, // currentUserInput - 当前用户输入
+        effectiveInstruction, // currentUserInput - 当前用户输入（可能来自命令模板）
         {
           // Agent 自己会在 think() 里重新注入当前请求，避免重复。
           // 保留 assistant 历史，优先使用 condensedContent，避免丢失多轮上下文。
           includeAssistantMessages: true,
           includeLatestUserMessage: false,
-          maxUserMessages: shouldCarryUserHistoryForAgent(inputValue) ? 3 : 0,
+          maxUserMessages: shouldCarryUserHistoryForAgent(effectiveInstruction) ? 3 : 0,
         }
       )
 
-      await agentHandler.execute(inputValue, messages, imageUrls)
+      await agentHandler.execute(effectiveInstruction, messages, imageUrls)
     } catch (error) {
       console.error('Agent execution error:', error)
     } finally {
@@ -564,7 +1031,7 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
   }
 
   // 对话（Agent 模式）
-  async function handleSubmit() {
+  async function handleSubmit(instructionOverride?: string) {
     if (inputValue === '') return
     onSent?.()
 
@@ -579,7 +1046,7 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
       images: imageUrls.length > 0 ? JSON.stringify(imageUrls) : undefined,
       quoteData: quoteData ? JSON.stringify(quoteData) : undefined,
     })
-    await handleAgentMode(imageUrls)
+    await handleAgentMode(imageUrls, instructionOverride)
     setLoading(false)
   }
 
@@ -597,6 +1064,7 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
     }
 
     // 重置 loading 状态
+    setAgentState({ pendingConfirmation: undefined })
     setLoading(false)
   }
 

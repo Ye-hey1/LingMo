@@ -1,0 +1,51 @@
+body.diagram-editor-active .excalidraw .dropdown-menu {
+  margin-top: 0.25rem;
+  max-width: min(360px, calc(100vw - 32px));
+}
+
+body.diagram-editor-active .excalidraw .dropdown-menu--mobile {
+  left: 0.5rem;
+  width: min(360px, calc(100vw - 32px));
+  row-gap: 0.25rem;
+}
+
+body.diagram-editor-active .excalidraw .dropdown-menu .dropdown-menu-container {
+  max-height: min(460px, calc(100vh - 180px));
+  padding: 6px;
+  border-radius: 12px;
+}
+
+body.diagram-editor-active .excalidraw .dropdown-menu .dropdown-menu-item,
+body.diagram-editor-active .excalidraw .dropdown-menu .dropdown-menu-item-bare {
+  min-height: 30px;
+  height: 30px;
+  padding: 0 8px;
+}
+
+body.diagram-editor-active .excalidraw .dropdown-menu .dropdown-menu-item-base {
+  column-gap: 8px;
+  font-size: 13px;
+}
+
+body.diagram-editor-active .excalidraw .dropdown-menu .dropdown-menu-item__text {
+  gap: 8px;
+}
+
+body.diagram-editor-active .excalidraw .dropdown-menu .dropdown-menu-item svg,
+body.diagram-editor-active .excalidraw .dropdown-menu .dropdown-menu-item-bare svg {
+  width: 14px;
+  height: 14px;
+}
+
+body.diagram-editor-active .excalidraw .dropdown-menu .dropdown-menu-group-title {
+  margin: 8px 0 6px;
+  font-size: 12px;
+}
+
+body.diagram-editor-active .excalidraw .dropdown-menu .dropdown-menu-item-custom {
+  margin-top: 4px;
+}
+
+body.diagram-editor-active .excalidraw .dropdown-menu .Stack_vertical > .separator {
+  margin: 6px 0;
+}

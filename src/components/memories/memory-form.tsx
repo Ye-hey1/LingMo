@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -8,18 +8,26 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import useMemoriesStore from '@/stores/memories'
+import type { Memory } from '@/db/memories'
 import { toast } from '@/hooks/use-toast'
 
 interface MemoryFormProps {
+  memory?: Memory
   onSuccess?: () => void
 }
 
-export function MemoryForm({ onSuccess }: MemoryFormProps) {
+export function MemoryForm({ memory, onSuccess }: MemoryFormProps) {
   const t = useTranslations('settings.memories')
-  const [content, setContent] = useState('')
-  const [category, setCategory] = useState<'preference' | 'memory'>('preference')
+  const [content, setContent] = useState(memory?.content || '')
+  const [category, setCategory] = useState<'preference' | 'memory'>(memory?.category || 'preference')
   const [submitting, setSubmitting] = useState(false)
-  const { addMemory } = useMemoriesStore()
+  const { addMemory, updateMemory } = useMemoriesStore()
+  const isEditing = Boolean(memory)
+
+  useEffect(() => {
+    setContent(memory?.content || '')
+    setCategory(memory?.category || 'preference')
+  }, [memory])
 
   const handleSubmit = async () => {
     if (!content.trim()) {
@@ -33,11 +41,15 @@ export function MemoryForm({ onSuccess }: MemoryFormProps) {
 
     setSubmitting(true)
     try {
-      await addMemory(content, category)
+      if (memory) {
+        await updateMemory(memory.id, content, category)
+      } else {
+        await addMemory(content, category)
+      }
       setContent('')
       toast({
         title: t('success'),
-        description: t('saved'),
+        description: isEditing ? t('edited') : t('saved'),
       })
       onSuccess?.()
     } catch (error) {
@@ -87,7 +99,7 @@ export function MemoryForm({ onSuccess }: MemoryFormProps) {
       </div>
 
       <Button onClick={handleSubmit} disabled={submitting || !content.trim()}>
-        {submitting ? t('form.saving') : t('form.save')}
+        {submitting ? t('form.saving') : isEditing ? t('form.update') : t('form.save')}
       </Button>
     </div>
   )

@@ -15,7 +15,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { Sparkles, Trash2, GitBranch, Archive, FolderOpen, Monitor } from 'lucide-react'
+import { Sparkles, Trash2, GitBranch, Archive, FolderOpen, Monitor, Loader2 } from 'lucide-react'
 import type { SkillRecord } from '@/stores/skills-v2'
 
 const SOURCE_ICONS: Record<string, React.ReactNode> = {
@@ -35,6 +35,7 @@ interface SkillCardV2Props {
   cancelLabel: string
   deleteLabel: string
   updateLabel: string
+  deleting?: boolean
 }
 
 export function SkillCardV2({
@@ -47,6 +48,7 @@ export function SkillCardV2({
   cancelLabel,
   deleteLabel,
   updateLabel,
+  deleting = false,
 }: SkillCardV2Props) {
   const sourceIcon = SOURCE_ICONS[skill.source_type] || <Sparkles className="size-3.5" />
 
@@ -77,12 +79,13 @@ export function SkillCardV2({
           <div className="flex items-center gap-1.5 shrink-0">
             <Switch
               checked={skill.enabled}
+              disabled={deleting}
               onCheckedChange={(checked) => onToggle(skill.id, checked)}
             />
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive">
-                  <Trash2 className="size-3.5" />
+                <Button size="sm" variant="ghost" disabled={deleting} className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive">
+                  {deleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>

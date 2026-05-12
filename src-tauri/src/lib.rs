@@ -1,17 +1,23 @@
+mod ai;
+mod backup;
+mod device;
+mod llm_memory;
 mod mcp;
 mod mcp_runtime;
-mod device;
-mod backup;
 mod skills;
-mod ai;
 mod skills_v2;
 
-use mcp::{start_mcp_stdio_server, stop_mcp_server, send_mcp_message, McpServerManager};
-use mcp_runtime::{cancel_mcp_runtime_install, inspect_mcp_runtime, install_mcp_runtime, RuntimeInstallManager};
-use device::get_device_id;
+use ai::{
+    ai_binary_request, ai_chat_completion_stream, ai_json_request, ai_multipart_request,
+    cancel_ai_request, AiRequestManager,
+};
 use backup::{export_app_data, import_app_data, import_app_data_from_file};
+use device::get_device_id;
+use mcp::{send_mcp_message, start_mcp_stdio_server, stop_mcp_server, McpServerManager};
+use mcp_runtime::{
+    cancel_mcp_runtime_install, inspect_mcp_runtime, install_mcp_runtime, RuntimeInstallManager,
+};
 use skills::import_skill_zip;
-use ai::{ai_binary_request, ai_chat_completion_stream, ai_json_request, ai_multipart_request, cancel_ai_request, AiRequestManager};
 use skills_v2::commands::SkillState;
 use skills_v2::db;
 use tauri::Manager;
@@ -31,8 +37,8 @@ pub fn run() {
         .manage(AiRequestManager::new())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
-            let store = db::init_skill_store(&app_data_dir)
-                .expect("Failed to initialize skills database");
+            let store =
+                db::init_skill_store(&app_data_dir).expect("Failed to initialize skills database");
             app.manage(SkillState(std::sync::Mutex::new(store)));
             Ok(())
         })
@@ -53,6 +59,13 @@ pub fn run() {
             ai_multipart_request,
             ai_chat_completion_stream,
             cancel_ai_request,
+            llm_memory::llm_memory_list_sessions,
+            llm_memory::llm_memory_get_session_detail,
+            llm_memory::llm_memory_update_message,
+            llm_memory::llm_memory_delete_session,
+            llm_memory::llm_memory_delete_message,
+            llm_memory::llm_memory_list_edit_logs,
+            llm_memory::llm_memory_restore_message,
             skills_v2::commands::skill_v2_get_all,
             skills_v2::commands::skill_v2_get_by_id,
             skills_v2::commands::skill_v2_delete,

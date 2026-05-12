@@ -1,11 +1,11 @@
-use std::path::{Path, PathBuf};
-use serde::Serialize;
-use uuid::Uuid;
-use walkdir::WalkDir;
 use crate::skills_v2::content_hash::hash_directory;
-use crate::skills_v2::skill_metadata::{is_skill_directory, parse_skill_md, sanitize_skill_name};
 use crate::skills_v2::db::{DiscoveredSkill, SkillStore};
 use crate::skills_v2::error::SkillResult;
+use crate::skills_v2::skill_metadata::{is_skill_directory, parse_skill_md, sanitize_skill_name};
+use serde::Serialize;
+use std::path::PathBuf;
+use uuid::Uuid;
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolAdapter {
@@ -49,9 +49,7 @@ pub fn get_tool_adapters() -> Vec<ToolAdapter> {
     });
 
     // Windsurf
-    let windsurf_dirs = vec![
-        home.join(".codeium").join("windsurf").join("commands"),
-    ];
+    let windsurf_dirs = vec![home.join(".codeium").join("windsurf").join("commands")];
     adapters.push(ToolAdapter {
         key: "windsurf".into(),
         name: "Windsurf".into(),

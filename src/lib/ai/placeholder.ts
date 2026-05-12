@@ -95,7 +95,21 @@ export async function fetchAiPlaceholder(text: string): Promise<string | false> 
  * @param text 上下文内容
  * @returns 灵感提示词数组，失败返回空数组
  */
+
+// 速率限制：防止 429 错误
+let lastQuickPromptCall = 0
+let rateLimitBackoff = 0  // 退避时间（毫秒），遇到 429 后递增
+const MIN_CALL_INTERVAL = 30000  // 最少 30 秒间隔
+
 export async function fetchAiQuickPrompts(text: string): Promise<QuickPrompt[]> {
+  // 速率限制检查
+  const now = Date.now()
+  const effectiveInterval = MIN_CALL_INTERVAL + rateLimitBackoff
+  if (now - lastQuickPromptCall < effectiveInterval) {
+    return []
+  }
+  lastQuickPromptCall = now
+
   try {
     const config = await getInspirationModelConfig()
     const chatModel = config?.models?.find(m => m.modelType === 'chat')
@@ -187,6 +201,15 @@ Content: ${text || 'General note-taking'}`
 
     return []
   } catch (error) {
+    // 429 限流错误：增加退避时间
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    if (errorMsg.includes('429') || errorMsg.includes('rate limit') || errorMsg.includes('TPM')) {
+      rateLimitBackoff = Math.min(rateLimitBackoff + 60000, 300000) // 每次加 60s，最多 5 分钟
+      console.warn(`[Placeholder] Rate limited, backing off ${rateLimitBackoff / 1000}s`)
+    } else {
+      // 非限流错误，重置退避
+      rateLimitBackoff = Math.max(0, rateLimitBackoff - 30000)
+    }
     console.error('Error in fetchAiQuickPrompts:', error)
     return []
   }

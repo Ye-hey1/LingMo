@@ -1,27 +1,27 @@
 'use client'
-import React, { useEffect, useState, useMemo } from "react"
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { rename, readTextFile, readFile, writeFile, writeTextFile } from "@tauri-apps/plugin-fs"
+import { getCurrentWebview } from "@tauri-apps/api/webview"
+
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
-import useArticleStore, { DirTree } from "@/stores/article"
-import { rename, writeTextFile, writeFile } from "@tauri-apps/plugin-fs"
-import { FileItem } from './file-item'
-import { FolderItem } from "./folder-item"
 import { computedParentPath } from "@/lib/path"
+import useArticleStore, { DirTree } from "@/stores/article"
+
+import { FileItem } from "./file-item"
+import { FolderItem } from "./folder-item"
 import { writeDroppedFileToRoot } from "./root-drop"
 
-// 递归过滤文件树，移除云端文件（如果 showCloudFiles 为 false）
-function filterFileTree(tree: DirTree[], showCloud: boolean): DirTree[] {
-  if (showCloud) return tree
-
-  return tree
-    .filter(item => item.isLocale)
-    .map(item => ({
-      ...item,
-      children: item.children ? filterFileTree(item.children, showCloud) : undefined
-    }))
-}
-
-function Tree({ item, focusSidebar }: { item: DirTree; focusSidebar: () => void }) {
-  const { collapsibleList, setCollapsibleList, loadCollapsibleFiles } = useArticleStore()
+function Tree({
+  item,
+  focusSidebar,
+  forceExpanded = false,
+}: {
+  item: DirTree
+  focusSidebar: () => void
+  forceExpanded?: boolean
+}) {
+  const { collapsibleList, loadCollapsibleFiles, setCollapsibleList } = useArticleStore()
   const path = computedParentPath(item)
 
   function handleCollapse(isOpen: boolean) {
@@ -31,20 +31,27 @@ function Tree({ item, focusSidebar }: { item: DirTree; focusSidebar: () => void 
     }
   }
 
+  if (item.isFile) {
+    return <FileItem item={item} focusSidebar={focusSidebar} />
+  }
+
   return (
-    item.isFile ?
-    <FileItem item={item} focusSidebar={focusSidebar} /> :
     <li>
       <Collapsible
         onOpenChange={handleCollapse}
         className="group/collapsible [&[data-state=open]>button>.file-manange-item>svg:first-child]:rotate-90"
-        open={collapsibleList.includes(path)}
+        open={forceExpanded || collapsibleList.includes(path)}
       >
-        <FolderItem item={item} focusSidebar={focusSidebar} />
-        <CollapsibleContent className="pl-1">
-          <ul className="pl-2">
+        <FolderItem item={item} focusSidebar={focusSidebar} forceExpanded={forceExpanded} />
+        <CollapsibleContent className="file-manager-nested">
+          <ul>
             {item.children?.map((subItem) => (
-              <Tree key={`${computedParentPath(subItem)}-${subItem.isLocale}`} item={subItem} focusSidebar={focusSidebar} />
+              <Tree
+                key={`${computedParentPath(subItem)}-${subItem.isLocale}`}
+                item={subItem}
+                focusSidebar={focusSidebar}
+                forceExpanded={forceExpanded}
+              />
             ))}
           </ul>
         </CollapsibleContent>
@@ -53,137 +60,190 @@ function Tree({ item, focusSidebar }: { item: DirTree; focusSidebar: () => void 
   )
 }
 
-export function FileManager({ focusSidebar }: { focusSidebar: () => void }) {
+export function FileManager({
+  focusSidebar,
+  tree,
+  forceExpanded = false,
+}: {
+  focusSidebar: () => void
+  tree?: DirTree[]
+  forceExpanded?: boolean
+}) {
   const [isDragging, setIsDragging] = useState(false)
-  const { activeFilePath, fileTree, loadFileTree, setActiveFilePath, addFile, showCloudFiles } = useArticleStore()
-
-  async function handleDrop (e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault()
-    const renamePath = e.dataTransfer?.getData('text')
-    if (renamePath) {
-      const filename = renamePath.slice(renamePath.lastIndexOf('/') + 1)
-      
-      // 获取工作区路径信息
-      const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
-      const workspace = await getWorkspacePath()
-      
-      // 获取源路径和目标路径的选项
-      const oldPathOptions = await getFilePathOptions(renamePath)
-      const newPathOptions = await getFilePathOptions(filename) // 直接使用文件名，表示根目录
-      
-      // 根据工作区类型执行重命名操作
-      if (workspace.isCustom) {
-        // 自定义工作区
-        await rename(oldPathOptions.path, newPathOptions.path)
-      } else {
-        // 默认工作区
-        await rename(oldPathOptions.path, newPathOptions.path, { 
-          newPathBaseDir: newPathOptions.baseDir,
-          oldPathBaseDir: oldPathOptions.baseDir
-        })
-      }
-      
-      await loadFileTree()
-      if (renamePath === activeFilePath) {
-        setActiveFilePath(filename)
-      }
-    } else {
-      const files = e.dataTransfer.files
-      for (let i = 0; i < files.length; i += 1) {
-        const file = files[i]
-        // 接受 markdown 和图片文件
-        if (file.name.endsWith('.md')) {
-          const text = await file.text()
-          const { getFilePathOptions } = await import('@/lib/workspace')
-          const sanitizedFileName = await writeDroppedFileToRoot({
-            fileName: file.name,
-            getFilePathOptions,
-            writeTextFile,
-          }, {
-            kind: 'text',
-            content: text,
-          })
-
-          addFile({
-            name: sanitizedFileName,
-            isEditing: false,
-            isLocale: true,
-            isDirectory: false,
-            isFile: true,
-            isSymlink: false
-          })
-        } else if (file.name.match(/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i)) {
-          // 处理图片文件，同样需要处理文件名以保持一致性
-          const arrayBuffer = await file.arrayBuffer()
-          const uint8Array = new Uint8Array(arrayBuffer)
-          const { getFilePathOptions } = await import('@/lib/workspace')
-          const sanitizedImageFileName = await writeDroppedFileToRoot({
-            fileName: file.name,
-            getFilePathOptions,
-            writeFile,
-          }, {
-            kind: 'binary',
-            content: uint8Array,
-          })
-
-          addFile({
-            name: sanitizedImageFileName,
-            isEditing: false,
-            isLocale: true,
-            isDirectory: false,
-            isFile: true,
-            isSymlink: false
-          })
-        }
-      }
-    }
-    setIsDragging(false)
-  }
-  
-  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    setIsDragging(true)
-  }
-
-  function handleDragleave(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    setIsDragging(false)
-  }
+  const { fileTree, loadFileTree } = useArticleStore()
+  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (fileTree.length === 0) {
       loadFileTree()
     }
-  }, [loadFileTree])
+  }, [fileTree.length, loadFileTree])
 
-  // 根据开关状态过滤文件树 - 使用 useMemo 缓存结果
-  const filteredFileTree = useMemo(
-    () => filterFileTree(fileTree, showCloudFiles),
-    [fileTree, showCloudFiles]
-  )
+  // 处理外部文件拖入（通过 Tauri 的 onDragDropEvent）
+  const handleExternalDrop = useCallback(async (paths: string[]) => {
+    const { getFilePathOptions } = await import("@/lib/workspace")
+
+    for (const filePath of paths) {
+      const fileName = filePath.split(/[/\\]/).pop() || filePath
+
+      if (fileName.endsWith(".md")) {
+        const content = await readTextFile(filePath)
+        const sanitizedFileName = await writeDroppedFileToRoot(
+          { fileName, getFilePathOptions, writeTextFile },
+          { kind: "text", content },
+        )
+        useArticleStore.getState().addFile({
+          name: sanitizedFileName,
+          isEditing: false,
+          isLocale: true,
+          isDirectory: false,
+          isFile: true,
+          isSymlink: false,
+        })
+        useArticleStore.getState().setActiveFilePath(sanitizedFileName)
+      } else if (fileName.match(/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i)) {
+        const content = await readFile(filePath)
+        const sanitizedFileName = await writeDroppedFileToRoot(
+          { fileName, getFilePathOptions, writeFile },
+          { kind: "binary", content },
+        )
+        useArticleStore.getState().addFile({
+          name: sanitizedFileName,
+          isEditing: false,
+          isLocale: true,
+          isDirectory: false,
+          isFile: true,
+          isSymlink: false,
+        })
+      } else if (fileName.match(/\.pdf$/i)) {
+        const content = await readFile(filePath)
+        const sanitizedFileName = await writeDroppedFileToRoot(
+          { fileName, getFilePathOptions, writeFile },
+          { kind: "binary", content },
+        )
+        useArticleStore.getState().addFile({
+          name: sanitizedFileName,
+          isEditing: false,
+          isLocale: true,
+          isDirectory: false,
+          isFile: true,
+          isSymlink: false,
+        })
+      }
+    }
+  }, [])
+
+  // 使用 Tauri 的 onDragDropEvent 监听外部文件拖放
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    let isOverContainer = false
+
+    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+      const { type } = event.payload
+
+      if (type === 'enter' || type === 'over') {
+        // 检查鼠标是否在文件树容器内
+        if (type === 'over') {
+          const { x, y } = event.payload.position
+          const rect = el.getBoundingClientRect()
+          isOverContainer = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+          if (isOverContainer) {
+            setIsDragging(true)
+          }
+        }
+        return
+      }
+
+      if (type === 'leave') {
+        setIsDragging(false)
+        isOverContainer = false
+        return
+      }
+
+      if (type === 'drop') {
+        setIsDragging(false)
+        isOverContainer = false
+        const { paths } = event.payload
+        if (paths && paths.length > 0) {
+          void handleExternalDrop(paths)
+        }
+      }
+    })
+
+    return () => {
+      void unlisten.then(fn => fn())
+    }
+  }, [handleExternalDrop])
+
+  // 内部文件拖拽（文件树内移动到根目录）仍使用 DOM 事件
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    function handleNativeDrop(event: DragEvent) {
+      const dt = event.dataTransfer
+      if (!dt) return
+
+      // 只处理内部拖拽（外部文件由 Tauri 事件处理）
+      const renamePath = dt.getData("application/x-note-gen-file") || dt.getData("text")
+      if (!renamePath) return
+
+      event.preventDefault()
+      event.stopPropagation()
+
+      void (async () => {
+        let actualPath = renamePath
+        try {
+          const parsed = JSON.parse(renamePath)
+          if (parsed?.path) actualPath = parsed.path
+        } catch {
+          // actualPath 就是纯文本路径
+        }
+
+        const filename = actualPath.slice(actualPath.lastIndexOf("/") + 1)
+        const { getFilePathOptions, getWorkspacePath } = await import("@/lib/workspace")
+        const workspace = await getWorkspacePath()
+
+        const oldPathOptions = await getFilePathOptions(actualPath)
+        const newPathOptions = await getFilePathOptions(filename)
+        if (workspace.isCustom) {
+          await rename(oldPathOptions.path, newPathOptions.path)
+        } else {
+          await rename(oldPathOptions.path, newPathOptions.path, {
+            newPathBaseDir: newPathOptions.baseDir,
+            oldPathBaseDir: oldPathOptions.baseDir,
+          })
+        }
+
+        await useArticleStore.getState().loadFileTree()
+        const { activeFilePath, setActiveFilePath } = useArticleStore.getState()
+        if (actualPath === activeFilePath) {
+          setActiveFilePath(filename)
+        }
+      })()
+    }
+
+    el.addEventListener('drop', handleNativeDrop)
+    return () => el.removeEventListener('drop', handleNativeDrop)
+  }, [])
+
+  const visibleTree = useMemo(() => tree ?? fileTree, [fileTree, tree])
 
   return (
-    <div className={`flex-1 overflow-y-auto ${isDragging && 'outline-2 outline-black outline-dotted -outline-offset-4'}`}>
-      <div className="flex-1 p-0">
+    <div ref={containerRef} className={`flex-1 overflow-y-auto ${isDragging && "outline-2 outline-black outline-dotted -outline-offset-4"}`}>
+      <div className="file-manager-list flex-1">
         <div className="flex-1">
           <ul className="h-full">
-            <div
-              className="min-h-0.5"
-              onDrop={(e) => handleDrop(e)}
-              onDragOver={e => handleDragOver(e)}
-              onDragLeave={(e) => handleDragleave(e)}
-            >
-            </div>
-            {filteredFileTree.map((item) => (
-              <Tree key={`${computedParentPath(item)}-${item.isLocale}`} item={item} focusSidebar={focusSidebar} />
+            {visibleTree.map((item) => (
+              <Tree
+                key={`${computedParentPath(item)}-${item.isLocale}`}
+                item={item}
+                focusSidebar={focusSidebar}
+                forceExpanded={forceExpanded}
+              />
             ))}
-            <div
-              className="flex-1 min-h-1"
-              onDrop={(e) => handleDrop(e)}
-              onDragOver={e => handleDragOver(e)}
-              onDragLeave={(e) => handleDragleave(e)}
-            >
-            </div>
           </ul>
         </div>
       </div>

@@ -11,6 +11,7 @@ import { buildRecordFilterSummary, filterMarks, getTrashRecordFilters } from "./
 import { MarkListDefaultView } from "./mark-list-default-view";
 import { MarkListCompactView } from "./mark-list-compact-view";
 import { MarkListCardView } from "./mark-list-card-view";
+import { TodoStats } from "./todo-stats";
 
 export const MarkList = React.memo(function MarkList() {
   const t = useTranslations('record.mark.list')
@@ -33,6 +34,11 @@ export const MarkList = React.memo(function MarkList() {
   ), [marks, effectiveFilters])
 
   const filterSummary = React.useMemo(() => buildRecordFilterSummary(effectiveFilters), [effectiveFilters])
+
+  const hasTodoVisible = React.useMemo(() => {
+    const types = effectiveFilters.selectedTypes
+    return types.length === 0 || types.includes('todo')
+  }, [effectiveFilters.selectedTypes])
 
   React.useEffect(() => {
     setVisibleMarkIds(filteredMarks.map((mark: Mark) => mark.id))
@@ -76,6 +82,11 @@ export const MarkList = React.memo(function MarkList() {
                     {t('filteredByType', { count: filterSummary.typeCount })}
                   </Badge>
                 ) : null}
+                {filterSummary.hasProcessState ? (
+                  <Badge variant="outline" className="rounded-full px-2 py-0 text-[11px] font-normal">
+                    {filterSummary.processState === 'processed' ? '已处理' : '未处理'}
+                  </Badge>
+                ) : null}
                 {filterSummary.hasTag ? (
                   <Badge variant="outline" className="rounded-full px-2 py-0 text-[11px] font-normal">
                     {t('filteredByTag')}
@@ -84,6 +95,7 @@ export const MarkList = React.memo(function MarkList() {
               </div>
             </div>
           ) : null}
+          {!trashState && hasTodoVisible && <TodoStats marks={filteredMarks} />}
           {
             queues.map(mark => {
               return (

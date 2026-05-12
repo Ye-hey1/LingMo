@@ -9,12 +9,16 @@ import useSettingStore from "@/stores/setting"
 interface ReadAloudControlProps {
   chat: Chat
   translatedContent?: string
+  compact?: boolean
 }
 
-export function ReadAloudControl({ chat, translatedContent }: ReadAloudControlProps) {
+export function ReadAloudControl({ chat, translatedContent, compact = false }: ReadAloudControlProps) {
   const t = useTranslations()
   const [isPlaying, setIsPlaying] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const actionButtonClass = compact
+    ? "size-6 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+    : "size-6.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
   
   // 处理朗读/停止
   async function handleTextToSpeech() {
@@ -88,6 +92,7 @@ export function ReadAloudControl({ chat, translatedContent }: ReadAloudControlPr
         onClick={handleTextToSpeech}
         variant="ghost"
         size="sm"
+        buttonClassName={actionButtonClass}
         disabled={isLoading}
       />
     </>

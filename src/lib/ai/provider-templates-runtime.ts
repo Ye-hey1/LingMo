@@ -47,6 +47,26 @@ function isValidUrl(value: unknown): value is string {
   }
 }
 
+function isBlockedProvider(item: Record<string, unknown>) {
+  const title = String(item.title || '').trim()
+  const baseURL = String(item.baseURL || '').trim().toLowerCase()
+  const key = String(item.key || '').trim().toLowerCase()
+
+  if (title === '优云智算') {
+    return true
+  }
+
+  if (key === 'modelverse' || key === 'youyun') {
+    return true
+  }
+
+  if (baseURL.includes('modelverse.cn')) {
+    return true
+  }
+
+  return false
+}
+
 function parseContentPayload(payload: unknown) {
   if (!payload) {
     return null
@@ -96,6 +116,7 @@ function normalizeProviderTemplatesPayload(payload: unknown): AiConfig[] {
   return providers
     .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
     .filter((item) => item.enabled !== false)
+    .filter((item) => !isBlockedProvider(item))
     .filter((item) => isNonEmptyString(item.key))
     .filter((item) => isNonEmptyString(item.title))
     .filter((item) => isValidUrl(item.baseURL))

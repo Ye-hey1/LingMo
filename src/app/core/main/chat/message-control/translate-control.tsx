@@ -15,12 +15,16 @@ import { TooltipButton } from "@/components/tooltip-button"
 interface TranslateControlProps {
   chat: Chat
   onTranslatedContent: (content: string) => void
+  compact?: boolean
 }
 
-export function TranslateControl({ chat, onTranslatedContent }: TranslateControlProps) {
+export function TranslateControl({ chat, onTranslatedContent, compact = false }: TranslateControlProps) {
   const translateT = useTranslations('record.chat.input.translate')
   const [isTranslating, setIsTranslating] = useState(false)
   const [selectedLanguage, setSelectedLanguage] = useState<string>('')
+  const actionButtonClass = compact
+    ? "size-6 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+    : "size-6.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
   
   // 可翻译的语言列表
   const languageOptions = [
@@ -74,6 +78,7 @@ export function TranslateControl({ chat, onTranslatedContent }: TranslateControl
             disabled={isTranslating}
             variant="ghost"
             size="sm"
+            buttonClassName={actionButtonClass}
           />
         </div>
       </DropdownMenuTrigger>

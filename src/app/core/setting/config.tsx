@@ -17,7 +17,7 @@ import {
   Sparkles,
   MessageSquare,
   PenTool,
-  Brain,
+  Globe2,
 } from "lucide-react"
 
 const baseConfig = [
@@ -72,10 +72,6 @@ const baseConfig = [
     anchor: 'prompt',
   },
   {
-    icon: <Brain className="size-4 md:size-6" />,
-    anchor: 'memories',
-  },
-  {
     icon: <LayoutTemplate className="size-4 md:size-6" />,
     anchor: 'template',
   },
@@ -96,6 +92,10 @@ const baseConfig = [
     icon: <Volume2 className="size-4 md:size-6" />,
     anchor: 'audio',
   },
+  {
+    icon: <Globe2 className="size-4 md:size-6" />,
+    anchor: 'webSearch',
+  },
   '-',
   {
     icon: <UserRoundCog className="size-4 md:size-6" />,
@@ -111,6 +111,7 @@ export interface ModelConfig {
   id: string
   model: string
   modelType: ModelType
+  supportsImageInput?: boolean
   temperature?: number
   topP?: number
   voice?: string
@@ -120,6 +121,7 @@ export interface ModelConfig {
 export interface AiConfig {
   key: string
   title: string
+  enabled?: boolean
   apiKey?: string
   baseURL?: string
   templateKey?: string
@@ -130,6 +132,7 @@ export interface AiConfig {
   models?: ModelConfig[]
   // 保持向后兼容
   model?: string
+  supportsImageInput?: boolean
   temperature?: number
   topP?: number
   modelType?: ModelType

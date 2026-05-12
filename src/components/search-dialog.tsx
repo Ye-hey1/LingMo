@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { debounce } from 'lodash-es'
+import { highlightTextReact } from '@/lib/highlight'
 import {
   Command,
   CommandGroup,
@@ -74,41 +75,8 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
     return fileName.includes('.') ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName
   }
 
-  // 高亮搜索关键词
-  function highlightText(text: string, query: string) {
-    if (!query.trim() || !text) return text
-    
-    const parts: React.ReactNode[] = []
-    const lowerText = text.toLowerCase()
-    const lowerQuery = query.toLowerCase().trim()
-    
-    let lastIndex = 0
-    let index = lowerText.indexOf(lowerQuery)
-    
-    while (index !== -1) {
-      // 添加匹配前的文本
-      if (index > lastIndex) {
-        parts.push(text.substring(lastIndex, index))
-      }
-      
-      // 添加高亮的匹配文本
-      parts.push(
-        <mark key={index} className="bg-yellow-200 dark:bg-yellow-800 text-foreground px-0.5 rounded">
-          {text.substring(index, index + lowerQuery.length)}
-        </mark>
-      )
-      
-      lastIndex = index + lowerQuery.length
-      index = lowerText.indexOf(lowerQuery, lastIndex)
-    }
-    
-    // 添加剩余文本
-    if (lastIndex < text.length) {
-      parts.push(text.substring(lastIndex))
-    }
-    
-    return <>{parts}</>
-  }
+  // 高亮搜索关键词（使用共享工具函数）
+
 
   function getResultMeta(item: EnhancedSearchResult) {
     if (item.searchType === 'record') {
@@ -439,7 +407,7 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
                             <div className="min-w-0 flex-1">
                               {item.title ? (
                                 <div className="truncate text-[14px] font-semibold tracking-tight text-foreground">
-                                  {highlightText(item.title, searchValue)}
+                                  {highlightTextReact(item.title, searchValue)}
                                 </div>
                               ) : null}
                             </div>
@@ -458,7 +426,7 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
                           </div>
 
                           <div className="line-clamp-2 text-xs leading-5 text-muted-foreground">
-                            {highlightText(item.highlightText, searchValue)}
+                            {highlightTextReact(item.highlightText, searchValue)}
                           </div>
                         </div>
                       </div>
@@ -479,7 +447,7 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
                             <div className="min-w-0 flex-1">
                               {item.title && (
                                 <div className="truncate text-[14px] font-semibold tracking-tight text-foreground">
-                                  {highlightText(item.title, searchValue)}
+                                  {highlightTextReact(item.title, searchValue)}
                                 </div>
                               )}
                             </div>
@@ -498,7 +466,7 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
                           </div>
 
                           <div className="line-clamp-2 text-[12px] leading-5 text-muted-foreground">
-                            {highlightText(item.highlightText, searchValue)}
+                            {highlightTextReact(item.highlightText, searchValue)}
                           </div>
                         </div>
                       </div>

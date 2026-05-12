@@ -1,5 +1,5 @@
 'use client'
-import { 
+import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
@@ -11,14 +11,10 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { Trash2, CircleCheck, CircleX, LoaderCircle } from "lucide-react"
+import { Trash2 } from "lucide-react"
 import { ModelConfig, ModelType, AiConfig } from "../config"
 import { useTranslations } from 'next-intl'
 import ModelSelect from "./modelSelect"
-import { useState, useRef } from "react"
-import { createOpenAIClient } from "@/lib/ai/utils"
-import { toast } from "@/hooks/use-toast"
-import { blobToBytes, invokeAiBinary, invokeAiJson, invokeAiMultipart } from "@/lib/ai/tauri-client"
 
 interface ModelCardProps {
   modelConfig: ModelConfig
@@ -29,187 +25,17 @@ interface ModelCardProps {
 
 export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }: ModelCardProps) {
   const t = useTranslations('settings.ai')
-  const [checkState, setCheckState] = useState<'ok' | 'error' | 'checking' | 'init'>('init')
-  const abortControllerRef = useRef<AbortController | null>(null)
-
-  const handleCheck = async () => {
-    // 取消之前的请求
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-    }
-    
-    setCheckState('checking')
-    abortControllerRef.current = new AbortController()
-    
-    try {
-      const aiStatus = await checkModelStatus(modelConfig, aiConfig, abortControllerRef.current.signal)
-      if (aiStatus) {
-        setCheckState('ok')
-        toast({
-          description: t('connectionSuccess'),
-          className: 'border-green-500 bg-green-50 text-green-800'
-        })
-      } else {
-        setCheckState('error')
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        return
-      }
-      setCheckState('error')
-    }
-  }
-
-  const checkModelStatus = async (model: ModelConfig, aiConfig: AiConfig, signal?: AbortSignal) => {
-    try {
-      if (!model.model || !aiConfig.baseURL) return false
-
-      const fullAiConfig: AiConfig = {
-        ...aiConfig,
-        model: model.model,
-        modelType: model.modelType,
-        temperature: model.temperature,
-        topP: model.topP,
-        voice: model.voice,
-        enableStream: model.enableStream
-      }
-
-      switch (model.modelType) {
-        case 'rerank':
-          const query = 'Apple'
-          const documents = ["apple","banana","fruit","vegetable"]
-          const rerankData = await invokeAiJson<any>({
-            config: {
-              baseUrl: aiConfig.baseURL,
-              apiKey: aiConfig.apiKey,
-              customHeaders: aiConfig.customHeaders,
-            },
-            path: '/rerank',
-            method: 'POST',
-            body: {
-              model: model.model,
-              query,
-              documents
-            }
-          }, signal)
-          if (!rerankData || !rerankData.results) {
-            throw new Error('重排序结果格式不正确')
-          }
-          return true
-
-        case 'embedding':
-          const testText = '测试文本'
-          const embeddingDataJson = await invokeAiJson<any>({
-            config: {
-              baseUrl: aiConfig.baseURL,
-              apiKey: aiConfig.apiKey,
-              customHeaders: aiConfig.customHeaders,
-            },
-            path: '/embeddings',
-            method: 'POST',
-            body: {
-              model: model.model,
-              input: testText,
-              encoding_format: 'float'
-            }
-          }, signal)
-          if (!embeddingDataJson || !embeddingDataJson.data || !embeddingDataJson.data[0] || !embeddingDataJson.data[0].embedding) {
-            throw new Error('嵌入结果格式不正确')
-          }
-          return true
-
-        case 'tts':
-          const testAudioText = '测试音频生成'
-          const ttsBuffer = await invokeAiBinary({
-            config: {
-              baseUrl: aiConfig.baseURL,
-              apiKey: aiConfig.apiKey,
-              customHeaders: aiConfig.customHeaders,
-            },
-            path: '/audio/speech',
-            method: 'POST',
-            body: {
-              model: model.model,
-              input: testAudioText,
-              voice: model.voice || 'alloy'
-            }
-          }, signal)
-          if (!ttsBuffer.byteLength) {
-            throw new Error('TTS模型返回格式不正确')
-          }
-          return true
-
-        case 'stt':
-          const testAudioBlob = new Blob([new Uint8Array(100)], { type: 'audio/webm' })
-          try {
-            await invokeAiMultipart({
-              config: {
-                baseUrl: aiConfig.baseURL,
-                apiKey: aiConfig.apiKey,
-                customHeaders: aiConfig.customHeaders,
-              },
-              path: '/audio/transcriptions',
-              fileFieldName: 'file',
-              fields: {
-                model: model.model
-              },
-              file: {
-                bytes: await blobToBytes(testAudioBlob),
-                fileName: 'test.webm',
-                contentType: 'audio/webm',
-              }
-            }, signal)
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            if (message.includes('401') || message.includes('403')) {
-              throw new Error(message)
-            }
-          }
-          return true
-
-        default:
-          const openai = await createOpenAIClient(fullAiConfig)
-          await openai.chat.completions.create({
-            model: model.model,
-            messages: [{
-              role: 'user' as const,
-              content: 'Hello'
-            }],
-          })
-          return true
-      }
-    } catch (error) {
-      toast({
-        description: error instanceof Error ? error.message : 'Error',
-        variant: 'destructive'
-      })
-      return false
-    }
-  }
-
-  const renderCheckIcon = () => {
-    switch (checkState) {
-      case 'ok':
-        return <CircleCheck className="text-green-500 size-4" />
-      case 'error':
-        return <CircleX className="text-red-500 size-4" />
-      case 'checking':
-        return <LoaderCircle className="animate-spin size-4" />
-      default:
-        return null
-    }
-  }
 
   return (
-    <AccordionItem value={modelConfig.id} className="border rounded-lg">
+    <AccordionItem value={modelConfig.id} className="rounded-lg border text-sm">
       <div className="flex items-center justify-between flex-wrap">
         <div className="flex-1">
-          <AccordionTrigger className="w-full px-4 py-4 hover:no-underline">
+          <AccordionTrigger className="w-full px-3 py-3 hover:no-underline">
             <div className="flex items-center">
-              <span className="text-base font-semibold">
+              <span className="text-sm font-semibold">
                 {modelConfig.model || t('newModel')}
               </span>
-              <Badge variant="secondary" className="ml-2">
+              <Badge variant="secondary" className="ml-2 text-[11px]">
                 {t(`modelType.${modelConfig.modelType}`)}
               </Badge>
             </div>
@@ -219,23 +45,14 @@ export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }:
           <Button
             variant="outline"
             size="sm"
-            onClick={handleCheck}
-            disabled={!modelConfig.model || checkState === 'checking'}
-          >
-            {renderCheckIcon()}
-            {t('checkConnection')}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
+            className="h-8 px-2"
             onClick={() => onDelete(modelConfig.id)}
           >
             <Trash2 className="size-4" />
           </Button>
         </div>
-      </div>      
-      <AccordionContent className="px-4 pb-4 space-y-4">
-        {/* 模型选择 */}
+      </div>
+      <AccordionContent className="space-y-4 px-3 pb-3">
         <div className="space-y-2">
           <Label>{t('model')}</Label>
           <ModelSelect
@@ -245,7 +62,6 @@ export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }:
           />
         </div>
 
-        {/* 模型类型 */}
         <div className="space-y-2">
           <Label>{t('modelType.title')}</Label>
           <RadioGroup
@@ -276,7 +92,6 @@ export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }:
           </RadioGroup>
         </div>
 
-        {/* Chat模型的特殊配置 */}
         {modelConfig.modelType === 'chat' && (
           <>
             <div className="space-y-2">
@@ -327,7 +142,6 @@ export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }:
           </>
         )}
 
-        {/* TTS模型的特殊配置 */}
         {modelConfig.modelType === 'tts' && (
           <div className="space-y-2">
             <Label>{t('voice')}</Label>

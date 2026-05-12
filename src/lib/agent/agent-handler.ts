@@ -1,5 +1,5 @@
 import { ReActAgent, ReActConfig } from './react'
-import { ToolCall, ReActStep } from './types'
+import { AgentEvent, ToolCall, ReActStep } from './types'
 import useChatStore from '@/stores/chat'
 import { skillManager } from '@/lib/skills'
 import { useSkillsStore } from '@/stores/skills'
@@ -8,9 +8,11 @@ import OpenAI from 'openai'
 
 export interface AgentHandlerConfig {
   activeChatId?: number
+  webSearchEnabled?: boolean
   onThought?: (thought: string) => void
   onAction?: (action: string, params: Record<string, any>) => void
   onObservation?: (observation: string) => void
+  onEvent?: (event: AgentEvent) => void
   onComplete?: (result: string, steps?: any[], stopped?: boolean) => void
   onError?: (error: string) => void
   onFinalAnswerRender?: (markdownContent: string) => void  // 当检测到 Final Answer 时立即渲染 Markdown
@@ -29,9 +31,55 @@ export interface AgentHandlerConfig {
 export class AgentHandler {
   private agent: ReActAgent | null = null
   private config: AgentHandlerConfig
+  private executing = false
 
   constructor(config: AgentHandlerConfig) {
     this.config = config
+  }
+
+  private handleAgentEvent(event: AgentEvent) {
+    const store = useChatStore.getState()
+    const agentEvents = store.agentState.agentEvents || []
+    const snapshot = event.type === 'agent.context.compacted'
+      ? event.payload?.snapshot
+      : undefined
+    const currentIteration = event.type === 'iteration.started' && typeof event.iteration === 'number'
+      ? event.iteration
+      : store.agentState.currentIteration
+
+    // Handle task plan events
+    let taskPlan = store.agentState.taskPlan
+    if (event.type === 'agent.planning' && event.payload?.plan) {
+      taskPlan = {
+        ...event.payload.plan,
+        completedStepIndex: -1,
+      }
+    } else if (event.type === 'iteration.started' && taskPlan && taskPlan.isComplex && currentIteration > 1) {
+      // Map iteration to step progress (iteration 2 means step 0 is done)
+      const newCompletedIndex = Math.min(currentIteration - 2, taskPlan.steps.length - 1)
+      taskPlan = {
+        ...taskPlan,
+        completedStepIndex: Math.max(taskPlan.completedStepIndex, newCompletedIndex),
+      }
+    } else if (event.type === 'agent.completed' || event.type === 'agent.stopped') {
+      // Mark all steps as completed when agent finishes
+      if (taskPlan && taskPlan.isComplex) {
+        taskPlan = {
+          ...taskPlan,
+          completedStepIndex: taskPlan.steps.length - 1,
+        }
+      }
+    }
+
+    store.setAgentState({
+      agentEvents: [...agentEvents, event].slice(-500),
+      agentRunId: event.runId || store.agentState.agentRunId,
+      agentEventCursor: event.sequence || store.agentState.agentEventCursor,
+      currentIteration,
+      agentContextSnapshot: snapshot || store.agentState.agentContextSnapshot,
+      taskPlan,
+    })
+    this.config.onEvent?.(event)
   }
 
   async execute(
@@ -39,6 +87,13 @@ export class AgentHandler {
     contextOrMessages?: string | OpenAI.Chat.ChatCompletionMessageParam[],
     imageUrls?: string[]
   ): Promise<string> {
+    // Execution mutex: stop previous run if still active
+    if (this.executing && this.agent) {
+      this.agent.stop()
+      this.agent = null
+    }
+    this.executing = true
+
     const store = useChatStore.getState()
 
     store.resetAgentState()
@@ -58,22 +113,28 @@ export class AgentHandler {
       console.error('[Agent Handler] Failed to initialize MCP Store:', error)
     }
 
-    // 预加载 MCP 工具
+    // 预加载 MCP 工具（仅在未加载时加载，避免重复）
     try {
-      await reloadMcpTools()
+      const { getAllToolsSync } = await import('./tools')
+      const currentTools = getAllToolsSync()
+      // 只有当没有 MCP 工具时才重新加载
+      if (!currentTools.some(t => t.category === 'mcp')) {
+        await reloadMcpTools()
+      }
     } catch (error) {
       console.error('[Agent Handler] Failed to reload MCP tools:', error)
     }
 
-    // 获取所有可用的 Skills（让 AI 自己选择）
-    const activeSkills = await this.getAvailableSkills()
+    // 获取与当前请求相关的 Skills 候选（让 AI 自己决定是否选择）
+    const activeSkills = await this.getAvailableSkills(userInput)
     // 获取 Skills 的详细信息用于 UI 显示
-    const skillsInfo = await this.getSkillsInfo()
+    const skillsInfo = await this.getSkillsInfo(activeSkills)
     // 将加载的 Skills 信息存储到状态中，用于 UI 显示
     store.setAgentState({ loadedSkills: skillsInfo })
 
     const reactConfig: ReActConfig = {
       maxIterations: 15,
+      webSearchEnabled: this.config.webSearchEnabled,
       activeSkills,
       onIterationStart: () => {
         // 在新迭代开始时，将完整的 ReAct 循环保存到历史，然后清空当前状态
@@ -135,16 +196,33 @@ export class AgentHandler {
             currentAction: undefined,
             currentObservation: undefined,
             currentStepStartTime: Date.now(),  // 记录新步骤的开始时间
-            isThinking: true  // 标记正在等待 AI 生成新的思考
+            isThinking: true,  // 标记正在等待 AI 生成新的思考
+            // Reset Final Answer mode for new iteration
+            isFinalAnswerMode: false,
+            finalAnswerContent: undefined
           })
         }
       },
       onThought: (thought: string) => {
-        // 流式输出时只更新当前思考，不保存到历史
-        store.setAgentState({
-          currentThought: thought,
-          isThinking: false  // 开始输出内容，取消思考状态
-        })
+        // Detect Final Answer in streaming content for immediate rendering
+        const faMatch = thought.match(/Final Answer:\s*([\s\S]*)/i) ||
+                        thought.match(/Final Answer：\s*([\s\S]*)/i) ||
+                        thought.match(/最终答案[：:]\s*([\s\S]*)/i)
+        if (faMatch && faMatch[1].trim().length > 0) {
+          const finalAnswerContent = faMatch[1].trim()
+          store.setAgentState({
+            currentThought: thought,
+            isThinking: false,
+            isFinalAnswerMode: true,
+            finalAnswerContent
+          })
+          this.config.onFinalAnswerRender?.(finalAnswerContent)
+        } else {
+          store.setAgentState({
+            currentThought: thought,
+            isThinking: false
+          })
+        }
         this.config.onThought?.(thought)
       },
       onAction: (action, params) => {
@@ -154,6 +232,9 @@ export class AgentHandler {
       onObservation: (observation) => {
         store.setAgentState({ currentObservation: observation })
         this.config.onObservation?.(observation)
+      },
+      onEvent: (event) => {
+        this.handleAgentEvent(event)
       },
       onToolCall: (toolCall: ToolCall) => {
         // 获取最新的 store 状态
@@ -188,25 +269,65 @@ export class AgentHandler {
 
     try {
       const result = await this.agent.run(userInput, contextOrMessages, imageUrls)
-      store.setAgentState({ isRunning: false })
 
       // 获取完整的 ReAct 步骤
       const steps = this.agent.getSteps()
+      store.setAgentState({
+        isRunning: false,
+        completedSteps: steps,
+        currentIteration: this.agent.getCurrentIteration(),
+      })
       this.config.onComplete?.(result, steps, false)
+      this.executing = false
       return result
     } catch (error) {
-      store.setAgentState({ isRunning: false })
-
       // 检查是否是用户终止
       if (error instanceof Error && error.message === 'USER_STOPPED') {
         // 获取已产生的步骤
         const steps = this.agent.getSteps()
+
+        // 保存中断恢复上下文到 store
+        const agentSnapshot = store.agentState.agentContextSnapshot
+        if (agentSnapshot) {
+          try {
+            const { Store: TauriStore } = await import('@tauri-apps/plugin-store')
+            const resumeStore = await TauriStore.load('agent-resume.json')
+            await resumeStore.set('lastInterrupt', {
+              snapshot: agentSnapshot,
+              originalUserInput: userInput,
+              interruptReason: 'user_stop',
+              interruptedAt: Date.now(),
+            })
+            await (resumeStore as any).save?.()
+          } catch {
+            // 保存恢复上下文失败不影响主流程
+          }
+        }
+
+        store.setAgentState({
+          isRunning: false,
+          completedSteps: steps,
+          currentIteration: this.agent.getCurrentIteration(),
+        })
         // 调用 onComplete，传入空结果和已产生的步骤，标记为已停止
         this.config.onComplete?.('', steps, true)
+        this.executing = false
         return ''
       }
 
+      store.setAgentState({ isRunning: false })
+      this.executing = false
+
       const errorMessage = error instanceof Error ? error.message : String(error)
+      this.handleAgentEvent({
+        type: 'error',
+        timestamp: Date.now(),
+        level: 'error',
+        payload: {
+          source: 'handler',
+          error: errorMessage,
+        },
+      })
       this.config.onError?.(errorMessage)
       throw error
     }
@@ -221,9 +342,41 @@ export class AgentHandler {
   }
 
   /**
+   * 从上次中断处恢复执行
+   */
+  async resume(): Promise<string> {
+    try {
+      const { Store: TauriStore } = await import('@tauri-apps/plugin-store')
+      const resumeStore = await TauriStore.load('agent-resume.json')
+      const resumeData = await resumeStore.get<any>('lastInterrupt')
+
+      if (!resumeData?.snapshot || !resumeData?.originalUserInput) {
+        return ''
+      }
+
+      const { canResumeFromSnapshot, buildResumePrompt } = await import('./resume')
+      if (!canResumeFromSnapshot(resumeData.snapshot)) {
+        return ''
+      }
+
+      const resumePrompt = buildResumePrompt(resumeData)
+
+      // 清除已使用的恢复数据
+      await resumeStore.delete('lastInterrupt')
+      await (resumeStore as any).save?.()
+
+      // 使用恢复 prompt 作为上下文执行
+      return await this.execute(resumeData.originalUserInput, resumePrompt)
+    } catch (error) {
+      console.warn('[AgentHandler] Resume failed:', error)
+      return ''
+    }
+  }
+
+  /**
    * 获取所有可用的 Skills（只返回元数据，让 AI 先选择）
    */
-  private async getAvailableSkills(): Promise<string[]> {
+  private async getAvailableSkills(userInput: string): Promise<string[]> {
     const skillsStore = useSkillsStore.getState()
 
     // 如果 Skills 功能未启用，返回空数组
@@ -240,12 +393,12 @@ export class AgentHandler {
       // 确保 Skill 管理器已初始化（initSkills 会处理重复初始化）
       await skillsStore.initSkills()
 
-      // 获取所有已启用的 Skills
-      const enabledSkills = await skillManager.getEnabledSkills()
+      // 只保留最相关的 Skill 候选，避免简单问答被大量 Skill 元数据干扰。
+      const matchedSkills = await skillManager.matchRelevantSkills(userInput, 5)
 
-      // 返回所有已启用 Skill 的 ID 列表
+      // 返回候选 Skill 的 ID 列表
       // 注意：这里只传递 ID，具体内容在 formatSkillsInstructions 中按需加载
-      const skillIds = enabledSkills.map(skill => skill.metadata.id)
+      const skillIds = matchedSkills.map(skill => skill.metadata.id)
       return skillIds
     } catch (error) {
       console.error('[Skills Debug] Failed to get skills:', error)
@@ -256,7 +409,7 @@ export class AgentHandler {
   /**
    * 获取 Skills 的详细信息用于 UI 显示
    */
-  private async getSkillsInfo(): Promise<Array<{ id: string; name: string; description?: string }>> {
+  private async getSkillsInfo(skillIds?: string[]): Promise<Array<{ id: string; name: string; description?: string }>> {
     const skillsStore = useSkillsStore.getState()
 
     // 如果 Skills 功能未启用，返回空数组
@@ -267,9 +420,13 @@ export class AgentHandler {
     try {
       // 确保 Skill 管理器已初始化
       await skillsStore.initSkills()
-      const enabledSkills = await skillManager.getEnabledSkills()
+      const candidateSkills = skillIds && skillIds.length > 0
+        ? skillIds
+            .map(id => skillManager.getSkill(id))
+            .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill))
+        : []
 
-      return enabledSkills.map(skill => ({
+      return candidateSkills.map(skill => ({
         id: skill.metadata.id,
         name: skill.metadata.name,
         description: skill.metadata.description

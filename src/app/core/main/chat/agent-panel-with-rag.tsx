@@ -5,6 +5,7 @@ import { FileText, ChevronRight, Database, ExternalLink } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useState } from "react"
 import useArticleStore from "@/stores/article"
+import type { AgentApprovalScope } from "@/lib/agent/types"
 
 interface RagSourceDetail {
   filepath: string
@@ -50,18 +51,19 @@ interface AgentPanelWithRagProps {
     canApproveForSession?: boolean
     sessionApprovalType?: "write" | "runtime-script-skill"
     sessionApprovalSkillId?: string
+    persistentApprovalOptions?: AgentApprovalScope[]
   }
   confirmationHistory?: Array<{
     toolName: string
     params: Record<string, any>
     status: "pending" | "confirmed" | "cancelled"
     timestamp: number
-    scope?: "once" | "conversation"
+    scope?: AgentApprovalScope
     sessionApprovalType?: "write" | "runtime-script-skill"
     sessionApprovalSkillId?: string
   }>
   currentStepStartTime?: number
-  onConfirm?: (scope?: "once" | "conversation") => void
+  onConfirm?: (scope?: AgentApprovalScope) => void
   onCancel?: () => void
 }
 

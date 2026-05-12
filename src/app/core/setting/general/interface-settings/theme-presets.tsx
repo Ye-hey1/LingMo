@@ -343,6 +343,28 @@ export function ThemePresets({ onApplyPreset, onResetDefault, t }: ThemePresetsP
         shadow: '#0d0c0a',
       },
     },
+    {
+      name: t('presets.warmSand.name'),
+      mode: 'light',
+      colors: {
+        background: '#f8f4ee',
+        foreground: '#3d3529',
+        card: '#ffffff',
+        cardForeground: '#3d3529',
+        primary: '#8b7355',
+        primaryForeground: '#ffffff',
+        secondary: '#efe8dd',
+        secondaryForeground: '#3d3529',
+        third: '#e2d9cc',
+        thirdForeground: '#524738',
+        muted: '#efe8dd',
+        mutedForeground: '#7a6e5f',
+        accent: '#a08b6f',
+        accentForeground: '#ffffff',
+        border: '#ddd4c6',
+        shadow: '#3d3529',
+      },
+    },
   ]
 
   return (

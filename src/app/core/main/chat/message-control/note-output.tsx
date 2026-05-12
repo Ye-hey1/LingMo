@@ -1,64 +1,71 @@
 'use client'
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { extractTitle } from "@/lib/markdown"
 import { getFilePathOptions, getWorkspacePath, getGenericPathOptions } from "@/lib/workspace"
 import useTagStore from "@/stores/tag"
 import { CheckedState } from "@radix-ui/react-checkbox"
 import { BaseDirectory, readDir, writeTextFile } from "@tauri-apps/plugin-fs"
-import { Store } from "@tauri-apps/plugin-store"
-import { SquarePen, TriangleAlert } from "lucide-react"
+import { SquarePen, Loader2 } from "lucide-react"
 import { useEffect, useState } from "react"
-import { redirect } from 'next/navigation'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Chat } from "@/db/chats"
 import { useTranslations } from "next-intl"
 import useArticleStore from "@/stores/article"
+import { useSidebarStore } from "@/stores/sidebar"
+import { getMarks, deleteMarks, TRASH_RETENTION_DAYS } from "@/db/marks"
 
-export function NoteOutput({chat}: {chat: Chat}) {
-  const { deleteTag, currentTagId } = useTagStore()
-  const { loadFileTree } = useArticleStore()
-  const [open, setOpen] = useState(false);
+export function NoteOutput({chat, compact = false}: {chat: Chat, compact?: boolean}) {
+  const { deleteTag, currentTagId, tags } = useTagStore()
+  const { loadFileTree, setActiveFilePath } = useArticleStore()
+  const { centerPanelVisible, toggleCenterPanel } = useSidebarStore()
+  const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [path, setPath] = useState('/')
   const [folders, setFolders] = useState<string[]>([])
   const [isRemove, setIsRemove] = useState<CheckedState>(true)
+  const [transforming, setTransforming] = useState(false)
   const t = useTranslations('record.chat')
+  const chatTag = tags.find(tag => tag.id === chat?.tagId)
+  const isChatTagLocked = Boolean(chatTag?.isLocked)
+  const actionButtonClass = compact
+    ? "inline-flex size-6 cursor-pointer items-center justify-center rounded-none p-0 text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground"
+    : "inline-flex size-6.5 cursor-pointer items-center justify-center rounded-none p-0 text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground"
 
   async function handleTransform() {
-    const content = chat?.content || ''
-    // 统一处理：将空格替换为下划线，确保本地和远程文件名一致
-    const sanitizedTitle = title.replace(/\s+/g, '_')
-    const writePath = `${path}/${sanitizedTitle}`
-    
-    // Use workspace functions instead of directly using BaseDirectory.AppData
-    const pathOptions = await getFilePathOptions(writePath)
-    if (pathOptions.baseDir) {
-      await writeTextFile(pathOptions.path, content, { baseDir: pathOptions.baseDir })
-    } else {
-      // Handle custom workspace (direct path, no baseDir)
-      await writeTextFile(pathOptions.path, content)
+    setTransforming(true)
+    try {
+      const content = chat?.content || ''
+      const sanitizedTitle = title.replace(/\s+/g, '_')
+      const writePath = `${path}/${sanitizedTitle}`
+      
+      const pathOptions = await getFilePathOptions(writePath)
+      if (pathOptions.baseDir) {
+        await writeTextFile(pathOptions.path, content, { baseDir: pathOptions.baseDir })
+      } else {
+        await writeTextFile(pathOptions.path, content)
+      }
+      
+      if (isRemove) {
+        // 将该标签下的记录软删除（移入回收站，保留 ${TRASH_RETENTION_DAYS} 天可恢复）
+        const marks = await getMarks(currentTagId)
+        const markIds = marks.filter(m => m.deleted === 0).map(m => m.id)
+        if (markIds.length > 0) {
+          await deleteMarks(markIds)
+        }
+        await deleteTag(currentTagId)
+      }
+      setOpen(false)
+      await loadFileTree()
+      await setActiveFilePath(writePath)
+      if (!centerPanelVisible) {
+        await toggleCenterPanel()
+      }
+    } finally {
+      setTransforming(false)
     }
-    
-    const store = await Store.load('store.json');
-    await store.set('activeFilePath', title)
-    if (isRemove) {
-      deleteTag(currentTagId)
-    }
-    setOpen(false)
-    await loadFileTree()
-    redirect('/core/article')
   }
 
   async function readArticleDir() {
@@ -78,62 +85,67 @@ export function NoteOutput({chat}: {chat: Chat}) {
   }
 
   useEffect(() => {
-    setIsRemove(chat?.tagId !== 1)
+    setIsRemove(!isChatTagLocked)
     setTitle(extractTitle(chat?.content || '') + '.md')
     readArticleDir()
-  }, [chat])
+  }, [chat, isChatTagLocked])
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <a className="cursor-pointer flex items-center gap-1 hover:underline">
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <a className={actionButtonClass}>
           <SquarePen className="size-4" />
         </a>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-[525px]">
-        <DialogHeader>
-          <DialogTitle>{t('note.convert')}</DialogTitle>
-          <DialogDescription>
-            {t('note.description')}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-2 mt-2">
-          <Label>{t('note.filename')}</Label>
-          <div className="flex border rounded-lg">
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="w-80 p-3">
+        <div className="space-y-2.5">
+          <div className="text-xs font-medium">{t('note.convert')}</div>
+          <div className="flex items-center gap-1 rounded-md border border-border">
             <Select value={path} onValueChange={setPath}>
-              <SelectTrigger className="w-[180px] border-none outline-none">
+              <SelectTrigger className="h-8 w-[120px] shrink-0 border-0 text-xs shadow-none focus:ring-0">
                 <SelectValue placeholder={t('note.selectFolder')} />
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
                   <SelectItem value="/">{t('note.rootDirectory')}</SelectItem>
-                  {
-                    folders.map((folder, index) => {
-                      return <SelectItem key={index} value={folder}>{folder}</SelectItem>
-                    })
-                  }
+                  {folders.map((folder, index) => (
+                    <SelectItem key={index} value={folder}>{folder}</SelectItem>
+                  ))}
                 </SelectGroup>
               </SelectContent>
             </Select>
-            <Input className="border-none" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <div className="h-4 w-px bg-border" />
+            <Input
+              className="h-8 border-0 text-xs shadow-none focus-visible:ring-0"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
           </div>
-          <div className="flex items-center space-x-2 mt-2">
-            <Checkbox disabled={chat?.tagId === 1} id="terms" checked={isRemove} onCheckedChange={value => setIsRemove(value)} />
-            <label
-              htmlFor="terms"
-              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Checkbox
+                disabled={isChatTagLocked}
+                id={`remove-${chat.id}`}
+                checked={isRemove}
+                onCheckedChange={value => setIsRemove(value)}
+                className="size-3.5"
+              />
+              <label htmlFor={`remove-${chat.id}`} className="text-[11px] text-muted-foreground">
+                {t('note.deleteTag')}（{TRASH_RETENTION_DAYS}天内可恢复）
+              </label>
+            </div>
+            <Button
+              size="sm"
+              className="h-7 px-3 text-xs"
+              disabled={!title.trim() || transforming}
+              onClick={handleTransform}
             >
-              {t('note.deleteTag')}
-            </label>
+              {transforming ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
+              {t('note.convert_button')}
+            </Button>
           </div>
         </div>
-        <DialogFooter>
-          <div className="flex items-center justify-end gap-2 pt-4">
-            <p className="text-xs text-zinc-400 flex items-center gap-1"><TriangleAlert className="size-4" />{t('note.warning')}</p>
-            <Button type="submit" onClick={handleTransform}>{t('note.convert_button')}</Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </PopoverContent>
+    </Popover>
   )
 }

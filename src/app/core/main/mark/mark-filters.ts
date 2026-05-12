@@ -1,17 +1,21 @@
 import type { Mark } from '@/db/marks'
 
 type RecordTimePreset = 'all' | 'today' | 'last7Days' | 'last30Days'
+type RecordProcessState = 'all' | 'unprocessed' | 'processed'
 
 type RecordFiltersLike = {
   search: string
   selectedTypes: Mark['type'][]
   timePreset: RecordTimePreset
   tagId: number | 'all'
+  processState: RecordProcessState
 }
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const VALID_TYPES = new Set<Mark['type']>(['scan', 'text', 'image', 'link', 'file', 'recording', 'todo'])
 const VALID_TIME_PRESETS = new Set<RecordTimePreset>(['all', 'today', 'last7Days', 'last30Days'])
+const VALID_PROCESS_STATES = new Set<RecordProcessState>(['all', 'unprocessed', 'processed'])
+const DEFAULT_PROCESS_STATE: RecordProcessState = 'unprocessed'
 
 function normalizeText(value?: string | null): string {
   return (value || '').trim().toLowerCase()
@@ -67,6 +71,7 @@ export function normalizeRecordFilters(filters?: Partial<RecordFiltersLike>): Re
     ? filters.selectedTypes.filter((type): type is Mark['type'] => VALID_TYPES.has(type))
     : []
   const timePreset: RecordTimePreset = filters?.timePreset && VALID_TIME_PRESETS.has(filters.timePreset) ? filters.timePreset : 'all'
+  const processState: RecordProcessState = filters?.processState && VALID_PROCESS_STATES.has(filters.processState) ? filters.processState : DEFAULT_PROCESS_STATE
   const parsedTagId = typeof filters?.tagId === 'string' ? Number(filters.tagId) : filters?.tagId
   const tagId: RecordFiltersLike['tagId'] = typeof parsedTagId === 'number' && Number.isInteger(parsedTagId) && parsedTagId > 0
     ? parsedTagId
@@ -77,6 +82,7 @@ export function normalizeRecordFilters(filters?: Partial<RecordFiltersLike>): Re
     selectedTypes,
     timePreset,
     tagId,
+    processState,
   }
 }
 
@@ -86,6 +92,7 @@ export function getTrashRecordFilters(): RecordFiltersLike {
     selectedTypes: [],
     timePreset: 'all',
     tagId: 'all',
+    processState: 'all',
   }
 }
 
@@ -97,11 +104,14 @@ export function buildRecordFilterSummary(filters?: Partial<RecordFiltersLike>) {
       normalized.search.trim() ||
       normalized.selectedTypes.length > 0 ||
       normalized.timePreset !== 'all' ||
-      normalized.tagId !== 'all'
+      normalized.tagId !== 'all' ||
+      normalized.processState !== DEFAULT_PROCESS_STATE
     ),
     search: normalized.search.trim(),
     typeCount: normalized.selectedTypes.length,
     timePreset: normalized.timePreset,
+    processState: normalized.processState,
+    hasProcessState: normalized.processState !== DEFAULT_PROCESS_STATE,
     hasTag: normalized.tagId !== 'all',
   }
 }
@@ -115,6 +125,7 @@ export function filterMarks(
   const selectedTypes = new Set(normalizedFilters.selectedTypes)
   const timePreset = normalizedFilters.timePreset
   const tagId = normalizedFilters.tagId
+  const processState = normalizedFilters.processState
   const now = filters?.now || new Date().toISOString()
 
   return marks.filter((mark) => {
@@ -123,6 +134,14 @@ export function filterMarks(
     }
 
     if (tagId !== 'all' && mark.tagId !== tagId) {
+      return false
+    }
+
+    if (processState === 'processed' && mark.processed !== 1) {
+      return false
+    }
+
+    if (processState === 'unprocessed' && mark.processed === 1) {
       return false
     }
 

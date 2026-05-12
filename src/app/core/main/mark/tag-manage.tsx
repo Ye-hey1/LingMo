@@ -1,7 +1,7 @@
 "use client"
 import * as React from "react"
 import { useTranslations } from 'next-intl'
-import { Plus, TagIcon, Inbox, SquareCheck } from "lucide-react"
+import { Plus, TagIcon, Inbox, SquareCheck, GripVertical } from "lucide-react"
 import {
   Accordion,
   AccordionContent,
@@ -17,7 +17,7 @@ import {
   EmptyTitle,
   EmptyDescription,
 } from "@/components/ui/empty"
-import { initTagsDb, insertTag, Tag, delTag, updateTag, updateTagsOrder } from "@/db/tags"
+import { initTagsDb, insertTag, Tag, TAG_COLORS, updateTag, updateTagColor, updateTagsOrder } from "@/db/tags"
 import type { Mark } from "@/db/marks"
 import useTagStore from "@/stores/tag"
 import useMarkStore from "@/stores/mark"
@@ -35,6 +35,9 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
+  ContextMenuSub,
+  ContextMenuSubTrigger,
+  ContextMenuSubContent,
 } from "@/components/ui/enhanced-context-menu"
 import { TagMobileActions } from './tag-mobile-actions'
 import { useTextSize } from "@/contexts/text-size-context"
@@ -133,16 +136,14 @@ export function TagManage() {
   const [isAdding, setIsAdding] = React.useState(false)
   const [editingTagId, setEditingTagId] = React.useState<number | null>(null)
   const [editingName, setEditingName] = React.useState<string>("")
-  const [expandedTagId, setExpandedTagId] = React.useState<string | undefined>(undefined)
   const [hasInitialized, setHasInitialized] = React.useState(false)
   const { init } = useChatStore()
   const textSize = getContextMenuTextSize('record')
 
-  // 自定义传感器，忽略记录项的拖拽
+  // 自定义传感器：使用轻量位移触发，点击不拖拽、移动即可拖拽
   const customPointerSensor = useSensor(PointerSensor, {
     activationConstraint: {
-      delay: 250,
-      tolerance: 5,
+      distance: 6,
     },
   })
 
@@ -153,16 +154,6 @@ export function TagManage() {
     })
   )
 
-  // 处理拖拽开始，检查是否是记录项
-  const handleDragStart = (event: any) => {
-    const target = event.active?.node?.current as HTMLElement
-    
-    // 如果拖拽的是记录项，取消 dnd-kit 拖拽
-    if (target?.querySelector('[data-mark-item]') || target?.closest('[data-mark-item]')) {
-      event.cancel()
-    }
-  }
-
   const {
     currentTag,
     currentTagId,
@@ -170,7 +161,8 @@ export function TagManage() {
     fetchTags,
     initTags,
     setCurrentTagId,
-    getCurrentTag
+    getCurrentTag,
+    deleteTag,
   } = useTagStore()
 
   const {
@@ -185,7 +177,15 @@ export function TagManage() {
     setPendingScrollMarkId,
     highlightedMarkId,
     setHighlightedMarkId,
+    expandedRecordTagIds,
+    setExpandedRecordTagIds,
   } = useMarkStore()
+
+  const openRecordTag = React.useCallback((tagId: number | string) => {
+    const nextTagId = tagId.toString()
+    if (expandedRecordTagIds.includes(nextTagId)) return
+    setExpandedRecordTagIds([...expandedRecordTagIds, nextTagId])
+  }, [expandedRecordTagIds, setExpandedRecordTagIds])
 
   async function handleAddTag() {
     if (!newTagName.trim()) return
@@ -199,7 +199,7 @@ export function TagManage() {
     setNewTagName("")
     setIsAdding(false)
     // 添加新标签后自动展开
-    setExpandedTagId(newTagId.toString())
+    openRecordTag(newTagId)
   }
 
   async function handleSelectTag(tag: Tag) {
@@ -210,9 +210,14 @@ export function TagManage() {
   }
 
   async function handleDeleteTag(tagId: number) {
-    await delTag(tagId)
-    await fetchTags()
-    getCurrentTag()
+    const deletedTagId = tagId.toString()
+    const remainingTags = tags.filter(tag => tag.id !== tagId)
+    await deleteTag(tagId)
+    setExpandedRecordTagIds(expandedRecordTagIds.filter(id => id !== deletedTagId))
+    if (currentTagId === tagId && remainingTags[0]) {
+      await init(remainingTags[0].id)
+    }
+    await fetchMarks()
   }
 
   async function handleRename(tag: Tag) {
@@ -243,6 +248,19 @@ export function TagManage() {
     })
   }, [marks, recordFilters])
 
+  const getRenderableTagMarks = React.useCallback((tagId: number) => {
+    return getFilteredTagMarks(tagId).filter((mark: Mark) => {
+      if (mark.type === 'image' || mark.type === 'scan') {
+        return !!(mark.content && mark.content.trim() !== '')
+      }
+      return true
+    })
+  }, [getFilteredTagMarks])
+
+  const getRenderableTagCount = React.useCallback((tagId: number) => {
+    return getRenderableTagMarks(tagId).length
+  }, [getRenderableTagMarks])
+
   const visibleTags = React.useMemo(() => {
     return tags.filter((tag) => {
       if (recordFilters.tagId !== 'all' && tag.id !== recordFilters.tagId) {
@@ -259,8 +277,8 @@ export function TagManage() {
   }, [filtersActive, getFilteredTagMarks, queues, recordFilters.tagId, tags])
 
   const visibleMarkIds = React.useMemo(() => {
-    return visibleTags.flatMap((tag) => getFilteredTagMarks(tag.id).map((mark: Mark) => mark.id))
-  }, [getFilteredTagMarks, visibleTags])
+    return visibleTags.flatMap((tag) => getRenderableTagMarks(tag.id).map((mark: Mark) => mark.id))
+  }, [getRenderableTagMarks, visibleTags])
 
   // 处理拖拽结束
   async function handleDragEnd(event: DragEndEvent) {
@@ -297,16 +315,16 @@ export function TagManage() {
   // 初始化时展开当前标签（只执行一次）
   React.useEffect(() => {
     if (currentTag && !hasInitialized) {
-      setExpandedTagId(currentTag.id.toString())
+      setExpandedRecordTagIds([currentTag.id.toString()])
       setHasInitialized(true)
     }
-  }, [currentTag, hasInitialized])
+  }, [currentTag, hasInitialized, setExpandedRecordTagIds])
 
   // 监听刷新事件，展开当前标签
   React.useEffect(() => {
     const handleRefresh = () => {
       if (currentTagId) {
-        setExpandedTagId(currentTagId.toString())
+        openRecordTag(currentTagId)
         fetchMarks()
       }
     }
@@ -316,10 +334,10 @@ export function TagManage() {
     return () => {
       emitter.off(EmitterRecordEvents.refreshMarks, handleRefresh)
     }
-  }, [currentTagId, fetchMarks])
+  }, [currentTagId, fetchMarks, openRecordTag])
 
   React.useEffect(() => {
-    if (!pendingScrollMarkId || expandedTagId !== currentTagId.toString()) {
+    if (!pendingScrollMarkId || !currentTagId || !expandedRecordTagIds.includes(currentTagId.toString())) {
       return
     }
 
@@ -356,7 +374,7 @@ export function TagManage() {
     return () => {
       cancelled = true
     }
-  }, [currentTagId, expandedTagId, marks, pendingScrollMarkId, setHighlightedMarkId, setPendingScrollMarkId])
+  }, [currentTagId, expandedRecordTagIds, marks, pendingScrollMarkId, setHighlightedMarkId, setPendingScrollMarkId])
 
   React.useEffect(() => {
     if (!highlightedMarkId) {
@@ -378,12 +396,7 @@ export function TagManage() {
   }, [setVisibleMarkIds, visibleMarkIds])
 
   const renderTagRecords = React.useCallback((tagId: number) => {
-    const filteredMarks = getFilteredTagMarks(tagId).filter((mark: Mark) => {
-      if (mark.type === 'image' || mark.type === 'scan') {
-        return mark.content && mark.content.trim() !== ''
-      }
-      return true
-    })
+    const filteredMarks = getRenderableTagMarks(tagId)
 
     if (filteredMarks.length === 0 && queues.filter(queue => queue.tagId === tagId).length === 0) {
       return (
@@ -410,14 +423,13 @@ export function TagManage() {
     default:
       return <MarkListDefaultView marks={filteredMarks} />
     }
-  }, [getFilteredTagMarks, queues, recordViewMode, t])
+  }, [getRenderableTagMarks, queues, recordViewMode, t])
 
   return (
     <div className="w-full">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
-        onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
         <SortableContext
@@ -425,14 +437,10 @@ export function TagManage() {
           strategy={verticalListSortingStrategy}
         >
           {/* 标签列表 */}
-          <Accordion 
-            type="single" 
-            collapsible 
-            value={expandedTagId} 
-            onValueChange={(value) => {
-              // 直接设置展开状态，允许折叠（value 为 undefined）
-              setExpandedTagId(value)
-            }}
+          <Accordion
+            type="multiple"
+            value={expandedRecordTagIds}
+            onValueChange={setExpandedRecordTagIds}
             className="w-full"
           >
             {visibleTags.length === 0 ? (
@@ -447,7 +455,13 @@ export function TagManage() {
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
-            ) : visibleTags.map((tag) => (
+            ) : visibleTags.map((tag) => {
+              const renderableCount = getRenderableTagCount(tag.id)
+              const fallbackTotal = tag.total && tag.total > 0 ? tag.total : ''
+              const displayCount = tag.id === currentTagId
+                ? (renderableCount > 0 ? renderableCount : '')
+                : fallbackTotal
+              return (
               <SortableTagItem key={tag.id} tag={tag}>
                 <AccordionItemWrapper value={tag.id.toString()}>
                   <ContextMenu>
@@ -461,11 +475,16 @@ export function TagManage() {
                         }}
                       >
                         <div className="flex items-center gap-2 flex-1">
-                          {
+                          {tag.color ? (
+                            <span
+                              className="inline-block size-2.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: tag.color }}
+                            />
+                          ) : (
                             currentTagId === tag.id ? 
                             <SquareCheck className="size-3" />:
                             <TagIcon className="size-3" />
-                          }
+                          )}
                           {editingTagId === tag.id ? (
                             <Input
                               value={editingName}
@@ -482,7 +501,15 @@ export function TagManage() {
                           ) : (
                             <div className="text-xs w-full flex items-center justify-between gap-2">
                               <span className={`flex-1 ${currentTagId === tag.id && 'font-bold'}`}>{tag.name}</span>
-                              <span className="text-muted-foreground">{tag.total && tag.total > 0 ? tag.total : ''}</span>
+                              <span className="text-muted-foreground">
+                                {displayCount}
+                              </span>
+                              <span
+                                className="inline-flex items-center justify-center text-muted-foreground/70 cursor-grab active:cursor-grabbing select-none"
+                                title="拖动排序"
+                              >
+                                <GripVertical className="size-3" />
+                              </span>
                               <TagMobileActions 
                                 tag={tag}
                                 onRename={startEditing}
@@ -498,6 +525,42 @@ export function TagManage() {
                       <ContextMenuItem disabled={editingTagId === tag.id} onClick={() => startEditing(tag)}>
                         {t('record.mark.tag.rename')}
                       </ContextMenuItem>
+                      <ContextMenuSub>
+                        <ContextMenuSubTrigger>
+                          <span className="flex items-center gap-2">
+                            {tag.color ? (
+                              <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: tag.color }} />
+                            ) : null}
+                            标签颜色
+                          </span>
+                        </ContextMenuSubTrigger>
+                        <ContextMenuSubContent>
+                          <div className="grid grid-cols-7 gap-1 p-2">
+                            <button
+                              type="button"
+                              className={`size-5 rounded-full border border-border flex items-center justify-center text-muted-foreground text-[10px] hover:ring-2 hover:ring-ring ${!tag.color ? 'ring-2 ring-ring' : ''}`}
+                              onClick={async () => {
+                                await updateTagColor(tag.id, null)
+                                await fetchTags()
+                              }}
+                            >
+                              ×
+                            </button>
+                            {TAG_COLORS.map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                className={`size-5 rounded-full hover:ring-2 hover:ring-ring hover:ring-offset-1 ${tag.color === c ? 'ring-2 ring-ring ring-offset-1' : ''}`}
+                                style={{ backgroundColor: c }}
+                                onClick={async () => {
+                                  await updateTagColor(tag.id, c)
+                                  await fetchTags()
+                                }}
+                              />
+                            ))}
+                          </div>
+                        </ContextMenuSubContent>
+                      </ContextMenuSub>
                       <ContextMenuItem disabled={tag.isLocked} onClick={() => handleDeleteTag(tag.id)}>
                         <span className="text-red-600">{t('record.mark.tag.delete')}</span>
                       </ContextMenuItem>
@@ -518,7 +581,8 @@ export function TagManage() {
                   </AccordionContent>
                 </AccordionItemWrapper>
               </SortableTagItem>
-            ))}
+              )
+            })}
           </Accordion>
         </SortableContext>
       </DndContext>

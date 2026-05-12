@@ -1,4 +1,3 @@
-import { Button } from "@/components/ui/button"
 import { Chat } from "@/db/chats"
 import dayjs from "dayjs"
 import { Clock } from "lucide-react"
@@ -8,16 +7,17 @@ dayjs.extend(relativeTime)
 
 interface MessageInfoProps {
   chat: Chat
+  compact?: boolean
 }
 
-export function MessageInfo({ chat }: MessageInfoProps) {
+export function MessageInfo({ chat, compact = false }: MessageInfoProps) {
 
   return (
-    <div className='flex items-center gap-1 -translate-x-3'>
-      <Button variant={"ghost"} size="sm" disabled>
-        <Clock className="size-4 hidden md:inline" />
+    <div className='flex items-center gap-1 text-muted-foreground'>
+      <Clock className={`${compact ? "size-3.5" : "size-4"} shrink-0`} />
+      <span className={`${compact ? "text-xs" : "text-sm"} leading-none`}>
         {dayjs(chat.createdAt).fromNow()}
-      </Button>
+      </span>
     </div>
   )
 }

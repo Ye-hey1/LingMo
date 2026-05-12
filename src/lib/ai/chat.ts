@@ -1,5 +1,116 @@
 import OpenAI from 'openai';
 import { getAISettings, validateAIService, prepareMessages, createOpenAIClient, handleAIError, convertImageToBase64 } from './utils';
+import type { AiConfig } from '@/app/core/setting/config'
+import { estimateTokens } from './token-counter'
+
+function inferProvider(config?: AiConfig) {
+  const source = `${config?.templateKey || ''} ${config?.key || ''} ${config?.title || ''} ${config?.baseURL || ''}`.toLowerCase()
+  if (source.includes('deepseek')) return 'deepseek'
+  if (source.includes('openai')) return 'openai'
+  if (source.includes('anthropic') || source.includes('claude')) return 'anthropic'
+  if (source.includes('gemini') || source.includes('google')) return 'google'
+  if (source.includes('ollama')) return 'ollama'
+  if (source.includes('openrouter')) return 'openrouter'
+  if (source.includes('siliconflow')) return 'siliconflow'
+  return config?.templateKey || config?.key || 'unknown'
+}
+
+function getErrorKind(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (/Request was aborted|USER_STOPPED/i.test(message)) return 'aborted'
+  if (/AI_TRANSPORT_ERROR|error sending request|Failed to fetch|NetworkError|connect/i.test(message)) return 'connect'
+  if (/timeout|timed out/i.test(message)) return 'timeout'
+  if (/status=401|401|Unauthorized/i.test(message)) return 'unauthorized'
+  if (/status=429|429|rate limit/i.test(message)) return 'rate_limit'
+  if (/status=5\d\d| 5\d\d/i.test(message)) return 'server'
+  return 'unknown'
+}
+
+function estimateMessagesTokens(messages: OpenAI.Chat.ChatCompletionMessageParam[]) {
+  return messages.reduce((sum, message) => {
+    if (!('content' in message)) return sum
+    return sum + estimateTokens(flattenMessageContentToText(message.content))
+  }, 0)
+}
+
+async function recordAiUsage(params: {
+  aiConfig?: AiConfig
+  storeKey?: string
+  messages?: OpenAI.Chat.ChatCompletionMessageParam[]
+  conversationId?: number
+  toolCallCount?: number
+  success: boolean
+  errorKind?: string
+  latencyMs: number
+}) {
+  try {
+    const { insertAiUsageEvent } = await import('@/db/ai-usage')
+    await insertAiUsageEvent({
+      platform: 'lingmo',
+      provider: inferProvider(params.aiConfig),
+      model: params.aiConfig?.model || '',
+      modelType: params.aiConfig?.modelType || 'chat',
+      storeKey: params.storeKey || 'primaryModel',
+      conversationId: params.conversationId ?? null,
+      messageCount: params.messages?.length || 0,
+      tokenEstimate: params.messages ? estimateMessagesTokens(params.messages) : 0,
+      toolCallCount: params.toolCallCount || 0,
+      success: params.success,
+      errorKind: params.errorKind || null,
+      latencyMs: Math.max(0, Math.round(params.latencyMs)),
+    })
+  } catch (error) {
+    console.error('Failed to record AI usage:', error)
+  }
+}
+
+function flattenMessageContentToText(content: unknown): string {
+  if (typeof content === 'string') {
+    return content
+  }
+
+  if (!Array.isArray(content)) {
+    return ''
+  }
+
+  return content
+    .map((part) => {
+      if (!part || typeof part !== 'object') {
+        return ''
+      }
+
+      const typedPart = part as { type?: string; text?: string }
+      if (typedPart.type === 'text') {
+        return typedPart.text || ''
+      }
+
+      if (typedPart.type === 'image_url') {
+        return '[图片内容已省略]'
+      }
+
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function toTextOnlyMessages(messages: OpenAI.Chat.ChatCompletionMessageParam[]) {
+  return messages.map((message) => {
+    if (!('content' in message)) {
+      return message
+    }
+
+    const nextContent = flattenMessageContentToText(message.content)
+    if (typeof message.content === 'string') {
+      return message
+    }
+
+    return {
+      ...message,
+      content: nextContent,
+    } as OpenAI.Chat.ChatCompletionMessageParam
+  })
+}
 
 /**
  * 非流式方式获取AI结果
@@ -12,28 +123,58 @@ export async function fetchAi(
   modelType?: string,
   messages?: OpenAI.Chat.ChatCompletionMessageParam[]
 ): Promise<string> {
+  const startedAt = Date.now()
+  let aiConfig: AiConfig | undefined
+  let finalMessages: OpenAI.Chat.ChatCompletionMessageParam[] = []
   try {
     // 获取AI设置
-    const aiConfig = await getAISettings(modelType)
+    aiConfig = await getAISettings(modelType)
 
     // 验证AI服务
-    if (await validateAIService(aiConfig?.baseURL) === null) return ''
+    if (await validateAIService(aiConfig?.baseURL) === null) {
+      await recordAiUsage({
+        aiConfig,
+        storeKey: modelType || 'primaryModel',
+        messages: finalMessages,
+        success: false,
+        errorKind: 'missing_config',
+        latencyMs: Date.now() - startedAt,
+      })
+      return ''
+    }
 
     // 准备消息
     const prepared = await prepareMessages(text, messages)
-    const finalMessages = prepared.messages
+    finalMessages = toTextOnlyMessages(prepared.messages)
 
     const openai = await createOpenAIClient(aiConfig)
 
     const completion = await openai.chat.completions.create({
       model: aiConfig?.model || '',
       messages: finalMessages,
-      temperature: aiConfig?.temperature || 1,
-      top_p: aiConfig?.topP || 1,
+      temperature: aiConfig?.temperature ?? 0.7,
+      top_p: aiConfig?.topP ?? 1,
+      max_tokens: 4096,
+    })
+
+    await recordAiUsage({
+      aiConfig,
+      storeKey: modelType || 'primaryModel',
+      messages: finalMessages,
+      success: true,
+      latencyMs: Date.now() - startedAt,
     })
 
     return completion.choices[0].message.content || ''
   } catch (error) {
+    await recordAiUsage({
+      aiConfig,
+      storeKey: modelType || 'primaryModel',
+      messages: finalMessages,
+      success: false,
+      errorKind: getErrorKind(error),
+      latencyMs: Date.now() - startedAt,
+    })
     return handleAIError(error) || ''
   }
 }
@@ -61,20 +202,32 @@ export async function fetchAiStream(
   onThinkingUpdate?: (thinking: string) => void,
   messages?: OpenAI.Chat.ChatCompletionMessageParam[]
 ): Promise<string> {
+  const startedAt = Date.now()
+  let aiConfig: AiConfig | undefined
+  let preparedMessages: OpenAI.Chat.ChatCompletionMessageParam[] = []
+  let totalToolCallCount = 0
   try {
 
 
     // 获取AI设置
-    const aiConfig = await getAISettings()
+    aiConfig = await getAISettings()
 
     // 验证AI服务
     const validatedBaseURL = await validateAIService(aiConfig?.baseURL)
     if (validatedBaseURL === null) {
+      await recordAiUsage({
+        aiConfig,
+        storeKey: 'primaryModel',
+        messages: preparedMessages,
+        conversationId: chatId,
+        success: false,
+        errorKind: 'missing_config',
+        latencyMs: Date.now() - startedAt,
+      })
       return ''
     }
 
     // 准备消息 - 如果提供了 messages 数组，使用它；否则用 prepareMessages
-    let preparedMessages: OpenAI.Chat.ChatCompletionMessageParam[]
     if (messages && messages.length > 0) {
       // 使用提供的消息数组
       const prepared = await prepareMessages('', messages)
@@ -128,8 +281,9 @@ export async function fetchAiStream(
     const requestParams: any = {
       model: aiConfig?.model || '',
       messages: preparedMessages,
-      temperature: aiConfig?.temperature,
-      top_p: aiConfig?.topP,
+      temperature: aiConfig?.temperature ?? 0.7,
+      top_p: aiConfig?.topP ?? 1,
+      max_tokens: 4096,
       stream: true,
     }
 
@@ -217,6 +371,7 @@ export async function fetchAiStream(
 
     // 如果有工具调用，执行工具并继续对话（支持多轮工具调用）
     if (toolCalls.length > 0) {
+      totalToolCallCount += toolCalls.length
       // 动态导入 callTool 函数（避免循环依赖）
       const { callTool } = await import('../mcp/tools')
 
@@ -334,8 +489,9 @@ export async function fetchAiStream(
         const nextStream = await openai.chat.completions.create({
           model: aiConfig?.model || '',
           messages: conversationMessages,
-          temperature: aiConfig?.temperature,
-          top_p: aiConfig?.topP,
+          temperature: aiConfig?.temperature ?? 0.7,
+          top_p: aiConfig?.topP ?? 1,
+          max_tokens: 4096,
           stream: true,
           tools: mcpTools,
           tool_choice: 'auto'
@@ -409,6 +565,8 @@ export async function fetchAiStream(
         if (currentToolCalls.length === 0) {
           break
         }
+
+        totalToolCallCount += currentToolCalls.length
       }
       
       if (iteration >= maxIterations) {
@@ -418,9 +576,29 @@ export async function fetchAiStream(
       }
     }
     
+    await recordAiUsage({
+      aiConfig,
+      storeKey: 'primaryModel',
+      messages: preparedMessages,
+      conversationId: chatId,
+      toolCallCount: totalToolCallCount,
+      success: true,
+      latencyMs: Date.now() - startedAt,
+    })
+
     return fullContent
   } catch (error) {
     console.error('[fetchAiStream] Error:', error)
+    await recordAiUsage({
+      aiConfig,
+      storeKey: 'primaryModel',
+      messages: preparedMessages,
+      conversationId: chatId,
+      toolCallCount: totalToolCallCount,
+      success: false,
+      errorKind: getErrorKind(error),
+      latencyMs: Date.now() - startedAt,
+    })
     return handleAIError(error) || ''
   }
 }
@@ -432,23 +610,38 @@ export async function fetchAiStream(
  * @param abortSignal 用于终止请求的信号
  */
 export async function fetchAiStreamToken(text: string, onUpdate: (content: string) => void, abortSignal?: AbortSignal): Promise<string> {
+  const startedAt = Date.now()
+  let aiConfig: AiConfig | undefined
+  let messages: OpenAI.Chat.ChatCompletionMessageParam[] = []
   try {
     // 获取AI设置
-    const aiConfig = await getAISettings()
+    aiConfig = await getAISettings()
     
     // 验证AI服务
-    if (await validateAIService(aiConfig?.baseURL) === null) return ''
+    if (await validateAIService(aiConfig?.baseURL) === null) {
+      await recordAiUsage({
+        aiConfig,
+        storeKey: 'primaryModel',
+        messages,
+        success: false,
+        errorKind: 'missing_config',
+        latencyMs: Date.now() - startedAt,
+      })
+      return ''
+    }
     
     // 准备消息
-    const { messages } = await prepareMessages(text)
+    const prepared = await prepareMessages(text)
+    messages = prepared.messages
   
     const openai = await createOpenAIClient(aiConfig)
 
     const stream = await openai.chat.completions.create({
       model: aiConfig?.model || '',
       messages: messages,
-      temperature: aiConfig?.temperature,
-      top_p: aiConfig?.topP,
+      temperature: aiConfig?.temperature ?? 0.7,
+      top_p: aiConfig?.topP ?? 1,
+      max_tokens: 4096,
       stream: true,
     }, {
       signal: abortSignal
@@ -465,8 +658,24 @@ export async function fetchAiStreamToken(text: string, onUpdate: (content: strin
       }
     }
     
+    await recordAiUsage({
+      aiConfig,
+      storeKey: 'primaryModel',
+      messages,
+      success: true,
+      latencyMs: Date.now() - startedAt,
+    })
+
     return ''
   } catch (error) {
+    await recordAiUsage({
+      aiConfig,
+      storeKey: 'primaryModel',
+      messages,
+      success: false,
+      errorKind: getErrorKind(error),
+      latencyMs: Date.now() - startedAt,
+    })
     return handleAIError(error) || ''
   }
 }

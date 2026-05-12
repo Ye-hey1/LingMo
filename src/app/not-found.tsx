@@ -3,14 +3,20 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { isMobileDevice } from '@/lib/check';
+import { checkIsTauri, isMobileDevice } from '@/lib/check';
 import { Store } from '@tauri-apps/plugin-store';
+import { WebRuntimeNotice } from '@/components/web-runtime-notice';
 
 export default function NotFound() {
   const router = useRouter();
   const [countdown, setCountdown] = useState(5);
+  const isTauri = checkIsTauri()
 
   async function clearRouteStore() {
+    if (!isTauri) {
+      return
+    }
+
     const store = await Store.load('store.json');
     await store.delete('lastSettingPage')
     await store.delete('lastRecordPage')
@@ -21,6 +27,10 @@ export default function NotFound() {
   }, [])
 
   useEffect(() => {
+    if (!isTauri) {
+      return
+    }
+
     const timer = setTimeout(() => {
       router.push(isMobileDevice() ? '/mobile/chat' : '/core/main');
     }, 5000);
@@ -41,7 +51,11 @@ export default function NotFound() {
       clearTimeout(timer);
       clearInterval(countdownInterval);
     };
-  }, [router]);
+  }, [isTauri, router]);
+
+  if (!isTauri) {
+    return <WebRuntimeNotice />
+  }
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-4">

@@ -1,7 +1,53 @@
 import { create } from 'zustand'
 import { Store } from '@tauri-apps/plugin-store'
+import { invoke } from '@tauri-apps/api/core'
 import type { SkillMetadata, SkillContent, SkillExecutionRecord } from '@/lib/skills/types'
 import { skillManager } from '@/lib/skills/manager'
+import { generateSkillId } from '@/lib/skills/parser'
+
+interface InstalledSkillRecord {
+  name: string
+  enabled: boolean
+}
+
+async function loadSkillEnabledOverrides(): Promise<Record<string, boolean>> {
+  const store = await Store.load('store.json')
+  const overrides = await store.get<Record<string, boolean>>('skills.enabledSkills') || {}
+
+  try {
+    const installedSkills = await invoke<InstalledSkillRecord[]>('skill_v2_get_all')
+    for (const skill of installedSkills) {
+      const skillId = generateSkillId(skill.name)
+      overrides[skillId] = skill.enabled
+      overrides[skill.name] = skill.enabled
+    }
+  } catch (error) {
+    console.warn('[Skills] Failed to load v2 enabled states, falling back to local skill settings:', error)
+  }
+
+  return overrides
+}
+
+async function buildSkillMetadataSnapshot() {
+  const enabledOverrides = await loadSkillEnabledOverrides()
+  const allSkills = skillManager.getAllSkills()
+
+  for (const skill of allSkills) {
+    const idOverride = enabledOverrides[skill.metadata.id]
+    const nameOverride = enabledOverrides[generateSkillId(skill.metadata.name)]
+    const rawNameOverride = enabledOverrides[skill.metadata.name]
+    skill.metadata.enabled = idOverride ?? nameOverride ?? rawNameOverride ?? skill.metadata.enabled ?? true
+  }
+
+  const globalSkills = skillManager.getSkillsByScope('global')
+  const projectSkills = skillManager.getSkillsByScope('project')
+
+  return {
+    skills: allSkills.map(s => s.metadata),
+    globalSkills: globalSkills.map(s => s.metadata),
+    projectSkills: projectSkills.map(s => s.metadata),
+  }
+}
 
 interface SkillsState {
   // 配置
@@ -74,6 +120,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     // 如果已经初始化过，只加载配置
     if (state.initialized) {
       await get().loadSkillsConfig()
+      set(await buildSkillMetadataSnapshot())
       return
     }
 
@@ -115,7 +162,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       const autoMatch = await store.get<boolean>('skills.autoMatch')
 
       set({
-        enabled: enabled ?? false,
+        enabled: enabled ?? true,
         autoMatch: autoMatch ?? true,
       })
     } catch (error) {
@@ -142,16 +189,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   // 刷新 Skills 列表
   refreshSkills: async () => {
     await skillManager.reload()
-
-    const allSkills = skillManager.getAllSkills()
-    const globalSkills = skillManager.getSkillsByScope('global')
-    const projectSkills = skillManager.getSkillsByScope('project')
-
-    set({
-      skills: allSkills.map(s => s.metadata),
-      globalSkills: globalSkills.map(s => s.metadata),
-      projectSkills: projectSkills.map(s => s.metadata),
-    })
+    set(await buildSkillMetadataSnapshot())
   },
 
   // 切换 Skill 启用状态

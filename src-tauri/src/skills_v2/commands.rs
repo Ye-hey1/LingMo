@@ -1,10 +1,10 @@
+use crate::skills_v2::db::{DiscoveredSkill, ScenarioRecord, SkillRecord, SkillStore};
+use crate::skills_v2::git_fetcher::PreviewSkill;
+use crate::skills_v2::installer;
+use crate::skills_v2::scanner;
+use crate::skills_v2::skillssh_api::{self, SkillsShSkill};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
-use crate::skills_v2::db::{SkillRecord, SkillStore, DiscoveredSkill, ScenarioRecord};
-use crate::skills_v2::scanner;
-use crate::skills_v2::installer;
-use crate::skills_v2::git_fetcher::PreviewSkill;
-use crate::skills_v2::skillssh_api::{self, SkillsShSkill};
 
 pub struct SkillState(pub Mutex<SkillStore>);
 
@@ -15,7 +15,10 @@ pub fn skill_v2_get_all(state: State<'_, SkillState>) -> Result<Vec<SkillRecord>
 }
 
 #[tauri::command]
-pub fn skill_v2_get_by_id(id: String, state: State<'_, SkillState>) -> Result<Option<SkillRecord>, String> {
+pub fn skill_v2_get_by_id(
+    id: String,
+    state: State<'_, SkillState>,
+) -> Result<Option<SkillRecord>, String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
     store.get_skill_by_id(&id).map_err(|e| e.to_string())
 }
@@ -27,9 +30,15 @@ pub fn skill_v2_delete(id: String, state: State<'_, SkillState>) -> Result<bool,
 }
 
 #[tauri::command]
-pub fn skill_v2_set_enabled(id: String, enabled: bool, state: State<'_, SkillState>) -> Result<bool, String> {
+pub fn skill_v2_set_enabled(
+    id: String,
+    enabled: bool,
+    state: State<'_, SkillState>,
+) -> Result<bool, String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
-    store.set_skill_enabled(&id, enabled).map_err(|e| e.to_string())
+    store
+        .set_skill_enabled(&id, enabled)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -39,7 +48,9 @@ pub fn skill_v2_scan(state: State<'_, SkillState>) -> Result<scanner::ScanResult
 }
 
 #[tauri::command]
-pub fn skill_v2_get_discovered(state: State<'_, SkillState>) -> Result<Vec<DiscoveredSkill>, String> {
+pub fn skill_v2_get_discovered(
+    state: State<'_, SkillState>,
+) -> Result<Vec<DiscoveredSkill>, String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
     store.get_all_discovered().map_err(|e| e.to_string())
 }
@@ -51,7 +62,9 @@ pub fn skill_v2_import_discovered(
 ) -> Result<SkillRecord, String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
     let discovered = store.get_all_discovered().map_err(|e| e.to_string())?;
-    let item = discovered.iter().find(|d| d.id == discovered_id)
+    let item = discovered
+        .iter()
+        .find(|d| d.id == discovered_id)
         .ok_or("Discovered skill not found")?;
 
     let source_path = std::path::Path::new(&item.found_path);
@@ -83,7 +96,9 @@ pub fn skill_v2_import_discovered(
     };
 
     store.insert_skill(&record).map_err(|e| e.to_string())?;
-    store.mark_discovered_imported(&discovered_id).map_err(|e| e.to_string())?;
+    store
+        .mark_discovered_imported(&discovered_id)
+        .map_err(|e| e.to_string())?;
 
     Ok(record)
 }
@@ -125,15 +140,22 @@ pub fn skill_v2_delete_scenario(id: String, state: State<'_, SkillState>) -> Res
 }
 
 #[tauri::command]
-pub fn skill_v2_get_active_scenario(state: State<'_, SkillState>) -> Result<Option<String>, String> {
+pub fn skill_v2_get_active_scenario(
+    state: State<'_, SkillState>,
+) -> Result<Option<String>, String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
     store.get_active_scenario_id().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn skill_v2_switch_scenario(scenario_id: Option<String>, state: State<'_, SkillState>) -> Result<(), String> {
+pub fn skill_v2_switch_scenario(
+    scenario_id: Option<String>,
+    state: State<'_, SkillState>,
+) -> Result<(), String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
-    store.set_active_scenario(scenario_id.as_deref()).map_err(|e| e.to_string())
+    store
+        .set_active_scenario(scenario_id.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -143,7 +165,9 @@ pub fn skill_v2_add_to_scenario(
     state: State<'_, SkillState>,
 ) -> Result<(), String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
-    store.add_skill_to_scenario(&scenario_id, &skill_id).map_err(|e| e.to_string())
+    store
+        .add_skill_to_scenario(&scenario_id, &skill_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -153,7 +177,9 @@ pub fn skill_v2_remove_from_scenario(
     state: State<'_, SkillState>,
 ) -> Result<(), String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
-    store.remove_skill_from_scenario(&scenario_id, &skill_id).map_err(|e| e.to_string())
+    store
+        .remove_skill_from_scenario(&scenario_id, &skill_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -162,7 +188,9 @@ pub fn skill_v2_get_scenario_skills(
     state: State<'_, SkillState>,
 ) -> Result<Vec<SkillRecord>, String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
-    store.get_scenario_skills(&scenario_id).map_err(|e| e.to_string())
+    store
+        .get_scenario_skills(&scenario_id)
+        .map_err(|e| e.to_string())
 }
 
 // --- Install Commands ---
@@ -211,7 +239,8 @@ pub fn skill_v2_install_local_dir(
         &app_data_dir,
         &store,
         name.as_deref(),
-    ).map_err(|e| e.to_string())
+    )
+    .map_err(|e| e.to_string())
 }
 
 // --- Marketplace Commands ---
@@ -223,7 +252,10 @@ pub fn skill_v2_fetch_leaderboard(board: String) -> Result<Vec<SkillsShSkill>, S
 }
 
 #[tauri::command]
-pub fn skill_v2_search_skillssh(query: String, limit: Option<usize>) -> Result<Vec<SkillsShSkill>, String> {
+pub fn skill_v2_search_skillssh(
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SkillsShSkill>, String> {
     let bounded = limit.unwrap_or(60).clamp(1, 300);
     skillssh_api::search_skills(&query, bounded)
 }

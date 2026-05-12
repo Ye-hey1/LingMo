@@ -13,8 +13,17 @@ export interface Tool {
   description: string
   parameters: ToolParameter[]
   requiresConfirmation: boolean
-  category: 'note' | 'chat' | 'tag' | 'mark' | 'search' | 'mcp' | 'system' | 'editor'
-  execute: (params: Record<string, any>) => Promise<ToolResult>
+  category: 'note' | 'chat' | 'tag' | 'mark' | 'search' | 'mcp' | 'system' | 'editor' | 'filesystem' | 'web'
+  execute: (params: Record<string, any>, context?: ToolExecutionContext) => Promise<ToolResult>
+  risk?: 'low' | 'medium' | 'high'
+  capabilities?: Array<'read' | 'write' | 'delete' | 'execute' | 'network'>
+}
+
+export interface ToolExecutionContext {
+  abortSignal?: AbortSignal
+  runId?: string
+  iteration?: number
+  userInput?: string
 }
 
 export interface ToolResult {
@@ -23,6 +32,13 @@ export interface ToolResult {
   error?: string
   message?: string
 }
+
+export type AgentApprovalScope =
+  | 'once'
+  | 'conversation'
+  | 'always-tool'
+  | 'always-folder'
+  | 'always-readonly'
 
 export interface ToolCall {
   id: string
@@ -33,57 +49,128 @@ export interface ToolCall {
   timestamp: number
 }
 
+export type AgentEventType =
+  | 'thought'
+  | 'action'
+  | 'observation'
+  | 'tool'
+  | 'approval'
+  | 'final'
+  | 'error'
+  | 'agent.started'
+  | 'agent.completed'
+  | 'agent.stopped'
+  | 'agent.context.compacted'
+  | 'iteration.started'
+  | 'thought.updated'
+  | 'action.parsed'
+  | 'observation.created'
+  | 'tool.updated'
+  | 'final.answer.rendered'
+  | 'skills.selected'
+  | 'agent.planning'
+
+export interface AgentEvent {
+  id?: string
+  runId?: string
+  sequence?: number
+  type: AgentEventType
+  timestamp: number
+  iteration?: number
+  level?: 'debug' | 'info' | 'warn' | 'error'
+  payload?: Record<string, any>
+}
+
 export interface ConfirmationRecord {
   toolName: string
   params: Record<string, any>
   status: 'pending' | 'confirmed' | 'cancelled'
   timestamp: number
-  scope?: 'once' | 'conversation'
+  scope?: AgentApprovalScope
   sessionApprovalType?: 'write' | 'runtime-script-skill'
   sessionApprovalSkillId?: string
 }
 
+export interface AgentContextSnapshot {
+  userGoal: string
+  readFiles: Array<{
+    path: string
+    source: string
+    lastReadAt: number
+  }>
+  toolResults: Array<{
+    toolName: string
+    status: ToolCall['status'] | 'observed'
+    summary: string
+    timestamp?: number
+  }>
+  todos: Array<{
+    title: string
+    status: 'pending' | 'done' | 'blocked'
+  }>
+  compactedAt: number
+  sourceEventCount: number
+  sourceStepCount: number
+}
+
 export interface AgentState {
+  agentRunId?: string
+  agentEventCursor?: number
   activeChatId?: number
   isRunning: boolean
-  isThinking: boolean // 是否正在等待 AI 生成新的思考
+  isThinking: boolean
   currentThought: string
-  thoughtHistory: string[] // 累积的思考历史（已弃用，保留用于兼容）
-  completedSteps: ReActStep[] // 已完成的完整步骤（包含 thought, action, observation）
+  thoughtHistory: string[]
+  completedSteps: ReActStep[]
   currentAction?: string
   currentObservation?: string
   toolCalls: ToolCall[]
+  agentEvents: AgentEvent[]
   maxIterations: number
   currentIteration: number
   pendingConfirmation?: {
     toolName: string
     params: Record<string, any>
     previewParams?: Record<string, any>
-    originalContent?: string  // 原始内容（用于显示 diff）
-    modifiedContent?: string  // 修改后的内容（用于显示 diff）
-    filePath?: string         // 文件路径（用于显示在确认对话框中）
+    originalContent?: string
+    modifiedContent?: string
+    filePath?: string
     canApproveForSession?: boolean
     sessionApprovalType?: 'write' | 'runtime-script-skill'
     sessionApprovalSkillId?: string
+    persistentApprovalOptions?: AgentApprovalScope[]
   }
-  confirmationHistory: ConfirmationRecord[] // 确认操作的历史记录
+  confirmationHistory: ConfirmationRecord[]
   loadedSkills?: Array<{
     id: string
     name: string
     description?: string
-  }> // 当前对话加载的 Skills 列表
-  selectedSkills?: string[] // AI 选择的 Skill ID 列表
-  currentStepStartTime?: number // 当前步骤开始时间戳（用于实时计算耗时）
-  // RAG 相关字段（实时执行时显示）
-  ragSources?: string[] // RAG 检索到的来源文件列表
+  }>
+  selectedSkills?: string[]
+  currentStepStartTime?: number
+  ragSources?: string[]
   ragSourceDetails?: Array<{
     filepath: string
     filename: string
     content: string
-  }> // RAG 检索到的来源文件详情
-  // Final Answer 模式（检测到 Final Answer 时切换到 Markdown 渲染）
+    sourceType?: 'rag' | 'current' | 'linked' | 'quote'
+    startLine?: number
+    endLine?: number
+    from?: number
+    to?: number
+  }>
   isFinalAnswerMode?: boolean
   finalAnswerContent?: string
+  agentContextSnapshot?: AgentContextSnapshot
+  taskPlan?: {
+    isComplex: boolean
+    steps: Array<{
+      description: string
+      tools: string[]
+    }>
+    summary: string
+    completedStepIndex: number
+  }
 }
 
 export interface ReActStep {
@@ -93,5 +180,5 @@ export interface ReActStep {
     params: Record<string, any>
   }
   observation?: string
-  duration?: number  // 耗时（毫秒）
+  duration?: number  // 鑰楁椂锛堟绉掞級
 }

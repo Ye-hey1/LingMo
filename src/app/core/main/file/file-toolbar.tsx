@@ -15,8 +15,17 @@ import { GiteaInstanceType } from "@/lib/sync/gitea.types"
 import { useTranslations } from "next-intl"
 import useVectorStore from "@/stores/vector"
 import useUsername from "@/hooks/use-username"
+import { cn } from "@/lib/utils"
 
-export function FileToolbar() {
+export function FileToolbar({
+  compact = false,
+  dense = false,
+  tooltipSide = compact ? "bottom" : "top",
+}: {
+  compact?: boolean
+  dense?: boolean
+  tooltipSide?: "top" | "right" | "bottom" | "left"
+}) {
   const { fileTreeLoading } = useArticleStore()
   const {
     primaryBackupMethod,
@@ -33,6 +42,10 @@ export function FileToolbar() {
   const t = useTranslations('article.file.toolbar')
 
   const username = useUsername()
+  const compactButtonClassName = dense
+    ? "size-5 rounded-sm text-muted-foreground hover:text-foreground"
+    : "size-7 rounded-md text-muted-foreground hover:text-foreground"
+  const compactIconClassName = dense ? "size-3" : "size-4"
 
   const repoName = React.useMemo(() => {
     switch (primaryBackupMethod) {
@@ -88,22 +101,26 @@ export function FileToolbar() {
 
 
   return (
-    <div className="flex items-center h-12 border-b px-2">
+    <div className={cn("flex items-center", compact ? "gap-0.5" : "h-12 gap-1 border-b px-2")}>
       {/* 向量数据库 */}
       <TooltipButton
-        icon={isProcessing ? <LoaderCircle className="animate-spin size-4" /> : <BookA className="text-primary" />}
+        icon={isProcessing ? <LoaderCircle className={cn("animate-spin", compactIconClassName)} /> : <BookA className={cn("text-primary", compactIconClassName)} />}
         tooltipText={isProcessing ? t('processingVectors') : t('calculateVectors')}
         onClick={processAllDocuments}
         disabled={isProcessing}
+        side={tooltipSide}
+        buttonClassName={compact ? compactButtonClassName : undefined}
       />
       {/* 同步 */}
       {
         primaryBackupMethod && username ?
           <TooltipButton
-            icon={fileTreeLoading ? <LoaderCircle className="animate-spin size-4" /> : <FolderGit2 />}
+            icon={fileTreeLoading ? <LoaderCircle className={cn("animate-spin", compactIconClassName)} /> : <FolderGit2 className={compactIconClassName} />}
             tooltipText={fileTreeLoading ? t('loadingSync') : t('accessRepo')}
             disabled={!username}
             onClick={openRemoteRepo}
+            side={tooltipSide}
+            buttonClassName={compact ? compactButtonClassName : undefined}
           />
           : null
       }

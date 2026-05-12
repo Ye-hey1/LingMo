@@ -1,11 +1,11 @@
-use std::path::Path;
-use std::fs;
-use uuid::Uuid;
+use crate::skills_v2::content_hash::hash_directory;
 use crate::skills_v2::db::{SkillRecord, SkillStore};
 use crate::skills_v2::error::{SkillError, SkillResult};
-use crate::skills_v2::content_hash::hash_directory;
-use crate::skills_v2::skill_metadata::{is_skill_directory, parse_skill_md, sanitize_skill_name};
 use crate::skills_v2::git_fetcher;
+use crate::skills_v2::skill_metadata::{is_skill_directory, parse_skill_md, sanitize_skill_name};
+use std::fs;
+use std::path::Path;
+use uuid::Uuid;
 
 /// Get the central skills directory under app data.
 fn central_skills_dir(app_data_dir: &Path) -> SkillResult<std::path::PathBuf> {
@@ -22,10 +22,14 @@ pub fn install_from_local_dir(
     custom_name: Option<&str>,
 ) -> SkillResult<SkillRecord> {
     if !source_path.exists() || !source_path.is_dir() {
-        return Err(SkillError::Validation("Source path does not exist or is not a directory".into()));
+        return Err(SkillError::Validation(
+            "Source path does not exist or is not a directory".into(),
+        ));
     }
     if !is_skill_directory(source_path) {
-        return Err(SkillError::Validation("Directory does not contain SKILL.md".into()));
+        return Err(SkillError::Validation(
+            "Directory does not contain SKILL.md".into(),
+        ));
     }
 
     let meta = parse_skill_md(source_path).ok().flatten();
@@ -33,7 +37,11 @@ pub fn install_from_local_dir(
         .map(|s| s.to_string())
         .or_else(|| meta.as_ref().and_then(|m| m.name.clone()))
         .unwrap_or_else(|| {
-            source_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
+            source_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string()
         });
     let name = sanitize_skill_name(&raw_name);
 
@@ -45,7 +53,9 @@ pub fn install_from_local_dir(
         let mut i = 2u32;
         loop {
             let candidate = central.join(format!("{}-{}", name, i));
-            if !candidate.exists() { break candidate; }
+            if !candidate.exists() {
+                break candidate;
+            }
             i += 1;
         }
     } else {
@@ -58,7 +68,11 @@ pub fn install_from_local_dir(
     let record = SkillRecord {
         id: Uuid::new_v4().to_string(),
         name: if final_target != central.join(&name) {
-            final_target.file_name().and_then(|n| n.to_str()).unwrap_or(&name).to_string()
+            final_target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&name)
+                .to_string()
         } else {
             name
         },
@@ -111,7 +125,9 @@ pub fn install_from_git(
     let skills = git_fetcher::find_skills_in_dir(&temp_dir);
     if skills.is_empty() {
         let _ = fs::remove_dir_all(&temp_dir);
-        return Err(SkillError::Validation("No skills found in repository".into()));
+        return Err(SkillError::Validation(
+            "No skills found in repository".into(),
+        ));
     }
 
     // Install the first skill (or the one matching custom_name)
@@ -151,7 +167,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> SkillResult<()> {
         let dst_path = dst.join(entry.file_name());
         if src_path.is_dir() {
             // Skip .git directories
-            if entry.file_name() == ".git" { continue; }
+            if entry.file_name() == ".git" {
+                continue;
+            }
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             fs::copy(&src_path, &dst_path)?;
@@ -166,7 +184,8 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> SkillResult<()> {
         .map_err(|e| SkillError::Install(format!("Failed to read ZIP: {}", e)))?;
 
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i)
+        let mut file = archive
+            .by_index(i)
             .map_err(|e| SkillError::Install(format!("Failed to read ZIP entry: {}", e)))?;
         let outpath = match file.enclosed_name() {
             Some(path) => dest.join(path),
@@ -177,8 +196,12 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> SkillResult<()> {
         let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
         if let Some(parent) = outpath.parent() {
             if parent.exists() {
-                let canonical_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
-                if !canonical_parent.starts_with(&canonical_dest) && canonical_parent != canonical_dest {
+                let canonical_parent = parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| parent.to_path_buf());
+                if !canonical_parent.starts_with(&canonical_dest)
+                    && canonical_parent != canonical_dest
+                {
                     continue;
                 }
             }
@@ -220,5 +243,7 @@ fn find_skill_in_extracted(dir: &Path) -> SkillResult<std::path::PathBuf> {
             }
         }
     }
-    Err(SkillError::Validation("No SKILL.md found in archive".into()))
+    Err(SkillError::Validation(
+        "No SKILL.md found in archive".into(),
+    ))
 }

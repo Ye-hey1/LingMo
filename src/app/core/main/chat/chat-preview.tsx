@@ -21,11 +21,12 @@ type ThemeType = 'light' | 'dark' | 'system';
 type ChatPreviewProps = {
   text: string;
   streaming?: boolean; // 是否为流式内容
+  highlightQuery?: string; // 搜索高亮关键词
 };
 
 const MIN_RENDER_INTERVAL_MS = 33;
 
-export default function ChatPreview({text, streaming = false}: ChatPreviewProps) {
+export default function ChatPreview({text, streaming = false, highlightQuery}: ChatPreviewProps) {
   const previewRef = useRef<HTMLDivElement>(null);
   const { theme } = useTheme()
   const [mdTheme, setMdTheme] = useState<ThemeType>('light')
@@ -245,9 +246,62 @@ export default function ChatPreview({text, streaming = false}: ChatPreviewProps)
   // 应用正文文字大小缩放
   useEffect(() => {
     if (previewRef.current) {
-      previewRef.current.style.fontSize = `${contentTextScale + 15}%`
+      const baseFontSize = (16 * contentTextScale) / 100
+      previewRef.current.style.fontSize = `${baseFontSize}px`
+      previewRef.current.style.setProperty('--chat-content-font-size', `${baseFontSize}px`)
     }
   }, [contentTextScale])
+
+  // 搜索关键词高亮（基于 DOM TreeWalker）
+  useEffect(() => {
+    const el = previewRef.current
+    if (!el) return
+
+    // 先清除已有高亮
+    el.querySelectorAll('mark.search-highlight').forEach((mark) => {
+      const parent = mark.parentNode
+      if (!parent) return
+      parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
+      parent.normalize()
+    })
+
+    if (!highlightQuery?.trim()) return
+
+    const lowerQuery = highlightQuery.toLowerCase().trim()
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement
+        if (!parent) return NodeFilter.FILTER_REJECT
+        const tag = parent.tagName.toLowerCase()
+        if (tag === 'code' || tag === 'pre' || tag === 'style') return NodeFilter.FILTER_REJECT
+        return NodeFilter.FILTER_ACCEPT
+      },
+    })
+
+    const textNodes: Text[] = []
+    while (walker.nextNode()) textNodes.push(walker.currentNode as Text)
+
+    for (const node of textNodes) {
+      const text = node.textContent || ''
+      const lowerText = text.toLowerCase()
+      const idx = lowerText.indexOf(lowerQuery)
+      if (idx === -1) continue
+
+      const before = text.substring(0, idx)
+      const match = text.substring(idx, idx + lowerQuery.length)
+      const after = text.substring(idx + lowerQuery.length)
+
+      const mark = document.createElement('mark')
+      mark.className = 'bg-yellow-200 dark:bg-yellow-800 text-foreground px-0.5 rounded search-highlight'
+      mark.textContent = match
+
+      const parent = node.parentNode!
+      if (before) parent.insertBefore(document.createTextNode(before), node)
+      parent.insertBefore(mark, node)
+      if (after) parent.insertBefore(document.createTextNode(after), node)
+      parent.removeChild(node)
+    }
+  }, [htmlContent, highlightQuery])
 
   // 根据主题选择样式
   const getThemeClass = () => {

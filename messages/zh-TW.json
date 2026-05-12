@@ -183,7 +183,10 @@
               "name": "米黄暖"
             },
             "beigeDark": {
-              "name": "米黄暗"
+              "name": "米黃暗"
+            },
+            "warmSand": {
+              "name": "暖陽沙"
             }
           }
         }
@@ -344,6 +347,10 @@
       "title": "編輯器設置",
       "interfaceSettings": "界面設置",
       "desc": "在這裡，你可以對編輯器進行自定義配置，打造更適合你的寫作方式。",
+      "contentTextScale": "正文文字縮放",
+      "contentTextScaleDesc": "調整編輯器正文的文字大小，適合不同閱讀偏好。",
+      "codeTheme": "程式碼區塊主題",
+      "codeThemeDesc": "設定編輯器中程式碼區塊的語法高亮主題。",
       "centeredContent": "置中內容",
       "centeredContentDesc": "啟用後，編輯器內容將在中間顯示，兩側留白。",
       "outlineEnable": "預設啟用大綱",
@@ -484,6 +491,7 @@
         "preferenceDesc": "偏好（語言、格式、風格等）",
         "knowledgeDesc": "知識（事實、經驗、專長等）",
         "save": "儲存記憶",
+        "update": "更新記憶",
         "saving": "儲存中...",
         "categoryDescription": "记忆分为两种类型：",
         "preferenceDescription": "偏好：语言、格式、风格等设置，每次对话都会自动加载",
@@ -494,8 +502,17 @@
       },
       "listTitle": "我的記憶",
       "addMemory": "新增記憶",
+      "editMemory": "編輯記憶",
+      "deleteMemory": "刪除記憶",
+      "clearAll": "清空全部",
+      "refresh": "重新整理",
+      "cancel": "取消",
+      "confirmClear": "確認清空",
+      "clearConfirmTitle": "清空所有記憶？",
+      "clearConfirmDesc": "這會刪除全部長期記憶，包括偏好和普通記憶。此操作無法復原。",
       "empty": "暫無記憶，新增第一條記憶吧！",
       "emptyHint": "你可以手動新增記憶，或在對話中使用「請記住」「記住這個」等話術讓 AI 自動記憶。",
+      "emptyTab": "目前分類沒有記憶",
       "preference": "偏好",
       "knowledge": "知識",
       "replaced": "已替換",
@@ -508,6 +525,7 @@
       },
       "success": "成功",
       "saved": "記憶已儲存",
+      "edited": "記憶已更新",
       "updated": "記憶已更新（已替換相似記憶）",
       "deleted": "記憶已刪除",
       "cleared": "所有記憶已清空",
@@ -565,20 +583,22 @@
     },
     "readAloud": {
       "title": "朗讀",
-      "desc": "在這裡，你可以配置朗讀相關設置，為聊天內容提供語音播放功能。",
-      "noModel": "不使用模型",
-      "alert": {
-        "title": "你正在使用系統朗讀",
-        "description": "當前未配置音訊模型，正在使用系統朗讀。"
-      },
+      "desc": "配置文字朗讀方式，預設優先使用系統語音，模型作為增強能力。",
       "options": {
+        "mode": {
+          "title": "運行方式",
+          "desc": "自動模式會優先使用系統語音，不可用時再嘗試模型。",
+          "auto": "自動（推薦）",
+          "local": "僅本地",
+          "model": "僅模型"
+        },
         "audioModel": {
-          "title": "音訊模型",
-          "desc": "選擇用於文本轉語音的AI模型，支持多種語音類型和參數配置。"
+          "title": "朗讀模型",
+          "desc": "可選。配置後可在自動模式下增強體驗，或在僅模型模式下使用。"
         },
         "speed": {
           "title": "語速",
-          "desc": "調整語音播放的速度，範圍從0.25倍到4倍速度，預設為1倍正常速度。"
+          "desc": "調整朗讀速度，範圍從0.5倍到2倍，預設為1倍。"
         }
       }
     },
@@ -971,6 +991,10 @@
           "desc": "選擇用於日常對話的主要 AI 模型"
         }
       },
+      "contentFontSize": {
+        "title": "生成內容字號",
+        "desc": "調整 AI 回答和 Markdown 預覽內容的顯示大小"
+      },
       "toolbar": {
         "title": "工具欄設置",
         "chatToolbar": {
@@ -982,6 +1006,9 @@
           },
           "promptSelect": {
             "desc": "選擇對話使用的預設提示詞"
+          },
+          "promptEnhancer": {
+            "desc": "將簡短輸入增強為包含筆記上下文的完整任務提示詞"
           },
           "chatLanguage": {
             "desc": "設置對話的語言"
@@ -1003,6 +1030,14 @@
           "clipboardMonitor": {
             "title": "剪貼板監聽",
             "desc": "自動監聽剪貼板內容變化"
+          },
+          "skillsPopover": {
+            "title": "Skills",
+            "desc": "查看目前安裝並可供 Agent 使用的 Skills"
+          },
+          "webSearch": {
+            "title": "聯網搜尋",
+            "desc": "顯示 Tavily 聯網搜尋按鈕"
           },
           "newChat": {
             "desc": "開始新對話"
@@ -1344,26 +1379,9 @@
         }
       }
     },
-    "readAloud": {
-      "title": "朗讀",
-      "desc": "配置文字朗讀方式，預設優先使用系統語音，模型作為增強能力。",
-      "options": {
-        "mode": {
-          "title": "運行方式",
-          "desc": "自動模式會優先使用系統語音，不可用時再嘗試模型。",
-          "auto": "自動（推薦）",
-          "local": "僅本地",
-          "model": "僅模型"
-        },
-        "audioModel": {
-          "title": "朗讀模型",
-          "desc": "可選。配置後可在自動模式下增強體驗，或在僅模型模式下使用。"
-        },
-        "speed": {
-          "title": "語速",
-          "desc": "調整朗讀速度，範圍從0.5倍到2倍，預設為1倍。"
-        }
-      }
+    "webSearch": {
+      "title": "\u806f\u7db2\u641c\u5c0b",
+      "desc": "\u5728\u9019\u88e1\u914d\u7f6e Tavily \u806f\u7db2\u641c\u5c0b\u80fd\u529b\uff0c\u5305\u62ec API Key\u3001\u641c\u5c0b\u6df1\u5ea6\u8207\u5065\u5eb7\u6aa2\u67e5\u3002"
     }
   },
   "record": {
@@ -1462,7 +1480,14 @@
         "cancel": "取消",
         "selectTag": "選擇標籤",
         "completed": "已完成",
-        "uncompleted": "未完成"
+        "uncompleted": "未完成",
+        "subtasks": "子任務",
+        "subtaskPlaceholder": "輸入子任務標題，Enter添加",
+        "addSubtask": "新增子任務",
+        "overdue": "逾期",
+        "dueToday": "今日截止",
+        "stats": "統計",
+        "noDueDate": "無截止日期"
       },
       "clipboard": {
         "detectedImage": "檢測到剪貼簿圖片",
@@ -1760,6 +1785,9 @@
           "tooltip": "選擇 Prompt",
           "placeholder": "搜索 Prompt"
         },
+        "promptEnhancer": {
+          "tooltip": "增強提示詞"
+        },
         "clearChat": "清空對話",
         "clearContext": {
           "tooltip": "清除上下文"
@@ -1885,6 +1913,19 @@
         "lineRange": "引用自 {fileName} 第 {startLine}-{endLine} 行",
         "noLine": "引用自 {fileName}"
       },
+      "citations": {
+        "title": "引用來源",
+        "open": "打開並定位引用內容",
+        "openDisabled": "缺少可打開的文件路徑",
+        "currentNote": "當前筆記",
+        "linkedFile": "關聯文件",
+        "quotedSelection": "選區引用",
+        "knowledgeBase": "知識庫",
+        "mentionedSource": "提及來源",
+        "previewFallback": "點擊打開來源文件",
+        "lineSingle": "第 {line} 行",
+        "lineRange": "第 {start}-{end} 行"
+      },
       "note": {
         "organize": "整理",
         "writing": "寫作",
@@ -1992,7 +2033,9 @@
     "labels": {
       "record": "記錄",
       "writing": "寫作",
-      "chat": "對話"
+      "chat": "對話",
+      "ai": "AI",
+      "memory": "記憶"
     },
     "heatmap": {
       "title": "最近 26 週熱力圖",
@@ -2176,7 +2219,25 @@
         "importing": "正在匯入...",
         "importSuccess": "匯入成功",
         "importSuccessDesc": "成功匯入 {count} 個文件",
-        "importError": "匯入失敗"
+        "importError": "匯入失敗",
+        "createMenu": "建立",
+        "newDiagram": "新建圖表"
+      },
+      "browser": {
+        "title": "檔案瀏覽",
+        "searchPlaceholder": "搜尋檔名或副檔名",
+        "clearSearch": "清除搜尋",
+        "summary": "顯示 {visibleFiles}/{totalFiles} 個文件 · {visibleFolders}/{totalFolders} 個資料夾",
+        "reset": "重置",
+        "emptyTitle": "沒有符合條件的檔案",
+        "emptyDescription": "試試調整搜尋詞或篩選條件。",
+        "filters": {
+          "all": "全部",
+          "markdown": "Markdown",
+          "pdf": "PDF",
+          "image": "圖片",
+          "folder": "資料夾"
+        }
       },
       "sync": {
         "syncingRemote": "正在拉取遠端檔案",
@@ -2269,8 +2330,35 @@
       },
       "deleteConfirm": "確認刪除此文件嗎？"
     },
+    "pdf": {
+      "prevPage": "上一頁",
+      "nextPage": "下一頁",
+      "zoomIn": "放大",
+      "zoomOut": "縮小",
+      "fitPage": "適應寬度",
+      "loadError": "無法載入 PDF 檔案",
+      "toggleSidebar": "批註面板",
+      "closeSidebar": "關閉",
+      "annotations": "批註",
+      "noAnnotations": "尚無批註",
+      "pageLabel": "第",
+      "deleteAnnotation": "刪除批註",
+      "exportAnnotations": "匯出批註",
+      "exportSuccess": "批註已匯出為 Markdown",
+      "exportError": "匯出失敗",
+      "highlight": "螢光標記",
+      "underline": "底線",
+      "note": "筆記",
+      "addNote": "新增筆記",
+      "cancelAnnotation": "取消",
+      "readingFile": "正在讀取檔案..."
+    },
     "editor": {
       "copySuccess": "複製成功",
+      "backlinks": "反向連結",
+      "noBacklinks": "尚無反向連結",
+      "outgoingLinks": "出站連結",
+      "unlinkedMentions": "未連結提及",
       "copySuccessDescription": "已複製到剪貼簿",
       "search": {
         "placeholder": "在文件中尋找",
@@ -2419,7 +2507,7 @@
         "range": "最近 {count} 週",
         "rangePlaceholder": "最近 16 週",
         "drawerEmpty": "選擇一個日期查看當天的活動詳情。",
-        "drawerSummary": "當天共 {total} 條活動，含 {record} 條記錄、{writing} 條寫作、{chat} 條對話。"
+        "drawerSummary": "當天共 {total} 條活動，含 {record} 條記錄、{writing} 條寫作、{chat} 條對話、{ai} 次 AI、{memory} 條記憶。"
       },
       "sync": {
         "title": "同步",
@@ -2536,6 +2624,14 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "blockType": "區塊類型",
+      "paragraph": "正文",
+      "heading1": "一級標題",
+      "heading2": "二級標題",
+      "heading3": "三級標題",
+      "heading4": "四級標題",
+      "heading5": "五級標題",
+      "heading6": "六級標題",
       "polish": "潤色",
       "concise": "精簡",
       "expand": "擴展",
@@ -2551,7 +2647,17 @@
       "strike": "刪除線",
       "underline": "底線",
       "inlineCode": "行內代碼",
+      "colorMenu": "顏色",
+      "textColor": "字體顏色",
+      "backgroundColor": "背景顏色",
+      "clearTextColor": "清除字體顏色",
       "highlight": "高亮",
+      "clearHighlight": "清除高亮",
+      "restoreDefault": "恢復預設",
+      "alignLeft": "靠左對齊",
+      "alignCenter": "置中對齊",
+      "alignRight": "靠右對齊",
+      "clearFormatting": "清除格式",
       "blockquote": "引用",
       "bulletList": "無序列表",
       "orderedList": "有序列表",
@@ -2569,6 +2675,29 @@
         "Arabic": "阿拉伯語"
       },
       "customLanguagePlaceholder": "自定義語言..."
+    },
+    "emptyLineMenu": {
+      "open": "插入或轉換區塊",
+      "basic": "基礎",
+      "common": "常用",
+      "task": "任務",
+      "image": "圖片",
+      "file": "檔案",
+      "videoFile": "影片或檔案",
+      "table": "表格",
+      "tablePickerSize": "插入 {rows} 行 x {cols} 列表格",
+      "columns": "分欄",
+      "highlightBlock": "高亮區塊",
+      "divider": "分隔線",
+      "linkFormTitle": "插入連結",
+      "linkText": "連結名稱",
+      "linkHref": "連結地址",
+      "linkTextPlaceholder": "例如：OpenAI 文件",
+      "linkHrefPlaceholder": "例如：https://openai.com",
+      "insertLink": "插入",
+      "cancel": "取消",
+      "linkRequired": "請輸入連結地址",
+      "insertFailed": "插入失敗"
     },
     "aiSuggestion": {
       "accept": "接受",

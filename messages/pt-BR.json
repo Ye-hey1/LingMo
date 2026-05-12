@@ -172,6 +172,9 @@
             },
             "beigeDark": {
               "name": "Bege escuro"
+            },
+            "warmSand": {
+              "name": "Areia Quente"
             }
           },
           "colors": {
@@ -350,6 +353,10 @@
       "title": "Configurações do Editor",
       "interfaceSettings": "Configurações de Interface",
       "desc": "Aqui, você pode personalizar o editor, criando uma experiência de escrita adaptada às suas necessidades.",
+      "contentTextScale": "Escala do Texto do Conteúdo",
+      "contentTextScaleDesc": "Ajuste o tamanho do texto do conteúdo do editor para diferentes preferências de leitura.",
+      "codeTheme": "Tema do Bloco de Código",
+      "codeThemeDesc": "Defina o tema de destaque de sintaxe para blocos de código no editor.",
       "centeredContent": "Conteúdo Centralizado",
       "centeredContentDesc": "Quando ativado, o conteúdo do editor será centralizado com margens em ambos os lados.",
       "outlineEnable": "Sumário habilitado por padrão",
@@ -519,6 +526,7 @@
         "preferenceDesc": "Preferência (idioma, formato, estilo, etc.)",
         "knowledgeDesc": "Conhecimento (fatos, experiência, especialização, etc.)",
         "save": "Salvar Memória",
+        "update": "Atualizar Memória",
         "saving": "Salvando...",
         "categoryDescription": "记忆分为两种类型：",
         "preferenceDescription": "偏好：语言、格式、风格等设置，每次对话都会自动加载",
@@ -529,8 +537,17 @@
       },
       "listTitle": "Minhas Memórias",
       "addMemory": "Adicionar Memória",
+      "editMemory": "Editar Memória",
+      "deleteMemory": "Excluir Memória",
+      "clearAll": "Limpar Tudo",
+      "refresh": "Atualizar",
+      "cancel": "Cancelar",
+      "confirmClear": "Limpar",
+      "clearConfirmTitle": "Limpar todas as memórias?",
+      "clearConfirmDesc": "Isso excluirá todas as memórias de longo prazo, incluindo preferências e memórias regulares. Esta ação não pode ser desfeita.",
       "empty": "Nenhuma memória ainda, adicione sua primeira memória!",
       "emptyHint": "Você pode adicionar memórias manualmente ou usar frases como \"por favor, lembre-se\" ou \"lembre-se disso\" nas conversas para que a IA crie memórias automaticamente.",
+      "emptyTab": "Nenhuma memória nesta categoria",
       "preference": "Preferência",
       "knowledge": "Conhecimento",
       "replaced": "Substituído",
@@ -543,6 +560,7 @@
       },
       "success": "Sucesso",
       "saved": "Memória salva",
+      "edited": "Memória atualizada",
       "updated": "Memória atualizada (memória similar substituída)",
       "deleted": "Memória excluída",
       "cleared": "Todas as memórias limpas",
@@ -636,23 +654,21 @@
       }
     },
     "readAloud": {
-      "title": "Ler em Voz Alta",
-      "desc": "Configure o comportamento da leitura em voz alta. As vozes do sistema são preferidas por padrão, e a voz de modelo funciona como aprimoramento.",
+      "title": "Leitura em voz alta",
+      "desc": "Aqui você pode configurar opções de leitura em voz alta para reproduzir o conteúdo do chat em áudio.",
+      "noModel": "Não usar modelo",
+      "alert": {
+        "title": "Você está usando a leitura do sistema",
+        "description": "Nenhum modelo de áudio foi configurado. Usando a leitura do próprio sistema."
+      },
       "options": {
-        "mode": {
-          "title": "Modo",
-          "desc": "O modo automático prefere as vozes do sistema e só tenta um modelo quando a fala local não está disponível.",
-          "auto": "Automático (Recomendado)",
-          "local": "Somente local",
-          "model": "Somente modelo"
-        },
         "audioModel": {
-          "title": "Modelo de Leitura",
-          "desc": "Opcional. Configure um modelo para aprimorar o modo automático ou usar o modo somente modelo."
+          "title": "Modelo de áudio",
+          "desc": "Escolha o modelo de IA para texto-para-fala (TTS). Suporta diferentes vozes e parâmetros."
         },
         "speed": {
           "title": "Velocidade",
-          "desc": "Ajuste a velocidade da leitura entre 0.5x e 2x, com 1x como padrão."
+          "desc": "Ajuste a velocidade da voz (de 0,25× a 4×). O padrão é 1×."
         }
       }
     },
@@ -1038,6 +1054,10 @@
           "desc": "Selecione o modelo de IA principal para conversas diárias"
         }
       },
+      "contentFontSize": {
+        "title": "Tamanho da Fonte Gerada",
+        "desc": "Ajuste o tamanho de exibição das respostas da IA e prévias Markdown"
+      },
       "toolbar": {
         "title": "Configurações da Barra de Ferramentas",
         "chatToolbar": {
@@ -1049,6 +1069,9 @@
           },
           "promptSelect": {
             "desc": "Selecionar o prompt predefinido para a conversa"
+          },
+          "promptEnhancer": {
+            "desc": "Expandir uma solicitação curta em um prompt completo com contexto das notas"
           },
           "chatLanguage": {
             "desc": "Definir o idioma da conversa"
@@ -1070,6 +1093,14 @@
           "clipboardMonitor": {
             "title": "Monitorar Área de Transferência",
             "desc": "Monitorar automaticamente alterações no conteúdo da área de transferência"
+          },
+          "skillsPopover": {
+            "title": "Skills",
+            "desc": "Ver Skills instaladas disponíveis para o Agent"
+          },
+          "webSearch": {
+            "title": "Pesquisa Web",
+            "desc": "Mostrar o botão de pesquisa web Tavily"
           },
           "newChat": {
             "desc": "Iniciar nova conversa"
@@ -1369,24 +1400,9 @@
       "deleteSkillDesc": "Tem certeza de que deseja excluir esta Skill? Esta ação não pode ser desfeita.",
       "skillDeleted": "Skill excluída com sucesso"
     },
-    "readAloud": {
-      "title": "Leitura em voz alta",
-      "desc": "Aqui você pode configurar opções de leitura em voz alta para reproduzir o conteúdo do chat em áudio.",
-      "noModel": "Não usar modelo",
-      "alert": {
-        "title": "Você está usando a leitura do sistema",
-        "description": "Nenhum modelo de áudio foi configurado. Usando a leitura do próprio sistema."
-      },
-      "options": {
-        "audioModel": {
-          "title": "Modelo de áudio",
-          "desc": "Escolha o modelo de IA para texto-para-fala (TTS). Suporta diferentes vozes e parâmetros."
-        },
-        "speed": {
-          "title": "Velocidade",
-          "desc": "Ajuste a velocidade da voz (de 0,25× a 4×). O padrão é 1×."
-        }
-      }
+    "webSearch": {
+      "title": "Pesquisa na Web",
+      "desc": "Configure aqui as opcoes de pesquisa web do Tavily, incluindo API Key, profundidade de busca e verificacao de saude."
     }
   },
   "record": {
@@ -1478,7 +1494,14 @@
         "cancel": "Cancelar",
         "selectTag": "Selecionar Tag",
         "completed": "Concluído",
-        "uncompleted": "Não Concluído"
+        "uncompleted": "Não Concluído",
+        "subtasks": "Subtarefas",
+        "subtaskPlaceholder": "Digite o título, Enter para adicionar",
+        "addSubtask": "Adicionar Subtarefa",
+        "overdue": "Atrasado",
+        "dueToday": "Vence Hoje",
+        "stats": "Estatísticas",
+        "noDueDate": "Sem prazo"
       },
       "clipboard": {
         "detectedImage": "Imagem da área de transferência detectada",
@@ -1829,6 +1852,9 @@
           "tooltip": "Selecionar prompt",
           "placeholder": "Pesquisar prompts"
         },
+        "promptEnhancer": {
+          "tooltip": "Aprimorar prompt"
+        },
         "clearChat": "Limpar Chat",
         "clearContext": {
           "tooltip": "Limpar contexto"
@@ -1954,6 +1980,19 @@
         "lineSingle": "引用自 {fileName} 第 {line} 行",
         "lineRange": "引用自 {fileName} 第 {startLine}-{endLine} 行",
         "noLine": "引用自 {fileName}"
+      },
+      "citations": {
+        "title": "Referências",
+        "open": "Abrir e localizar conteúdo referenciado",
+        "openDisabled": "Nenhum caminho de arquivo disponível",
+        "currentNote": "Nota atual",
+        "linkedFile": "Arquivo vinculado",
+        "quotedSelection": "Seleção citada",
+        "knowledgeBase": "Base de conhecimento",
+        "mentionedSource": "Fonte mencionada",
+        "previewFallback": "Abrir arquivo de origem",
+        "lineSingle": "Linha {line}",
+        "lineRange": "Linhas {start}-{end}"
       }
     },
     "tag": {
@@ -2034,7 +2073,9 @@
     "labels": {
       "record": "Registro",
       "writing": "Escrita",
-      "chat": "Conversa"
+      "chat": "Conversa",
+      "ai": "AI",
+      "memory": "Memória"
     },
     "heatmap": {
       "title": "Últimas 26 Semanas",
@@ -2218,7 +2259,25 @@
         "importing": "Importando...",
         "importSuccess": "Importação Bem-sucedida",
         "importSuccessDesc": "Importados {count} arquivos com sucesso",
-        "importError": "Falha na Importação"
+        "importError": "Falha na Importação",
+        "createMenu": "Criar",
+        "newDiagram": "Novo Diagrama"
+      },
+      "browser": {
+        "title": "Navegador de Arquivos",
+        "searchPlaceholder": "Buscar por nome ou sufixo",
+        "clearSearch": "Limpar busca",
+        "summary": "{visibleFiles}/{totalFiles} files · {visibleFolders}/{totalFolders} folders",
+        "reset": "Redefinir",
+        "emptyTitle": "Nenhum arquivo correspondente",
+        "emptyDescription": "Tente ajustar a busca ou o filtro.",
+        "filters": {
+          "all": "Todos",
+          "markdown": "Markdown",
+          "pdf": "PDF",
+          "image": "Imagens",
+          "folder": "Pastas"
+        }
       },
       "sync": {
         "syncingRemote": "Buscando arquivo remoto...",
@@ -2348,9 +2407,36 @@
       },
       "deleteConfirm": "Confirmar exclusão deste arquivo?"
     },
+    "pdf": {
+      "prevPage": "Página anterior",
+      "nextPage": "Próxima página",
+      "zoomIn": "Ampliar",
+      "zoomOut": "Reduzir",
+      "fitPage": "Ajustar à largura",
+      "loadError": "Falha ao carregar arquivo PDF",
+      "toggleSidebar": "Painel de anotações",
+      "closeSidebar": "Fechar",
+      "annotations": "Anotações",
+      "noAnnotations": "Sem anotações",
+      "pageLabel": "P.",
+      "deleteAnnotation": "Excluir anotação",
+      "exportAnnotations": "Exportar anotações",
+      "exportSuccess": "Anotações exportadas como Markdown",
+      "exportError": "Falha na exportação",
+      "highlight": "Destaque",
+      "underline": "Sublinhado",
+      "note": "Nota",
+      "addNote": "Adicionar nota",
+      "cancelAnnotation": "Cancelar",
+      "readingFile": "Lendo arquivo..."
+    },
     "editor": {
       "copySuccess": "Cópia Bem-sucedida",
       "copySuccessDescription": "Copiado para a área de transferência",
+      "backlinks": "Backlinks",
+      "noBacklinks": "Sem backlinks",
+      "outgoingLinks": "Links de Saída",
+      "unlinkedMentions": "Menções Sem Link",
       "search": {
         "placeholder": "Localizar no documento",
         "replacePlaceholder": "Substituir por",
@@ -2500,7 +2586,7 @@
         "range": "Últimas {count} semanas",
         "rangePlaceholder": "Últimas 16 semanas",
         "drawerEmpty": "Escolha um dia para ver os detalhes da atividade.",
-        "drawerSummary": "Houve {total} atividades nesse dia, incluindo {record} registros, {writing} escritas e {chat} conversas."
+        "drawerSummary": "Houve {total} atividades nesse dia, incluindo {record} registros, {writing} escritas, {chat} conversas, {ai} chamadas de AI e {memory} memórias."
       },
       "sync": {
         "title": "Sincronização",
@@ -2591,122 +2677,16 @@
     }
   },
   "editor": {
-    "placeholder": "Digite / para abrir o menu, ou comece a escrever...",
-    "outline": {
-      "title": "Esboço",
-      "open": "Abrir Esboço",
-      "close": "Fechar Esboço"
-    },
-    "copySuccess": "Cópia Bem-sucedida",
-    "copySuccessDescription": "Copiado para a área de transferência",
-    "search": {
-      "placeholder": "Localizar no documento",
-      "replacePlaceholder": "Substituir por",
-      "caseSensitive": "Diferenciar maiúsculas e minúsculas",
-      "replace": "Substituir",
-      "replaceAll": "Substituir tudo",
-      "findPrev": "Anterior",
-      "findNext": "Próximo"
-    },
-    "floatbar": {
-      "readAloud": {
-        "start": "Ler em Voz Alta",
-        "stop": "Parar Leitura",
-        "loading": "Carregando..."
-      }
-    },
-    "toolbar": {
-      "mark": {
-        "title": "Registros",
-        "tooltip": "Registros",
-        "description": "Converta registros em conteúdo para inserir no artigo.",
-        "noRecords": "Nenhum registro",
-        "ocrNoContent": "OCR não reconheceu nenhum conteúdo"
-      },
-      "question": {
-        "tooltip": "Perguntas e Respostas",
-        "selectContent": "Por favor, selecione o conteúdo primeiro",
-        "promptTemplate": "Texto de referência: \n{content}\nCom base na pergunta: \n{question}\n, forneça diretamente o conteúdo da resposta."
-      },
-      "continue": {
-        "tooltip": "Continuar",
-        "promptTemplate": "Com base no texto anterior: \n{content}\n continue escrevendo e retorne um conteúdo que não exceda 100 palavras.\nVocê pode referenciar o seguinte texto: \n{endContent}\n, mas evite duplicar seu conteúdo."
-      },
-      "polish": {
-        "tooltip": "Polir",
-        "selectContent": "Por favor, selecione o conteúdo primeiro",
-        "promptTemplate": "Polir este texto: \n{content}\n, mantenha o idioma inalterado, corrija erros de digitação e gramaticais, retorne diretamente o resultado polido."
-      },
-      "eraser": {
-        "tooltip": "Simplificar",
-        "selectContent": "Por favor, selecione o conteúdo primeiro",
-        "promptTemplate": "Simplificar este texto: \n{content}\n, este texto está muito verboso, reduza a contagem de palavras pela metade, mantenha o idioma inalterado, retorne diretamente o resultado otimizado."
-      },
-      "expansion": {
-        "tooltip": "Expandir",
-        "selectContent": "Por favor, selecione o conteúdo primeiro",
-        "promptTemplate": "Expandir este texto: \n{content}\n, este texto está muito curto, aumente a contagem de palavras pela metade, mantenha o idioma inalterado, retorne diretamente o resultado expandido."
-      },
-      "translation": {
-        "tooltip": "Traduzir",
-        "description": "Traduzir o texto selecionado",
-        "selectContent": "Por favor, selecione o conteúdo primeiro",
-        "promptTemplate": "Traduzir este texto: \n{content}\n, para {language}, retorne diretamente o resultado traduzido.",
-        "fail": "Falha na tradução",
-        "failNoSelection": "Por favor, selecione o texto para traduzir",
-        "translating": "Traduzindo...",
-        "translatingTo": "Traduzindo para {language}...",
-        "success": "Tradução concluída",
-        "successTo": "Traduzido para {language}",
-        "customLanguageEmpty": "Por favor, digite o idioma de destino",
-        "customLanguageExample": "ex.: Inglês, Japonês, Francês, etc."
-      },
-      "quoteDisplay": {
-        "fromFile": "Citado de {fileName}",
-        "line": "Citado de {fileName} linha {line}",
-        "lines": "Citado de {fileName} linhas {start}-{end}"
-      }
-    },
-    "upload": {
-      "error": "Falha no upload",
-      "needToken": "O upload de imagens precisa configurar o accessToken",
-      "uploading": "Enviando imagem"
-    }
-  },
-  "footer": {
-    "wordCount": "Palavras",
-    "sync": {
-      "push": "Push",
-      "pushed": "Enviado",
-      "syncing": "Enviando",
-      "syncFailed": "Falha no Push",
-      "checkNetworkOrToken": "Por favor, verifique a conexão de rede ou o token",
-      "quickSync": "Sincronização Rápida"
-    },
-    "history": {
-      "loadingHistory": "Carregando histórico",
-      "historyRecords": "Registros do Histórico",
-      "noHistory": "Nenhum Histórico",
-      "loading": "Carregando",
-      "recordsCount": "registros",
-      "filterQuickSync": "Filtrar Sincronizações Rápidas",
-      "committedAt": "enviado em",
-      "pull": "Pull",
-      "quickSync": "Sincronização Rápida"
-    },
-    "vectorCalc": {
-      "tooltip": "Cálculo Vetorial: Cálculo automático 30s após a edição, ou clique para calcular agora",
-      "calculating": "Calculando",
-      "pending": "Pendente {progress}%",
-      "synced": "Sincronizado"
-    }
-  },
-  "quickRecord": {
-    "description": "Clique para selecionar uma ferramenta de registro e criar registros rapidamente"
-  },
-  "editor": {
     "bubbleMenu": {
       "ai": "IA",
+      "blockType": "Tipo de bloco",
+      "paragraph": "Texto",
+      "heading1": "Título 1",
+      "heading2": "Título 2",
+      "heading3": "Título 3",
+      "heading4": "Título 4",
+      "heading5": "Título 5",
+      "heading6": "Título 6",
       "polish": "Polir",
       "concise": "Conciso",
       "expand": "Expandir",
@@ -2722,7 +2702,17 @@
       "strike": "Tachado",
       "underline": "Sublinhado",
       "inlineCode": "Código na linha",
+      "colorMenu": "Cores",
+      "textColor": "Cor da fonte",
+      "backgroundColor": "Cor de fundo",
+      "clearTextColor": "Limpar cor do texto",
       "highlight": "Destacar",
+      "clearHighlight": "Limpar destaque",
+      "restoreDefault": "Restaurar padrão",
+      "alignLeft": "Alinhar à esquerda",
+      "alignCenter": "Centralizar",
+      "alignRight": "Alinhar à direita",
+      "clearFormatting": "Limpar formatação",
       "blockquote": "Citação",
       "bulletList": "Lista com marcadores",
       "orderedList": "Lista numerada",
@@ -2740,6 +2730,29 @@
         "Arabic": "Árabe"
       },
       "customLanguagePlaceholder": "Idioma personalizado..."
+    },
+    "emptyLineMenu": {
+      "open": "Inserir ou converter bloco",
+      "basic": "Básico",
+      "common": "Comum",
+      "task": "Tarefa",
+      "image": "Imagem",
+      "file": "Arquivo",
+      "videoFile": "Vídeo ou arquivo",
+      "table": "Tabela",
+      "tablePickerSize": "Inserir tabela {rows} x {cols}",
+      "columns": "Colunas",
+      "highlightBlock": "Bloco destacado",
+      "divider": "Divisor",
+      "linkFormTitle": "Inserir link",
+      "linkText": "Texto do link",
+      "linkHref": "Endereço do link",
+      "linkTextPlaceholder": "Ex.: docs da OpenAI",
+      "linkHrefPlaceholder": "Ex.: https://openai.com",
+      "insertLink": "Inserir",
+      "cancel": "Cancelar",
+      "linkRequired": "Informe o endereço do link",
+      "insertFailed": "Falha ao inserir"
     },
     "aiSuggestion": {
       "accept": "Aceitar",
@@ -2856,6 +2869,37 @@
         "failed": "Falha ao inserir imagem"
       }
     }
+  },
+  "footer": {
+    "wordCount": "Palavras",
+    "sync": {
+      "push": "Push",
+      "pushed": "Enviado",
+      "syncing": "Enviando",
+      "syncFailed": "Falha no Push",
+      "checkNetworkOrToken": "Por favor, verifique a conexão de rede ou o token",
+      "quickSync": "Sincronização Rápida"
+    },
+    "history": {
+      "loadingHistory": "Carregando histórico",
+      "historyRecords": "Registros do Histórico",
+      "noHistory": "Nenhum Histórico",
+      "loading": "Carregando",
+      "recordsCount": "registros",
+      "filterQuickSync": "Filtrar Sincronizações Rápidas",
+      "committedAt": "enviado em",
+      "pull": "Pull",
+      "quickSync": "Sincronização Rápida"
+    },
+    "vectorCalc": {
+      "tooltip": "Cálculo Vetorial: Cálculo automático 30s após a edição, ou clique para calcular agora",
+      "calculating": "Calculando",
+      "pending": "Pendente {progress}%",
+      "synced": "Sincronizado"
+    }
+  },
+  "quickRecord": {
+    "description": "Clique para selecionar uma ferramenta de registro e criar registros rapidamente"
   },
   "tabContext": {
     "close": "Fechar",

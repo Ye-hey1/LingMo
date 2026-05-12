@@ -1,6 +1,16 @@
 import { Tool, ToolResult } from '../types'
 import { upsertMemory, getAllMemories, getMemoriesByCategory, deleteMemory, clearAllMemories, Memory } from '@/db/memories'
 import { fetchEmbedding } from '@/lib/ai/embedding'
+import useChatStore from '@/stores/chat'
+
+async function clearMemoryContextCache() {
+  try {
+    const { contextLoader } = await import('@/lib/context/loader')
+    contextLoader.clearCache()
+  } catch (error) {
+    console.error('[Memory Tools] Failed to clear memory context cache:', error)
+  }
+}
 
 /**
  * Tool: List all memories
@@ -79,6 +89,7 @@ Parameters:
   execute: async (params): Promise<ToolResult> => {
     try {
       await deleteMemory(params.id)
+      await clearMemoryContextCache()
       return {
         success: true,
         message: `Memory deleted`,
@@ -148,6 +159,7 @@ Examples:
         embedding: JSON.stringify(embedding),
         category: params.category as 'preference' | 'memory' || undefined,
       })
+      await clearMemoryContextCache()
 
       if (result.replaced) {
         return {
@@ -164,6 +176,109 @@ Examples:
       return {
         success: false,
         error: `Failed to save memory`,
+      }
+    }
+  },
+}
+
+/**
+ * Tool: Save memory with source trace
+ */
+export const saveAsMemoryTool: Tool = {
+  name: 'save_as_memory',
+  description: `Save long-term memory with source trace metadata.
+
+Use this when extracting durable knowledge from a conversation and you want to keep where it came from.
+Compared with save_memory, this tool defaults to memory category and appends trace info (conversation/chat/time).`,
+  category: 'system',
+  requiresConfirmation: false,
+  parameters: [
+    {
+      name: 'content',
+      type: 'string',
+      description: 'Knowledge content to save as long-term memory',
+      required: true,
+    },
+    {
+      name: 'sourceConversationId',
+      type: 'number',
+      description: 'Optional source conversation ID. Defaults to current active conversation.',
+      required: false,
+    },
+    {
+      name: 'sourceChatId',
+      type: 'number',
+      description: 'Optional source chat message ID',
+      required: false,
+    },
+    {
+      name: 'category',
+      type: 'string',
+      description: 'Optional category: preference or memory. Defaults to memory.',
+      required: false,
+    },
+  ],
+  execute: async (params): Promise<ToolResult> => {
+    try {
+      const content = (params.content || '').trim()
+      if (!content) {
+        return {
+          success: false,
+          error: '缺少有效的 content 参数',
+        }
+      }
+
+      const store = useChatStore.getState()
+      const conversationId = typeof params.sourceConversationId === 'number'
+        ? params.sourceConversationId
+        : store.currentConversationId
+      const chatId = typeof params.sourceChatId === 'number' ? params.sourceChatId : undefined
+
+      const traceParts: string[] = []
+      if (conversationId) {
+        traceParts.push(`conversation=${conversationId}`)
+      }
+      if (chatId) {
+        traceParts.push(`chat=${chatId}`)
+      }
+      traceParts.push(`savedAt=${new Date().toISOString()}`)
+
+      const persistedContent = traceParts.length > 0
+        ? `${content}\n\n[source-trace] ${traceParts.join(', ')}`
+        : content
+
+      const embedding = await fetchEmbedding(content)
+      if (!embedding) {
+        return {
+          success: false,
+          error: '无法生成记忆向量，请检查嵌入模型配置',
+        }
+      }
+
+      const category = params.category as 'preference' | 'memory' || 'memory'
+      const result = await upsertMemory({
+        content: persistedContent,
+        embedding: JSON.stringify(embedding),
+        category,
+      })
+      await clearMemoryContextCache()
+
+      return {
+        success: true,
+        data: {
+          id: result.id,
+          replaced: result.replaced,
+          sourceConversationId: conversationId ?? null,
+          sourceChatId: chatId ?? null,
+        },
+        message: result.replaced
+          ? '已更新长期记忆（含来源追溯信息）'
+          : '已保存长期记忆（含来源追溯信息）',
+      }
+    } catch {
+      return {
+        success: false,
+        error: '保存带来源追溯的记忆失败',
       }
     }
   },
@@ -187,6 +302,7 @@ WARNING: This operation is irreversible, use with caution`,
   execute: async (): Promise<ToolResult> => {
     try {
       await clearAllMemories()
+      await clearMemoryContextCache()
       return {
         success: true,
         message: `All memories cleared`,
@@ -202,6 +318,7 @@ WARNING: This operation is irreversible, use with caution`,
 
 export const memoryTools: Tool[] = [
   saveMemoryTool,
+  saveAsMemoryTool,
   listMemoriesTool,
   deleteMemoryTool,
   clearMemoriesTool,

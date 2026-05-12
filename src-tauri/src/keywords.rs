@@ -1,11 +1,11 @@
 use jieba_rs::Jieba;
 use jieba_rs::KeywordExtract;
 use jieba_rs::TextRank;
-use serde::{Serialize, Deserialize};
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use tauri::command;
-use std::collections::HashSet;
-use regex::Regex;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Keyword {
@@ -16,9 +16,7 @@ pub struct Keyword {
 fn get_jieba() -> &'static Jieba {
     static JIEBA: OnceLock<Jieba> = OnceLock::new();
 
-    JIEBA.get_or_init(|| {
-        Jieba::new()
-    })
+    JIEBA.get_or_init(|| Jieba::new())
 }
 
 fn get_text_rank() -> TextRank {
@@ -30,19 +28,111 @@ fn get_text_rank() -> TextRank {
 fn get_stop_words() -> HashSet<&'static str> {
     [
         // 中文虚词/系动词
-        "的", "了", "是", "在", "有", "和", "就", "不", "人", "都", "一", "一个",
-        "上", "也", "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看",
-        "好", "自己", "这", "那", "里", "就是", "为", "与", "之", "用", "可以",
-        "但", "而", "或", "及", "等", "对", "把", "被", "让", "给", "从", "向",
-        "什么", "怎么", "怎样", "如何", "为什么", "哪些", "多少",
-
+        "的",
+        "了",
+        "是",
+        "在",
+        "有",
+        "和",
+        "就",
+        "不",
+        "人",
+        "都",
+        "一",
+        "一个",
+        "上",
+        "也",
+        "很",
+        "到",
+        "说",
+        "要",
+        "去",
+        "你",
+        "会",
+        "着",
+        "没有",
+        "看",
+        "好",
+        "自己",
+        "这",
+        "那",
+        "里",
+        "就是",
+        "为",
+        "与",
+        "之",
+        "用",
+        "可以",
+        "但",
+        "而",
+        "或",
+        "及",
+        "等",
+        "对",
+        "把",
+        "被",
+        "让",
+        "给",
+        "从",
+        "向",
+        "什么",
+        "怎么",
+        "怎样",
+        "如何",
+        "为什么",
+        "哪些",
+        "多少",
         // 英文停用词
-        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-        "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
-        "be", "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "must", "can", "this", "that", "these", "those",
-        "what", "how", "why", "where", "when", "who", "which",
-    ].into_iter().collect()
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "by",
+        "from",
+        "as",
+        "is",
+        "was",
+        "are",
+        "were",
+        "been",
+        "be",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "can",
+        "this",
+        "that",
+        "these",
+        "those",
+        "what",
+        "how",
+        "why",
+        "where",
+        "when",
+        "who",
+        "which",
+    ]
+    .into_iter()
+    .collect()
 }
 
 /// 检查词是否为停用词
@@ -79,29 +169,24 @@ pub fn rank_keywords(text: &str, top_k: usize, allowed_pos: Option<Vec<String>>)
     let jieba = get_jieba();
     let extractor = get_text_rank();
 
-    let pos_tags = allowed_pos.unwrap_or_else(||
+    let pos_tags = allowed_pos.unwrap_or_else(|| {
         vec![
-            String::from("n"),    // noun
-            String::from("ns"),   // place name
-            String::from("nr"),   // person name
-            String::from("nz"),   // other proper noun
-            String::from("v"),    // verb
-            String::from("vn"),   // verbal noun
-            String::from("a"),    // adjective
-            String::from("ad"),   // adjective as verb
-            String::from("an"),   // adjective as noun
-            String::from("eng"),  // 英文字母（尝试支持英文）
+            String::from("n"),   // noun
+            String::from("ns"),  // place name
+            String::from("nr"),  // person name
+            String::from("nz"),  // other proper noun
+            String::from("v"),   // verb
+            String::from("vn"),  // verbal noun
+            String::from("a"),   // adjective
+            String::from("ad"),  // adjective as verb
+            String::from("an"),  // adjective as noun
+            String::from("eng"), // 英文字母（尝试支持英文）
         ]
-    );
+    });
 
     // 提取更多候选关键词（因为会被过滤掉一部分）
     let extract_k = top_k * 3;
-    let jieba_keywords = extractor.extract_keywords(
-        jieba,
-        text,
-        extract_k,
-        pos_tags,
-    );
+    let jieba_keywords = extractor.extract_keywords(jieba, text, extract_k, pos_tags);
 
     // 过滤掉停用词
     let filtered_keywords: Vec<_> = jieba_keywords

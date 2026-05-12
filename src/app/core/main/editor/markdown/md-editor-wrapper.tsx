@@ -4,7 +4,7 @@ import useArticleStore from '@/stores/article'
 import { useEffect, useState, useCallback, useRef, RefObject } from 'react'
 import { TipTapEditor } from './tiptap-editor'
 import { Outline } from './outline'
-import { Loader2, Download } from 'lucide-react'
+import { Loader2, Download, Menu } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import emitter from '@/lib/emitter'
 import { DEFAULT_OUTLINE_POSITION, normalizeOutlinePosition, type OutlinePosition } from '@/lib/outline-preferences'
@@ -42,6 +42,7 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
   const expectedContentRef = useRef<string | null>(null)
   // Outline panel state
   const [outlineOpen, setOutlineOpen] = useState(false)
+  const [outlineHoverOpen, setOutlineHoverOpen] = useState(false)
   const [outlinePosition, setOutlinePosition] = useState<OutlinePosition>(DEFAULT_OUTLINE_POSITION)
   // State for editor instance (to trigger re-render when ready)
   const [editorInstance, setEditorInstance] = useState<any>(null)
@@ -50,6 +51,8 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
   // AI streaming state
   const [aiStreaming, setAiStreaming] = useState(false)
   const terminateRef = useRef<(() => void) | undefined>()
+  const loadPromiseRef = useRef<Promise<void> | null>(null)
+  const outlineHoverCloseTimerRef = useRef<number | null>(null)
 
   // Bug fix: Listen for file close events to clean up loaded state
   useEffect(() => {
@@ -123,35 +126,54 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
     loadOutlinePreferences()
   }, [])
 
+  useEffect(() => {
+    return () => {
+      if (outlineHoverCloseTimerRef.current) {
+        window.clearTimeout(outlineHoverCloseTimerRef.current)
+      }
+    }
+  }, [])
+
+  const openHoverOutline = useCallback(() => {
+    if (outlineHoverCloseTimerRef.current) {
+      window.clearTimeout(outlineHoverCloseTimerRef.current)
+      outlineHoverCloseTimerRef.current = null
+    }
+    setOutlineHoverOpen(true)
+  }, [])
+
+  const closeHoverOutline = useCallback(() => {
+    if (outlineHoverCloseTimerRef.current) {
+      window.clearTimeout(outlineHoverCloseTimerRef.current)
+    }
+    outlineHoverCloseTimerRef.current = window.setTimeout(() => {
+      setOutlineHoverOpen(false)
+      outlineHoverCloseTimerRef.current = null
+    }, 120)
+  }, [])
+
   // Load content from cache or disk - only on first mount per file
   useEffect(() => {
     if (!filePath || loadedPathsRef.current.has(filePath)) return
 
-    // Bug fix: Check cache first
-    if (tabContentsRef.current && tabContentsRef.current[filePath] !== undefined) {
-      setInitialContent(tabContentsRef.current[filePath])
-      loadedPathsRef.current.add(filePath)
-      setIsLoading(false)
-      isLoadingRef.current = false
-      return
-    }
-
-    // Bug fix: Also check if currentArticle belongs to this file (for store initialization)
-    // This handles the case where app restarts and currentArticle is already set
-    if (currentArticle && currentArticle.length > 0) {
-      // Check if the current active file path matches
-      const { activeFilePath: storeActivePath } = useArticleStore.getState()
-      if (storeActivePath === filePath) {
-        setInitialContent(currentArticle)
-        loadedPathsRef.current.add(filePath)
+    const loadContent = async () => {
+      if (tabContentsRef.current && tabContentsRef.current[filePath] !== undefined) {
+        setInitialContent(tabContentsRef.current[filePath])
         setIsLoading(false)
         isLoadingRef.current = false
         return
       }
-    }
 
-    // Load from disk directly (avoid using global currentArticle)
-    const loadContent = async () => {
+      if (currentArticle && currentArticle.length > 0) {
+        const { activeFilePath: storeActivePath } = useArticleStore.getState()
+        if (storeActivePath === filePath) {
+          setInitialContent(currentArticle)
+          setIsLoading(false)
+          isLoadingRef.current = false
+          return
+        }
+      }
+
       setIsLoading(true)
       try {
         const { readTextFile } = await import('@tauri-apps/plugin-fs')
@@ -160,33 +182,21 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
         const workspace = await getWorkspacePath()
         const pathOptions = await getFilePathOptions(filePath)
 
-        let content = ''
-        if (workspace.isCustom) {
-          content = await readTextFile(pathOptions.path)
-        } else {
-          content = await readTextFile(pathOptions.path, { baseDir: pathOptions.baseDir })
-        }
+        const content = workspace.isCustom
+          ? await readTextFile(pathOptions.path)
+          : await readTextFile(pathOptions.path, { baseDir: pathOptions.baseDir })
 
-        // Bug fix: Only set isLoading(false) if we have actual content
-        // This prevents flickering when isLoading=false with empty content
         setInitialContent(content)
-        // Update cache
         if (tabContentsRef.current) {
           tabContentsRef.current[filePath] = content
         }
-        if (content) {
-          setIsLoading(false)
-          isLoadingRef.current = false
-          // Mark content as initialized since we have actual content from disk
-          // This is safe because the content came from disk, not an empty initialization
-          contentInitializedRef.current = true
-        }
-        // If empty, wait for subscription
+        setIsLoading(false)
+        isLoadingRef.current = false
+        contentInitializedRef.current = true
       } catch {
-        // File doesn't exist
         setInitialContent('')
-        // Don't set isLoading(false) here - wait for subscription
-        // This prevents showing empty content briefly before subscription updates
+        setIsLoading(false)
+        isLoadingRef.current = false
       }
     }
 
@@ -360,6 +370,8 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
     )
   }
 
+  const outlinePanelOpen = outlineOpen || outlineHoverOpen
+
   return (
     <div id="onboarding-target-editor-content" className="flex-1 relative w-full h-full">
       {/* Pull loading overlay */}
@@ -402,13 +414,32 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
         }
       />
 
-      {outlineOpen && !isPulling && editorReady && editorInstance && (
-        <Outline
-          editor={editorInstance}
-          isOpen={outlineOpen}
-          position={outlinePosition}
-          floating
-        />
+      {!isPulling && editorReady && editorInstance && (
+        <div
+          className={`absolute z-30 ${outlinePanelOpen ? 'left-1 top-5 bottom-8 w-72' : 'left-1 top-14 h-8 w-8'}`}
+          onMouseEnter={openHoverOutline}
+          onMouseLeave={closeHoverOutline}
+        >
+          {!outlinePanelOpen && (
+            <button
+              type="button"
+              className="flex h-8 w-8 items-center justify-center rounded-md bg-background/40 text-muted-foreground/75 backdrop-blur-sm transition-colors hover:bg-muted/70 hover:text-foreground"
+              title={tEditor('outline.open')}
+              onFocus={openHoverOutline}
+            >
+              <Menu className="h-5 w-5 stroke-[1.8]" />
+            </button>
+          )}
+
+          {outlinePanelOpen && (
+            <Outline
+              editor={editorInstance}
+              isOpen={outlinePanelOpen}
+              position="left"
+              floating
+            />
+          )}
+        </div>
       )}
     </div>
   )

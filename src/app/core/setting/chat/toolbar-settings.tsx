@@ -1,16 +1,21 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
+import { useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
 import {
   BotMessageSquare,
   Drama,
+  Globe2,
   ServerCrash,
   Database,
   Clipboard,
-  GripVertical
+  GripVertical,
+  Sparkles,
+  WandSparkles,
 } from 'lucide-react'
 import useSettingStore, { ChatToolbarItem } from '@/stores/setting'
+import { useIsMobile } from '@/hooks/use-mobile'
 import {
   DndContext,
   closestCenter,
@@ -39,6 +44,11 @@ const TOOL_CONFIGS = {
     titleKey: 'record.chat.input.promptSelect.tooltip',
     descKey: 'settings.chat.toolbar.chatToolbar.promptSelect.desc',
   },
+  promptEnhancer: {
+    icon: <WandSparkles className="size-4" />,
+    titleKey: 'record.chat.input.promptEnhancer.tooltip',
+    descKey: 'settings.chat.toolbar.chatToolbar.promptEnhancer.desc',
+  },
   mcpButton: {
     icon: <ServerCrash className="size-4" />,
     titleKey: 'mcp.selectServers',
@@ -53,6 +63,16 @@ const TOOL_CONFIGS = {
     icon: <Clipboard className="size-4" />,
     titleKey: 'settings.chat.toolbar.chatToolbar.clipboardMonitor.title',
     descKey: 'settings.chat.toolbar.chatToolbar.clipboardMonitor.desc',
+  },
+  skillsPopover: {
+    icon: <Sparkles className="size-4" />,
+    titleKey: 'settings.chat.toolbar.chatToolbar.skillsPopover.title',
+    descKey: 'settings.chat.toolbar.chatToolbar.skillsPopover.desc',
+  },
+  webSearch: {
+    icon: <Globe2 className="size-4" />,
+    titleKey: 'settings.chat.toolbar.chatToolbar.webSearch.title',
+    descKey: 'settings.chat.toolbar.chatToolbar.webSearch.desc',
   },
 }
 
@@ -113,11 +133,34 @@ function SortableItem({ item, config, onToggle, t }: SortableItemProps) {
 
 export function ToolbarSettings() {
   const t = useTranslations()
+  const isMobile = useIsMobile()
   const { chatToolbarConfigPc, setChatToolbarConfigPc, chatToolbarConfigMobile, setChatToolbarConfigMobile } = useSettingStore()
 
   // 根据设备类型选择配置
-  const config = chatToolbarConfigMobile.length > 0 ? chatToolbarConfigMobile : chatToolbarConfigPc
-  const setConfig = chatToolbarConfigMobile.length > 0 ? setChatToolbarConfigMobile : setChatToolbarConfigPc
+  const config = isMobile ? chatToolbarConfigMobile : chatToolbarConfigPc
+  const setConfig = isMobile ? setChatToolbarConfigMobile : setChatToolbarConfigPc
+
+  useEffect(() => {
+    const missingToolIds = Object.keys(TOOL_CONFIGS).filter(
+      id => !config.some(item => item.id === id)
+    )
+
+    if (missingToolIds.length === 0) {
+      return
+    }
+
+    const maxOrder = Math.max(...config.map(item => item.order), -1)
+    const mergedConfig = [
+      ...config,
+      ...missingToolIds.map((id, index) => ({
+        id,
+        enabled: true,
+        order: maxOrder + index + 1,
+      })),
+    ]
+
+    void setConfig(mergedConfig)
+  }, [config, setConfig])
 
   // 拖拽传感器配置
   const sensors = useSensors(

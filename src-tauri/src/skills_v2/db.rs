@@ -1,10 +1,7 @@
-use std::path::PathBuf;
-use std::sync::Mutex;
+use crate::skills_v2::error::SkillResult;
+use crate::skills_v2::migrations::run_migrations;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use crate::skills_v2::error::{SkillError, SkillResult};
-use crate::skills_v2::migrations::run_migrations;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillRecord {
@@ -96,16 +93,29 @@ impl SkillStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, source_type, source_ref, source_ref_resolved, source_subpath, source_branch, source_revision, remote_revision, central_path, content_hash, enabled, status, update_status, created_at, updated_at FROM skills ORDER BY updated_at DESC"
         )?;
-        let records = stmt.query_map([], |row| {
-            Ok(SkillRecord {
-                id: row.get(0)?, name: row.get(1)?, description: row.get(2)?,
-                source_type: row.get(3)?, source_ref: row.get(4)?, source_ref_resolved: row.get(5)?,
-                source_subpath: row.get(6)?, source_branch: row.get(7)?, source_revision: row.get(8)?,
-                remote_revision: row.get(9)?, central_path: row.get(10)?, content_hash: row.get(11)?,
-                enabled: row.get::<_, i32>(12)? != 0, status: row.get(13)?,
-                update_status: row.get(14)?, created_at: row.get(15)?, updated_at: row.get(16)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let records = stmt
+            .query_map([], |row| {
+                Ok(SkillRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    source_type: row.get(3)?,
+                    source_ref: row.get(4)?,
+                    source_ref_resolved: row.get(5)?,
+                    source_subpath: row.get(6)?,
+                    source_branch: row.get(7)?,
+                    source_revision: row.get(8)?,
+                    remote_revision: row.get(9)?,
+                    central_path: row.get(10)?,
+                    content_hash: row.get(11)?,
+                    enabled: row.get::<_, i32>(12)? != 0,
+                    status: row.get(13)?,
+                    update_status: row.get(14)?,
+                    created_at: row.get(15)?,
+                    updated_at: row.get(16)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(records)
     }
 
@@ -113,21 +123,36 @@ impl SkillStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, source_type, source_ref, source_ref_resolved, source_subpath, source_branch, source_revision, remote_revision, central_path, content_hash, enabled, status, update_status, created_at, updated_at FROM skills WHERE id = ?1"
         )?;
-        let mut records = stmt.query_map([id], |row| {
-            Ok(SkillRecord {
-                id: row.get(0)?, name: row.get(1)?, description: row.get(2)?,
-                source_type: row.get(3)?, source_ref: row.get(4)?, source_ref_resolved: row.get(5)?,
-                source_subpath: row.get(6)?, source_branch: row.get(7)?, source_revision: row.get(8)?,
-                remote_revision: row.get(9)?, central_path: row.get(10)?, content_hash: row.get(11)?,
-                enabled: row.get::<_, i32>(12)? != 0, status: row.get(13)?,
-                update_status: row.get(14)?, created_at: row.get(15)?, updated_at: row.get(16)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let mut records = stmt
+            .query_map([id], |row| {
+                Ok(SkillRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    source_type: row.get(3)?,
+                    source_ref: row.get(4)?,
+                    source_ref_resolved: row.get(5)?,
+                    source_subpath: row.get(6)?,
+                    source_branch: row.get(7)?,
+                    source_revision: row.get(8)?,
+                    remote_revision: row.get(9)?,
+                    central_path: row.get(10)?,
+                    content_hash: row.get(11)?,
+                    enabled: row.get::<_, i32>(12)? != 0,
+                    status: row.get(13)?,
+                    update_status: row.get(14)?,
+                    created_at: row.get(15)?,
+                    updated_at: row.get(16)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(records.pop())
     }
 
     pub fn delete_skill(&self, id: &str) -> SkillResult<bool> {
-        let affected = self.conn.execute("DELETE FROM skills WHERE id = ?1", [id])?;
+        let affected = self
+            .conn
+            .execute("DELETE FROM skills WHERE id = ?1", [id])?;
         Ok(affected > 0)
     }
 
@@ -142,7 +167,8 @@ impl SkillStore {
     // --- Discovered Skills ---
 
     pub fn clear_discovered(&self) -> SkillResult<()> {
-        self.conn.execute("DELETE FROM discovered_skills WHERE imported = 0", [])?;
+        self.conn
+            .execute("DELETE FROM discovered_skills WHERE imported = 0", [])?;
         Ok(())
     }
 
@@ -160,25 +186,36 @@ impl SkillStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, tool_key, found_path, name_guess, fingerprint, imported, discovered_at FROM discovered_skills ORDER BY discovered_at DESC"
         )?;
-        let records = stmt.query_map([], |row| {
-            Ok(DiscoveredSkill {
-                id: row.get(0)?, tool_key: row.get(1)?, found_path: row.get(2)?,
-                name_guess: row.get(3)?, fingerprint: row.get(4)?,
-                imported: row.get::<_, i32>(5)? != 0, discovered_at: row.get(6)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let records = stmt
+            .query_map([], |row| {
+                Ok(DiscoveredSkill {
+                    id: row.get(0)?,
+                    tool_key: row.get(1)?,
+                    found_path: row.get(2)?,
+                    name_guess: row.get(3)?,
+                    fingerprint: row.get(4)?,
+                    imported: row.get::<_, i32>(5)? != 0,
+                    discovered_at: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(records)
     }
 
     pub fn mark_discovered_imported(&self, id: &str) -> SkillResult<()> {
-        self.conn.execute("UPDATE discovered_skills SET imported = 1 WHERE id = ?1", [id])?;
+        self.conn.execute(
+            "UPDATE discovered_skills SET imported = 1 WHERE id = ?1",
+            [id],
+        )?;
         Ok(())
     }
 
     // --- Settings ---
 
     pub fn get_setting(&self, key: &str) -> SkillResult<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM settings WHERE key = ?1")?;
         let mut rows = stmt.query_map([key], |row| row.get::<_, String>(0))?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
@@ -200,13 +237,19 @@ impl SkillStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, icon, sort_order, created_at, updated_at FROM scenarios ORDER BY sort_order"
         )?;
-        let records = stmt.query_map([], |row| {
-            Ok(ScenarioRecord {
-                id: row.get(0)?, name: row.get(1)?, description: row.get(2)?,
-                icon: row.get(3)?, sort_order: row.get(4)?,
-                created_at: row.get(5)?, updated_at: row.get(6)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let records = stmt
+            .query_map([], |row| {
+                Ok(ScenarioRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    icon: row.get(3)?,
+                    sort_order: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(records)
     }
 
@@ -221,12 +264,16 @@ impl SkillStore {
     }
 
     pub fn delete_scenario(&self, id: &str) -> SkillResult<bool> {
-        let affected = self.conn.execute("DELETE FROM scenarios WHERE id = ?1", [id])?;
+        let affected = self
+            .conn
+            .execute("DELETE FROM scenarios WHERE id = ?1", [id])?;
         Ok(affected > 0)
     }
 
     pub fn get_active_scenario_id(&self) -> SkillResult<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT scenario_id FROM active_scenario WHERE id = 1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT scenario_id FROM active_scenario WHERE id = 1")?;
         let mut rows = stmt.query_map([], |row| row.get::<_, Option<String>>(0))?;
         match rows.next() {
             Some(row) => Ok(row?),
@@ -265,16 +312,29 @@ impl SkillStore {
              FROM skills s JOIN scenario_skills ss ON s.id = ss.skill_id
              WHERE ss.scenario_id = ?1 ORDER BY ss.sort_order"
         )?;
-        let records = stmt.query_map([scenario_id], |row| {
-            Ok(SkillRecord {
-                id: row.get(0)?, name: row.get(1)?, description: row.get(2)?,
-                source_type: row.get(3)?, source_ref: row.get(4)?, source_ref_resolved: row.get(5)?,
-                source_subpath: row.get(6)?, source_branch: row.get(7)?, source_revision: row.get(8)?,
-                remote_revision: row.get(9)?, central_path: row.get(10)?, content_hash: row.get(11)?,
-                enabled: row.get::<_, i32>(12)? != 0, status: row.get(13)?,
-                update_status: row.get(14)?, created_at: row.get(15)?, updated_at: row.get(16)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let records = stmt
+            .query_map([scenario_id], |row| {
+                Ok(SkillRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    source_type: row.get(3)?,
+                    source_ref: row.get(4)?,
+                    source_ref_resolved: row.get(5)?,
+                    source_subpath: row.get(6)?,
+                    source_branch: row.get(7)?,
+                    source_revision: row.get(8)?,
+                    remote_revision: row.get(9)?,
+                    central_path: row.get(10)?,
+                    content_hash: row.get(11)?,
+                    enabled: row.get::<_, i32>(12)? != 0,
+                    status: row.get(13)?,
+                    update_status: row.get(14)?,
+                    created_at: row.get(15)?,
+                    updated_at: row.get(16)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(records)
     }
 }

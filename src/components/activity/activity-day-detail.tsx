@@ -1,30 +1,72 @@
 'use client'
 
+import { ExternalLink } from 'lucide-react'
+
 import { Badge } from '@/components/ui/badge'
-import type { ActivityDaySummary, ActivityEntry } from '@/lib/activity/types'
+import type { ActivityDaySummary, ActivityEntry, ActivityViewSource } from '@/lib/activity/types'
 
 interface ActivityDayDetailProps {
   day?: ActivityDaySummary
   compact?: boolean
+  onOpenEntryPath?: (entry: ActivityEntry) => void
+  summarySource?: ActivityViewSource | 'all'
   labels: {
     empty: string
     records: string
     writing: string
     chats: string
+    ai: string
+    memory: string
   }
 }
 
+function getPathLabel(path: string) {
+  const normalized = path.replace(/\\/g, '/')
+  return normalized.split('/').filter(Boolean).pop() || path
+}
+
 const badgeClassMap = {
-  record: 'border-rose-200 bg-rose-100 text-rose-700 dark:border-rose-900 dark:bg-rose-950/70 dark:text-rose-200',
-  writing: 'border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/70 dark:text-emerald-200',
-  chat: 'border-sky-200 bg-sky-100 text-sky-700 dark:border-sky-900 dark:bg-sky-950/70 dark:text-sky-200',
+  record: 'border-rose-200/70 bg-rose-50/75 text-rose-600 dark:border-rose-900/60 dark:bg-rose-950/25 dark:text-rose-200',
+  writing: 'border-emerald-200/70 bg-emerald-50/75 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200',
+  chat: 'border-sky-200/70 bg-sky-50/75 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/25 dark:text-sky-200',
+  ai: 'border-violet-200/70 bg-violet-50/75 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/25 dark:text-violet-200',
+  memory: 'border-amber-200/80 bg-amber-50/75 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/25 dark:text-amber-200',
+  platform: 'border-slate-200/70 bg-slate-50/75 text-slate-600 dark:border-slate-800/70 dark:bg-slate-900/40 dark:text-slate-300',
 } as const
+
+function getAiPlatformLabel(entry: ActivityEntry) {
+  const platform = typeof entry.meta?.platform === 'string' ? entry.meta.platform : ''
+  if (platform === 'codex') return 'Codex'
+  if (platform === 'claude') return 'Claude'
+  if (platform === 'opencode') return 'OpenCode'
+  if (platform === 'lingmo') return 'LingMo'
+  return ''
+}
+
+function canOpenEntryAction(entry: ActivityEntry) {
+  if (entry.source === 'ai') {
+    return typeof entry.meta?.platform === 'string' && typeof entry.meta?.sessionKey === 'string'
+  }
+
+  return Boolean(entry.path)
+}
+
+function getEntryActionLabel(entry: ActivityEntry) {
+  if (entry.source === 'ai') {
+    const platformLabel = getAiPlatformLabel(entry)
+    return platformLabel ? `在记忆管理中打开 ${platformLabel} 会话` : '在记忆管理中打开会话'
+  }
+
+  return entry.path ? `打开 ${getPathLabel(entry.path)}` : '打开'
+}
 
 function getSourceLabel(source: ActivityEntry['source'], labels: ActivityDayDetailProps['labels']) {
   return {
     record: labels.records,
     chat: labels.chats,
     writing: labels.writing,
+    ai: labels.ai,
+    memory: labels.memory,
   }[source]
 }
 
@@ -34,11 +76,38 @@ function renderSourceBadge(entry: ActivityEntry, labels: ActivityDayDetailProps[
   return (
     <Badge
       variant="outline"
-      className={`shrink-0 whitespace-nowrap border capitalize ${badgeClassMap[entry.source]}`}
+      className={`shrink-0 whitespace-nowrap rounded-md border px-2.5 font-medium shadow-none ${badgeClassMap[entry.source]}`}
     >
       {label}
     </Badge>
   )
+}
+
+function renderSummaryBadges(
+  day: ActivityDaySummary,
+  labels: ActivityDayDetailProps['labels'],
+  summarySource: ActivityViewSource | 'all',
+) {
+  const summaryItems = [
+    { key: 'record', label: labels.records, value: day.counts.record },
+    { key: 'writing', label: labels.writing, value: day.counts.writing },
+    { key: 'chat', label: labels.chats, value: day.counts.chat },
+    { key: 'ai', label: labels.ai, value: day.counts.ai },
+    { key: 'memory', label: labels.memory, value: day.counts.memory },
+  ] as const
+
+  const visibleItems =
+    summarySource === 'all' ? summaryItems : summaryItems.filter((item) => item.key === summarySource)
+
+  return visibleItems.map((item) => (
+    <Badge
+      key={item.key}
+      variant="outline"
+      className={`rounded-md border px-2.5 font-medium shadow-none ${badgeClassMap[item.key]}`}
+    >
+      {item.label}: {item.value}
+    </Badge>
+  ))
 }
 
 function formatEntryBucket(timestamp: number) {
@@ -62,6 +131,10 @@ function normalizeText(value?: string) {
 function getEntryBodyText(entry: ActivityEntry) {
   if (entry.source === 'writing') {
     return normalizeText(entry.title || entry.path || entry.description)
+  }
+
+  if (entry.source === 'ai' || entry.source === 'memory') {
+    return normalizeText(entry.description || entry.title)
   }
 
   return normalizeText(entry.description || entry.title)
@@ -109,8 +182,15 @@ function groupEntriesByBucket(entries: ActivityEntry[]) {
   }))
 }
 
-export function ActivityDayDetail({ day, compact = false, labels }: ActivityDayDetailProps) {
+export function ActivityDayDetail({
+  day,
+  compact = false,
+  onOpenEntryPath,
+  summarySource = 'all',
+  labels,
+}: ActivityDayDetailProps) {
   const hourGroups = day ? groupEntriesByBucket(day.entries) : []
+  const hasEntries = hourGroups.some(group => group.entries.length > 0)
 
   return (
     <section className="space-y-4">
@@ -118,24 +198,16 @@ export function ActivityDayDetail({ day, compact = false, labels }: ActivityDayD
         <h3 className="text-base font-semibold">{day?.day || new Date().toISOString().slice(0, 10)}</h3>
         {day ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Badge variant="outline" className={`border ${badgeClassMap.record}`}>
-              {labels.records}: {day.counts.record}
-            </Badge>
-            <Badge variant="outline" className={`border ${badgeClassMap.writing}`}>
-              {labels.writing}: {day.counts.writing}
-            </Badge>
-            <Badge variant="outline" className={`border ${badgeClassMap.chat}`}>
-              {labels.chats}: {day.counts.chat}
-            </Badge>
+            {renderSummaryBadges(day, labels, summarySource)}
           </div>
         ) : null}
       </div>
       <div className="space-y-1">
-        {!day ? (
+        {!day || !hasEntries ? (
           <p className="text-sm text-muted-foreground">{labels.empty}</p>
         ) : null}
       </div>
-      {day ? (
+      {day && hasEntries ? (
         <div className="space-y-3">
           <div className="space-y-3">
             {hourGroups.map((group) => (
@@ -156,13 +228,34 @@ export function ActivityDayDetail({ day, compact = false, labels }: ActivityDayD
                       <div className="space-y-1.5">
                         <div className="flex items-center gap-2">
                           {renderSourceBadge(entry, labels)}
+                          {entry.source === 'ai' && getAiPlatformLabel(entry) ? (
+                            <Badge
+                              variant="outline"
+                              className={`shrink-0 whitespace-nowrap rounded-md border px-2.5 font-medium shadow-none ${badgeClassMap.platform}`}
+                            >
+                              {getAiPlatformLabel(entry)}
+                            </Badge>
+                          ) : null}
                           <span className="ml-auto text-xs font-medium tabular-nums text-muted-foreground">
                             {formatEntryTime(entry.timestamp)}
                           </span>
                         </div>
-                        <p className="line-clamp-2 text-sm leading-6">
-                          {getEntryBodyText(entry)}
-                        </p>
+                        <div className="flex items-start gap-2">
+                          <p className="line-clamp-2 min-w-0 flex-1 text-sm leading-6">
+                            {getEntryBodyText(entry)}
+                          </p>
+                          {canOpenEntryAction(entry) && onOpenEntryPath ? (
+                            <button
+                              type="button"
+                              className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background text-primary shadow-sm transition-colors hover:border-primary/40 hover:bg-primary/5"
+                              title={getEntryActionLabel(entry)}
+                              aria-label={getEntryActionLabel(entry)}
+                              onClick={() => onOpenEntryPath(entry)}
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </button>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
                   ))}

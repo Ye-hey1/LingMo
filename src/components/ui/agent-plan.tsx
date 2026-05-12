@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
 import { DiffViewer } from "@/components/ui/diff-viewer";
 import { formatConfirmationPreview } from "@/lib/agent/tool-confirmation-display";
+import type { AgentApprovalScope } from "@/lib/agent/types";
 
 // Type definitions from existing codebase
 interface ToolCall {
@@ -43,7 +44,7 @@ interface ConfirmationRecord {
   params: Record<string, any>;
   status: "pending" | "confirmed" | "cancelled";
   timestamp: number;
-  scope?: "once" | "conversation";
+  scope?: AgentApprovalScope;
   sessionApprovalType?: "write" | "runtime-script-skill";
   sessionApprovalSkillId?: string;
 }
@@ -82,6 +83,7 @@ interface AgentPlanProps {
     canApproveForSession?: boolean;
     sessionApprovalType?: "write" | "runtime-script-skill";
     sessionApprovalSkillId?: string;
+    persistentApprovalOptions?: AgentApprovalScope[];
   };
   confirmationHistory?: ConfirmationRecord[];
   currentStepStartTime?: number; // 当前步骤开始时间戳
@@ -90,7 +92,7 @@ interface AgentPlanProps {
   historyJson?: string;
 
   // Callbacks for live mode
-  onConfirm?: (scope?: "once" | "conversation") => void;
+  onConfirm?: (scope?: AgentApprovalScope) => void;
   onCancel?: () => void;
 
   // i18n namespace (optional, defaults to 'record.chat.input.agent')
@@ -563,7 +565,7 @@ export function AgentPlan({
   };
 
   // Handle confirmation
-  const handleConfirm = (scope: "once" | "conversation" = "once") => {
+  const handleConfirm = (scope: AgentApprovalScope = "once") => {
     if (onConfirm) onConfirm(scope);
   };
 
@@ -948,7 +950,7 @@ export function AgentPlan({
               )}
 
             {/* Confirmation buttons */}
-            <div className="flex items-center justify-end gap-1 px-3 py-1.5 border-t border-border/50">
+            <div className="flex flex-wrap items-center justify-end gap-1 px-3 py-1.5 border-t border-border/50">
               <Button
                 size="sm"
                 variant="ghost"
@@ -979,6 +981,39 @@ export function AgentPlan({
                       ? "本会话允许此 Skill 脚本"
                       : "本会话都允许"}
                   </span>
+                </Button>
+              )}
+              {pendingConfirmation.persistentApprovalOptions?.includes("always-tool") && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => handleConfirm("always-tool")}
+                >
+                  <CheckCircle2 className="size-4 text-green-600" />
+                  <span className="ml-1">总是允许此工具</span>
+                </Button>
+              )}
+              {pendingConfirmation.persistentApprovalOptions?.includes("always-folder") && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => handleConfirm("always-folder")}
+                >
+                  <CheckCircle2 className="size-4 text-green-600" />
+                  <span className="ml-1">总是允许此文件夹</span>
+                </Button>
+              )}
+              {pendingConfirmation.persistentApprovalOptions?.includes("always-readonly") && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => handleConfirm("always-readonly")}
+                >
+                  <CheckCircle2 className="size-4 text-green-600" />
+                  <span className="ml-1">总是允许只读工具</span>
                 </Button>
               )}
             </div>

@@ -102,40 +102,29 @@ async function runWithConcurrencyLimit<T>(
   limit: number,
   onProgress?: (completed: number, total: number) => void
 ): Promise<T[]> {
+  const safeLimit = Math.max(1, limit);
   const results: T[] = new Array(tasks.length);
-  const executing: Promise<void>[] = [];
+  let nextTaskIndex = 0;
   let completed = 0;
 
-  for (const [index, task] of tasks.entries()) {
-    const promise = task()
-      .then(result => {
-        results[index] = result;
-        completed++;
-        if (onProgress) {
-          onProgress(completed, tasks.length);
-        }
-      })
-      .catch(error => {
-        results[index] = error as T;
-        completed++;
-        if (onProgress) {
-          onProgress(completed, tasks.length);
-        }
-        throw error;
-      });
+  async function worker(): Promise<void> {
+    while (true) {
+      const currentIndex = nextTaskIndex++;
+      if (currentIndex >= tasks.length) {
+        return;
+      }
 
-    executing.push(promise);
-
-    if (executing.length >= limit) {
-      await Promise.race(executing);
-      executing.splice(
-        executing.findIndex(p => p === promise),
-        1
-      );
+      const result = await tasks[currentIndex]();
+      results[currentIndex] = result;
+      completed++;
+      if (onProgress) {
+        onProgress(completed, tasks.length);
+      }
     }
   }
 
-  await Promise.all(executing);
+  const workerCount = Math.min(safeLimit, tasks.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return results;
 }
 
@@ -691,6 +680,12 @@ export async function processAllMarkdownFiles(onProgress?: (current: number, tot
     let failed = 0;
 
     for (const result of results) {
+      if (!result) {
+        failed++;
+        failedFiles.push({ fileName: 'unknown', error: 'Task returned no result' });
+        continue;
+      }
+
       if (result.success) {
         success++;
       } else {

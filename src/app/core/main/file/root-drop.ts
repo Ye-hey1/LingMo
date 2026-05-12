@@ -38,3 +38,21 @@ export async function writeDroppedFileToRoot(deps: RootDropDeps, payload: RootDr
 
   return sanitizedFileName
 }
+
+export async function writeDroppedFileToFolder(
+  deps: RootDropDeps,
+  payload: RootDropPayload,
+  targetFolder: string,
+) {
+  const sanitizedFileName = sanitizeDroppedFileName(deps.fileName)
+  const relativePath = `${targetFolder}/${sanitizedFileName}`
+  const pathOptions = await deps.getFilePathOptions(relativePath)
+
+  if (payload.kind === 'text') {
+    await deps.writeTextFile?.(pathOptions.path, payload.content, pathOptions.baseDir ? { baseDir: pathOptions.baseDir } : undefined)
+  } else {
+    await deps.writeFile?.(pathOptions.path, payload.content, pathOptions.baseDir ? { baseDir: pathOptions.baseDir } : undefined)
+  }
+
+  return `${targetFolder}/${sanitizedFileName}`
+}

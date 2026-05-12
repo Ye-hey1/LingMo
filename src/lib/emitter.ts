@@ -1,10 +1,13 @@
 import mitt from 'mitt'
 import type { QuickPrompt } from '@/lib/ai/placeholder'
 import type { OnboardingStepId } from '@/app/core/main/editor/onboarding-state'
+import type { MemorySessionTarget } from '@/app/core/main/memory/memory-navigation'
 
 // 定义事件类型
 interface Events {
   'searchAndScroll': string;
+  'pdf-search-trigger': unknown;
+  'pdf-jump-to-page': { filePath: string; pageNumber: number };
   'ai-completion-loading': boolean;
   'auto-completion-enabled-changed': boolean;
   'editor-input': unknown;
@@ -30,6 +33,14 @@ interface Events {
     from: number;
     to: number;
     articlePath: string;
+  };
+  'editor-focus-citation': {
+    filePath?: string;
+    startLine?: number;
+    endLine?: number;
+    from?: number;
+    to?: number;
+    searchText?: string;
   };
   'toolbar-shortcut-image': unknown;
   'toolbar-shortcut-file': unknown;
@@ -64,6 +75,7 @@ interface Events {
     fileCount: number;
     indexedCount: number;
   };
+  'memory-open-session': MemorySessionTarget;
   'toolbar-mark': unknown;
   'toolbar-continue': unknown;
   'toolbar-question': unknown;

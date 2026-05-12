@@ -1,0 +1,196 @@
+import type { ReActStep } from './types'
+
+/**
+ * Agent 安全防护模块
+ * 包含：Observation 截断、循环检测、格式降级策略
+ */
+
+// ============ Observation 硬截断 ============
+
+const MAX_OBSERVATION_CHARS = 8000
+const HEAD_RATIO = 0.7
+const TAIL_RATIO = 0.2
+
+/**
+ * 截断过长的 Observation，保留头尾关键信息
+ */
+export function truncateObservation(observation: string): string {
+  if (observation.length <= MAX_OBSERVATION_CHARS) return observation
+
+  const headLen = Math.floor(MAX_OBSERVATION_CHARS * HEAD_RATIO)
+  const tailLen = Math.floor(MAX_OBSERVATION_CHARS * TAIL_RATIO)
+  const truncatedCount = observation.length - headLen - tailLen
+
+  const head = observation.slice(0, headLen)
+  const tail = observation.slice(-tailLen)
+
+  return `${head}\n\n... [truncated ${truncatedCount} chars for context efficiency] ...\n\n${tail}`
+}
+
+// ============ 语义循环检测 ============
+
+interface LoopDetectionResult {
+  isLoop: boolean
+  reason?: string
+}
+
+/**
+ * 检测 Agent 是否陷入语义循环
+ * 不仅检测完全相同的 action，还检测变体循环模式
+ */
+export function detectSemanticLoop(steps: ReActStep[]): LoopDetectionResult {
+  if (steps.length < 3) return { isLoop: false }
+
+  // 1. 检测连续相同工具调用（参数可能略有不同）
+  const recent4 = steps.slice(-4)
+  if (recent4.length >= 4) {
+    const tools = recent4.map(s => s.action?.tool)
+    // A→B→A→B 模式
+    if (tools[0] === tools[2] && tools[1] === tools[3] && tools[0] !== tools[1]) {
+      return {
+        isLoop: true,
+        reason: `Detected alternating loop pattern: ${tools[0]} ↔ ${tools[1]}`,
+      }
+    }
+  }
+
+  // 2. 检测连续 3 次相同工具（即使参数不同）
+  const recent3 = steps.slice(-3)
+  if (recent3.length === 3) {
+    const tools = recent3.map(s => s.action?.tool)
+    if (tools[0] === tools[1] && tools[1] === tools[2]) {
+      // 如果是读取工具且参数不同，允许（可能在遍历文件）
+      const isReadTool = /^(read_|list_|get_|search_|safe_read|safe_list|safe_grep)/.test(tools[0] || '')
+      const paramsAll = recent3.map(s => JSON.stringify(s.action?.params || {}))
+      const allDifferent = new Set(paramsAll).size === paramsAll.length
+
+      if (!isReadTool || !allDifferent) {
+        return {
+          isLoop: true,
+          reason: `Tool "${tools[0]}" called 3 consecutive times without progress`,
+        }
+      }
+    }
+  }
+
+  // 3. 检测 observation 重复（相同结果说明没有进展）
+  const recentObs = steps.slice(-3).map(s => s.observation?.slice(0, 200) || '')
+  if (recentObs.length === 3 && recentObs[0] === recentObs[1] && recentObs[1] === recentObs[2] && recentObs[0].length > 20) {
+    return {
+      isLoop: true,
+      reason: 'Same observation returned 3 times consecutively',
+    }
+  }
+
+  // 4. 检测 thought 重复（LLM 在重复相同的推理）
+  const recentThoughts = steps.slice(-3).map(s => s.thought.slice(0, 150))
+  if (recentThoughts.length === 3) {
+    const similarity = computeStringSimilarity(recentThoughts[0], recentThoughts[2])
+    if (similarity > 0.85) {
+      return {
+        isLoop: true,
+        reason: 'Agent reasoning is repeating with high similarity',
+      }
+    }
+  }
+
+  return { isLoop: false }
+}
+
+/**
+ * 简单的字符串相似度计算（Jaccard on bigrams）
+ */
+function computeStringSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0
+  if (a === b) return 1
+
+  const bigramsA = new Set<string>()
+  const bigramsB = new Set<string>()
+
+  for (let i = 0; i < a.length - 1; i++) bigramsA.add(a.slice(i, i + 2))
+  for (let i = 0; i < b.length - 1; i++) bigramsB.add(b.slice(i, i + 2))
+
+  let intersection = 0
+  for (const bg of bigramsA) {
+    if (bigramsB.has(bg)) intersection++
+  }
+
+  const union = bigramsA.size + bigramsB.size - intersection
+  return union === 0 ? 0 : intersection / union
+}
+
+// ============ LLM 响应格式降级策略 ============
+
+export type FormatDegradationLevel = 'strict' | 'lenient' | 'fallback'
+
+/**
+ * 根据连续解析失败次数决定降级策略
+ */
+export function getFormatDegradationLevel(consecutiveParseFailures: number): FormatDegradationLevel {
+  if (consecutiveParseFailures <= 1) return 'strict'
+  if (consecutiveParseFailures === 2) return 'lenient'
+  return 'fallback'
+}
+
+/**
+ * 根据降级级别生成不同的格式提示
+ */
+export function getFormatRecoveryPrompt(level: FormatDegradationLevel): string {
+  switch (level) {
+    case 'strict':
+      return 'Your previous response could not be parsed. Please respond with a valid JSON object containing "action" and "action_input" fields, or a "final_answer" field.'
+    case 'lenient':
+      return 'I still cannot parse your response. Please use this EXACT format:\n{"action": "tool_name", "action_input": {"param": "value"}}\nOR for final answer:\n{"final_answer": "your answer here"}'
+    case 'fallback':
+      return 'Multiple parse failures detected. Please just provide your final answer as plain text. I will treat your entire response as the answer to the user.'
+  }
+}
+
+/**
+ * 在 fallback 级别，将 LLM 的原始输出作为 Final Answer
+ */
+export function extractFallbackAnswer(rawOutput: string): string {
+  // 移除可能的 JSON 包装尝试
+  const cleaned = rawOutput
+    .replace(/^```(?:json)?\s*/g, '')
+    .replace(/\s*```$/g, '')
+    .replace(/^\{[\s\S]*?"(?:thought|action)"[\s\S]*$/g, '')
+    .trim()
+
+  return cleaned || rawOutput.trim()
+}
+
+// ============ 自适应迭代上限 ============
+
+interface IterationConfig {
+  maxIterations: number
+  warningThreshold: number  // 接近上限时发出警告的阈值
+}
+
+/**
+ * 根据任务复杂度动态计算迭代上限
+ */
+export function computeAdaptiveIterationLimit(
+  taskPlan?: { isComplex: boolean; steps: Array<{ tools: string[] }> },
+  userInput?: string
+): IterationConfig {
+  // 简单任务
+  if (!taskPlan || !taskPlan.isComplex) {
+    return { maxIterations: 10, warningThreshold: 8 }
+  }
+
+  // 复杂任务：每步预留 2-3 次迭代
+  const stepCount = taskPlan.steps.length
+  const toolCount = taskPlan.steps.reduce((sum, s) => sum + s.tools.length, 0)
+
+  // 基础迭代 = 步骤数 * 3（每步可能需要读取、执行、验证）
+  const baseIterations = Math.max(stepCount * 3, toolCount * 2)
+
+  // 上限 25，下限 10
+  const maxIterations = Math.min(Math.max(baseIterations, 10), 25)
+
+  return {
+    maxIterations,
+    warningThreshold: Math.floor(maxIterations * 0.8),
+  }
+}

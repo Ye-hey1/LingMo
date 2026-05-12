@@ -1,5 +1,19 @@
 /* Markdown Editor Styles */
 
+/* WikiLink 样式 */
+.tiptap-editor .ProseMirror .wikilink {
+  color: hsl(var(--primary));
+  background: hsl(var(--primary) / 0.08);
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.tiptap-editor .ProseMirror .wikilink:hover {
+  background: hsl(var(--primary) / 0.18);
+}
+
 /* ========================
    Tiptap 编辑器核心样式
    ======================== */
@@ -65,6 +79,71 @@
 }
 
 /* 粗体和斜体 */
+.tiptap-editor .ProseMirror .heading-collapse-heading {
+  position: relative;
+}
+
+.tiptap-editor .ProseMirror .heading-collapse-toggle {
+  position: absolute;
+  left: -0.72em;
+  top: 50%;
+  display: inline-flex;
+  height: 1em;
+  width: 1em;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.tiptap-editor .ProseMirror .heading-collapse-caret {
+  display: block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid #111827;
+}
+
+.tiptap-editor .ProseMirror .heading-collapse-toggle[data-heading-collapsed="true"] .heading-collapse-caret {
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid #111827;
+  border-right: 0;
+}
+
+.tiptap-editor .ProseMirror .heading-collapse-heading:hover .heading-collapse-toggle,
+.tiptap-editor .ProseMirror .heading-collapse-toggle:focus-visible,
+.tiptap-editor .ProseMirror .heading-collapse-heading.is-heading-collapsed .heading-collapse-toggle {
+  opacity: 1;
+}
+
+.tiptap-editor .ProseMirror .heading-collapse-toggle:hover,
+.tiptap-editor .ProseMirror .heading-collapse-toggle:focus-visible {
+  background: transparent;
+  outline: none;
+}
+
+.tiptap-editor .ProseMirror .heading-collapse-toggle:hover .heading-collapse-caret,
+.tiptap-editor .ProseMirror .heading-collapse-toggle:focus-visible .heading-collapse-caret {
+  border-top-color: #000;
+}
+
+.tiptap-editor .ProseMirror .heading-collapse-toggle[data-heading-collapsed="true"]:hover .heading-collapse-caret,
+.tiptap-editor .ProseMirror .heading-collapse-toggle[data-heading-collapsed="true"]:focus-visible .heading-collapse-caret {
+  border-top-color: transparent;
+  border-left-color: #000;
+}
+
+.tiptap-editor .ProseMirror .heading-collapse-hidden {
+  display: none !important;
+}
+
 .tiptap-editor .ProseMirror strong {
   font-weight: 700;
 }
@@ -242,6 +321,32 @@
   margin: 1em 0;
   overflow-x: auto;
   max-width: 100%;
+  position: relative;
+  padding: 2px 0 8px;
+  scrollbar-color: hsl(var(--border)) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.tiptap-editor .ProseMirror .tableWrapper::-webkit-scrollbar {
+  height: 8px;
+}
+
+.tiptap-editor .ProseMirror .tableWrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tiptap-editor .ProseMirror .tableWrapper::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.tiptap-editor .ProseMirror .tableWrapper::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.42);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 .tiptap-editor .ProseMirror table {
@@ -250,20 +355,30 @@
   min-width: 100%;
   max-width: none;
   margin: 0;
-  table-layout: auto;
+  table-layout: fixed;
 }
 
 .tiptap-editor .ProseMirror table th,
 .tiptap-editor .ProseMirror table td {
   border: 1px solid hsl(var(--border));
-  padding: 8px 12px;
+  padding: 9px 12px;
   text-align: left;
   vertical-align: top;
-  min-width: 100px;
-  empty-cells: hide;
+  min-width: 96px;
+  height: 44px;
+  empty-cells: show;
   white-space: normal;
   overflow-wrap: break-word;
   word-break: normal;
+  position: relative;
+  background-clip: padding-box;
+  cursor: text;
+}
+
+.tiptap-editor .ProseMirror table th > *,
+.tiptap-editor .ProseMirror table td > * {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 /* 表格空单元格使用空格替代 nbsp */
@@ -286,6 +401,30 @@
 /* 选中单元格 */
 .tiptap-editor .ProseMirror .selectedCell {
   background-color: hsl(var(--primary) / 0.15) !important;
+  caret-color: transparent;
+  cursor: default;
+}
+
+.tiptap-editor .ProseMirror .selectedCell * {
+  caret-color: transparent;
+}
+
+.tiptap-editor .ProseMirror.table-cell-selection-active,
+.tiptap-editor .ProseMirror.table-cell-selection-active * {
+  caret-color: transparent !important;
+}
+
+.tiptap-editor .ProseMirror.table-cell-selection-active .selectedCell,
+.tiptap-editor .ProseMirror.table-cell-selection-active .selectedCell * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+.tiptap-editor .ProseMirror.table-cell-selection-active .selectedCell::selection,
+.tiptap-editor .ProseMirror.table-cell-selection-active .selectedCell *::selection {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: inherit !important;
 }
 
 /* 表格头部样式 */
@@ -310,30 +449,56 @@
 }
 
 /* 表格调整大小手柄 */
+.tiptap-editor .ProseMirror .column-resize-handle,
 .tiptap-editor .ProseMirror .tableResizeHandle {
   position: absolute;
   right: -4px;
   top: 0;
   bottom: 0;
+  z-index: 20;
   width: 8px;
   cursor: col-resize;
-  background-color: transparent;
+  background-color: transparent !important;
+  opacity: 0 !important;
 }
 
+.tiptap-editor .ProseMirror .column-resize-handle:hover,
 .tiptap-editor .ProseMirror .tableResizeHandle:hover {
-  background-color: hsl(var(--primary) / 0.5);
+  background-color: transparent !important;
 }
 
+.tiptap-editor .ProseMirror .column-resize-handle::before,
 .tiptap-editor .ProseMirror .tableResizeHandle::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 4px;
-  height: 20px;
-  background-color: hsl(var(--primary) / 0.3);
-  border-radius: 2px;
+  content: none;
+}
+
+.tiptap-editor .ProseMirror.resize-cursor,
+.tiptap-editor .ProseMirror.table-column-resize-ready,
+.tiptap-editor .ProseMirror.table-column-resizing {
+  cursor: col-resize !important;
+}
+
+.tiptap-editor .ProseMirror.table-column-resizing table th,
+.tiptap-editor .ProseMirror.table-column-resizing table td {
+  cursor: col-resize !important;
+}
+
+.table-column-resize-guide {
+  position: fixed;
+  z-index: 9999;
+  width: 2px;
+  min-height: 24px;
+  transform: translateX(-1px);
+  border-radius: 999px;
+  background: #1677ff;
+  box-shadow: 0 0 0 1px rgb(22 119 255 / 0.08);
+  pointer-events: none;
+}
+
+.table-column-resize-guide.is-dragging {
+  width: 3px;
+  transform: translateX(-1.5px);
+  box-shadow: 0 0 0 3px rgb(22 119 255 / 0.12);
 }
 
 /* 表格工具栏样式 */
@@ -640,6 +805,28 @@
 
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+.outline-panel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.32) transparent;
+}
+
+.outline-panel-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.outline-panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.outline-panel-scroll::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.28);
+  border-radius: 999px;
+}
+
+.outline-panel-scroll::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.42);
 }
 
 /* 标签页容器 */
@@ -1017,4 +1204,16 @@
 .sequence-diagram .note {
   fill: hsl(var(--muted)) !important;
   stroke: hsl(var(--border)) !important;
+}
+
+.tiptap-editor .ProseMirror.table-cell-selection-active ::selection {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: inherit !important;
+}
+
+.tiptap-editor .ProseMirror.table-cell-selection-active ::-moz-selection {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: inherit !important;
 }

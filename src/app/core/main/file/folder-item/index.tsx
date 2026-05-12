@@ -12,6 +12,7 @@ import useSettingStore from '@/stores/setting'
 import { isSkillsFolder } from "@/lib/skills/utils"
 import SyncFolder from './sync-folder'
 import { NewFile } from './new-file'
+import { NewDiagram } from './new-diagram'
 import { NewFolder } from './new-folder'
 import { ViewDirectory } from './view-directory'
 import { CutFolder } from './cut-folder'
@@ -28,8 +29,21 @@ import { FolderVectorMenu } from './folder-vector-menu'
 import { pasteIntoFolder } from './paste-into-folder'
 import emitter from '@/lib/emitter'
 import { LinkedFolder } from '@/lib/files'
+import { sanitizeFileName } from "@/lib/sync/filename-utils"
 
-export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar?: () => void }) {
+function stopRenameInputPropagation(event: React.SyntheticEvent) {
+  event.stopPropagation()
+}
+
+export function FolderItem({
+  item,
+  focusSidebar,
+  forceExpanded = false,
+}: {
+  item: DirTree
+  focusSidebar?: () => void
+  forceExpanded?: boolean
+}) {
   const [isEditing, setIsEditing] = useState(item.isEditing)
   const [name, setName] = useState(item.name)
   const [isComposing, setIsComposing] = useState(false)
@@ -77,6 +91,7 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
   const cacheTree = cloneDeep(fileTree)
   const currentFolder = getCurrentFolder(path, cacheTree)
   const parentFolder = currentFolder?.parent
+  const visibleChildCount = item.children?.length || 0
 
   // 检查文件夹是否被剪切
   const isCut = clipboardOperation === 'cut' && clipboardItem?.path === path
@@ -121,17 +136,17 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
 
     if (status === 'calculating') {
       return (
-        <div className="flex items-center mr-2">
-          <LoaderCircle className={`${iconSize} animate-spin`} />
+        <div className="ml-1 flex shrink-0 items-center">
+          <LoaderCircle className={`${iconSize} animate-spin text-muted-foreground`} />
         </div>
       )
-    } else if (status === 'completed' || vectorStatus.hasVector) {
+    } else if ((status === 'completed' || vectorStatus.hasVector) && path === activeFilePath) {
       return (
-        <div className="flex items-center mr-2">
+        <div className="file-manager-vector-pill">
           <span className={`text-xs text-muted-foreground ${vectorStatus.isComplete ? 'opacity-100' : 'opacity-60'}`}>
             {vectorStatus.indexedCount}/{vectorStatus.totalCount}
           </span>
-          <Database className={`${iconSize} text-muted-foreground ml-1 ${vectorStatus.isComplete ? 'opacity-100' : 'opacity-60'}`} />
+          <Database className={`${iconSize} text-muted-foreground ${vectorStatus.isComplete ? 'opacity-100' : 'opacity-60'}`} />
         </div>
       )
     }
@@ -378,7 +393,7 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
   // 创建或修改文件夹名称
   async function handleRename() {
     // 统一处理：将空格替换为下划线，确保本地和远程文件名一致
-    const sanitizedName = name.replace(/\s+/g, '_')
+    const sanitizedName = sanitizeFileName(name.replace(/\s+/g, '_'))
     setName(sanitizedName)
 
     // 获取工作区路径信息
@@ -478,40 +493,43 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
 
   async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
-    const renamePath = e.dataTransfer?.getData('text')
+    setIsDragging(false)
+
+    // 内部文件拖拽（文件树内移动）
+    const renamePath = e.dataTransfer?.getData('application/x-note-gen-file') || e.dataTransfer?.getData('text')
     if (renamePath) {
-      const filename = renamePath.slice(renamePath.lastIndexOf('/') + 1)
-      
-      // 获取工作区路径信息
+      let actualPath = renamePath
+      try {
+        const parsed = JSON.parse(renamePath)
+        if (parsed?.path) actualPath = parsed.path
+      } catch {
+        // actualPath 就是纯文本路径
+      }
+
+      const filename = actualPath.slice(actualPath.lastIndexOf('/') + 1)
+
       const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
       const workspace = await getWorkspacePath()
-      
-      // 获取源路径和目标路径的选项
-      const oldPathOptions = await getFilePathOptions(renamePath)
+
+      const oldPathOptions = await getFilePathOptions(actualPath)
       const newPathOptions = await getFilePathOptions(`${path}/${filename}`)
-      
-      // 根据工作区类型执行重命名操作
+
       if (workspace.isCustom) {
-        // 自定义工作区
         await rename(oldPathOptions.path, newPathOptions.path)
       } else {
-        // 默认工作区
-        await rename(oldPathOptions.path, newPathOptions.path, { 
-          newPathBaseDir: BaseDirectory.AppData, 
-          oldPathBaseDir: BaseDirectory.AppData 
+        await rename(oldPathOptions.path, newPathOptions.path, {
+          newPathBaseDir: BaseDirectory.AppData,
+          oldPathBaseDir: BaseDirectory.AppData
         })
       }
-      
-      // 刷新文件树
+
       loadFileTree()
-      
-      // 更新活动文件路径和折叠状态
-      if (renamePath === activeFilePath && !collapsibleList.includes(item.name)) {
+
+      if (actualPath === activeFilePath && !collapsibleList.includes(item.name)) {
         setCollapsibleList(item.name, true)
         setActiveFilePath(`${path}/${filename}`)
       }
     }
-    setIsDragging(false)
   }
 
   function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
@@ -666,11 +684,12 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
   const renameKey = currentPlatform === 'macos' ? '↩' : 'F2'
 
   return (
-    <CollapsibleTrigger className="w-full select-none">
+    <CollapsibleTrigger className="w-full select-none text-left">
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
             className={`${isDragging ? 'file-on-drop' : ''} ${path === activeFilePath ? 'active' : ''} group file-manange-item flex select-none`}
+            title={path}
             onClick={() => handleSelectFolder()}
             onContextMenu={(e) => {
               // 右键打开菜单时阻止冒泡，防止触发折叠/展开
@@ -678,11 +697,14 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
             }}
           >
             <ChevronRight
-              className="transition-transform size-4 ml-1 bg-sidebar group-hover:bg-transparent"
+              className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:text-foreground"
               onClick={async (e) => {
                 // 点击折叠箭头时只触发展开/折叠，阻止冒泡避免触发 handleSelectFolder
                 e.stopPropagation();
                 e.preventDefault();
+                if (forceExpanded) {
+                  return
+                }
                 // 切换折叠状态
                 const isExpanded = collapsibleList.includes(path)
                 await setCollapsibleList(path, !isExpanded)
@@ -704,6 +726,11 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
                     ref={inputRef}
                     className={`h-5 rounded-sm text-${fileManagerTextSize} px-1 font-normal flex-1 mr-1`}
                     value={name}
+                    onPointerDown={stopRenameInputPropagation}
+                    onMouseDown={stopRenameInputPropagation}
+                    onClick={stopRenameInputPropagation}
+                    onDoubleClick={stopRenameInputPropagation}
+                    onContextMenu={stopRenameInputPropagation}
                     onBlur={handleRename}
                     onChange={handleInputChange}
                     onCompositionStart={handleCompositionStart}
@@ -725,9 +752,9 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
                   onDrop={(e) => handleDrop(e)}
                   onDragOver={e => handleDragOver(e)}
                   onDragLeave={(e) => handleDragleave(e)}
-                  className={`${!item.isLocale || isCut ? 'opacity-50' : ''} flex gap-1 items-center flex-1 select-none`}
+                  className={`${!item.isLocale || isCut ? 'opacity-50' : ''} flex min-w-0 flex-1 items-center gap-1.5 select-none`}
                 >
-                  <div className="flex flex-1 gap-1 select-none relative items-center">
+                  <div className="relative flex min-w-0 flex-1 select-none items-center gap-1.5">
                     {item.loading ? (
                       <Loader2 className={`${iconSize} animate-spin text-primary`} />
                     ) : isSkillsFolder(item.name) ? (
@@ -737,7 +764,12 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
                     ) : (
                       assetsPath === item.name ? <FolderDot className={iconSize} /> : (!item.isLocale ? <FolderDown className={iconSize} /> : (item.sha ? <FolderUp className={iconSize} /> : <Folder className={iconSize} />))
                     )}
-                    <span className={`text-${fileManagerTextSize} line-clamp-1 ${item.loading ? 'text-muted-foreground' : ''}`}>{item.name}</span>
+                    <span className={`min-w-0 flex-1 text-${fileManagerTextSize} line-clamp-1 ${item.loading ? 'text-muted-foreground' : ''}`}>{item.name}</span>
+                    {visibleChildCount > 0 ? (
+                      <span className="file-manager-count-badge">
+                        {visibleChildCount}
+                      </span>
+                    ) : null}
                   </div>
                   {/* 向量状态指示器 - 放在最右侧，skills 文件夹及其子内容不显示 */}
                   {renderFolderVectorIcon()}
@@ -781,6 +813,7 @@ export function FolderItem({ item, focusSidebar }: { item: DirTree; focusSidebar
         </ContextMenuTrigger>
         <ContextMenuContent>
           <NewFile item={item} />
+          <NewDiagram item={item} />
           <NewFolder item={item} />
           <ViewDirectory item={item} />
           <ContextMenuSeparator />

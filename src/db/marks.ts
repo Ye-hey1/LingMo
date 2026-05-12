@@ -3,6 +3,8 @@ import { BaseDirectory, exists, mkdir, remove } from "@tauri-apps/plugin-fs"
 import { insertActivityEvent } from './activity'
 import { truncateActivityText } from '@/lib/activity/events'
 
+export const TRASH_RETENTION_DAYS = 14
+
 export interface Mark {
   id: number
   tagId: number
@@ -11,7 +13,11 @@ export interface Mark {
   desc?: string
   url: string
   deleted: 0 | 1
+  deletedAt?: number | null
   createdAt: number
+  processed?: 0 | 1
+  processedAt?: number | null
+  pinned?: 0 | 1
 }
 
 const HTTP_URL_PATTERN = /^https?:\/\//i
@@ -78,6 +84,13 @@ async function deleteMarkLocalAssets(marks: Pick<Mark, 'type' | 'url'>[]) {
   }
 }
 
+async function ensureMarksColumn(column: string, definition: string) {
+  const db = await getDb()
+  const columns = await db.select<Array<{ name: string }>>("pragma table_info(marks)")
+  if (!columns.some((item) => item.name === column)) {
+    await db.execute(`alter table marks add column ${column} ${definition}`)
+  }
+}
 
 // 创建 marks 表
 export async function initMarksDb() {
@@ -107,23 +120,32 @@ export async function initMarksDb() {
       url text default null,
       desc text default null,
       deleted integer default 0,
-      createdAt integer
+      createdAt integer,
+      processed integer default 0,
+      processedAt integer default null
     )
   `)
+  await ensureMarksColumn('processed', 'integer default 0')
+  await ensureMarksColumn('processedAt', 'integer default null')
+  await ensureMarksColumn('deletedAt', 'integer default null')
+  await ensureMarksColumn('pinned', 'integer default 0')
+
+  // 启动时自动清理超过14天的回收站数据
+  await cleanupExpiredTrash()
 }
 
 export async function getMarks(id: number) {
   const db = await getDb();
   // 根据 tagId 获取 marks，根据 createdAt 倒序
-  return await db.select<Mark[]>("select * from marks where tagId = $1 order by createdAt desc", [id])
+  return await db.select<Mark[]>("select * from marks where tagId = $1 order by pinned desc, createdAt desc", [id])
 }
 
 export async function insertMark(mark: Partial<Mark>) {
   const db = await getDb();
   const createdAt = Date.now();
   const result = await db.execute(
-    "insert into marks (tagId, type, content, url, desc, createdAt, deleted) values ($1, $2, $3, $4, $5, $6, $7)",
-    [mark.tagId, mark.type,  mark.content, mark.url, mark.desc, createdAt, 0]
+    "insert into marks (tagId, type, content, url, desc, createdAt, deleted, processed, processedAt) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    [mark.tagId, mark.type,  mark.content, mark.url, mark.desc, createdAt, 0, mark.processed ?? 0, mark.processedAt ?? null]
   )
 
   const preview = truncateActivityText(mark.desc || mark.content || mark.url || '', 140)
@@ -148,32 +170,36 @@ export async function getAllMarks() {
 export async function updateMark(mark: Mark) {
   const db = await getDb();
   const res = await db.execute(
-    "update marks set tagId = $1, url = $2, desc = $3, content = $4, createdAt = $5 where id = $6",
-    [mark.tagId, mark.url, mark.desc, mark.content, mark.createdAt, mark.id]
+    "update marks set tagId = $1, url = $2, desc = $3, content = $4, createdAt = $5, processed = $6, processedAt = $7 where id = $8",
+    [mark.tagId, mark.url, mark.desc, mark.content, mark.createdAt, mark.processed ?? 0, mark.processedAt ?? null, mark.id]
   )
   return res 
 }
 
+export async function pinMark(id: number) {
+  const db = await getDb();
+  return await db.execute("update marks set pinned = 1 where id = $1", [id])
+}
+
+export async function unpinMark(id: number) {
+  const db = await getDb();
+  return await db.execute("update marks set pinned = 0 where id = $1", [id])
+}
+
 export async function restoreMark(id: number) {
   const db = await getDb();
-  const createdAt = Date.now();
   return await db.execute(
-    "update marks set deleted = $1, createdAt = $2 where id = $3",
-    [0, createdAt, id]
+    "update marks set deleted = $1, deletedAt = $2 where id = $3",
+    [0, null, id]
   )
 }
 
 export async function delMark(id: number) {
   const db = await getDb();
-  // 判断有没有 deleted 列，没有就添加
-  const res = await db.select<Mark[]>("select * from marks where id = $1", [id])
-  if (res[0].deleted === undefined) {
-    await db.execute("alter table marks add column deleted integer default 0")
-  }
-  const createdAt = Date.now();
+  const deletedAt = Date.now();
   return await db.execute(
-    "update marks set deleted = $1, createdAt = $2 where id = $3",
-    [1, createdAt, id]
+    "update marks set deleted = $1, deletedAt = $2 where id = $3",
+    [1, deletedAt, id]
   )
 }
 
@@ -187,8 +213,8 @@ export async function insertMarks(marks: Partial<Mark>[]) {
   try {
     for (const mark of marks) {
       await db.execute(
-        "insert into marks (tagId, type, content, url, desc, createdAt, deleted) values ($1, $2, $3, $4, $5, $6, $7)",
-        [mark.tagId, mark.type, mark.content, mark.url, mark.desc, mark.createdAt, mark.deleted]
+        "insert into marks (tagId, type, content, url, desc, createdAt, deleted, processed, processedAt) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        [mark.tagId, mark.type, mark.content, mark.url, mark.desc, mark.createdAt, mark.deleted, mark.processed ?? 0, mark.processedAt ?? null]
       );
     }
   } catch (error) {
@@ -216,8 +242,8 @@ export async function updateMarks(marks: Mark[]) {
   try {
     for (const mark of marks) {
       await db.execute(
-        "update marks set tagId = $1, url = $2, desc = $3, content = $4, createdAt = $5 where id = $6",
-        [mark.tagId, mark.url, mark.desc, mark.content, mark.createdAt, mark.id]
+        "update marks set tagId = $1, url = $2, desc = $3, content = $4, createdAt = $5, processed = $6, processedAt = $7 where id = $8",
+        [mark.tagId, mark.url, mark.desc, mark.content, mark.createdAt, mark.processed ?? 0, mark.processedAt ?? null, mark.id]
       );
     }
   } catch (error) {
@@ -226,14 +252,36 @@ export async function updateMarks(marks: Mark[]) {
   }
 }
 
-export async function deleteMarks(ids: number[]) {
+export async function updateMarksProcessed(ids: number[], processed: boolean) {
+  if (ids.length === 0) {
+    return
+  }
+
   const db = await getDb();
-  const createdAt = Date.now();
+  const processedValue = processed ? 1 : 0;
+  const processedAt = processed ? Date.now() : null;
+
   try {
     for (const id of ids) {
       await db.execute(
-        "update marks set deleted = $1, createdAt = $2 where id = $3",
-        [1, createdAt, id]
+        "update marks set processed = $1, processedAt = $2 where id = $3",
+        [processedValue, processedAt, id]
+      );
+    }
+  } catch (error) {
+    console.error('Error updating marks processed state:', error);
+    throw error;
+  }
+}
+
+export async function deleteMarks(ids: number[]) {
+  const db = await getDb();
+  const deletedAt = Date.now();
+  try {
+    for (const id of ids) {
+      await db.execute(
+        "update marks set deleted = $1, deletedAt = $2 where id = $3",
+        [1, deletedAt, id]
       );
     }
   } catch (error) {
@@ -244,16 +292,75 @@ export async function deleteMarks(ids: number[]) {
 
 export async function restoreMarks(ids: number[]) {
   const db = await getDb();
-  const createdAt = Date.now();
   try {
     for (const id of ids) {
       await db.execute(
-        "update marks set deleted = $1, createdAt = $2 where id = $3",
-        [0, createdAt, id]
+        "update marks set deleted = $1, deletedAt = $2 where id = $3",
+        [0, null, id]
       );
     }
   } catch (error) {
     console.error('Error restoring marks:', error);
     throw error;
   }
+}
+
+/** 清理超过 TRASH_RETENTION_DAYS 天的回收站数据，永久删除并清理本地资产 */
+export async function cleanupExpiredTrash() {
+  const db = await getDb();
+  const cutoff = Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000
+  const expired = await db.select<Mark[]>(
+    "select id, type, url from marks where deleted = 1 and deletedAt is not null and deletedAt < $1",
+    [cutoff]
+  )
+  if (expired.length === 0) return
+  await deleteMarkLocalAssets(expired)
+  await db.execute(
+    "delete from marks where deleted = 1 and deletedAt is not null and deletedAt < $1",
+    [cutoff]
+  )
+  console.log(`[Trash] Cleaned up ${expired.length} expired items (older than ${TRASH_RETENTION_DAYS} days)`)
+}
+
+export interface DueTodoItem {
+  markId: number
+  title: string
+  dueDate: string
+  status: 'overdue' | 'today' | 'upcoming'
+}
+
+/** 检查即将到期和已过期的待办，返回需要提醒的列表 */
+export async function checkDueTodos(): Promise<DueTodoItem[]> {
+  const db = await getDb();
+  const todos = await db.select<Mark[]>(
+    "select id, content from marks where type = 'todo' and deleted = 0"
+  )
+  const results: DueTodoItem[] = []
+  const now = new Date()
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+
+  for (const todo of todos) {
+    try {
+      const data = JSON.parse(todo.content || '{}')
+      if (!data.dueDate || data.completed) continue
+      const title = data.title || '待办事项'
+
+      if (data.dueDate < todayStr) {
+        results.push({ markId: todo.id, title, dueDate: data.dueDate, status: 'overdue' })
+      } else if (data.dueDate === todayStr) {
+        results.push({ markId: todo.id, title, dueDate: data.dueDate, status: 'today' })
+      } else {
+        // 3天内到期
+        const due = new Date(data.dueDate + 'T00:00:00')
+        const diffDays = Math.ceil((due.getTime() - now.getTime()) / 86400000)
+        if (diffDays <= 3) {
+          results.push({ markId: todo.id, title, dueDate: data.dueDate, status: 'upcoming' })
+        }
+      }
+    } catch {
+      // 跳过解析失败的记录
+    }
+  }
+
+  return results
 }

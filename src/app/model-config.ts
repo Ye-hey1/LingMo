@@ -26,6 +26,7 @@ export const noteGenDefaultModels: AiConfig[] = [
         "id": "note-gen-vlm",
         "model": "THUDM/GLM-4.1V-9B-Thinking", 
         "modelType": "chat",
+        "supportsImageInput": true,
         "temperature": 0.7,
         "topP": 1,
         "enableStream": true

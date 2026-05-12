@@ -26,16 +26,21 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  webpack: (config) => {
-    // Filter known flushSync warnings from the Tiptap editor.
-    config.stats = {
-      ...config.stats,
-      warningsFilter: (warning: string) => {
-        return !warning.includes('flushSync');
-      }
-    };
-    return config;
-  }
+  experimental: {
+    optimizePackageImports: [
+      'lucide-react',
+      'lodash-es',
+      'date-fns',
+      '@radix-ui/react-accordion',
+      '@radix-ui/react-alert-dialog',
+      '@radix-ui/react-dialog',
+      '@radix-ui/react-dropdown-menu',
+      '@radix-ui/react-popover',
+      '@radix-ui/react-select',
+      '@radix-ui/react-tabs',
+      '@radix-ui/react-tooltip',
+    ],
+  },
 };
 
 export default withNextIntl(nextConfig);

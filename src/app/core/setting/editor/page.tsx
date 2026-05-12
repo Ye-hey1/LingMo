@@ -5,7 +5,9 @@ import { useTranslations } from 'next-intl';
 import ShowUndoRedo from './show-undo-redo';
 import CenteredContent from './centered-content';
 import Outline from './outline';
-import { DefaultModelsSettings } from '../components/default-models-settings';
+import ContentTextScale from './content-text-scale';
+import CodeTheme from './code-theme';
+import { DefaultModelsSettings } from "../components/default-models-settings";
 
 export default function EditorSettingPage() {
   const t = useTranslations('settings.editor');
@@ -13,6 +15,8 @@ export default function EditorSettingPage() {
     <div className="space-y-4">
       <DefaultModelsSettings type="editor" />
       <h3 className="text-lg font-semibold">{t('interfaceSettings')}</h3>
+      <ContentTextScale />
+      <CodeTheme />
       <CenteredContent />
       <Outline />
       <ShowUndoRedo />

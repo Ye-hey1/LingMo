@@ -35,6 +35,10 @@ function isRecoverableWriteToolLocally(toolName: string, tool: Tool | undefined)
     'rename_files_batch',
     'move_files_batch',
     'copy_files_batch',
+    'create_diagram_file',
+    'create_diagram_from_outline',
+    'update_diagram_file',
+    'safe_write_file',
   ].includes(toolName)
 }
 

@@ -12,10 +12,13 @@ import { SkillInstall } from './skill-install'
 import { SkillMarket } from './skill-market'
 import { SkillCardV2 } from './skill-card-v2'
 import { useSkillsV2Store } from '@/stores/skills-v2'
+import { useToast } from '@/hooks/use-toast'
 
 export function SkillsSettings() {
   const t = useTranslations('settings.skills')
-  const { skills, fetchSkills, deleteSkill, setEnabled, loading } = useSkillsV2Store()
+  const tc = useTranslations('common')
+  const { toast } = useToast()
+  const { skills, fetchSkills, deleteSkill, setEnabled, loading, deletingSkillId } = useSkillsV2Store()
   const [search, setSearch] = useState('')
 
   useEffect(() => {
@@ -38,6 +41,19 @@ export function SkillsSettings() {
       discovered: t('sourceDiscovered'),
     }
     return map[type] || type
+  }
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteSkill(id)
+      toast({ title: t('skillDeleted') })
+    } catch (error) {
+      toast({
+        title: tc('error'),
+        description: String(error),
+        variant: 'destructive',
+      })
+    }
   }
 
   return (
@@ -87,13 +103,14 @@ export function SkillsSettings() {
                 key={skill.id}
                 skill={skill}
                 onToggle={setEnabled}
-                onDelete={deleteSkill}
+                onDelete={handleDelete}
                 sourceLabel={sourceLabel(skill.source_type)}
                 deleteTitle={t('deleteSkillTitle')}
                 deleteDesc={t('deleteSkillDesc')}
                 cancelLabel={t('cancel')}
                 deleteLabel={t('delete')}
                 updateLabel={t('updateAvailable')}
+                deleting={deletingSkillId === skill.id}
               />
             ))}
           </div>

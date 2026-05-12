@@ -11,9 +11,141 @@ import { getRemoteFileContent } from '@/lib/sync/remote-file';
 import { Store } from '@tauri-apps/plugin-store';
 import { locales } from '@/lib/locales';
 import { AgentState, ToolCall } from '@/lib/agent/types'
-import { LinkedResource } from '@/lib/files'
+import type { LinkedResource } from '@/lib/files'
 import type { Conversation } from '@/db/conversations'
 import { S3Config, WebDAVConfig } from '@/types/sync'
+
+const SYNC_PATH = '.data'
+const SYNC_FILENAME = 'chats.json'
+
+async function getSyncMethod(store: Store): Promise<string> {
+  return (await store.get<string>('primaryBackupMethod')) || 'github'
+}
+
+async function uploadChatsToRemote(chats: Chat[]): Promise<unknown> {
+  const store = await Store.load('store.json')
+  const method = await getSyncMethod(store)
+  const fullPath = `${SYNC_PATH}/${SYNC_FILENAME}`
+  const base64Data = Buffer.from(JSON.stringify(chats, null, 2)).toString('base64')
+  const jsonData = JSON.stringify(chats, null, 2)
+
+  switch (method) {
+    case 'github': {
+      const repo = await getSyncRepoName('github')
+      const files = await githubGetFiles({ path: fullPath, repo })
+      return uploadGithubFile({ file: base64Data, repo, path: fullPath, sha: files?.sha })
+    }
+    case 'gitee': {
+      const repo = await getSyncRepoName('gitee')
+      const files = await giteeGetFiles({ path: fullPath, repo })
+      return uploadGiteeFile({ file: base64Data, repo, path: fullPath, sha: files?.sha })
+    }
+    case 'gitlab': {
+      const repo = await getSyncRepoName('gitlab')
+      const files = await gitlabGetFiles({ path: SYNC_PATH, repo })
+      const chatFile = Array.isArray(files)
+        ? files.find(file => file.name === SYNC_FILENAME)
+        : (files?.name === SYNC_FILENAME ? files : undefined)
+      return uploadGitlabFile({ file: base64Data, repo, path: SYNC_PATH, filename: SYNC_FILENAME, sha: chatFile?.sha || '' })
+    }
+    case 'gitea': {
+      const repo = await getSyncRepoName('gitea')
+      const files = await giteaGetFiles({ path: SYNC_PATH, repo })
+      const chatFile = Array.isArray(files)
+        ? files.find(file => file.name === SYNC_FILENAME)
+        : (files?.name === SYNC_FILENAME ? files : undefined)
+      return uploadGiteaFile({ file: base64Data, repo, path: SYNC_PATH, filename: SYNC_FILENAME, sha: chatFile?.sha || '' })
+    }
+    case 's3': {
+      const config = await store.get<S3Config>('s3SyncConfig')
+      if (!config) return null
+      const key = fullPath
+      if (await s3HeadObject(config, key)) {
+        await s3Delete(config, key)
+      }
+      return s3Upload(config, key, jsonData)
+    }
+    case 'webdav': {
+      const config = await store.get<WebDAVConfig>('webdavSyncConfig')
+      if (!config) return null
+      const key = fullPath
+      if (await webdavHeadObject(config, key)) {
+        await webdavDelete(config, key)
+      }
+      return webdavUpload(config, key, jsonData)
+    }
+    default:
+      return null
+  }
+}
+
+async function downloadChatsFromRemote(): Promise<Chat[]> {
+  const store = await Store.load('store.json')
+  const method = await getSyncMethod(store)
+  const fullPath = `${SYNC_PATH}/${SYNC_FILENAME}`
+
+  switch (method) {
+    case 'github': {
+      const repo = await getSyncRepoName('github')
+      const files = await githubGetFiles({ path: fullPath, repo })
+      const content = decodeBase64ToString(getRemoteFileContent(files, fullPath))
+      return JSON.parse(content)
+    }
+    case 'gitee': {
+      const repo = await getSyncRepoName('gitee')
+      const files = await giteeGetFiles({ path: fullPath, repo })
+      const content = decodeBase64ToString(getRemoteFileContent(files, fullPath))
+      return JSON.parse(content)
+    }
+    case 'gitlab': {
+      const repo = await getSyncRepoName('gitlab')
+      const files = await gitlabGetFileContent({ path: fullPath, ref: 'main', repo })
+      const content = decodeBase64ToString(getRemoteFileContent(files, fullPath))
+      return JSON.parse(content)
+    }
+    case 'gitea': {
+      const repo = await getSyncRepoName('gitea')
+      const files = await giteaGetFileContent({ path: fullPath, ref: 'main', repo })
+      const content = decodeBase64ToString(getRemoteFileContent(files, fullPath))
+      return JSON.parse(content)
+    }
+    case 's3': {
+      const config = await store.get<S3Config>('s3SyncConfig')
+      if (!config) return []
+      const result = await s3Download(config, fullPath)
+      return result ? JSON.parse(result.content) : []
+    }
+    case 'webdav': {
+      const config = await store.get<WebDAVConfig>('webdavSyncConfig')
+      if (!config) return []
+      const result = await webdavDownload(config, fullPath)
+      return result ? JSON.parse(result.content) : []
+    }
+    default:
+      return []
+  }
+}
+
+function getLinkedResourceKey(resource: LinkedResource): string {
+  return resource.relativePath || resource.path || resource.name
+}
+
+function normalizeLinkedResources(resources: LinkedResource[]): LinkedResource[] {
+  const seen = new Set<string>()
+  const normalized: LinkedResource[] = []
+
+  for (const resource of resources) {
+    const key = getLinkedResourceKey(resource)
+    if (!key || seen.has(key)) {
+      continue
+    }
+
+    seen.add(key)
+    normalized.push(resource)
+  }
+
+  return normalized
+}
 
 export interface PendingQuote {
   quote: string
@@ -93,6 +225,11 @@ interface ChatState {
   setPlaceholderEnabled: (enabled: boolean) => void
 
   // 关联的文件或文件夹（用于 Agent 工具调用时判断内容是否已在上下文中）
+  linkedResources: LinkedResource[]
+  setLinkedResources: (resources: LinkedResource[]) => void
+  addLinkedResource: (resource: LinkedResource) => void
+  removeLinkedResource: (resource: LinkedResource) => void
+  clearLinkedResources: () => void
   linkedResource: LinkedResource | null
   setLinkedResource: (resource: LinkedResource | null) => void
 
@@ -120,6 +257,15 @@ interface ChatState {
   deleteConversation: (id: number) => Promise<void> // 删除会话
   toggleConversationPin: (id: number) => Promise<boolean> // 切换会话置顶状态
   startNewConversation: () => Promise<void> // 开始新对话（保存当前会话后创建新会话）
+
+  // 会话内搜索
+  chatSearchOpen: boolean
+  setChatSearchOpen: (open: boolean) => void
+  chatSearchQuery: string
+  setChatSearchQuery: (query: string) => void
+  chatSearchResults: number[] // 匹配的消息 ID
+  chatSearchCurrentIndex: number
+  setChatSearchCurrentIndex: (index: number) => void
 }
 
 const useChatStore = create<ChatState>((set, get) => ({
@@ -206,6 +352,8 @@ const useChatStore = create<ChatState>((set, get) => ({
   },
 
   agentState: {
+    agentRunId: undefined,
+    agentEventCursor: undefined,
     activeChatId: undefined,
     isRunning: false,
     isThinking: false,
@@ -215,6 +363,7 @@ const useChatStore = create<ChatState>((set, get) => ({
     currentAction: undefined,
     currentObservation: undefined,
     toolCalls: [],
+    agentEvents: [],
     maxIterations: 15,
     currentIteration: 0,
     pendingConfirmation: undefined,
@@ -224,6 +373,8 @@ const useChatStore = create<ChatState>((set, get) => ({
     currentStepStartTime: undefined,
     ragSources: undefined,
     ragSourceDetails: undefined,
+    agentContextSnapshot: undefined,
+    taskPlan: undefined,
   },
 
   setAgentState: (state: Partial<AgentState>) => {
@@ -234,6 +385,8 @@ const useChatStore = create<ChatState>((set, get) => ({
     const currentState = get().agentState
     set({
       agentState: {
+        agentRunId: undefined,
+        agentEventCursor: undefined,
         activeChatId: undefined,
         isRunning: false,
         isThinking: false,
@@ -243,6 +396,7 @@ const useChatStore = create<ChatState>((set, get) => ({
         currentAction: '',
         currentObservation: '',
         toolCalls: [],
+        agentEvents: [],
         maxIterations: 15,
         currentIteration: 0,
         pendingConfirmation: undefined,
@@ -253,9 +407,11 @@ const useChatStore = create<ChatState>((set, get) => ({
         // 保留 RAG 字段，因为它们应该在整个 Agent 执行期间显示
         ragSources: currentState.ragSources,
         ragSourceDetails: currentState.ragSourceDetails,
+        agentContextSnapshot: undefined,
         // 重置 Final Answer 模式
         isFinalAnswerMode: false,
         finalAnswerContent: undefined,
+        taskPlan: undefined,
       }
     })
   },
@@ -298,7 +454,52 @@ const useChatStore = create<ChatState>((set, get) => ({
 
   linkedResource: null,
   setLinkedResource: (resource: LinkedResource | null) => {
-    set({ linkedResource: resource })
+    const resources = resource ? [resource] : []
+    set({ linkedResource: resource, linkedResources: resources })
+  },
+  linkedResources: [],
+  setLinkedResources: (resources: LinkedResource[]) => {
+    const normalized = normalizeLinkedResources(resources)
+    set({
+      linkedResources: normalized,
+      linkedResource: normalized[0] || null,
+    })
+  },
+  addLinkedResource: (resource: LinkedResource) => {
+    const state = get()
+    const current = state.linkedResources.length > 0
+      ? state.linkedResources
+      : state.linkedResource
+        ? [state.linkedResource]
+        : []
+    const resourceKey = getLinkedResourceKey(resource)
+    const normalized = normalizeLinkedResources([
+      ...current.filter(item => getLinkedResourceKey(item) !== resourceKey),
+      resource,
+    ])
+
+    set({
+      linkedResources: normalized,
+      linkedResource: normalized[0] || null,
+    })
+  },
+  removeLinkedResource: (resource: LinkedResource) => {
+    const resourceKey = getLinkedResourceKey(resource)
+    const normalized = normalizeLinkedResources(get().linkedResources)
+      .filter(item => getLinkedResourceKey(item) !== resourceKey)
+
+    set({
+      linkedResources: normalized,
+      linkedResource: normalized[0] || null,
+      linkedResourcePreview: null,
+    })
+  },
+  clearLinkedResources: () => {
+    set({
+      linkedResources: [],
+      linkedResource: null,
+      linkedResourcePreview: null,
+    })
   },
 
   linkedResourcePreview: null,
@@ -317,6 +518,41 @@ const useChatStore = create<ChatState>((set, get) => ({
   onboardingPromptDraft: null,
   setOnboardingPromptDraft: (prompt: string | null) => {
     set({ onboardingPromptDraft: prompt })
+  },
+
+  chatSearchOpen: false,
+  setChatSearchOpen: (open: boolean) => {
+    if (!open) {
+      set({ chatSearchOpen: false, chatSearchQuery: '', chatSearchResults: [], chatSearchCurrentIndex: 0 })
+    } else {
+      set({ chatSearchOpen: true })
+    }
+  },
+  chatSearchQuery: '',
+  setChatSearchQuery: (query: string) => {
+    const { chats } = get()
+    if (!query.trim()) {
+      set({ chatSearchQuery: query, chatSearchResults: [], chatSearchCurrentIndex: 0 })
+      return
+    }
+    const lowerQuery = query.toLowerCase().trim()
+    const results = chats
+      .filter((chat) => {
+        if (chat.content && chat.content.toLowerCase().includes(lowerQuery)) return true
+        if (chat.thinking && chat.thinking.toLowerCase().includes(lowerQuery)) return true
+        return false
+      })
+      .map((chat) => chat.id)
+    set({
+      chatSearchQuery: query,
+      chatSearchResults: results,
+      chatSearchCurrentIndex: results.length > 0 ? 0 : -1,
+    })
+  },
+  chatSearchResults: [],
+  chatSearchCurrentIndex: 0,
+  setChatSearchCurrentIndex: (index: number) => {
+    set({ chatSearchCurrentIndex: index })
   },
 
   chats: [],
@@ -500,97 +736,10 @@ const useChatStore = create<ChatState>((set, get) => ({
   },
   uploadChats: async () => {
     set({ syncState: true })
-    const path = '.data'
-    const filename = 'chats.json'
     const chats = await getAllChats()
-    const store = await Store.load('store.json');
-    const jsonToBase64 = (data: Chat[]) => {
-      return Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-    }
-    const primaryBackupMethod = await store.get<string>('primaryBackupMethod') || 'github';
-    let result = false
-    let files: any;
-    let res;
-    const fullPath = `${path}/${filename}`;
-    switch (primaryBackupMethod) {
-      case 'github':
-        const githubRepo = await getSyncRepoName('github')
-        files = await githubGetFiles({ path: fullPath, repo: githubRepo })
-        res = await uploadGithubFile({
-          file: jsonToBase64(chats),
-          repo: githubRepo,
-          path: fullPath,
-          sha: files?.sha,
-        })
-        break;
-      case 'gitee':
-        const giteeRepo = await getSyncRepoName('gitee')
-        files = await giteeGetFiles({ path: fullPath, repo: giteeRepo })
-        res = await uploadGiteeFile({
-          file: jsonToBase64(chats),
-          repo: giteeRepo,
-          path: fullPath,
-          sha: files?.sha,
-        })
-        break;
-      case 'gitlab':
-        const gitlabRepo = await getSyncRepoName('gitlab')
-        files = await gitlabGetFiles({ path, repo: gitlabRepo })
-        const chatFile = Array.isArray(files)
-          ? files.find(file => file.name === filename)
-          : (files?.name === filename ? files : undefined)
-        res = await uploadGitlabFile({
-          file: jsonToBase64(chats),
-          repo: gitlabRepo,
-          path,
-          filename,
-          sha: chatFile?.sha || '',
-        })
-        break;
-      case 'gitea':
-        const giteaRepo = await getSyncRepoName('gitea')
-        files = await giteaGetFiles({ path, repo: giteaRepo })
-        const giteaChatFile = Array.isArray(files)
-          ? files.find(file => file.name === filename)
-          : (files?.name === filename ? files : undefined)
-        res = await uploadGiteaFile({
-          file: jsonToBase64(chats),
-          repo: giteaRepo,
-          path,
-          filename,
-          sha: giteaChatFile?.sha || '',
-        })
-        break;
-      case 's3': {
-        const s3Config = await store.get<S3Config>('s3SyncConfig')
-        if (s3Config) {
-          const s3Key = `${path}/${filename}`
-          const existingFile = await s3HeadObject(s3Config, s3Key)
-          if (existingFile) {
-            await s3Delete(s3Config, s3Key)
-          }
-          res = await s3Upload(s3Config, s3Key, JSON.stringify(chats, null, 2))
-        }
-        break;
-      }
-      case 'webdav': {
-        const webdavConfig = await store.get<WebDAVConfig>('webdavSyncConfig')
-        if (webdavConfig) {
-          const webdavKey = `${path}/${filename}`
-          const existingFile = await webdavHeadObject(webdavConfig, webdavKey)
-          if (existingFile) {
-            await webdavDelete(webdavConfig, webdavKey)
-          }
-          res = await webdavUpload(webdavConfig, webdavKey, JSON.stringify(chats, null, 2))
-        }
-        break;
-      }
-    }
-    if (res) {
-      result = true
-    }
+    const res = await uploadChatsToRemote(chats)
     set({ syncState: false })
-    return result
+    return !!res
   },
   // MCP 工具调用记录
   mcpToolCalls: [],
@@ -616,58 +765,7 @@ const useChatStore = create<ChatState>((set, get) => ({
   },
 
   downloadChats: async () => {
-    const path = '.data'
-    const filename = 'chats.json'
-    const store = await Store.load('store.json');
-    const primaryBackupMethod = await store.get<string>('primaryBackupMethod') || 'github';
-    let result = []
-    let files;
-    switch (primaryBackupMethod) {
-      case 'github':
-        const githubRepo2 = await getSyncRepoName('github')
-        files = await githubGetFiles({ path: `${path}/${filename}`, repo: githubRepo2 })
-        break;
-      case 'gitee':
-        const giteeRepo2 = await getSyncRepoName('gitee')
-        files = await giteeGetFiles({ path: `${path}/${filename}`, repo: giteeRepo2 })
-        break;
-      case 'gitlab':
-        const gitlabRepo2 = await getSyncRepoName('gitlab')
-        files = await gitlabGetFileContent({ path: `${path}/${filename}`, ref: 'main', repo: gitlabRepo2 })
-        break;
-      case 'gitea':
-        const giteaRepo2 = await getSyncRepoName('gitea')
-        files = await giteaGetFileContent({ path: `${path}/${filename}`, ref: 'main', repo: giteaRepo2 })
-        break;
-      case 's3': {
-        const s3Config = await store.get<S3Config>('s3SyncConfig')
-        if (s3Config) {
-          const s3Key = `${path}/${filename}`
-          const s3Result = await s3Download(s3Config, s3Key)
-          if (s3Result) {
-            // S3 返回的 content 是字符串，直接解析
-            result = JSON.parse(s3Result.content)
-          }
-        }
-        break;
-      }
-      case 'webdav': {
-        const webdavConfig = await store.get<WebDAVConfig>('webdavSyncConfig')
-        if (webdavConfig) {
-          const webdavKey = `${path}/${filename}`
-          const webdavResult = await webdavDownload(webdavConfig, webdavKey)
-          if (webdavResult) {
-            result = JSON.parse(webdavResult.content)
-          }
-        }
-        break;
-      }
-    }
-    // S3/WebDAV 已经直接解析到 result 了，这里处理 Git 平台
-    if (files) {
-      const configJson = decodeBase64ToString(getRemoteFileContent(files, `${path}/${filename}`))
-      result = JSON.parse(configJson)
-    }
+    const result = await downloadChatsFromRemote()
     if (result.length > 0) {
       await deleteAllChats()
       await insertChats(result)
@@ -702,7 +800,7 @@ const useChatStore = create<ChatState>((set, get) => ({
     // 然后加载消息
     const { getChatsByConversation } = await import('@/db/chats')
     const data = await getChatsByConversation(id)
-    set({ currentConversationId: id, chats: data, pendingQuote: null })
+    set({ currentConversationId: id, chats: data, pendingQuote: null, chatSearchOpen: false, chatSearchQuery: '', chatSearchResults: [], chatSearchCurrentIndex: 0 })
     // 刷新会话列表以确保 UI 显示最新的会话状态
     await get().initConversations()
   },
@@ -732,7 +830,11 @@ const useChatStore = create<ChatState>((set, get) => ({
           chats: [],
           pendingQuote: null,
           agentAutoApproveConversationId: null,
-          agentAutoApproveRuntimeSkillId: null
+          agentAutoApproveRuntimeSkillId: null,
+          chatSearchOpen: false,
+          chatSearchQuery: '',
+          chatSearchResults: [],
+          chatSearchCurrentIndex: 0,
         })
         get().resetAgentState()
         get().clearMcpToolCalls()

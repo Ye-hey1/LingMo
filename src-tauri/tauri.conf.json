@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "灵墨",
-  "version": "0.27.7",
+  "version": "1.0.0",
   "identifier": "com.lingmo.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -21,16 +21,7 @@
         ]
       }
     },
-    "windows": [
-      {
-        "title": "灵墨",
-        "label": "main",
-        "width": 1360,
-        "height": 720,
-        "dragDropEnabled": false,
-        "titleBarStyle": "Overlay"
-      }
-    ]
+    "windows": []
   },
   "bundle": {
     "active": true,

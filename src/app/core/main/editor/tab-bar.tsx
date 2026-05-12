@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState, useEffect, memo } from 'react'
-import { X, FileText, Folder, Plus, Undo2, Redo2 } from 'lucide-react'
+import { X, FileText, Folder, Plus, Undo2, Redo2, Network, WalletCards, Brain } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import emitter from '@/lib/emitter'
@@ -32,6 +32,9 @@ import {
 } from '@/components/ui/enhanced-context-menu'
 import { platform } from '@tauri-apps/plugin-os'
 import useSettingStore from '@/stores/setting'
+import { isKnowledgeGraphTabPath } from '../knowledge/knowledge-graph-constants'
+import { isFlashcardTabPath } from '../flashcard/flashcard-constants'
+import { isMemoryTabPath } from '../memory/memory-constants'
 
 export interface TabInfo {
   id: string
@@ -50,7 +53,7 @@ interface TabBarProps {
   onCloseAllTabs: () => void
   onCloseLeftTabs: (path: string) => void
   onCloseRightTabs: (path: string) => void
-  showUndoRedo?: boolean // 保留这个 prop 以保持兼容性，但主要使用 store 中的值
+  showUndoRedo?: boolean
 }
 
 // Sortable Tab with Context Menu
@@ -136,7 +139,13 @@ function SortableTabWithMenu({
           {...attributes}
           {...listeners}
         >
-          {tab.isFolder ? (
+          {isKnowledgeGraphTabPath(tab.path) ? (
+            <Network className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
+          ) : isFlashcardTabPath(tab.path) ? (
+            <WalletCards className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
+          ) : isMemoryTabPath(tab.path) ? (
+            <Brain className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
+          ) : tab.isFolder ? (
             <Folder className="w-4 h-4 shrink-0 text-amber-500" />
           ) : (
             <FileText className={cn('w-4 h-4 shrink-0', isActive ? 'text-primary' : '')} />

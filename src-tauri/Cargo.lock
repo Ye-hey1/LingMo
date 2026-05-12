@@ -3141,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "lingmo"
-version = "0.27.7"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "core-graphics 0.23.2",

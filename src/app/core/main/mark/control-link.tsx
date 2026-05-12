@@ -27,7 +27,7 @@ import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
 import { Link, CircleX } from "lucide-react"
 import { useState, useEffect, useCallback } from "react"
-import { fetch } from '@tauri-apps/plugin-http'
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { v4 as uuidv4 } from 'uuid'
 import emitter from '@/lib/emitter'
 import { useRouter } from 'next/navigation'
@@ -36,6 +36,10 @@ import { useIsMobile } from '@/hooks/use-mobile'
 import { isMobileDevice as checkIsMobileDevice } from '@/lib/check'
 import { hasText, readText } from 'tauri-plugin-clipboard-api'
 import { Store } from '@tauri-apps/plugin-store'
+import { toast } from "@/hooks/use-toast"
+import { parseWebPageContent, type ParsedWebPageContent } from "@/lib/web/content-extractor"
+import { organizeLinkRecord } from "@/lib/ai/link-organizer"
+import { tavilyExtract } from "@/lib/tavily"
 
 export function ControlLink() {
   const t = useTranslations();
@@ -44,6 +48,8 @@ export function ControlLink() {
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [autoReadClipboard, setAutoReadClipboard] = useState(true)
+  const [organizeAfterSave, setOrganizeAfterSave] = useState(true)
+  const [errorMessage, setErrorMessage] = useState('')
   const isMobile = useIsMobile() || checkIsMobileDevice()
 
   const { currentTagId, fetchTags, getCurrentTag } = useTagStore()
@@ -58,11 +64,25 @@ export function ControlLink() {
         if (savedValue !== null && savedValue !== undefined) {
           setAutoReadClipboard(savedValue)
         }
+        const savedOrganize = await store.get<boolean>('linkAutoOrganize')
+        if (savedOrganize !== null && savedOrganize !== undefined) {
+          setOrganizeAfterSave(savedOrganize)
+        }
       } catch {
         // 忽略加载错误
       }
     }
     loadSetting()
+  }, [])
+
+  const handleOrganizeChange = useCallback(async (checked: boolean) => {
+    setOrganizeAfterSave(checked)
+    try {
+      const store = await Store.load('store.json')
+      await store.set('linkAutoOrganize', checked)
+    } catch {
+      // ignore
+    }
   }, [])
 
   // 保存设置到 store
@@ -112,11 +132,15 @@ export function ControlLink() {
 
   const handleOpen = useCallback(async () => {
     setOpen(true)
+    setErrorMessage('')
     await checkClipboard()
   }, [checkClipboard])
 
   const handleOpenChange = useCallback(async (open: boolean) => {
     setOpen(open)
+    if (!open) {
+      setErrorMessage('')
+    }
     if (open) {
       await checkClipboard()
     }
@@ -139,14 +163,130 @@ export function ControlLink() {
     return urlPattern.test(trimmed) || domainPattern.test(trimmed)
   }
 
+  type LinkCaptureErrorCode = 'http' | 'non_text' | 'parse' | 'network' | 'unknown'
+  class LinkCaptureError extends Error {
+    code: LinkCaptureErrorCode
+    status?: number
+    contentType?: string
+
+    constructor(
+      message: string,
+      code: LinkCaptureErrorCode,
+      options?: { status?: number; contentType?: string }
+    ) {
+      super(message)
+      this.name = 'LinkCaptureError'
+      this.code = code
+      this.status = options?.status
+      this.contentType = options?.contentType
+    }
+  }
+
+  function toLinkCaptureError(error: unknown): LinkCaptureError {
+    if (error instanceof LinkCaptureError) {
+      return error
+    }
+    if (error instanceof Error) {
+      const lowered = error.message.toLowerCase()
+      if (
+        lowered.includes('network')
+        || lowered.includes('timeout')
+        || lowered.includes('failed to fetch')
+        || lowered.includes('error sending request')
+      ) {
+        return new LinkCaptureError(error.message, 'network')
+      }
+      return new LinkCaptureError(error.message, 'unknown')
+    }
+    return new LinkCaptureError(String(error), 'unknown')
+  }
+
+  function getLinkErrorMessage(error: LinkCaptureError): string {
+    if (error.code === 'http') {
+      if (error.status === 403) {
+        return '请求被目标站点拒绝（403）。该站点可能开启了 Cloudflare/WAF，请更换可直连链接，或改用支持浏览器渲染的抓取方式。'
+      }
+      if (error.status === 401) {
+        return '目标网页需要登录（401），当前抓取不带登录态。请先登录后复制正文，或使用可匿名访问的链接。'
+      }
+      if (error.status === 404) {
+        return '目标网页不存在（404），请检查链接是否正确。'
+      }
+      return `链接抓取失败（HTTP ${error.status ?? 'unknown'}）。请稍后重试，或更换链接。`
+    }
+
+    if (error.code === 'non_text') {
+      return `当前链接返回的不是网页文本内容（${error.contentType || 'unknown content-type'}）。建议改用 PDF/OCR 或文件导入方式。`
+    }
+
+    if (error.code === 'parse') {
+      return '网页内容解析失败，可能是动态渲染页面或编码异常。建议使用可公开访问的文章页链接。'
+    }
+
+    if (error.code === 'network') {
+      return '网络请求失败，请检查网络连接、代理设置，或稍后重试。'
+    }
+
+    return error.message || '链接处理失败，请重试。'
+  }
+
+  function getFallbackTitleFromUrl(targetUrl: string): string {
+    try {
+      return new URL(targetUrl).hostname.replace(/^www\./, '')
+    } catch {
+      return targetUrl
+    }
+  }
+
+  function getTitleFromMarkdown(markdown: string, targetUrl: string): string {
+    const heading = markdown
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .find(line => /^#{1,2}\s+/.test(line))
+
+    return heading?.replace(/^#{1,2}\s+/, '').trim() || getFallbackTitleFromUrl(targetUrl)
+  }
+
+  function shouldFallbackToTavily(content: string): boolean {
+    const compact = content.replace(/\s+/g, '')
+    return compact.length < 500
+  }
+
+  async function extractPageViaTavily(targetUrl: string) {
+    const response = await tavilyExtract({
+      urls: targetUrl,
+      extractDepth: 'advanced',
+      format: 'markdown',
+      timeout: 20,
+    })
+    const result = response.results[0]
+    const content = result?.rawContent?.trim() || ''
+    if (!content) {
+      const failedReason = response.failedResults[0]?.error
+      throw new LinkCaptureError(failedReason || 'Tavily Extract 未返回可用正文', 'parse')
+    }
+
+    const title = getTitleFromMarkdown(content, targetUrl)
+    return {
+      title,
+      metaDesc: '通过 Tavily Extract 提取',
+      mainContent: content.slice(0, 20000),
+      bodyText: content.slice(0, 20000),
+      url: targetUrl,
+    }
+  }
+
   // 清空输入框
   function handleClear() {
     setUrl('')
+    setErrorMessage('')
   }
 
   async function handleSuccess() {
     if (!url) return
-    let targetUrl = url
+    setErrorMessage('')
+
+    let targetUrl = url.trim()
     if (!targetUrl.startsWith('http')) {
       targetUrl = `https://${targetUrl}`
       setUrl(targetUrl)
@@ -169,56 +309,146 @@ export function ControlLink() {
     
     try {
       setQueue(queueId, { progress: '30%' });
-      
-      // 使用 Tauri 的 HTTP 插件获取页面内容
-      const response = await fetch(targetUrl, {
-        method: 'GET',
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP 错误: ${response.status}`);
-      }
-      
-      setQueue(queueId, { progress: '60%' });
-      
-      // 获取 HTML 内容
-      const html = await response.text();
 
-      // 创建一个 DOMParser 来解析 HTML
-      const pageContent = await parseHtmlContent(html, targetUrl);
-      
-      setQueue(queueId, { progress: '90%' });
-      
-      if (pageContent.error) {
-        throw new Error(pageContent.error);
+      let pageContent: ParsedWebPageContent
+      try {
+        // 使用 Tauri 的 HTTP 插件快速获取页面内容
+        const response = await tauriFetch(targetUrl, {
+          method: 'GET',
+          connectTimeout: 12000,
+          maxRedirections: 5,
+          headers: {
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.1',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'identity',
+          },
+        });
+
+        if (!response.ok) {
+          throw new LinkCaptureError(`HTTP 错误: ${response.status}`, 'http', {
+            status: response.status,
+          })
+        }
+
+        const contentType = (response.headers.get('content-type') || '').toLowerCase()
+        const isTextLike =
+          !contentType
+          || contentType.includes('text/')
+          || contentType.includes('application/xhtml+xml')
+          || contentType.includes('application/xml')
+          || contentType.includes('application/json')
+        if (!isTextLike) {
+          throw new LinkCaptureError(
+            `当前链接返回的不是可解析网页内容（Content-Type: ${contentType}）`,
+            'non_text',
+            { contentType }
+          )
+        }
+
+        setQueue(queueId, { progress: '60%' });
+
+        const html = await extractResponseText(response);
+        pageContent = parseWebPageContent(html, targetUrl);
+        const directContent = pageContent.mainContent || pageContent.bodyText || pageContent.metaDesc
+        if (shouldFallbackToTavily(directContent || '')) {
+          setQueue(queueId, { progress: '70%' });
+          pageContent = await extractPageViaTavily(targetUrl)
+        }
+      } catch (directError) {
+        const typedError = toLinkCaptureError(directError)
+        if (typedError.code === 'unknown') {
+          throw typedError
+        }
+
+        setQueue(queueId, { progress: '70%' });
+        pageContent = await extractPageViaTavily(targetUrl)
       }
-      
+
+      setQueue(queueId, { progress: '90%' });
+
       // 提取有用的内容
       const { title, metaDesc, mainContent, bodyText } = pageContent;
-      
+
       // 构建描述
-      const desc = `${title}\n${metaDesc}`;
-      
+      let desc = [title, metaDesc].filter(Boolean).join('\n');
+
       // 构建内容（优先使用主要内容，如果没有则使用正文）
-      const content = mainContent || bodyText;
-      
+      let content = mainContent || bodyText || metaDesc || `来源链接：${targetUrl}`;
+
+      if (!content.trim()) {
+        throw new LinkCaptureError('网页解析结果为空', 'parse')
+      }
+
       // 保存到数据库
-      await insertMark({ 
-        tagId: currentTagId, 
-        type: 'link', 
-        desc: desc, 
+      const insertResult = await insertMark({
+        tagId: currentTagId,
+        type: 'link',
+        desc: desc,
         content: content,
-        url: targetUrl 
+        url: targetUrl
       });
-      
+
+      setQueue(queueId, { progress: '100%' });
       await fetchMarks();
       await fetchTags();
       getCurrentTag();
-      
+
       setUrl('');
       setOpen(false);
+
+      // 保存后后台异步整理，避免阻塞弹窗
+      const insertedId = Number(insertResult.lastInsertId || 0)
+      if (organizeAfterSave && insertedId > 0) {
+        toast({
+          title: '链接已保存',
+          description: 'AI 正在后台整理内容，你可以继续操作。',
+        })
+
+        void (async () => {
+          try {
+            const organized = await organizeLinkRecord({
+              url: targetUrl,
+              title,
+              metaDesc,
+              content,
+            })
+            if (!organized) {
+              return
+            }
+
+            // 读取最新记录并更新
+            await fetchMarks()
+            const { marks, updateMark: updateMarkInStore } = useMarkStore.getState()
+            const targetMark = marks.find(item => item.id === insertedId)
+            if (!targetMark) {
+              return
+            }
+
+            await updateMarkInStore({
+              ...targetMark,
+              desc: organized.desc || targetMark.desc,
+              content: organized.content || targetMark.content,
+            })
+
+            toast({
+              title: 'AI 整理完成',
+              description: '链接内容已优化为结构化摘要。',
+            })
+          } catch (backgroundError) {
+            console.error('Background link organize failed:', backgroundError)
+          }
+        })()
+      }
       
     } catch (error) {
+      const typedError = toLinkCaptureError(error)
+      const message = getLinkErrorMessage(typedError)
+      setErrorMessage(message)
+      toast({
+        title: '链接处理失败',
+        description: message,
+        variant: 'destructive',
+      })
       console.error('Error crawling page:', error);
     } finally {
       removeQueue(queueId);
@@ -226,64 +456,158 @@ export function ControlLink() {
     }
   }
 
-  // 在浏览器环境中解析 HTML 内容
-  function parseHtmlContent(html: string, url: string): Promise<any> {
-    return new Promise((resolve) => {
-      try {
-        // 创建一个临时的 div 元素
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        
-        // 获取页面标题
-        const title = doc.title || new URL(url).hostname;
-        
-        // 获取元描述
-        const metaDesc = doc.querySelector('meta[name="description"]')?.getAttribute('content') || '';
-        
-        // 尝试获取主要内容
-        let mainContent = '';
-        const mainElement = doc.querySelector('main') || 
-                           doc.querySelector('article') || 
-                           doc.querySelector('#content') || 
-                           doc.querySelector('.content');
-        
-        if (mainElement) {
-          mainContent = mainElement.textContent || '';
+  async function extractResponseText(response: Response): Promise<string> {
+    const contentType = response.headers.get('content-type')
+    const contentEncoding = response.headers.get('content-encoding') || ''
+    const fallbackResponse = response.clone()
+
+    try {
+      const sourceBuffer = await response.arrayBuffer()
+      const sourceBytes = new Uint8Array(sourceBuffer)
+
+      let text = decodeBestEffortText(sourceBytes, contentType)
+      if (looksLikeGarbledText(text) && contentEncoding) {
+        const decompressed = await decompressBytes(sourceBytes, contentEncoding)
+        if (decompressed) {
+          const decompressedText = decodeBestEffortText(decompressed, contentType)
+          if (!looksLikeGarbledText(decompressedText) || decompressedText.length > text.length) {
+            text = decompressedText
+          }
         }
-        
-        // 获取所有文本内容作为备选
-        let bodyText = '';
-        if (doc.body) {
-          bodyText = doc.body.textContent || '';
-        }
-        
-        // 限制文本长度
-        if (mainContent.length > 10000) {
-          mainContent = mainContent.substring(0, 10000);
-        }
-        
-        if (bodyText.length > 10000) {
-          bodyText = bodyText.substring(0, 10000);
-        }
-        
-        resolve({
-          title,
-          metaDesc,
-          mainContent,
-          bodyText,
-          url
-        });
-      } catch (error) {
-        resolve({ 
-          error: `解析 HTML 内容失败: ${error}`,
-          title: new URL(url).hostname,
-          metaDesc: '',
-          mainContent: '',
-          bodyText: '',
-          url
-        });
       }
-    });
+
+      if (!looksLikeGarbledText(text)) {
+        return text
+      }
+    } catch {
+      // 忽略并使用 text() 回退
+    }
+
+    return await fallbackResponse.text()
+  }
+
+  function decodeBestEffortText(bytes: Uint8Array, contentType: string | null): string {
+    const charset = extractCharset(contentType)
+    const candidates = [charset, 'utf-8', 'gb18030', 'gbk', 'big5']
+      .filter((item, index, arr): item is string => !!item && arr.indexOf(item) === index)
+    let best = ''
+    let bestScore = Number.NEGATIVE_INFINITY
+
+    for (const encoding of candidates) {
+      try {
+        const decoded = new TextDecoder(encoding).decode(bytes)
+        const score = getTextScore(decoded)
+        if (score > bestScore) {
+          best = decoded
+          bestScore = score
+        }
+      } catch {
+        // ignore unsupported encoding
+      }
+    }
+
+    if (best) {
+      return best
+    }
+
+    try {
+      return new TextDecoder().decode(bytes)
+    } catch {
+      return ''
+    }
+  }
+
+  function extractCharset(contentType: string | null): string | null {
+    if (!contentType) {
+      return null
+    }
+    const match = contentType.match(/charset=([^\s;]+)/i)
+    return match?.[1]?.trim().toLowerCase() || null
+  }
+
+  function getTextScore(text: string): number {
+    if (!text) {
+      return Number.NEGATIVE_INFINITY
+    }
+    const length = text.length || 1
+    const replacementCount = (text.match(/\uFFFD/g) || []).length
+    const replacementRatio = replacementCount / length
+    const controlCount = (text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g) || []).length
+    const controlRatio = controlCount / length
+
+    let score = 0
+    if (/<html[\s>]/i.test(text)) score += 40
+    if (/<body[\s>]/i.test(text)) score += 20
+    if (/<title[\s>]/i.test(text)) score += 10
+    score -= replacementRatio * 300
+    score -= controlRatio * 200
+    return score
+  }
+
+  function looksLikeGarbledText(text: string): boolean {
+    if (!text) {
+      return true
+    }
+    const length = text.length
+    if (length < 20) {
+      return false
+    }
+
+    const replacementCount = (text.match(/\uFFFD/g) || []).length
+    const replacementRatio = replacementCount / length
+    if (replacementRatio > 0.02) {
+      return true
+    }
+
+    const controlCount = (text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g) || []).length
+    const controlRatio = controlCount / length
+    if (controlRatio > 0.01) {
+      return true
+    }
+
+    return false
+  }
+
+  async function decompressBytes(bytes: Uint8Array, encodingHeader: string): Promise<Uint8Array | null> {
+    if (typeof DecompressionStream === 'undefined') {
+      return null
+    }
+
+    const encodings = encodingHeader
+      .split(',')
+      .map(item => item.trim().toLowerCase())
+      .filter(Boolean)
+
+    if (encodings.length === 0) {
+      return null
+    }
+
+    let result = bytes
+    let decompressed = false
+
+    for (let index = encodings.length - 1; index >= 0; index--) {
+      const encoding = encodings[index]
+      const format: 'gzip' | 'deflate' | null = encoding === 'x-gzip'
+        ? 'gzip'
+        : encoding === 'gzip' || encoding === 'deflate'
+          ? encoding
+          : null
+
+      if (!format) {
+        continue
+      }
+
+      try {
+        const stream = new Blob([result]).stream().pipeThrough(new DecompressionStream(format))
+        const decompressedBuffer = await new Response(stream).arrayBuffer()
+        result = new Uint8Array(decompressedBuffer)
+        decompressed = true
+      } catch {
+        return null
+      }
+    }
+
+    return decompressed ? result : null
   }
 
   return (
@@ -320,19 +644,35 @@ export function ControlLink() {
               </div>
             </div>
             <DrawerFooter className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="auto-read-clipboard-mobile"
-                  checked={autoReadClipboard}
-                  onCheckedChange={(checked) => handleAutoReadChange(checked === true)}
-                  disabled={loading}
-                />
-                <Label
-                  htmlFor="auto-read-clipboard-mobile"
-                  className="text-sm cursor-pointer"
-                >
-                  {t('record.mark.link.autoReadClipboard') || '自动读取剪贴板链接'}
-                </Label>
+              <div className="flex items-center gap-4 whitespace-nowrap">
+                <div className="flex items-center gap-2 whitespace-nowrap">
+                  <Checkbox
+                    id="auto-read-clipboard-mobile"
+                    checked={autoReadClipboard}
+                    onCheckedChange={(checked) => handleAutoReadChange(checked === true)}
+                    disabled={loading}
+                  />
+                  <Label
+                    htmlFor="auto-read-clipboard-mobile"
+                    className="text-sm cursor-pointer"
+                  >
+                    {t('record.mark.link.autoReadClipboard') || '自动读取剪贴板链接'}
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2 whitespace-nowrap">
+                  <Checkbox
+                    id="auto-organize-link-mobile"
+                    checked={organizeAfterSave}
+                    onCheckedChange={(checked) => handleOrganizeChange(checked === true)}
+                    disabled={loading}
+                  />
+                  <Label
+                    htmlFor="auto-organize-link-mobile"
+                    className="text-sm cursor-pointer"
+                  >
+                    保存后 AI 整理
+                  </Label>
+                </div>
               </div>
               <div className="flex items-center gap-4">
                 <p className="text-sm text-zinc-500">
@@ -347,6 +687,11 @@ export function ControlLink() {
                 </Button>
               </div>
             </DrawerFooter>
+            {errorMessage ? (
+              <div className="px-4 pb-4 text-sm text-red-600">
+                {errorMessage}
+              </div>
+            ) : null}
           </DrawerContent>
         </Drawer>
       ) : (
@@ -379,19 +724,35 @@ export function ControlLink() {
               )}
             </div>
             <DialogFooter className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="auto-read-clipboard"
-                  checked={autoReadClipboard}
-                  onCheckedChange={(checked) => handleAutoReadChange(checked === true)}
-                  disabled={loading}
-                />
-                <Label
-                  htmlFor="auto-read-clipboard"
-                  className="text-sm cursor-pointer"
-                >
-                  {t('record.mark.link.autoReadClipboard') || '自动读取剪贴板链接'}
-                </Label>
+              <div className="flex items-center gap-4 whitespace-nowrap">
+                <div className="flex items-center gap-2 whitespace-nowrap">
+                  <Checkbox
+                    id="auto-read-clipboard"
+                    checked={autoReadClipboard}
+                    onCheckedChange={(checked) => handleAutoReadChange(checked === true)}
+                    disabled={loading}
+                  />
+                  <Label
+                    htmlFor="auto-read-clipboard"
+                    className="text-sm cursor-pointer"
+                  >
+                    {t('record.mark.link.autoReadClipboard') || '自动读取剪贴板链接'}
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2 whitespace-nowrap">
+                  <Checkbox
+                    id="auto-organize-link"
+                    checked={organizeAfterSave}
+                    onCheckedChange={(checked) => handleOrganizeChange(checked === true)}
+                    disabled={loading}
+                  />
+                  <Label
+                    htmlFor="auto-organize-link"
+                    className="text-sm cursor-pointer"
+                  >
+                    保存后 AI 整理
+                  </Label>
+                </div>
               </div>
               <div className="flex items-center gap-4">
                 <p className="text-sm text-zinc-500">
@@ -406,6 +767,11 @@ export function ControlLink() {
                 </Button>
               </div>
             </DialogFooter>
+            {errorMessage ? (
+              <div className="text-sm text-red-600">
+                {errorMessage}
+              </div>
+            ) : null}
           </DialogContent>
         </Dialog>
       )}

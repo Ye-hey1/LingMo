@@ -8,11 +8,15 @@ import { writeText } from "tauri-plugin-clipboard-api"
 interface CopyControlProps {
   chat: Chat
   translatedContent?: string
+  compact?: boolean
 }
 
-export function CopyControl({ chat, translatedContent }: CopyControlProps) {
+export function CopyControl({ chat, translatedContent, compact = false }: CopyControlProps) {
   const t = useTranslations()
   const [isCopied, setIsCopied] = useState(false)
+  const actionButtonClass = compact
+    ? "size-6 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+    : "size-6.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
   
   // 处理复制功能
   async function handleCopy() {
@@ -63,6 +67,7 @@ export function CopyControl({ chat, translatedContent }: CopyControlProps) {
         onClick={handleCopy}
         variant="ghost"
         size="sm"
+        buttonClassName={actionButtonClass}
         disabled={isCopied}
       />
     </>

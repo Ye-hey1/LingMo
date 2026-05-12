@@ -1,7 +1,7 @@
 'use client'
 
 import { Editor } from '@tiptap/react'
-import { Heading1, Heading2, Heading3 } from 'lucide-react'
+import { ListTree } from 'lucide-react'
 import { useCallback, useEffect, useState, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { getOutlineHeadingTextClass, getOutlinePanelClass } from '@/lib/outline-styles'
@@ -31,6 +31,23 @@ interface OutlineProps {
   onHeadingSelect?: () => void
 }
 
+const HEADING_SCROLL_OFFSET = 88
+
+function isImplicitOutlineHeading(text: string): boolean {
+  const trimmed = text.trim()
+
+  if (
+    !trimmed ||
+    trimmed.length > 90 ||
+    trimmed.includes('|') ||
+    /[。；;:]$/.test(trimmed)
+  ) {
+    return false
+  }
+
+  return /^(?:第?[一二三四五六七八九十百千万]+[章节部分]?|[0-9]{1,2})[、．.]\s*\S/.test(trimmed)
+}
+
 function OutlineItems({
   headings,
   activeHeadingId,
@@ -41,32 +58,42 @@ function OutlineItems({
   onSelect: (id: string) => void
 }) {
   return headings.length === 0 ? (
-    <div className="p-4 text-sm text-[hsl(var(--muted-foreground))] text-center">
+    <div className="px-4 py-10 text-center text-sm text-[hsl(var(--muted-foreground))]">
       暂无标题
     </div>
   ) : (
-    <ul className="p-2 space-y-1">
-      {headings.map((heading) => (
-        <li key={heading.id}>
-          <button
-            id={`outline-${heading.id}`}
-            onClick={() => onSelect(heading.id)}
-            className={cn(
-              'w-full min-w-0 text-left px-2 py-1.5 rounded text-sm hover:bg-[hsl(var(--muted))] flex items-start gap-2 transition-colors',
-              heading.level === 1 ? 'font-semibold' : '',
-              activeHeadingId === heading.id
-                ? 'bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))]'
-                : ''
-            )}
-            style={{ paddingLeft: `${(heading.level - 1) * 12 + 8}px` }}
-          >
-            {heading.level === 1 && <Heading1 size={14} className="shrink-0 mt-0.5" />}
-            {heading.level === 2 && <Heading2 size={14} className="shrink-0 mt-0.5" />}
-            {heading.level === 3 && <Heading3 size={14} className="shrink-0 mt-0.5" />}
-            <span className={getOutlineHeadingTextClass()}>{heading.text}</span>
-          </button>
-        </li>
-      ))}
+    <ul className="space-y-0.5 px-3 pb-5">
+      {headings.map((heading) => {
+        const active = activeHeadingId === heading.id
+        const level = Math.min(Math.max(heading.level, 1), 6)
+
+        return (
+          <li key={heading.id}>
+            <button
+              id={`outline-${heading.id}`}
+              onClick={() => onSelect(heading.id)}
+              className={cn(
+                'group relative flex h-9 w-full min-w-0 items-center rounded-md pr-2 text-left text-[15px] transition-colors',
+                'hover:bg-muted/60',
+                level === 1 && 'font-semibold',
+                level > 1 && 'text-[hsl(var(--muted-foreground))]',
+                level >= 4 && 'text-sm',
+                active && 'bg-transparent !text-[#1677ff]',
+              )}
+              style={{ paddingLeft: `${(level - 1) * 16 + 12}px` }}
+              title={heading.text}
+            >
+              <span
+                className={cn(
+                  'absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-transparent',
+                  active && 'bg-[#1677ff]',
+                )}
+              />
+              <span className={getOutlineHeadingTextClass()}>{heading.text}</span>
+            </button>
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -87,6 +114,14 @@ export function Outline({
   // Track if editor is ready - use both ref and state
   const isEditorReadyRef = useRef(false)
   const [isReady, setIsReady] = useState(false)
+
+  const getEditorScrollContainer = useCallback(() => {
+    const editorElement = editor?.view?.dom as HTMLElement | undefined
+    if (!editorElement) return null
+
+    return editorElement.closest('.overflow-y-auto') as HTMLElement | null
+      || editorElement.parentElement
+  }, [editor])
 
   // Check if editor is ready - wait for view to be available
   useEffect(() => {
@@ -137,7 +172,9 @@ export function Outline({
     if (!editor) return []
 
     const items: HeadingItem[] = []
+    const fallbackItems: HeadingItem[] = []
     let index = 0
+    let fallbackIndex = 0
 
     editor.state.doc.descendants((node, pos) => {
       if (node.type.name === 'heading') {
@@ -155,24 +192,33 @@ export function Outline({
         })
         index++
       }
+
+      if (node.type.name === 'paragraph') {
+        const text = node.textContent.trim()
+
+        if (isImplicitOutlineHeading(text)) {
+          fallbackItems.push({
+            level: 2,
+            text,
+            id: `implicit-heading-${fallbackIndex}-${text.slice(0, 20)}`,
+            pos,
+            nodeSize: node.nodeSize,
+          })
+          fallbackIndex++
+        }
+      }
     })
 
-    return items
+    return items.length > 0 ? items : fallbackItems
   }, [editor])
 
   // Find the active heading based on cursor position
   const findActiveHeading = useCallback((cursorPos: number): string | null => {
     if (headings.length === 0) return null
 
-    // Find the heading that contains the cursor position
     for (let i = headings.length - 1; i >= 0; i--) {
       const heading = headings[i]
-      const endPos = heading.pos + heading.nodeSize
-      if (cursorPos >= heading.pos && cursorPos <= endPos) {
-        return heading.id
-      }
-      // Also check if cursor is right after the heading (at the start of next content)
-      if (i === headings.length - 1 && cursorPos <= endPos) {
+      if (cursorPos >= heading.pos) {
         return heading.id
       }
     }
@@ -224,27 +270,47 @@ export function Outline({
     // Check if editor is fully initialized - use isEditorReadyRef
     if (!isEditorReadyRef.current || headings.length === 0) return null
 
-    // Get the editor's scrollable element
-    const editorElement = editor.view.dom as HTMLElement
-    const scrollTop = editorElement.scrollTop
-    const viewportTop = scrollTop + 100 // Add some offset for better UX
+    const scrollContainer = getEditorScrollContainer()
+    if (!scrollContainer) return headings[0]?.id || null
 
-    // Find the first heading that is above or near the viewport top
+    const scrollTop = scrollContainer.scrollTop
+    const viewportTop = scrollTop + 100 // Add some offset for better UX
+    const containerRect = scrollContainer.getBoundingClientRect()
+    let activeId: string | null = null
+
     for (const heading of headings) {
       const domNode = editor.view.nodeDOM(heading.pos) as HTMLElement | undefined
       if (domNode) {
         const rect = domNode.getBoundingClientRect()
-        const editorRect = editorElement.getBoundingClientRect()
-        const relativeTop = rect.top - editorRect.top + scrollTop
+        const relativeTop = rect.top - containerRect.top + scrollTop
 
         if (relativeTop <= viewportTop) {
-          return heading.id
+          activeId = heading.id
+        } else {
+          break
         }
       }
     }
 
-    return headings[0]?.id || null
-  }, [editor, headings])
+    return activeId || headings[0]?.id || null
+  }, [editor, getEditorScrollContainer, headings])
+
+  const resolveActiveHeading = useCallback((source: 'selection' | 'viewport' = 'viewport'): string | null => {
+    if (headings.length === 0) return null
+
+    const { from } = editor.state.selection
+    const scrollActiveId = findActiveHeadingByScroll()
+    const cursorActiveId = findActiveHeading(from)
+
+    if (source === 'selection') {
+      if (editor.view.hasFocus()) {
+        return cursorActiveId || scrollActiveId || headings[0]?.id || null
+      }
+      return scrollActiveId || cursorActiveId || headings[0]?.id || null
+    }
+
+    return scrollActiveId || cursorActiveId || headings[0]?.id || null
+  }, [editor, findActiveHeading, findActiveHeadingByScroll, headings])
 
   // Update active heading when selection or scroll changes
   useEffect(() => {
@@ -252,34 +318,61 @@ export function Outline({
     if (!editor || !editor.view || !editor.view.dom) return
 
     const updateActiveHeading = () => {
-      // First try to get heading from cursor position
-      const { from } = editor.state.selection
-      const activeId = findActiveHeading(from)
+      const activeId = resolveActiveHeading('selection')
       setActiveHeadingId(activeId)
     }
 
     // Handle scroll - update based on viewport position
     const handleScroll = () => {
-      const scrollActiveId = findActiveHeadingByScroll()
+      const scrollActiveId = resolveActiveHeading('viewport')
       if (scrollActiveId) {
         setActiveHeadingId(scrollActiveId)
       }
     }
 
-    updateActiveHeading()
+    handleScroll()
     editor.on('selectionUpdate', updateActiveHeading)
     editor.on('transaction', updateActiveHeading)
 
-    // Add scroll listener to editor element
-    const editorElement = editor.view.dom as HTMLElement
-    editorElement.addEventListener('scroll', handleScroll)
+    const scrollContainer = getEditorScrollContainer()
+    scrollContainer?.addEventListener('scroll', handleScroll, { passive: true })
 
     return () => {
       editor.off('selectionUpdate', updateActiveHeading)
       editor.off('transaction', updateActiveHeading)
-      editorElement.removeEventListener('scroll', handleScroll)
+      scrollContainer?.removeEventListener('scroll', handleScroll)
     }
-  }, [editor, findActiveHeading, findActiveHeadingByScroll, headings])
+  }, [editor, getEditorScrollContainer, resolveActiveHeading])
+
+  // When outline opens (especially hover panel), re-sync active heading by viewport first.
+  useEffect(() => {
+    if (!isOpen) return
+
+    const raf = requestAnimationFrame(() => {
+      setActiveHeadingId(resolveActiveHeading('viewport'))
+    })
+
+    return () => cancelAnimationFrame(raf)
+  }, [isOpen, resolveActiveHeading])
+
+  const scrollHeadingIntoView = useCallback((heading: HeadingItem) => {
+    const scrollContainer = getEditorScrollContainer()
+    const headingElement = editor.view.nodeDOM(heading.pos) as HTMLElement | null
+
+    if (!scrollContainer || !headingElement) {
+      editor.commands.scrollIntoView()
+      return
+    }
+
+    const containerRect = scrollContainer.getBoundingClientRect()
+    const headingRect = headingElement.getBoundingClientRect()
+    const targetTop = scrollContainer.scrollTop + headingRect.top - containerRect.top - HEADING_SCROLL_OFFSET
+
+    scrollContainer.scrollTo({
+      top: Math.max(0, targetTop),
+      behavior: 'smooth',
+    })
+  }, [editor, getEditorScrollContainer])
 
   // Scroll to heading when clicked
   const scrollToHeading = useCallback((id: string) => {
@@ -287,24 +380,22 @@ export function Outline({
     const currentHeadings = headingsRef.current
     const heading = currentHeadings.find(h => h.id === id)
     if (heading && editor) {
-      // Use stored position directly - it's calculated from current document
-      const targetPos = heading.pos
+      const targetPos = Math.min(heading.pos + 1, editor.state.doc.content.size)
 
       // First, focus the editor to ensure it can receive commands
       editor.commands.focus()
 
-      // Then set the selection to the heading position
+      // Then set the selection inside the heading, not before the heading node.
       editor.commands.setTextSelection(targetPos)
 
-      // Then scroll into view
-      // Use setTimeout to ensure the selection is applied first
-      setTimeout(() => {
-        editor.commands.scrollIntoView()
-      }, 0)
+      requestAnimationFrame(() => {
+        scrollHeadingIntoView(heading)
+        setActiveHeadingId(heading.id)
+      })
 
       onHeadingSelect?.()
     }
-  }, [editor, onHeadingSelect])
+  }, [editor, onHeadingSelect, scrollHeadingIntoView])
 
   // Auto-scroll to keep active heading visible
   useEffect(() => {
@@ -330,7 +421,7 @@ export function Outline({
           <DrawerHeader className="pb-2">
             <DrawerTitle>{t('outline.title')}</DrawerTitle>
           </DrawerHeader>
-          <div className="overflow-y-auto px-2 pb-4">
+          <div className="overflow-y-auto px-1 pb-4">
             <OutlineItems
               headings={headings}
               activeHeadingId={activeHeadingId}
@@ -344,11 +435,19 @@ export function Outline({
 
   return (
     <div className={getOutlinePanelClass(position, floating)}>
-      <OutlineItems
-        headings={headings}
-        activeHeadingId={activeHeadingId}
-        onSelect={scrollToHeading}
-      />
+      <div className="flex h-full min-h-0 flex-col bg-background/95 shadow-lg backdrop-blur">
+        <div className="flex h-11 shrink-0 items-center gap-2 px-4 text-[13px] font-medium text-[hsl(var(--muted-foreground))]">
+          <ListTree className="h-4 w-4" />
+          <span>{t('outline.title')}</span>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto outline-panel-scroll">
+          <OutlineItems
+            headings={headings}
+            activeHeadingId={activeHeadingId}
+            onSelect={scrollToHeading}
+          />
+        </div>
+      </div>
     </div>
   )
 }

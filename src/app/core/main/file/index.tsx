@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState, useCallback, useRef } from "react"
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react"
 import { FileManager } from "./file-manager"
 import { FileFooter } from "./file-footer"
 import useArticleStore from "@/stores/article"
@@ -8,6 +8,15 @@ import useClipboardStore from "@/stores/clipboard"
 import { isMobileDevice } from "@/lib/check"
 import { platform } from "@tauri-apps/plugin-os"
 import { isEditableKeyboardTarget } from "@/lib/is-editable-keyboard-target"
+import { useTranslations } from "next-intl"
+
+import { FileBrowserHeader } from "./file-browser-header"
+import {
+  applyFileBrowserFilters,
+  collectFileBrowserStats,
+  filterTreeByCloudVisibility,
+  type FileBrowserFilter,
+} from "./file-browser-utils"
 
 type Platform = 'macos' | 'windows' | 'linux' | 'unknown'
 
@@ -229,14 +238,31 @@ function useFileManagerShortcuts() {
 }
 
 export function FileSidebar() {
-  const { initCollapsibleList, initSortSettings, initShowCloudFiles } = useArticleStore()
+  const { fileTree, initCollapsibleList, initSortSettings, initShowCloudFiles, showCloudFiles } = useArticleStore()
   const { sidebarRef, focusSidebar } = useFileManagerShortcuts()
+  const tBrowser = useTranslations('article.file.browser')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [activeFilter, setActiveFilter] = useState<FileBrowserFilter>('all')
 
   useEffect(() => {
     initCollapsibleList()
     initSortSettings()
     initShowCloudFiles()
-  }, [])
+  }, [initCollapsibleList, initSortSettings, initShowCloudFiles])
+
+  const cloudVisibleTree = useMemo(
+    () => filterTreeByCloudVisibility(fileTree, showCloudFiles),
+    [fileTree, showCloudFiles],
+  )
+
+  const filteredTree = useMemo(
+    () => applyFileBrowserFilters(cloudVisibleTree, searchQuery, activeFilter),
+    [activeFilter, cloudVisibleTree, searchQuery],
+  )
+
+  const totalStats = useMemo(() => collectFileBrowserStats(cloudVisibleTree), [cloudVisibleTree])
+  const visibleStats = useMemo(() => collectFileBrowserStats(filteredTree), [filteredTree])
+  const hasActiveFilters = searchQuery.trim().length > 0 || activeFilter !== 'all'
 
   return (
     <div
@@ -245,8 +271,23 @@ export function FileSidebar() {
       className="w-full h-full flex flex-col outline-none"
       tabIndex={-1}
     >
+      <FileBrowserHeader
+        searchQuery={searchQuery}
+        onSearchQueryChange={setSearchQuery}
+        activeFilter={activeFilter}
+        onFilterChange={setActiveFilter}
+        visibleStats={visibleStats}
+        totalStats={totalStats}
+      />
       <div className="flex-1 overflow-x-hidden overflow-y-auto">
-        <FileManager focusSidebar={focusSidebar} />
+        {hasActiveFilters && filteredTree.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+            <p className="text-sm font-medium text-foreground">{tBrowser('emptyTitle')}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{tBrowser('emptyDescription')}</p>
+          </div>
+        ) : (
+          <FileManager focusSidebar={focusSidebar} tree={filteredTree} forceExpanded={hasActiveFilters} />
+        )}
       </div>
       <FileFooter />
     </div>

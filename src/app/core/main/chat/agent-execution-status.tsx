@@ -1,6 +1,11 @@
 import * as React from "react"
 import useChatStore from "@/stores/chat"
 import { AgentPanelWithRag } from "./agent-panel-with-rag"
+import type { AgentApprovalScope } from "@/lib/agent/types"
+import {
+  recordPersistentApprovalHistory,
+  rememberPersistentAgentApproval,
+} from "@/lib/agent/persistent-approval"
 
 /**
  * Agent execution status component - displays real-time agent execution state
@@ -16,7 +21,7 @@ export function AgentExecutionStatus() {
   } = useChatStore()
 
   // Handle confirmation
-  const handleConfirm = (scope: 'once' | 'conversation' = 'once') => {
+  const handleConfirm = async (scope: AgentApprovalScope = 'once') => {
     if (!agentState.pendingConfirmation) return
 
     const confirmationRecord = {
@@ -38,6 +43,20 @@ export function AgentExecutionStatus() {
       )
     }
 
+    try {
+      if (scope === 'always-tool' || scope === 'always-folder' || scope === 'always-readonly') {
+        await rememberPersistentAgentApproval(
+          scope,
+          agentState.pendingConfirmation.toolName,
+          agentState.pendingConfirmation.params
+        )
+      }
+
+      await recordPersistentApprovalHistory(confirmationRecord, currentConversationId)
+    } catch (error) {
+      console.error('[Agent Approval] Failed to persist approval decision:', error)
+    }
+
     // Confirm while keeping isRunning: true, only clear pendingConfirmation
     setAgentState({
       pendingConfirmation: undefined,
@@ -46,7 +65,7 @@ export function AgentExecutionStatus() {
     })
   }
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
     if (!agentState.pendingConfirmation) return
 
     const confirmationRecord = {
@@ -54,6 +73,12 @@ export function AgentExecutionStatus() {
       params: agentState.pendingConfirmation.params,
       status: 'cancelled' as const,
       timestamp: Date.now()
+    }
+
+    try {
+      await recordPersistentApprovalHistory(confirmationRecord, currentConversationId)
+    } catch (error) {
+      console.error('[Agent Approval] Failed to persist cancelled approval:', error)
     }
 
     // Cancel and stop agent execution

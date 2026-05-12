@@ -67,6 +67,7 @@ interface SkillsV2State {
   loading: boolean
   scanning: boolean
   installing: boolean
+  deletingSkillId: string | null
   previewing: boolean
   previewSkills: PreviewSkill[]
   marketSkills: MarketSkill[]
@@ -105,6 +106,7 @@ export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
   loading: false,
   scanning: false,
   installing: false,
+  deletingSkillId: null,
   previewing: false,
   previewSkills: [],
   marketSkills: [],
@@ -122,9 +124,16 @@ export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
   },
 
   deleteSkill: async (id) => {
-    await invoke('skill_v2_delete', { id })
-    const skills = get().skills.filter(s => s.id !== id)
-    set({ skills })
+    set({ deletingSkillId: id })
+    try {
+      await invoke('skill_v2_delete', { id })
+      set({
+        skills: get().skills.filter(s => s.id !== id),
+        scenarioSkills: get().scenarioSkills.filter(s => s.id !== id),
+      })
+    } finally {
+      set(state => state.deletingSkillId === id ? { deletingSkillId: null } : {})
+    }
   },
 
   setEnabled: async (id, enabled) => {

@@ -15,7 +15,8 @@ import {
   Undo
 } from 'lucide-react'
 import { getWorkspacePath, getFilePathOptions } from '@/lib/workspace'
-import { readFile, writeFile } from '@tauri-apps/plugin-fs'
+import { writeFile } from '@tauri-apps/plugin-fs'
+import { readWorkspaceBinaryFile } from '@/lib/file-binary'
 import { toast } from '@/hooks/use-toast'
 import useArticleStore from '@/stores/article'
 import { Separator } from '@/components/ui/separator'
@@ -87,15 +88,7 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
     
     try {
       setLoading(true)
-      const workspace = await getWorkspacePath()
-      const pathOptions = await getFilePathOptions(filePath)
-      
-      let imageData: Uint8Array
-      if (workspace.isCustom) {
-        imageData = await readFile(pathOptions.path)
-      } else {
-        imageData = await readFile(pathOptions.path, { baseDir: pathOptions.baseDir })
-      }
+      const imageData = await readWorkspaceBinaryFile(filePath)
       
       setOriginalImageData(imageData)
       

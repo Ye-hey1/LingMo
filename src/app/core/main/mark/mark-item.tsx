@@ -1,6 +1,6 @@
 'use client'
 import React from "react"
-import { delMark, delMarkForever, Mark, restoreMark, updateMark } from "@/db/marks";
+import { delMark, delMarkForever, Mark, pinMark, unpinMark, restoreMark, updateMark, TRASH_RETENTION_DAYS } from "@/db/marks";
 import { useTranslations } from 'next-intl';
 import {
   ContextMenu,
@@ -21,7 +21,7 @@ import { LocalImage } from "@/components/local-image";
 import { fetchAiDesc } from "@/lib/ai/description";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { appDataDir } from "@tauri-apps/api/path";
-import { CheckSquare, ImageUp, Pencil, RefreshCw, Save, Settings2, Square } from "lucide-react";
+import { CheckSquare, ImageUp, Pencil, Pin, PinOff, RefreshCw, Save, Settings2, Square } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,6 +41,9 @@ import { getMarkTypeListBadgeClasses } from "./mark-type-meta";
 import { getMarkListItemContent } from "./mark-list-item-content";
 import { TodoEditTrigger } from "./todo-edit-button";
 import { canOpenMarkSource, getMarkOpenAction } from "./mark-open-path";
+import useArticleStore from "@/stores/article";
+import { useSidebarStore } from "@/stores/sidebar";
+import { appendRecordsToNote, createNoteFromRecords } from "@/lib/record-to-note";
 
 dayjs.extend(relativeTime)
 
@@ -110,7 +113,6 @@ const DetailViewer = React.memo(({mark, content, path, className}: {mark: Mark, 
 
   // For text type, always show Textarea
   const showEditor = isTextType || isEditing
-
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -179,6 +181,18 @@ DetailViewer.displayName = 'DetailViewer'
 
 export type MarkItemVariant = 'list' | 'compact' | 'cards'
 
+function MarkProcessedChip({ processed }: { processed: boolean }) {
+  if (!processed) {
+    return null
+  }
+
+  return (
+    <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium leading-none text-emerald-700 ring-1 ring-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20">
+      已处理
+    </span>
+  )
+}
+
 export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, variant?: MarkItemVariant}) => {
   const t = useTranslations('record.mark.type');
   const todoT = useTranslations('record.mark.todo');
@@ -191,6 +205,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
   const [isRetryingTranscription, setIsRetryingTranscription] = useState(false);
 
   const lineHeight = useMemo(() => getLineHeight(recordTextSize), [recordTextSize])
+  const isProcessed = mark.processed === 1
   const shouldShowRecordingAction = mark.type === 'recording' && mark.content === NO_TRANSCRIPTION_MESSAGE
   const itemContent = useMemo(() => getMarkListItemContent(mark), [mark])
 
@@ -276,6 +291,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
         <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
           {t(mark.type)}
         </span>
+        <MarkProcessedChip processed={isProcessed} />
         {mark.type === 'todo' && itemContent.todo ? (
           <span className={`size-2 shrink-0 rounded-full ${todoPriorityDotClass}`} />
         ) : null}
@@ -310,6 +326,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
           <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
             {t(mark.type)}
           </span>
+          <MarkProcessedChip processed={isProcessed} />
           {mark.type === 'todo' && itemContent.todo ? (
             <span className={`size-2 shrink-0 rounded-full ${todoPriorityDotClass}`} />
           ) : null}
@@ -379,6 +396,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
             <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
               {t(mark.type)}
             </span>
+            <MarkProcessedChip processed={isProcessed} />
             <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
           </div>
           <DetailViewer mark={mark} content={mark.desc || ''} path="screenshot" />
@@ -391,6 +409,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
             <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
               {t(mark.type)}
             </span>
+            <MarkProcessedChip processed={isProcessed} />
             {mark.url.includes('http') ? <ImageUp className="size-3 text-zinc-400" /> : null}
             <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
           </div>
@@ -404,6 +423,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
             <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
               {t(mark.type)}
             </span>
+            <MarkProcessedChip processed={isProcessed} />
             <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
           </div>
           <DetailViewer mark={mark} content={mark.desc || ''} />
@@ -426,6 +446,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
               <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
                 {t(mark.type)}
               </span>
+              <MarkProcessedChip processed={isProcessed} />
               <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
             </div>
             <DetailViewer mark={mark} content={mark.content || ''} />
@@ -438,6 +459,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
               <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
                 {t(mark.type)}
               </span>
+              <MarkProcessedChip processed={isProcessed} />
               {shouldShowRecordingAction && (
                 <button
                   type="button"
@@ -472,6 +494,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
               <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
                 {t(mark.type)}
               </span>
+              <MarkProcessedChip processed={isProcessed} />
               <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
             </div>
             <DetailViewer mark={mark} content={mark.content || ''} />
@@ -526,8 +549,31 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
     selectedMarkIds,
     clearSelection,
     highlightedMarkId,
+    setMarksProcessed,
   } = useMarkStore()
   const { tags, currentTagId, fetchTags, getCurrentTag } = useTagStore()
+  const {
+    activeFilePath,
+    currentArticle,
+    loadFileTree,
+    setActiveFilePath,
+    setCurrentArticle,
+    saveCurrentArticle,
+  } = useArticleStore()
+  const { setLeftSidebarTab } = useSidebarStore()
+
+  const getActionMarks = useCallback(() => {
+    if (isMultiSelectMode && selectedMarkIds.size > 0) {
+      return marks.filter((item: Mark) => selectedMarkIds.has(item.id))
+    }
+
+    return [mark]
+  }, [isMultiSelectMode, mark, marks, selectedMarkIds])
+
+  const getActionTagName = useCallback((targetMarks: Mark[]) => {
+    const tagId = targetMarks.length === 1 ? targetMarks[0].tagId : currentTagId
+    return tags.find(tag => tag.id === tagId)?.name
+  }, [currentTagId, tags])
 
   const handleDragStart = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (isMultiSelectMode) {
@@ -595,6 +641,16 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
       await fetchMarks()
     }
   }, [mark.id, trashState, fetchAllTrashMarks, fetchMarks])
+
+  const handleTogglePin = useCallback(async (e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    if (mark.pinned === 1) {
+      await unpinMark(mark.id)
+    } else {
+      await pinMark(mark.id)
+    }
+    await fetchMarks()
+  }, [mark.id, mark.pinned, fetchMarks])
 
   const handleTransfer = useCallback(async (tagId: number, e?: React.MouseEvent) => {
     e?.stopPropagation()
@@ -670,6 +726,102 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
     })
   }, [mark.url, t])
 
+  const handleSetProcessed = useCallback(async (processed: boolean, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    const targetMarks = getActionMarks()
+    const ids = targetMarks.map(item => item.id)
+
+    try {
+      await setMarksProcessed(ids, processed)
+      if (isMultiSelectMode) {
+        clearSelection()
+      }
+      toast({
+        title: processed ? '已标记为已处理' : '已标记为未处理',
+        description: `${ids.length} 条记录`,
+      })
+    } catch (error) {
+      toast({
+        title: '更新处理状态失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
+  }, [clearSelection, getActionMarks, isMultiSelectMode, setMarksProcessed])
+
+  const markRecordsAsProcessed = useCallback(async (targetMarks: Mark[]) => {
+    try {
+      await setMarksProcessed(targetMarks.map(item => item.id), true)
+    } catch (error) {
+      console.error('标记记录为已处理失败:', error)
+    }
+  }, [setMarksProcessed])
+
+  const handleCreateNoteFromRecords = useCallback(async (e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    const targetMarks = getActionMarks()
+
+    try {
+      const { filePath } = await createNoteFromRecords(targetMarks, {
+        tagName: getActionTagName(targetMarks),
+      })
+      await loadFileTree({ skipRemoteSync: true })
+      await setLeftSidebarTab('files')
+      setActiveFilePath(filePath)
+      await markRecordsAsProcessed(targetMarks)
+      if (isMultiSelectMode) {
+        clearSelection()
+      }
+      toast({
+        title: '已转为笔记',
+        description: filePath,
+      })
+    } catch (error) {
+      toast({
+        title: '转为笔记失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
+  }, [clearSelection, getActionMarks, getActionTagName, isMultiSelectMode, loadFileTree, markRecordsAsProcessed, setActiveFilePath, setLeftSidebarTab])
+
+  const handleAppendRecordsToCurrentNote = useCallback(async (e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    const targetMarks = getActionMarks()
+
+    if (!activeFilePath || !/\.md$/i.test(activeFilePath)) {
+      toast({
+        title: '请先打开一篇 Markdown 笔记',
+        description: '打开目标笔记后，可以把记录追加到正文末尾。',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    try {
+      const nextContent = await appendRecordsToNote(activeFilePath, targetMarks, {
+        currentContent: currentArticle || undefined,
+        tagName: getActionTagName(targetMarks),
+      })
+      setCurrentArticle(nextContent)
+      await saveCurrentArticle(nextContent)
+      await markRecordsAsProcessed(targetMarks)
+      if (isMultiSelectMode) {
+        clearSelection()
+      }
+      toast({
+        title: '已追加到当前笔记',
+        description: activeFilePath,
+      })
+    } catch (error) {
+      toast({
+        title: '追加失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
+  }, [activeFilePath, clearSelection, currentArticle, getActionMarks, getActionTagName, isMultiSelectMode, markRecordsAsProcessed, saveCurrentArticle, setCurrentArticle])
+
   // Memoize filtered tags to prevent unnecessary re-renders
   const filteredTags = useMemo(() =>
     tags.filter(tag => tag.id !== currentTagId),
@@ -691,6 +843,26 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
+      {!trashState && mark.pinned === 1 ? (
+        <div className="flex items-center gap-1 px-2.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
+          <Pin className="size-2.5" />
+          <span>已置顶</span>
+        </div>
+      ) : null}
+      {trashState && mark.deletedAt ? (
+        <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] text-muted-foreground border-b border-border/50">
+          <span>
+            {(() => {
+              const elapsed = Date.now() - mark.deletedAt
+              const remaining = Math.max(0, Math.ceil((TRASH_RETENTION_DAYS * 86400000 - elapsed) / 86400000))
+              return remaining > 0
+                ? `${remaining} 天后自动删除`
+                : '即将自动删除'
+            })()}
+          </span>
+          <span className="ml-auto">{dayjs(mark.deletedAt).format('MM-DD HH:mm')} 删除</span>
+        </div>
+      ) : null}
       <MarkWrapper mark={mark} variant={variant} />
       <div className="absolute top-2 right-2">
         <MarkMobileActions
@@ -725,6 +897,38 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
       <ContextMenuContent>
         {
           trashState ? null :
+          <>
+            <ContextMenuItem inset onClick={handleCreateNoteFromRecords} menuType="record">
+              {isMultiSelectMode && selectedMarkIds.size > 0
+                ? `转为笔记（${selectedMarkIds.size} 条）`
+                : '转为笔记'}
+            </ContextMenuItem>
+            <ContextMenuItem inset onClick={handleAppendRecordsToCurrentNote} disabled={!activeFilePath || !/\.md$/i.test(activeFilePath)} menuType="record">
+              {isMultiSelectMode && selectedMarkIds.size > 0
+                ? `追加到当前笔记（${selectedMarkIds.size} 条）`
+                : '追加到当前笔记'}
+            </ContextMenuItem>
+            <ContextMenuItem inset onClick={(event) => handleSetProcessed(true, event)} menuType="record">
+              {isMultiSelectMode && selectedMarkIds.size > 0
+                ? `标记为已处理（${selectedMarkIds.size} 条）`
+                : '标记为已处理'}
+            </ContextMenuItem>
+            <ContextMenuItem inset onClick={(event) => handleSetProcessed(false, event)} menuType="record">
+              {isMultiSelectMode && selectedMarkIds.size > 0
+                ? `标记为未处理（${selectedMarkIds.size} 条）`
+                : '标记为未处理'}
+            </ContextMenuItem>
+            <ContextMenuItem inset disabled={isMultiSelectMode} onClick={handleTogglePin} menuType="record">
+              <span className="flex items-center gap-1.5">
+                {mark.pinned === 1 ? <PinOff className="size-3" /> : <Pin className="size-3" />}
+                {mark.pinned === 1 ? '取消置顶' : '置顶'}
+              </span>
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        }
+        {
+          trashState ? null :
           <ContextMenuSub>
             <ContextMenuSubTrigger inset menuType="record">
               {isMultiSelectMode && selectedMarkIds.size > 0
@@ -748,9 +952,6 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
             </ContextMenuSubContent>
           </ContextMenuSub>
         }
-        <ContextMenuItem inset disabled={isMultiSelectMode || true} menuType="record">
-          {t('record.mark.toolbar.convertTo', { type: mark.type === 'scan' ? t('record.mark.type.image') : t('record.mark.type.screenshot') })}
-        </ContextMenuItem>
         <ContextMenuItem inset disabled={isMultiSelectMode || !mark.url} onClick={handleCopyLink} menuType="record">
           {t('record.mark.toolbar.copyLink')}
         </ContextMenuItem>

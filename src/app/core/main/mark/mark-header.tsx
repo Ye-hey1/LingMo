@@ -1,7 +1,8 @@
 "use client"
 import { useTranslations } from 'next-intl'
 import * as React from "react"
-import { initMarksDb } from "@/db/marks"
+import { initMarksDb, checkDueTodos } from "@/db/marks"
+import { toast } from "@/hooks/use-toast"
 import { ControlScan } from "./control-scan"
 import { ControlText } from "./control-text"
 import { ControlImage } from "./control-image"
@@ -70,7 +71,29 @@ export function MarkHeader() {
   }
 
   React.useEffect(() => {
-    initMarksDb()
+    initMarksDb().then(() => {
+      checkDueTodos().then((dueTodos) => {
+        if (dueTodos.length === 0) return
+        const overdue = dueTodos.filter(t => t.status === 'overdue')
+        const today = dueTodos.filter(t => t.status === 'today')
+        const upcoming = dueTodos.filter(t => t.status === 'upcoming')
+        const lines: string[] = []
+        if (overdue.length > 0) {
+          lines.push(`ⓘ ${overdue.length} 个已过期：${overdue.map(t => t.title).join('、')}`)
+        }
+        if (today.length > 0) {
+          lines.push(`⚠ ${today.length} 个今天到期：${today.map(t => t.title).join('、')}`)
+        }
+        if (upcoming.length > 0) {
+          lines.push(`⏰ ${upcoming.length} 个即将到期：${upcoming.map(t => t.title).join('、')}`)
+        }
+        toast({
+          title: `待办提醒（${dueTodos.length}）`,
+          description: lines.join('\n'),
+          duration: 8000,
+        })
+      })
+    })
   }, [])
 
   React.useEffect(() => {

@@ -1,5 +1,5 @@
 'use client'
-import { ImageUp, Search, Settings, SquarePen, X } from "lucide-react"
+import { ImageUp, Search, Settings, SquarePen, X, LayoutGrid } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -39,6 +39,11 @@ export function AppSidebar({ onSearchClick }: AppSidebarProps) {
       title: t('navigation.search'),
       url: "/core/search",
       icon: Search,
+    },
+    {
+      title: '闪卡',
+      url: '/core/flashcard',
+      icon: LayoutGrid,
     },
   ])
 

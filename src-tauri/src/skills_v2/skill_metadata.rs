@@ -1,5 +1,5 @@
-use std::path::Path;
 use crate::skills_v2::error::SkillResult;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct SkillMeta {
@@ -26,13 +26,21 @@ pub fn parse_skill_md(dir: &Path) -> SkillResult<Option<SkillMeta>> {
 fn parse_frontmatter(content: &str) -> SkillMeta {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
-        return SkillMeta { name: None, description: None };
+        return SkillMeta {
+            name: None,
+            description: None,
+        };
     }
 
     let after_start = &trimmed[3..];
     let end = match after_start.find("---") {
         Some(pos) => pos,
-        None => return SkillMeta { name: None, description: None },
+        None => {
+            return SkillMeta {
+                name: None,
+                description: None,
+            }
+        }
     };
 
     let yaml = &after_start[..end].trim();

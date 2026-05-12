@@ -1,11 +1,10 @@
 use tauri::{path::BaseDirectory, AppHandle, Manager};
-use xcap::{Window};
+use xcap::Window;
 
 #[cfg(target_os = "macos")]
 use core_graphics::display::CGDisplay;
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct ScreenshotImage {
     name: String,
     path: String,
@@ -18,14 +17,14 @@ pub struct ScreenshotImage {
 
 fn normalized(s: &str) -> String {
     s.replace(" ", "-")
-    .replace("/", "-")
-    .replace("\\", "-")
-    .replace("*", "-")
-    .replace("?", "-")
-    .replace(":", "-")
-    .replace("<", "-")
-    .replace(">", "-")
-    .replace("|", "-")
+        .replace("/", "-")
+        .replace("\\", "-")
+        .replace("*", "-")
+        .replace("?", "-")
+        .replace(":", "-")
+        .replace("<", "-")
+        .replace(">", "-")
+        .replace("|", "-")
 }
 
 pub fn cleanup_temp_screenshot_dir(app: &AppHandle) {
@@ -47,7 +46,7 @@ pub fn screenshot(app: AppHandle) -> Vec<ScreenshotImage> {
         let display = CGDisplay::main();
         let _ = display.image();
     }
-    
+
     let windows = Window::all().unwrap();
 
     let temp_screenshot_folder = app
@@ -65,7 +64,7 @@ pub fn screenshot(app: AppHandle) -> Vec<ScreenshotImage> {
         if window.is_minimized().unwrap() {
             continue;
         }
-        
+
         // 获取窗口属性
         let title = window.title().unwrap_or_default();
         let width = window.width().unwrap_or(0);
@@ -73,15 +72,22 @@ pub fn screenshot(app: AppHandle) -> Vec<ScreenshotImage> {
         let x = window.x().unwrap_or(0);
         let y = window.y().unwrap_or(0);
         let z = window.z().unwrap_or(0);
-        let system_titles = vec!["Dock", "Menu Bar", "MenuBar", "Status", "Notification Center", "", "Desktop", "NoteGen"];
-        
-        if system_titles.contains(&title.as_str()) || 
-           title.len() < 2 ||
-           width < 150 || 
-           height < 150 {
+        let system_titles = vec![
+            "Dock",
+            "Menu Bar",
+            "MenuBar",
+            "Status",
+            "Notification Center",
+            "",
+            "Desktop",
+            "NoteGen",
+        ];
+
+        if system_titles.contains(&title.as_str()) || title.len() < 2 || width < 150 || height < 150
+        {
             continue;
         }
-        
+
         let image = window.capture_image().unwrap();
         let path = format!(
             "{}/window-{}-{}.png",

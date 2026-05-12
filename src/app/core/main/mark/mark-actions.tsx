@@ -26,7 +26,7 @@ export function MarkActions() {
   }
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-0.5">
       {!trashState && (
         <TooltipButton 
           buttonId="onboarding-target-organize-notes"
@@ -35,6 +35,7 @@ export function MarkActions() {
           onClick={handleOrganize}
           variant="ghost"
           side="bottom"
+          buttonClassName="size-7 rounded-md text-muted-foreground hover:text-foreground"
         />
       )}
       <MarkFilterPopover />
@@ -42,8 +43,9 @@ export function MarkActions() {
         icon={trashState ? <XCircle className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />} 
         tooltipText={trashState ? t('toolbar.closeTrash') : t('toolbar.trash')} 
         onClick={handleToggleTrash}
-        variant={trashState ? "default" : "ghost"}
+        variant="ghost"
         side="bottom"
+        buttonClassName={`size-7 rounded-md hover:text-foreground ${trashState ? 'bg-muted text-foreground' : 'text-muted-foreground'}`}
       />
       <OrganizeNotes ref={organizeRef} />
     </div>

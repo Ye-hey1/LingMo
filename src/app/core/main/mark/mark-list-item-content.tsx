@@ -1,11 +1,14 @@
 import type { Mark } from "@/db/marks"
 import type { Priority } from "./todo-form"
+import type { Subtask } from "./todo-form"
 
 export type ParsedTodoMark = {
   title: string
   description: string
   completed: boolean
   priority: Priority
+  dueDate?: string
+  subtasks?: Subtask[]
 }
 
 export type MarkListItemContent = {
@@ -47,6 +50,8 @@ export function parseTodoMarkContent(mark: Mark): ParsedTodoMark {
       description: compactText(parsed.description),
       completed: Boolean(parsed.completed),
       priority: parsed.priority || 'medium',
+      dueDate: parsed.dueDate || undefined,
+      subtasks: parsed.subtasks || undefined,
     }
   } catch {
     return {

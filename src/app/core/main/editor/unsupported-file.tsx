@@ -18,6 +18,19 @@ interface UnsupportedFileProps {
   filePath: string
 }
 
+function isPathNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  const lowerMessage = message.toLowerCase()
+  return (
+    lowerMessage.includes('no such file') ||
+    lowerMessage.includes('not found') ||
+    lowerMessage.includes('os error 2') ||
+    lowerMessage.includes('os error 3') ||
+    message.includes('系统找不到指定的文件') ||
+    message.includes('系统找不到指定的路径')
+  )
+}
+
 export function UnsupportedFile({ filePath }: UnsupportedFileProps) {
   const t = useTranslations('article.unsupportedFile')
   const [metadata, setMetadata] = useState<FileMetadata | null>(null)
@@ -48,8 +61,17 @@ export function UnsupportedFile({ filePath }: UnsupportedFileProps) {
   useEffect(() => {
     const fetchMetadata = async () => {
       try {
-        const { stat } = await import('@tauri-apps/plugin-fs')
+        const { stat, exists } = await import('@tauri-apps/plugin-fs')
         const pathOptions = await getFilePathOptions(filePath)
+
+        const fileExists = pathOptions.baseDir
+          ? await exists(pathOptions.path, { baseDir: pathOptions.baseDir })
+          : await exists(pathOptions.path)
+
+        if (!fileExists) {
+          setMetadata(null)
+          return
+        }
 
         let fileStat
         if (pathOptions.baseDir) {
@@ -64,6 +86,10 @@ export function UnsupportedFile({ filePath }: UnsupportedFileProps) {
           createdAt: fileStat.birthtime?.getTime() || null
         })
       } catch (error) {
+        if (isPathNotFoundError(error)) {
+          setMetadata(null)
+          return
+        }
         console.error('Failed to get file metadata:', error)
       } finally {
         setLoading(false)

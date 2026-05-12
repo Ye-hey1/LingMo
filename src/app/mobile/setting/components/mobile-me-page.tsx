@@ -452,6 +452,8 @@ export function MobileMePage() {
           records: tActivity('labels.record'),
           writing: tActivity('labels.writing'),
           chats: tActivity('labels.chat'),
+          ai: tActivity('labels.ai'),
+          memory: tActivity('labels.memory'),
         }}
       />
     </div>

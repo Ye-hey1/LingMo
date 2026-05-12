@@ -184,6 +184,9 @@
             },
             "beigeDark": {
               "name": "米黄暗"
+            },
+            "warmSand": {
+              "name": "ウォームサンド"
             }
           }
         }
@@ -336,8 +339,7 @@
       "runtimeInstallCancelFailed": "インストールの停止に失敗しました",
       "runtimeInstallSuccess": "ランタイムのインストールが完了しました",
       "runtimeInstallFailed": "ランタイムのインストールに失敗しました",
-      "runtimeNoGuidedSupport": "このコマンドにはまだガイド付きランタイム補助がありません。"
-      ,
+      "runtimeNoGuidedSupport": "このコマンドにはまだガイド付きランタイム補助がありません。",
       "enableTitle": "启用 MCP 功能",
       "enableDesc": "启用后，AI 可以调用配置的 MCP 服务器提供的工具。"
     },
@@ -345,6 +347,10 @@
       "title": "エディター設定",
       "interfaceSettings": "インターフェース設定",
       "desc": "ここでは、エディターをカスタマイズして、より適した書き込み体験を提供できます。",
+      "contentTextScale": "本文テキストスケール",
+      "contentTextScaleDesc": "エディターの本文のテキストサイズを調整します。",
+      "codeTheme": "コードブロックテーマ",
+      "codeThemeDesc": "エディター内のコードブロックのシンタックスハイライトテーマを設定します。",
       "centeredContent": "コンテンツを中央に表示",
       "centeredContentDesc": "有効にすると、コンテンツを中央に表示し、両側に余白を設けます。",
       "outlineEnable": "アウトラインを有効にする",
@@ -485,6 +491,7 @@
         "preferenceDesc": "設定（言語、形式、スタイルなど）",
         "knowledgeDesc": "知識（事実、経験、専門分野など）",
         "save": "記憶を保存",
+        "update": "記憶を更新",
         "saving": "保存中...",
         "categoryDescription": "记忆分为两种类型：",
         "preferenceDescription": "偏好：语言、格式、风格等设置，每次对话都会自动加载",
@@ -495,8 +502,17 @@
       },
       "listTitle": "マイ記憶",
       "addMemory": "記憶を追加",
+      "editMemory": "記憶を編集",
+      "deleteMemory": "記憶を削除",
+      "clearAll": "すべてクリア",
+      "refresh": "更新",
+      "cancel": "キャンセル",
+      "confirmClear": "クリア",
+      "clearConfirmTitle": "すべての記憶をクリアしますか？",
+      "clearConfirmDesc": "設定と通常の記憶を含む、すべての長期記憶を削除します。この操作は元に戻せません。",
       "empty": "まだ記憶がありません。最初の記憶を追加しましょう！",
       "emptyHint": "手動で記憶を追加するか、会話で「覚えて」「これを覚えて」などのフレーズを使うとAIが自動的に記憶を作成します。",
+      "emptyTab": "このカテゴリには記憶がありません",
       "preference": "設定",
       "knowledge": "知識",
       "replaced": "置換済み",
@@ -509,6 +525,7 @@
       },
       "success": "成功",
       "saved": "記憶を保存しました",
+      "edited": "記憶を更新しました",
       "updated": "記憶を更新しました（類似の記憶を置換）",
       "deleted": "記憶を削除しました",
       "cleared": "すべての記憶をクリアしました",
@@ -566,17 +583,23 @@
       "mainModel": "メインモデル"
     },
     "readAloud": {
-      "title": "音声読み上げ",
-      "desc": "ここでは、音声読み上げ関連の設定を構成し、チャットコンテンツに音声再生機能を提供できます。",
-      "noModel": "モデルを使用しない",
+      "title": "読み上げ",
+      "desc": "読み上げ方法を設定します。既定ではシステム音声を優先し、モデル音声は強化用として利用します。",
       "options": {
+        "mode": {
+          "title": "モード",
+          "desc": "自動モードではシステム音声を優先し、ローカル音声が使えない場合のみモデルを試します。",
+          "auto": "自動（推奨）",
+          "local": "ローカルのみ",
+          "model": "モデルのみ"
+        },
         "audioModel": {
-          "title": "音声モデル",
-          "desc": "テキストから音声への変換にAIモデルを選択し、様々な音声タイプとパラメータ設定をサポートします。"
+          "title": "読み上げモデル",
+          "desc": "任意です。自動モードの強化やモデル専用モードで利用できます。"
         },
         "speed": {
-          "title": "読み上げ速度",
-          "desc": "音声の再生速度を調整します。0.25倍から4倍の範囲で設定でき、1倍が通常の速度です。"
+          "title": "速度",
+          "desc": "読み上げ速度を0.5倍から2倍まで調整できます。既定値は1倍です。"
         }
       }
     },
@@ -991,6 +1014,10 @@
           "desc": "日常会話に使用するメインの AI モデルを選択"
         }
       },
+      "contentFontSize": {
+        "title": "生成内容の文字サイズ",
+        "desc": "AI の回答と Markdown プレビューの表示サイズを調整"
+      },
       "toolbar": {
         "title": "ツールバー設定",
         "chatToolbar": {
@@ -1002,6 +1029,9 @@
           },
           "promptSelect": {
             "desc": "会話で使用するプリセットプロンプトを選択"
+          },
+          "promptEnhancer": {
+            "desc": "短い入力をノート文脈付きの完全なタスクプロンプトに拡張"
           },
           "chatLanguage": {
             "desc": "会話の言語を設定"
@@ -1023,6 +1053,14 @@
           "clipboardMonitor": {
             "title": "クリップボード監視",
             "desc": "クリップボードの内容の変更を自動監視"
+          },
+          "skillsPopover": {
+            "title": "Skills",
+            "desc": "Agent が使用できるインストール済み Skills を表示"
+          },
+          "webSearch": {
+            "title": "Web 検索",
+            "desc": "Tavily Web 検索ボタンを表示"
           },
           "newChat": {
             "desc": "新しい会話を開始"
@@ -1350,26 +1388,9 @@
         }
       }
     },
-    "readAloud": {
-      "title": "読み上げ",
-      "desc": "読み上げ方法を設定します。既定ではシステム音声を優先し、モデル音声は強化用として利用します。",
-      "options": {
-        "mode": {
-          "title": "モード",
-          "desc": "自動モードではシステム音声を優先し、ローカル音声が使えない場合のみモデルを試します。",
-          "auto": "自動（推奨）",
-          "local": "ローカルのみ",
-          "model": "モデルのみ"
-        },
-        "audioModel": {
-          "title": "読み上げモデル",
-          "desc": "任意です。自動モードの強化やモデル専用モードで利用できます。"
-        },
-        "speed": {
-          "title": "速度",
-          "desc": "読み上げ速度を0.5倍から2倍まで調整できます。既定値は1倍です。"
-        }
-      }
+    "webSearch": {
+      "title": "Web Search",
+      "desc": "Configure Tavily web search settings here, including API key, search depth, and health checks."
     }
   },
   "record": {
@@ -1463,7 +1484,14 @@
         "cancel": "キャンセル",
         "selectTag": "タグを選択",
         "completed": "完了",
-        "uncompleted": "未完了"
+        "uncompleted": "未完了",
+        "subtasks": "サブタスク",
+        "subtaskPlaceholder": "サブタスクを入力してEnter",
+        "addSubtask": "サブタスク追加",
+        "overdue": "期限切れ",
+        "dueToday": "今日期限",
+        "stats": "統計",
+        "noDueDate": "期限なし"
       },
       "clipboard": {
         "detectedImage": "クリップボードの画像を検出しました",
@@ -1769,6 +1797,9 @@
           "tooltip": "プロンプトを選択",
           "placeholder": "プロンプトを検索"
         },
+        "promptEnhancer": {
+          "tooltip": "プロンプトを強化"
+        },
         "clearChat": "会話をクリア",
         "clearContext": {
           "tooltip": "コンテキストをクリア"
@@ -1891,6 +1922,19 @@
         "lineRange": "{fileName} の {startLine}-{endLine} 行目から引用",
         "noLine": "{fileName} から引用"
       },
+      "citations": {
+        "title": "参照元",
+        "open": "参照内容を開いて移動",
+        "openDisabled": "開けるファイルパスがありません",
+        "currentNote": "現在のノート",
+        "linkedFile": "リンク済みファイル",
+        "quotedSelection": "引用選択範囲",
+        "knowledgeBase": "ナレッジベース",
+        "mentionedSource": "言及された参照元",
+        "previewFallback": "参照ファイルを開く",
+        "lineSingle": "{line} 行目",
+        "lineRange": "{start}-{end} 行目"
+      },
       "note": {
         "organize": "整理",
         "writing": "執筆",
@@ -1982,7 +2026,9 @@
     "labels": {
       "record": "記録",
       "writing": "執筆",
-      "chat": "対話"
+      "chat": "対話",
+      "ai": "AI",
+      "memory": "メモリ"
     },
     "heatmap": {
       "title": "直近 26 週間",
@@ -2309,7 +2355,25 @@
         "importing": "インポート中...",
         "importSuccess": "インポート成功",
         "importSuccessDesc": "{count} 個のファイルをインポートしました",
-        "importError": "インポート失敗"
+        "importError": "インポート失敗",
+        "createMenu": "作成",
+        "newDiagram": "新しい図表"
+      },
+      "browser": {
+        "title": "ファイルブラウザ",
+        "searchPlaceholder": "ファイル名または拡張子で検索",
+        "clearSearch": "検索をクリア",
+        "summary": "{visibleFiles}/{totalFiles} files · {visibleFolders}/{totalFolders} folders",
+        "reset": "リセット",
+        "emptyTitle": "一致するファイルがありません",
+        "emptyDescription": "検索語やフィルターを調整してください。",
+        "filters": {
+          "all": "All",
+          "markdown": "Markdown",
+          "pdf": "PDF",
+          "image": "Images",
+          "folder": "Folders"
+        }
       },
       "sync": {
         "syncingRemote": "リモートファイルをプル中...",
@@ -2402,8 +2466,35 @@
       },
       "deleteConfirm": "このファイルを削除してもよろしいですか？"
     },
+    "pdf": {
+      "prevPage": "前のページ",
+      "nextPage": "次のページ",
+      "zoomIn": "拡大",
+      "zoomOut": "縮小",
+      "fitPage": "幅に合わせる",
+      "loadError": "PDFファイルを読み込めません",
+      "toggleSidebar": "注釈パネル",
+      "closeSidebar": "閉じる",
+      "annotations": "注釈",
+      "noAnnotations": "注釈はありません",
+      "pageLabel": "P.",
+      "deleteAnnotation": "注釈を削除",
+      "exportAnnotations": "注釈をエクスポート",
+      "exportSuccess": "注釈をMarkdownとしてエクスポートしました",
+      "exportError": "エクスポートに失敗しました",
+      "highlight": "ハイライト",
+      "underline": "下線",
+      "note": "メモ",
+      "addNote": "メモを追加",
+      "cancelAnnotation": "キャンセル",
+      "readingFile": "ファイルを読み込み中..."
+    },
     "editor": {
       "copySuccess": "コピー成功",
+      "backlinks": "バックリンク",
+      "noBacklinks": "バックリンクはありません",
+      "outgoingLinks": "発信リンク",
+      "unlinkedMentions": "リンクされていない言及",
       "copySuccessDescription": "クリップボードにコピーしました",
       "search": {
         "placeholder": "ドキュメント内を検索",
@@ -2552,7 +2643,7 @@
         "range": "直近 {count} 週間",
         "rangePlaceholder": "直近 16 週間",
         "drawerEmpty": "日付を選択すると、その日の活動詳細を確認できます。",
-        "drawerSummary": "この日は合計 {total} 件の活動があり、記録 {record} 件、執筆 {writing} 件、対話 {chat} 件です。"
+        "drawerSummary": "この日は合計 {total} 件の活動があり、記録 {record} 件、執筆 {writing} 件、対話 {chat} 件、AI {ai} 件、メモリ {memory} 件です。"
       },
       "sync": {
         "title": "同期",
@@ -2669,6 +2760,14 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "blockType": "ブロック種類",
+      "paragraph": "本文",
+      "heading1": "見出し 1",
+      "heading2": "見出し 2",
+      "heading3": "見出し 3",
+      "heading4": "見出し 4",
+      "heading5": "見出し 5",
+      "heading6": "見出し 6",
       "polish": "添削",
       "concise": "簡潔に",
       "expand": "拡張",
@@ -2684,7 +2783,17 @@
       "strike": "取り消し線",
       "underline": "下線",
       "inlineCode": "インラインコード",
+      "colorMenu": "カラー",
+      "textColor": "文字色",
+      "backgroundColor": "背景色",
+      "clearTextColor": "文字色をクリア",
       "highlight": "ハイライト",
+      "clearHighlight": "ハイライトをクリア",
+      "restoreDefault": "デフォルトに戻す",
+      "alignLeft": "左揃え",
+      "alignCenter": "中央揃え",
+      "alignRight": "右揃え",
+      "clearFormatting": "書式をクリア",
       "blockquote": "引用",
       "bulletList": "箇条書き",
       "orderedList": "番号付きリスト",
@@ -2702,6 +2811,29 @@
         "Arabic": "アラビア語"
       },
       "customLanguagePlaceholder": "カスタム言語..."
+    },
+    "emptyLineMenu": {
+      "open": "ブロックを挿入または変換",
+      "basic": "基本",
+      "common": "よく使う",
+      "task": "タスク",
+      "image": "画像",
+      "file": "ファイル",
+      "videoFile": "動画またはファイル",
+      "table": "表",
+      "tablePickerSize": "{rows} 行 x {cols} 列の表を挿入",
+      "columns": "段組み",
+      "highlightBlock": "ハイライトブロック",
+      "divider": "区切り線",
+      "linkFormTitle": "リンクを挿入",
+      "linkText": "リンク名",
+      "linkHref": "リンク先",
+      "linkTextPlaceholder": "例：OpenAI ドキュメント",
+      "linkHrefPlaceholder": "例：https://openai.com",
+      "insertLink": "挿入",
+      "cancel": "キャンセル",
+      "linkRequired": "リンク先を入力してください",
+      "insertFailed": "挿入に失敗しました"
     },
     "aiSuggestion": {
       "accept": "受け入れ",

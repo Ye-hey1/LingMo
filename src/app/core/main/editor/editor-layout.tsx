@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo, Suspense } from 'react'
+import dynamic from 'next/dynamic'
 import useArticleStore, { findFolderInTree } from '@/stores/article'
 import emitter from '@/lib/emitter'
 import { Store } from '@tauri-apps/plugin-store'
@@ -16,12 +17,42 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { MdEditor } from './markdown/md-editor-wrapper'
 import { TabBar, TabInfo } from './tab-bar'
-import { ImageEditor } from './image/image-editor'
 import { EmptyState } from './empty-state'
 import { FolderView } from './folder'
 import { UnsupportedFile } from './unsupported-file'
+import { isDiagramPath } from '@/lib/diagram'
+import { TemplateSelectDialog, type TemplateSelectDialogRef, type TemplateSelectResult } from '../file/template-select-dialog'
+import { generateUniqueFilename } from '@/lib/default-filename'
+import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
+import {
+  KNOWLEDGE_GRAPH_TAB_ID,
+  KNOWLEDGE_GRAPH_TAB_NAME,
+  isKnowledgeGraphTabPath,
+} from '../knowledge/knowledge-graph-constants'
+import {
+  FLASHCARD_TAB_ID,
+  FLASHCARD_TAB_NAME,
+  isFlashcardTabPath,
+} from '../flashcard/flashcard-constants'
+import {
+  MEMORY_TAB_ID,
+  MEMORY_TAB_NAME,
+  isMemoryTabPath,
+} from '../memory/memory-constants'
+
+import { writeTextFile } from '@tauri-apps/plugin-fs'
+import { toast } from '@/hooks/use-toast'
+
+const MdEditor = dynamic(() => import('./markdown/md-editor-wrapper').then(m => m.MdEditor), { ssr: false })
+const BacklinksPanel = dynamic(() => import('./markdown/backlinks-panel').then(m => m.BacklinksPanel), { ssr: false })
+const RelatedNotesPanel = dynamic(() => import('@/lib/related-notes').then(m => m.RelatedNotesPanel), { ssr: false })
+const ImageEditor = dynamic(() => import('./image/image-editor').then(m => m.ImageEditor), { ssr: false })
+const PdfViewer = dynamic(() => import('./pdf/pdf-viewer').then(m => m.PdfViewer), { ssr: false })
+const DiagramEditor = dynamic(() => import('./diagram/diagram-editor').then(m => m.DiagramEditor), { ssr: false })
+const KnowledgeGraph = dynamic(() => import('../knowledge/knowledge-graph').then(m => m.KnowledgeGraph), { ssr: false })
+const FlashcardWorkspace = dynamic(() => import('../flashcard/flashcard-workspace').then(m => m.FlashcardWorkspace), { ssr: false })
+const MemoryWorkspace = dynamic(() => import('../memory/memory-workspace').then(m => m.MemoryWorkspace), { ssr: false })
 import {
   createDefaultOnboardingProgress,
   getCompletionFeedbackMode,
@@ -47,6 +78,7 @@ const MARKDOWN_EXTENSIONS = new Set([
 ])
 
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'])
+const PDF_EXTENSIONS = new Set(['pdf'])
 const ONBOARDING_PROGRESS_STORE_KEY = 'desktopOnboardingProgress'
 
 export function EditorLayout() {
@@ -61,16 +93,22 @@ export function EditorLayout() {
     addTab,
     removeTab,
     initOpenTabs,
-    initShowCloudFiles
+    initShowCloudFiles,
+    loadFileTree,
+    newFile,
+    readArticle,
   } = useArticleStore()
   const { setLeftSidebarTab, rightSidebarVisible, toggleRightSidebar } = useSidebarStore()
   const { setOnboardingPromptDraft } = useChatStore()
   const tOnboarding = useTranslations('article.emptyState.onboarding')
 
   const tabContentsRef = useRef<Record<string, string>>({})
+  const templateDialogRef = useRef<TemplateSelectDialogRef>(null)
   const [tabs, setLocalTabs] = useState<TabInfo[]>([])
   const [localActiveTabId, setLocalActiveTabId] = useState<string>('')
+  const [mountedPersistentTabIds, setMountedPersistentTabIds] = useState<Set<string>>(new Set())
   const tabsRef = useRef<TabInfo[]>([])
+  const lastDocumentPathRef = useRef('')
   const isInitializedRef = useRef(false)
   const currentOnboardingTaskRef = useRef<OnboardingStepId | null>(null)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(createDefaultOnboardingProgress())
@@ -84,6 +122,58 @@ export function EditorLayout() {
     const store = await Store.load('store.json')
     await store.set(ONBOARDING_PROGRESS_STORE_KEY, progress)
     await store.save()
+  }, [])
+
+  // Template dialog: always-mounted listener for creating notes
+  const handleTemplateSelect = useCallback(async (result: TemplateSelectResult) => {
+    if (!result.template) {
+      newFile()
+      return
+    }
+
+    const template = result.template
+    try {
+      const currentActiveFilePath = useArticleStore.getState().activeFilePath
+      const parentPath = currentActiveFilePath?.includes('/') ? currentActiveFilePath.split('/').slice(0, -1).join('/') : ''
+
+      const baseName = template.title.replace(/\s+/g, '_')
+      const fileName = await generateUniqueFilename(parentPath, baseName)
+      const relativePath = parentPath ? `${parentPath}/${fileName}` : fileName
+
+      const workspace = await getWorkspacePath()
+      const pathOptions = await getFilePathOptions(relativePath)
+
+      if (workspace.isCustom) {
+        await writeTextFile(pathOptions.path, template.content)
+      } else {
+        await writeTextFile(pathOptions.path, template.content, { baseDir: pathOptions.baseDir })
+      }
+
+      const { collapsibleList } = useArticleStore.getState()
+      await loadFileTree({ skipRemoteSync: true })
+      if (parentPath && !collapsibleList.includes(parentPath)) {
+        useArticleStore.setState({ collapsibleList: [...collapsibleList, parentPath] })
+      }
+
+      setActiveFilePath(relativePath)
+      readArticle(relativePath, '', false)
+    } catch (error) {
+      console.error('Create file from template failed:', error)
+      toast({
+        description: String(error),
+        variant: 'destructive',
+      })
+    }
+  }, [loadFileTree, newFile, readArticle, setActiveFilePath])
+
+  useEffect(() => {
+    const handler = () => {
+      templateDialogRef.current?.open()
+    }
+    emitter.on('template-select-dialog:open', handler)
+    return () => {
+      emitter.off('template-select-dialog:open', handler)
+    }
   }, [])
 
   // Initialize tabs from store on mount
@@ -108,6 +198,12 @@ export function EditorLayout() {
   useEffect(() => {
     currentOnboardingTaskRef.current = currentOnboardingTask
   }, [currentOnboardingTask])
+
+  useEffect(() => {
+    if (activeFilePath && !activeFilePath.includes('://')) {
+      lastDocumentPathRef.current = activeFilePath
+    }
+  }, [activeFilePath])
 
   useEffect(() => {
     const handleOnboardingStepComplete = ({
@@ -162,12 +258,19 @@ export function EditorLayout() {
   }, [])
 
   // Get item type based on path
-  const getItemType = useCallback((path: string): 'markdown' | 'image' | 'folder' | 'unknown' => {
+  const getItemType = useCallback((path: string): 'knowledgeGraph' | 'flashcards' | 'memory' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'folder' | 'unknown' => {
     if (!path) return 'unknown'
+    if (isKnowledgeGraphTabPath(path)) return 'knowledgeGraph'
+    if (isFlashcardTabPath(path)) return 'flashcards'
+    if (isMemoryTabPath(path)) return 'memory'
 
     // First check if it's a folder
     const folder = findFolderInTree(path, fileTree)
     if (folder) return 'folder'
+
+    if (isDiagramPath(path)) {
+      return 'diagram'
+    }
 
     // Check file extension
     const extension = path.split('.').pop()?.toLowerCase()
@@ -179,8 +282,50 @@ export function EditorLayout() {
     if (IMAGE_EXTENSIONS.has(extension)) {
       return 'image'
     }
+    if (PDF_EXTENSIONS.has(extension)) {
+      return 'pdf'
+    }
     return 'unknown'
   }, [fileTree])
+
+  const shouldKeepTabMounted = useCallback((tab: TabInfo): boolean => {
+    const itemType = getItemType(tab.path)
+    return itemType === 'pdf' || itemType === 'diagram' || itemType === 'knowledgeGraph' || itemType === 'flashcards' || itemType === 'memory'
+  }, [getItemType])
+
+  useEffect(() => {
+    if (!localActiveTabId) return
+
+    const activeTab = tabsRef.current.find(tab => tab.id === localActiveTabId)
+    if (!activeTab || !shouldKeepTabMounted(activeTab)) return
+
+    setMountedPersistentTabIds((current) => {
+      if (current.has(activeTab.id)) {
+        return current
+      }
+      const next = new Set(current)
+      next.add(activeTab.id)
+      return next
+    })
+  }, [localActiveTabId, shouldKeepTabMounted])
+
+  useEffect(() => {
+    setMountedPersistentTabIds((current) => {
+      if (current.size === 0) {
+        return current
+      }
+
+      const validTabIds = new Set(
+        tabs
+          .filter(tab => shouldKeepTabMounted(tab))
+          .map(tab => tab.id),
+      )
+      const next = new Set([...current].filter(id => validTabIds.has(id)))
+      const changed = next.size !== current.size || [...next].some(id => !current.has(id))
+
+      return changed ? next : current
+    })
+  }, [tabs, shouldKeepTabMounted])
 
   // Check if file/folder exists
   const checkPathExists = useCallback(async (path: string): Promise<boolean> => {
@@ -210,7 +355,7 @@ export function EditorLayout() {
     const extension = path.split('.').pop()?.toLowerCase()
     if (!extension) return false
 
-    const validExtensions = ['md', 'txt', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'css', 'scss', 'less', 'html', 'xml', 'json', 'yaml', 'yml', 'sh', 'bash', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'sql', 'rb', 'php', 'vue', 'svelte', 'astro', 'toml', 'ini', 'conf', 'cfg', 'gitignore', 'env', 'example', 'template', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg']
+    const validExtensions = ['md', 'txt', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'css', 'scss', 'less', 'html', 'xml', 'json', 'yaml', 'yml', 'sh', 'bash', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'sql', 'rb', 'php', 'vue', 'svelte', 'astro', 'toml', 'ini', 'conf', 'cfg', 'gitignore', 'env', 'example', 'template', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'pdf']
 
     if (!validExtensions.includes(extension)) return false
 
@@ -236,6 +381,11 @@ export function EditorLayout() {
       let hasInvalid = false
 
       for (const tab of tabs) {
+        if (isKnowledgeGraphTabPath(tab.path) || isFlashcardTabPath(tab.path) || isMemoryTabPath(tab.path)) {
+          validTabs.push(tab)
+          continue
+        }
+
         if (tab.isFolder) {
           // Check if folder exists in fileTree
           if (isFolderInTree(tab.path)) {
@@ -268,7 +418,11 @@ export function EditorLayout() {
     if (!activeFilePath) return
 
     const name = activeFilePath.split('/').pop() || activeFilePath
-    const isFolder = isFolderPath(activeFilePath)
+    const isGraphTab = isKnowledgeGraphTabPath(activeFilePath)
+    const isFlashcardsTab = isFlashcardTabPath(activeFilePath)
+    const isMemoryTab = isMemoryTabPath(activeFilePath)
+    const isVirtualTab = isGraphTab || isFlashcardsTab || isMemoryTab
+    const isFolder = isVirtualTab ? false : isFolderPath(activeFilePath)
 
     // Check if tab already exists
     const existingTab = tabsRef.current.find(tab => tab.path === activeFilePath)
@@ -281,9 +435,21 @@ export function EditorLayout() {
     } else {
       // Add new tab
       const newTab: TabInfo = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+        id: isGraphTab
+          ? KNOWLEDGE_GRAPH_TAB_ID
+          : isFlashcardsTab
+            ? FLASHCARD_TAB_ID
+            : isMemoryTab
+              ? MEMORY_TAB_ID
+              : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
         path: activeFilePath,
-        name: name,
+        name: isGraphTab
+          ? KNOWLEDGE_GRAPH_TAB_NAME
+          : isFlashcardsTab
+            ? FLASHCARD_TAB_NAME
+            : isMemoryTab
+              ? MEMORY_TAB_NAME
+              : name,
         isFolder: isFolder
       }
       addTab(newTab)
@@ -312,33 +478,37 @@ export function EditorLayout() {
     delete tabContentsRef.current[closedPath]
 
     // Get closedTab from the current ref value
-    const closedTab = tabsRef.current.find(t => t.path === closedPath)
+    const currentTabs = tabsRef.current
+    const closedTab = currentTabs.find(t => t.path === closedPath)
     if (!closedTab) return
 
-    // Save the current tabs count before removing
-    const tabsCountBeforeRemove = tabsRef.current.length
+    const remainingTabs = currentTabs.filter(t => t.id !== closedTab.id)
+    const closedIndex = currentTabs.findIndex(t => t.id === closedTab.id)
+    const isClosingActiveTab =
+      localActiveTabId === closedTab.id ||
+      activeTabId === closedTab.id ||
+      activeFilePath === closedPath
 
     // Remove the tab
     removeTab(closedTab.id)
 
-    // Only switch active tab if we're closing the currently active tab
-    if (localActiveTabId === closedTab.id) {
-      if (tabsCountBeforeRemove > 1) {
-        // Find the new target tab from the updated tabsRef after removal
-        const remainingTabs = tabsRef.current.filter(t => t.id !== closedTab.id)
-        if (remainingTabs.length > 0) {
-          // Try to select the tab to the left, otherwise select the last one
-          const currentIndex = tabsRef.current.findIndex(t => t.id === closedTab.id)
-          const targetTab = remainingTabs[Math.max(0, currentIndex - 1)] || remainingTabs[remainingTabs.length - 1]
-          setActiveTabId(targetTab.id)
-          setActiveFilePath(targetTab.path)
-        }
-      } else {
-        setActiveTabId('')
-        setActiveFilePath('')
-      }
+    // If we closed the active tab/path, pick a deterministic fallback
+    if (!isClosingActiveTab) {
+      return
     }
-  }, [localActiveTabId, removeTab, setActiveTabId, setActiveFilePath])
+
+    if (remainingTabs.length > 0) {
+      const targetTab =
+        remainingTabs[Math.max(0, closedIndex - 1)] ||
+        remainingTabs[remainingTabs.length - 1]
+      setActiveTabId(targetTab.id)
+      setActiveFilePath(targetTab.path)
+      return
+    }
+
+    setActiveTabId('')
+    setActiveFilePath('')
+  }, [activeFilePath, activeTabId, localActiveTabId, removeTab, setActiveTabId, setActiveFilePath])
 
   // Handle close other tabs
   const handleCloseOtherTabs = useCallback((keepPath: string) => {
@@ -508,21 +678,59 @@ export function EditorLayout() {
     return (
       <div
         key={tab.id}
-        className="flex min-h-0 flex-1 overflow-hidden"
-        style={{ display: isActive ? 'flex' : 'none' }}
+        className={isActive
+          ? 'relative z-10 flex h-full min-h-0 w-full overflow-hidden'
+          : 'pointer-events-none absolute inset-0 z-0 flex min-h-0 overflow-hidden opacity-0'
+        }
+        aria-hidden={!isActive}
       >
         {itemType === 'folder' && (
           <FolderView folderPath={tab.path} />
         )}
         {itemType === 'image' && (
-          <ImageEditor filePath={tab.path} />
+          <Suspense fallback={<div className="flex-1" />}>
+            <ImageEditor filePath={tab.path} />
+          </Suspense>
+        )}
+        {itemType === 'pdf' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <PdfViewer filePath={tab.path} isActive={isActive} />
+          </Suspense>
+        )}
+        {itemType === 'diagram' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <DiagramEditor filePath={tab.path} isActive={isActive} />
+          </Suspense>
+        )}
+        {itemType === 'knowledgeGraph' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <KnowledgeGraph focusPath={lastDocumentPathRef.current} />
+          </Suspense>
+        )}
+        {itemType === 'flashcards' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <FlashcardWorkspace sourcePath={lastDocumentPathRef.current} />
+          </Suspense>
+        )}
+        {itemType === 'memory' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <MemoryWorkspace />
+            </div>
+          </Suspense>
         )}
         {itemType === 'markdown' && (
-          <MdEditor
-            key={tab.id}
-            tabContentsRef={tabContentsRef}
-            filePath={tab.path}
-          />
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <Suspense fallback={<div className="flex-1" />}>
+              <MdEditor
+                key={tab.id}
+                tabContentsRef={tabContentsRef}
+                filePath={tab.path}
+              />
+            </Suspense>
+            <BacklinksPanel />
+            <RelatedNotesPanel />
+          </div>
         )}
         {itemType === 'unknown' && (
           <UnsupportedFile filePath={tab.path} />
@@ -530,6 +738,11 @@ export function EditorLayout() {
       </div>
     )
   }, [getItemType])
+
+  const renderedTabs = useMemo(() =>
+    tabs.filter(tab => tab.id === localActiveTabId || mountedPersistentTabIds.has(tab.id)),
+    [tabs, localActiveTabId, mountedPersistentTabIds]
+  )
 
   // No tabs or no active tab - show empty state
   if (tabs.length === 0 || !activeTabId) {
@@ -583,6 +796,7 @@ export function EditorLayout() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        <TemplateSelectDialog ref={templateDialogRef} onSelect={handleTemplateSelect} />
       </div>
     )
   }
@@ -602,8 +816,9 @@ export function EditorLayout() {
         onCloseRightTabs={handleCloseRightTabs}
       />
 
-      {/* Only render active tab content - improves performance with many tabs */}
-      {tabs.filter(tab => tab.id === localActiveTabId).map(tab => renderContentPanel(tab, true))}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        {renderedTabs.map(tab => renderContentPanel(tab, tab.id === localActiveTabId))}
+      </div>
       <OnboardingSpotlight
         targetId={activeOnboardingStep ? getOnboardingSpotlightTarget(activeOnboardingStep) : null}
         title={spotlightTitle}
@@ -632,6 +847,7 @@ export function EditorLayout() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <TemplateSelectDialog ref={templateDialogRef} onSelect={handleTemplateSelect} />
     </div>
   )
 }

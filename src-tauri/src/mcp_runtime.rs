@@ -4,8 +4,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Runtime};
 use tauri::State;
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::Mutex;
@@ -236,9 +236,18 @@ fn current_platform() -> &'static str {
 
 fn find_command_path(command: &str) -> Option<PathBuf> {
     let path_var = env::var("PATH").ok()?;
-    let separator = if cfg!(target_os = "windows") { ';' } else { ':' };
+    let separator = if cfg!(target_os = "windows") {
+        ';'
+    } else {
+        ':'
+    };
     let candidates: &[&str] = if cfg!(target_os = "windows") {
-        &[command, &format!("{command}.cmd"), &format!("{command}.exe"), &format!("{command}.bat")]
+        &[
+            command,
+            &format!("{command}.cmd"),
+            &format!("{command}.exe"),
+            &format!("{command}.bat"),
+        ]
     } else {
         &[command]
     };
@@ -287,9 +296,11 @@ fn read_command_version(command: &str, path: &Path) -> Result<Option<String>, St
 
 fn inspect_requirement(requirement: &RuntimeRequirement) -> RuntimeInspection {
     let resolved_path = find_command_path(&requirement.launcher);
-    let version = resolved_path
-        .as_ref()
-        .and_then(|path| read_command_version(&requirement.launcher, path).ok().flatten());
+    let version = resolved_path.as_ref().and_then(|path| {
+        read_command_version(&requirement.launcher, path)
+            .ok()
+            .flatten()
+    });
 
     let check = RuntimeCheckResult {
         command: requirement.launcher.clone(),
@@ -441,7 +452,10 @@ async fn collect_process_output<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn inspect_mcp_runtime(command: String, args: Vec<String>) -> Result<RuntimeInspection, String> {
+pub async fn inspect_mcp_runtime(
+    command: String,
+    args: Vec<String>,
+) -> Result<RuntimeInspection, String> {
     let requirement = classify_runtime_requirement(&command, &args);
     Ok(inspect_requirement(&requirement))
 }
@@ -460,7 +474,10 @@ pub async fn install_mcp_runtime(
         &recipe_id,
         InstallProgressStage::Preparing,
         None,
-        Some(format!("Starting install command: {shell} {}", args.join(" "))),
+        Some(format!(
+            "Starting install command: {shell} {}",
+            args.join(" ")
+        )),
         None,
     )?;
 
@@ -618,10 +635,8 @@ mod tests {
 
     #[test]
     fn classifies_combined_npx_command() {
-        let requirement = classify_runtime_requirement(
-            "npx @modelcontextprotocol/server-filesystem",
-            &[],
-        );
+        let requirement =
+            classify_runtime_requirement("npx @modelcontextprotocol/server-filesystem", &[]);
 
         assert_eq!(requirement.launcher, "npx");
         assert_eq!(requirement.kind, RuntimeKind::Npx);
@@ -629,10 +644,8 @@ mod tests {
 
     #[test]
     fn classifies_python_command_with_args() {
-        let requirement = classify_runtime_requirement(
-            "python3",
-            &["-m".into(), "mcp_server".into()],
-        );
+        let requirement =
+            classify_runtime_requirement("python3", &["-m".into(), "mcp_server".into()]);
 
         assert_eq!(requirement.launcher, "python3");
         assert_eq!(requirement.kind, RuntimeKind::Python3);
@@ -671,12 +684,18 @@ mod tests {
 
     #[test]
     fn final_install_stage_returns_failed_on_error() {
-        assert_eq!(final_install_stage(false, false), InstallProgressStage::Failed);
+        assert_eq!(
+            final_install_stage(false, false),
+            InstallProgressStage::Failed
+        );
     }
 
     #[test]
     fn final_install_stage_returns_cancelled_when_requested() {
-        assert_eq!(final_install_stage(false, true), InstallProgressStage::Cancelled);
+        assert_eq!(
+            final_install_stage(false, true),
+            InstallProgressStage::Cancelled
+        );
     }
 
     #[test]

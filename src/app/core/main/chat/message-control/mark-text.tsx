@@ -8,13 +8,16 @@ import { CheckCircle, Highlighter } from "lucide-react"
 import {useEffect, useState} from "react";
 import { useTranslations } from 'next-intl';
 
-export function MarkText({chat}: {chat: Chat}) {
+export function MarkText({chat, compact = false}: {chat: Chat, compact?: boolean}) {
 
   const { currentTagId, fetchTags, getCurrentTag } = useTagStore()
   const { fetchMarks, marks } = useMarkStore()
   const { updateInsert, chats } = useChatStore()
   const [isRecorded, setIsRecorded] = useState(chat.inserted)
   const t = useTranslations('record.queue')
+  const actionButtonClass = compact
+    ? "size-6 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+    : "size-6.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
 
   useEffect(() => {
     const currentIndex = chats.findIndex(item => item.id === chat.id)
@@ -56,7 +59,7 @@ ${chat.content}
 
   return (
     isRecorded ?
-      <TooltipButton icon={<CheckCircle className="size-4" />} tooltipText={t('recorded')} variant={"ghost"} size="sm" disabled/> :
-      <TooltipButton icon={<Highlighter className="size-4" />} tooltipText={t('record')} variant={"ghost"} size="sm" onClick={handleSuccess}/>
+      <TooltipButton icon={<CheckCircle className="size-4" />} tooltipText={t('recorded')} variant={"ghost"} size="sm" buttonClassName={actionButtonClass} disabled/> :
+      <TooltipButton icon={<Highlighter className="size-4" />} tooltipText={t('record')} variant={"ghost"} size="sm" buttonClassName={actionButtonClass} onClick={handleSuccess}/>
   )
 }

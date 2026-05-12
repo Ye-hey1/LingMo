@@ -12,6 +12,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
 
   const items = [
     {
+      id: "home",
       url: "https://github.com/Ye-hey1/note-gen#readme",
       title: t('items.home.title'),
       desc: t('items.home.desc'),
@@ -19,6 +20,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
       buttonName: t('items.home.buttonName')
     },
     {
+      id: "guide",
       url: "https://github.com/Ye-hey1/note-gen#readme",
       title: t('items.guide.title'),
       desc: t('items.guide.desc'),
@@ -26,6 +28,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
       buttonName: t('items.guide.buttonName')
     },
     {
+      id: "github",
       url: "https://github.com/Ye-hey1/note-gen",
       title: t('items.github.title'),
       desc: t('items.github.desc'),
@@ -33,6 +36,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
       buttonName: t('items.github.buttonName')
     },
     {
+      id: "releases",
       url: "https://github.com/Ye-hey1/note-gen/releases",
       title: t('items.releases.title'),
       desc: t('items.releases.desc'),
@@ -40,6 +44,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
       buttonName: t('items.releases.buttonName')
     },
     {
+      id: "issues",
       url: "https://github.com/Ye-hey1/note-gen/issues",
       title: t('items.issues.title'),
       desc: t('items.issues.desc'),
@@ -47,6 +52,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
       buttonName: t('items.issues.buttonName')
     },
     {
+      id: "discussions",
       url: "https://github.com/Ye-hey1/note-gen/discussions",
       title: t('items.discussions.title'),
       desc: t('items.discussions.desc'),
@@ -60,7 +66,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
       <Updater />
       <ItemGroup className="gap-4 pt-8">
         {
-          items.map(item => <AboutItem key={item.url} {...item} />)
+          items.map(item => <AboutItem key={item.id} {...item} />)
         }
       </ItemGroup>
     </SettingType>

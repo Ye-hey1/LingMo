@@ -4,7 +4,7 @@ import { Node, mergeAttributes } from '@tiptap/core'
 import { ReactNodeViewRenderer, NodeViewWrapper, ReactNodeViewProps } from '@tiptap/react'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
-import mermaid from 'mermaid'
+import type mermaidType from 'mermaid'
 import { Code, Check } from 'lucide-react'
 import {
   Select,
@@ -15,13 +15,21 @@ import {
 } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 
-// Initialize mermaid
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'default',
-  securityLevel: 'loose',
-  fontFamily: 'inherit',
-})
+// 懒加载 mermaid 实例（约 2.5MB，避免打入首屏 chunk）
+let mermaidInstance: typeof mermaidType | null = null
+async function getMermaid() {
+  if (!mermaidInstance) {
+    const mod = await import('mermaid')
+    mermaidInstance = mod.default
+    mermaidInstance.initialize({
+      startOnLoad: false,
+      theme: 'default',
+      securityLevel: 'loose',
+      fontFamily: 'inherit',
+    })
+  }
+  return mermaidInstance
+}
 
 // Diagram type configuration with icons
 const DIAGRAM_TYPES = [
@@ -69,6 +77,7 @@ function MermaidDiagramView({ node, updateAttributes }: ReactNodeViewProps) {
     setError(null)
 
     try {
+      const mermaid = await getMermaid()
       mermaid.parse(code)
       const id = `mermaid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
       const { svg: renderedSvg } = await mermaid.render(id, code)

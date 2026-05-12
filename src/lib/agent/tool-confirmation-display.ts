@@ -59,6 +59,24 @@ const TOOL_CONFIRMATION_DISPLAY: Record<string, ToolConfirmationDisplayConfig> =
     summaryFields: ['content'],
     contentFields: ['content'],
   },
+  create_diagram_file: {
+    titleKey: 'record.chat.input.agent.confirmation.tools.create_diagram_file.title',
+    descriptionKey: 'record.chat.input.agent.confirmation.tools.create_diagram_file.description',
+    summaryFields: ['kind', 'fileName', 'folderPath', 'contentPreview', 'openAfterCreate'],
+    contentFields: ['contentPreview'],
+  },
+  create_diagram_from_outline: {
+    titleKey: 'record.chat.input.agent.confirmation.tools.create_diagram_from_outline.title',
+    descriptionKey: 'record.chat.input.agent.confirmation.tools.create_diagram_from_outline.description',
+    summaryFields: ['title', 'kind', 'layout', 'fileName', 'folderPath', 'outline'],
+    contentFields: ['outline'],
+  },
+  update_diagram_file: {
+    titleKey: 'record.chat.input.agent.confirmation.tools.update_diagram_file.title',
+    descriptionKey: 'record.chat.input.agent.confirmation.tools.update_diagram_file.description',
+    summaryFields: ['filePath', 'contentPreview', 'expectedModifiedAt'],
+    contentFields: ['contentPreview'],
+  },
   delete_markdown_file: {
     titleKey: 'record.chat.input.agent.confirmation.tools.delete_markdown_file.title',
     descriptionKey: 'record.chat.input.agent.confirmation.tools.delete_markdown_file.description',

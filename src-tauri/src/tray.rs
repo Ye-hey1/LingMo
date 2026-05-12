@@ -1,10 +1,10 @@
+use tauri::Emitter;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
 };
-use tauri::Emitter;
 
 pub const ID_SHOW_MAIN: &str = "show-main";
 pub const ID_SETTINGS: &str = "settings";

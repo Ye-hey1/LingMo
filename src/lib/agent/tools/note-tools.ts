@@ -1,11 +1,10 @@
 import { Tool, ToolResult } from '../types'
 import { BaseDirectory, readTextFile, writeTextFile, remove, rename, copyFile, stat } from '@tauri-apps/plugin-fs'
 import { appDataDir } from '@tauri-apps/api/path'
-import { getAllMarkdownFiles, MarkdownFile } from '@/lib/files'
+import { getAllMarkdownFiles, isLinkedFolder, type LinkedResource, type MarkdownFile } from '@/lib/files'
 import { ensureSafeWorkspaceRelativePath, getFilePathOptions } from '@/lib/workspace'
 import useArticleStore from '@/stores/article'
 import useChatStore from '@/stores/chat'
-import { isLinkedFolder } from '@/lib/files'
 import emitter from '@/lib/emitter'
 import { getVectorDocumentKey } from '@/lib/vector-document-key'
 
@@ -40,13 +39,13 @@ function matchesLinkedFileCandidate(
 
 function getBatchLinkedFileReadPlan(
   filePaths: string[],
-  linkedResource: { relativePath?: string; name?: string; path?: string }
+  linkedResources: Array<{ relativePath?: string; name?: string; path?: string }>
 ): { filesToRead: string[]; skippedFiles: string[] } {
   const filesToRead: string[] = []
   const skippedFiles: string[] = []
 
   for (const filePath of filePaths) {
-    if (matchesLinkedFileCandidate(filePath, linkedResource)) {
+    if (linkedResources.some(resource => matchesLinkedFileCandidate(filePath, resource))) {
       skippedFiles.push(filePath)
     } else {
       filesToRead.push(filePath)
@@ -57,6 +56,21 @@ function getBatchLinkedFileReadPlan(
     filesToRead,
     skippedFiles,
   }
+}
+
+function getEffectiveLinkedFiles(): LinkedResource[] {
+  const { linkedResource, linkedResources } = useChatStore.getState()
+  const resources = linkedResources.length > 0
+    ? linkedResources
+    : linkedResource
+      ? [linkedResource]
+      : []
+
+  return resources.filter(resource => !isLinkedFolder(resource))
+}
+
+function assertNotAborted(signal?: AbortSignal) {
+  signal?.throwIfAborted()
 }
 
 function joinRelativePath(folderPath: string | undefined, fileName: string): string {
@@ -163,25 +177,19 @@ export const readMarkdownFileTool: Tool = {
       const normalizedFilePath = await ensureSafeWorkspaceRelativePath(params.filePath)
 
       // 检查是否已关联该文件到对话中（避免重复读取）
-      const chatStore = useChatStore.getState()
-      const { linkedResource } = chatStore
+      const linkedFile = getEffectiveLinkedFiles().find(resource =>
+        matchesLinkedFileCandidate(normalizedFilePath, resource)
+      )
 
-      // 如果有关联的文件（非文件夹），且路径匹配，则提示内容已在上下文中
-      if (linkedResource && !isLinkedFolder(linkedResource)) {
-        // 提取文件名进行比较，支持相对路径和绝对路径的匹配
-        const requestedFileName = normalizedFilePath.split('/').pop() || normalizedFilePath
-        const linkedFileName = linkedResource.relativePath.split('/').pop() || linkedResource.relativePath
-
-        if (requestedFileName === linkedFileName) {
-          return {
-            success: true,
-            data: {
-              filePath: normalizedFilePath,
-              content: `[该文件内容已在对话上下文中] 文件 "${linkedResource.name}" (${linkedResource.relativePath}) 已关联到当前对话，其完整内容已在上下文中，无需再次读取。请直接使用上下文中已有的文件内容。`,
-              alreadyInContext: true,
-            },
-            message: `文件 "${linkedResource.name}" 已在对话上下文中，无需再次读取`,
-          }
+      if (linkedFile) {
+        return {
+          success: true,
+          data: {
+            filePath: normalizedFilePath,
+            content: `[该文件内容已在对话上下文中] 文件 "${linkedFile.name}" (${linkedFile.relativePath}) 已关联到当前对话，其完整内容已在上下文中，无需再次读取。请直接使用上下文中已有的文件内容。`,
+            alreadyInContext: true,
+          },
+          message: `文件 "${linkedFile.name}" 已在对话上下文中，无需再次读取`,
         }
       }
 
@@ -347,6 +355,7 @@ export const createFileTool: Tool = {
         data: {
           filePath,
           fullPath,
+          output_files: [filePath],
         },
         message: `成功创建文件: ${fullPath}`,
       }
@@ -617,11 +626,13 @@ Use folderPath to limit scope to a specific folder.`,
         allFiles = allFiles.filter(file => file.relativePath.startsWith(normalizedFolderPath))
       }
 
+      const queryLower = params.query.toLowerCase()
       const results: Array<{
         filePath: string
         fileName: string
         matchedContent: string
         lineNumber?: number
+        _score: number
       }> = []
 
       for (const file of allFiles) {
@@ -637,46 +648,71 @@ Use folderPath to limit scope to a specific folder.`,
             content = await readTextFile(path)
           }
 
-          if (content.toLowerCase().includes(params.query.toLowerCase())) {
-            // 按行分割内容
-            const lines = content.split('\n')
+          const contentLower = content.toLowerCase()
+          if (!contentLower.includes(queryLower)) continue
 
-            // 查找匹配的行
-            for (let i = 0; i < lines.length; i++) {
-              if (lines[i].toLowerCase().includes(params.query.toLowerCase())) {
-                // 提取上下文（前后各 2 行）
-                const contextStart = Math.max(0, i - 2)
-                const contextEnd = Math.min(lines.length, i + 3)
-                const contextLines = lines.slice(contextStart, contextEnd)
-
-                // 格式化匹配内容，包含行号
-                const formattedLines = contextLines.map((line, idx) => {
-                  const actualLineNum = contextStart + idx + 1
-                  const isMatchLine = actualLineNum === i + 1
-                  const prefix = isMatchLine ? '>' : ' '
-                  return `${prefix} ${actualLineNum}: ${line}`
-                })
-
-                results.push({
-                  filePath: file.relativePath,
-                  fileName: file.name,
-                  matchedContent: formattedLines.join('\n'),
-                  lineNumber: i + 1,
-                })
-
-                break // 只添加第一个匹配位置，避免重复
-              }
+          // Scoring: title match bonus + occurrence count + heading match bonus
+          let score = 0
+          const titleLower = file.name.toLowerCase()
+          if (titleLower.includes(queryLower)) score += 10
+          // Count occurrences
+          let occIndex = 0
+          let occCount = 0
+          while ((occIndex = contentLower.indexOf(queryLower, occIndex)) !== -1) {
+            occCount++
+            occIndex += queryLower.length
+          }
+          score += Math.min(occCount, 20)
+          // Heading bonus: match appears after a markdown heading line
+          const lines = content.split('\n')
+          let bestMatchLine = -1
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].toLowerCase().includes(queryLower)) {
+              bestMatchLine = i
+              // Check if this line or previous non-empty line is a heading
+              if (/^#{1,6}\s/.test(lines[i])) score += 5
+              if (i > 0 && /^#{1,6}\s/.test(lines[i - 1])) score += 3
+              break // Score based on first match
             }
+          }
+
+          // Find match for content display
+          if (bestMatchLine >= 0) {
+            const i = bestMatchLine
+            const contextStart = Math.max(0, i - 2)
+            const contextEnd = Math.min(lines.length, i + 3)
+            const contextLines = lines.slice(contextStart, contextEnd)
+
+            const formattedLines = contextLines.map((line, idx) => {
+              const actualLineNum = contextStart + idx + 1
+              const isMatchLine = actualLineNum === i + 1
+              const prefix = isMatchLine ? '>' : ' '
+              return `${prefix} ${actualLineNum}: ${line}`
+            })
+
+            results.push({
+              filePath: file.relativePath,
+              fileName: file.name,
+              matchedContent: formattedLines.join('\n'),
+              lineNumber: i + 1,
+              _score: score,
+            })
           }
         } catch (error) {
           console.error(`读取文件 ${file.path} 失败:`, error)
         }
       }
 
+      // Sort by relevance score (descending)
+      results.sort((a, b) => b._score - a._score)
+
+      // Strip internal score from output
+      const cleanResults = results.map(({ _score, ...rest }) => rest)
+
       return {
         success: true,
-        data: results,
-        message: `找到 ${results.length} 个匹配的文件${normalizedFolderPath ? `（文件夹：${normalizedFolderPath}）` : ''}`,
+        data: cleanResults,
+        message: `找到 ${cleanResults.length} 个匹配的文件${normalizedFolderPath ? `（文件夹：${normalizedFolderPath}）` : ''}`,
       }
     } catch (error) {
       return {
@@ -710,6 +746,8 @@ export const readMarkdownFilesBatchTool: Tool = {
   description: 'Batch read the saved on-disk contents of multiple Markdown notes. Prefer `get_editor_content` for any note that is currently open in the editor.',
   category: 'note',
   requiresConfirmation: false,
+  risk: 'low',
+  capabilities: ['read'],
   parameters: [
     {
       name: 'filePaths',
@@ -718,8 +756,9 @@ export const readMarkdownFilesBatchTool: Tool = {
       required: true,
     },
   ],
-  execute: async (params): Promise<ToolResult> => {
+  execute: async (params, context): Promise<ToolResult> => {
     try {
+      assertNotAborted(context?.abortSignal)
       if (!Array.isArray(params.filePaths) || params.filePaths.length === 0) {
         return {
           success: false,
@@ -730,9 +769,9 @@ export const readMarkdownFilesBatchTool: Tool = {
       const results = []
       const errors = []
       const skipped = []
-      const { linkedResource } = useChatStore.getState()
-      const readPlan = linkedResource && !isLinkedFolder(linkedResource)
-        ? getBatchLinkedFileReadPlan(params.filePaths, linkedResource)
+      const linkedFiles = getEffectiveLinkedFiles()
+      const readPlan = linkedFiles.length > 0
+        ? getBatchLinkedFileReadPlan(params.filePaths, linkedFiles)
         : { filesToRead: params.filePaths, skippedFiles: [] }
 
       for (const filePath of readPlan.skippedFiles) {
@@ -743,6 +782,7 @@ export const readMarkdownFilesBatchTool: Tool = {
       }
 
       for (const filePath of readPlan.filesToRead) {
+        assertNotAborted(context?.abortSignal)
         try {
           let content = ''
 
@@ -757,6 +797,7 @@ export const readMarkdownFilesBatchTool: Tool = {
           }
 
           results.push({ filePath: normalizedFilePath, content })
+          assertNotAborted(context?.abortSignal)
         } catch (error) {
           errors.push({ filePath, error: String(error) })
         }
@@ -795,6 +836,8 @@ export const deleteMarkdownFilesBatchTool: Tool = {
   description: 'Batch delete multiple Markdown note files to avoid loop calls.',
   category: 'note',
   requiresConfirmation: true,
+  risk: 'high',
+  capabilities: ['delete'],
   parameters: [
     {
       name: 'filePaths',
@@ -803,8 +846,9 @@ export const deleteMarkdownFilesBatchTool: Tool = {
       required: true,
     },
   ],
-  execute: async (params): Promise<ToolResult> => {
+  execute: async (params, context): Promise<ToolResult> => {
     try {
+      assertNotAborted(context?.abortSignal)
       if (!Array.isArray(params.filePaths) || params.filePaths.length === 0) {
         return {
           success: false,
@@ -818,6 +862,7 @@ export const deleteMarkdownFilesBatchTool: Tool = {
       let currentFileDeleted = false
 
       for (const filePath of params.filePaths) {
+        assertNotAborted(context?.abortSignal)
         try {
           const normalizedFilePath = await ensureSafeWorkspaceRelativePath(filePath)
 
@@ -835,6 +880,7 @@ export const deleteMarkdownFilesBatchTool: Tool = {
           }
 
           results.push(normalizedFilePath)
+          assertNotAborted(context?.abortSignal)
         } catch (error) {
           errors.push({ filePath, error: String(error) })
         }
@@ -843,6 +889,7 @@ export const deleteMarkdownFilesBatchTool: Tool = {
       // 批量删除向量数据库中的记录（只删除成功的文件）
       const { deleteVectorDocumentsByFilename } = await import('@/db/vector')
       for (const filePath of results) {
+        assertNotAborted(context?.abortSignal)
         const filename = filePath.split('/').pop() || filePath
         try {
           await deleteVectorDocumentsByFilename(filename)
@@ -1381,6 +1428,8 @@ export const moveFilesBatchTool: Tool = {
   description: 'Batch move multiple Markdown files to another folder to avoid loop calls. The filenames remain unchanged.',
   category: 'note',
   requiresConfirmation: true,
+  risk: 'medium',
+  capabilities: ['write'],
   parameters: [
     {
       name: 'files',
@@ -1389,8 +1438,9 @@ export const moveFilesBatchTool: Tool = {
       required: true,
     },
   ],
-  execute: async (params): Promise<ToolResult> => {
+  execute: async (params, context): Promise<ToolResult> => {
     try {
+      assertNotAborted(context?.abortSignal)
       if (!Array.isArray(params.files) || params.files.length === 0) {
         return {
           success: false,
@@ -1404,6 +1454,7 @@ export const moveFilesBatchTool: Tool = {
       let currentFileMoved = false
 
       for (const file of params.files) {
+        assertNotAborted(context?.abortSignal)
         try {
           const filePath = await ensureSafeWorkspaceRelativePath(file.filePath)
           const targetFolderPath = await ensureSafeWorkspaceRelativePath(file.targetFolderPath)
@@ -1464,6 +1515,7 @@ export const moveFilesBatchTool: Tool = {
           }
 
           results.push({ oldPath: filePath, newPath: newRelativePath })
+          assertNotAborted(context?.abortSignal)
         } catch (error) {
           errors.push({ filePath: file.filePath, error: String(error) })
         }
@@ -1508,6 +1560,8 @@ export const copyFilesBatchTool: Tool = {
   description: 'Batch copy multiple Markdown files to other folders to avoid loop calls. The original files remain unchanged.',
   category: 'note',
   requiresConfirmation: true,
+  risk: 'medium',
+  capabilities: ['read', 'write'],
   parameters: [
     {
       name: 'files',
@@ -1516,8 +1570,9 @@ export const copyFilesBatchTool: Tool = {
       required: true,
     },
   ],
-  execute: async (params): Promise<ToolResult> => {
+  execute: async (params, context): Promise<ToolResult> => {
     try {
+      assertNotAborted(context?.abortSignal)
       if (!Array.isArray(params.files) || params.files.length === 0) {
         return {
           success: false,
@@ -1530,6 +1585,7 @@ export const copyFilesBatchTool: Tool = {
       const errors = []
 
       for (const file of params.files) {
+        assertNotAborted(context?.abortSignal)
         try {
           const filePath = await ensureSafeWorkspaceRelativePath(file.filePath)
           const targetFolderPath = file.targetFolderPath
@@ -1614,6 +1670,7 @@ export const copyFilesBatchTool: Tool = {
             newPath: newRelativePath,
             newName: newFileName,
           })
+          assertNotAborted(context?.abortSignal)
         } catch (error) {
           errors.push({ filePath: file.filePath, error: String(error) })
         }
@@ -1649,6 +1706,8 @@ export const renameFilesBatchTool: Tool = {
   description: 'Batch rename multiple Markdown files to avoid loop calls. Only changes the filenames, not the folders containing the files.',
   category: 'note',
   requiresConfirmation: true,
+  risk: 'medium',
+  capabilities: ['write'],
   parameters: [
     {
       name: 'files',
@@ -1657,8 +1716,9 @@ export const renameFilesBatchTool: Tool = {
       required: true,
     },
   ],
-  execute: async (params): Promise<ToolResult> => {
+  execute: async (params, context): Promise<ToolResult> => {
     try {
+      assertNotAborted(context?.abortSignal)
       if (!Array.isArray(params.files) || params.files.length === 0) {
         return {
           success: false,
@@ -1672,6 +1732,7 @@ export const renameFilesBatchTool: Tool = {
       let currentFileRenamed = false
 
       for (const file of params.files) {
+        assertNotAborted(context?.abortSignal)
         try {
           const filePath = await ensureSafeWorkspaceRelativePath(file.filePath)
           let newName = file.newName
@@ -1727,6 +1788,7 @@ export const renameFilesBatchTool: Tool = {
             newPath: newRelativePath,
             newName,
           })
+          assertNotAborted(context?.abortSignal)
         } catch (error) {
           errors.push({ filePath: file.filePath, error: String(error) })
         }

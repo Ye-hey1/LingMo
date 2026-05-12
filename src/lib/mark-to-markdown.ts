@@ -37,6 +37,19 @@ export function markToMarkdown(mark: Mark): string {
       const recordingContent = mark.content || '';
       const audioLink = mark.url ? `\n\n[🎵 Audio Recording](${mark.url})` : '';
       return recordingContent + audioLink;
+
+    case 'todo': {
+      try {
+        const todo = JSON.parse(mark.content || '{}')
+        const status = todo.completed ? 'x' : ' '
+        const title = todo.title || mark.desc || '待办'
+        const description = todo.description ? `\n\n${todo.description}` : ''
+        const priority = todo.priority ? `\n\n优先级：${todo.priority}` : ''
+        return `- [${status}] ${title}${description}${priority}`
+      } catch {
+        return mark.desc || mark.content || ''
+      }
+    }
     
     default:
       return mark.content || '';

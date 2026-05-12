@@ -181,6 +181,9 @@
             },
             "beigeDark": {
               "name": "米黄暗"
+            },
+            "warmSand": {
+              "name": "暖阳沙"
             }
           }
         },
@@ -482,6 +485,10 @@
       "title": "编辑器设置",
       "desc": "在这里，你可以对编辑器进行自定义配置，打造更适合你的写作方式。",
       "interfaceSettings": "界面设置",
+      "contentTextScale": "正文文字缩放",
+      "contentTextScaleDesc": "调整编辑器正文的文字大小，适合不同阅读偏好。",
+      "codeTheme": "代码块主题",
+      "codeThemeDesc": "设置编辑器中代码块的语法高亮主题。",
       "centeredContent": "居中内容",
       "centeredContentDesc": "启用后，编辑器内容将在中间显示，两侧留白。",
       "outlineEnable": "默认启用大纲",
@@ -626,12 +633,22 @@
         "preferenceDesc": "语言、格式、风格等",
         "memoryDesc": "事实、经验、专长等",
         "save": "保存记忆",
+        "update": "更新记忆",
         "saving": "保存中..."
       },
       "listTitle": "我的记忆",
       "addMemory": "添加记忆",
+      "editMemory": "编辑记忆",
+      "deleteMemory": "删除记忆",
+      "clearAll": "清空全部",
+      "refresh": "刷新",
+      "cancel": "取消",
+      "confirmClear": "确认清空",
+      "clearConfirmTitle": "清空所有记忆？",
+      "clearConfirmDesc": "这会删除全部长期记忆，包括偏好和普通记忆。此操作无法撤销。",
       "empty": "暂无记忆，添加第一条记忆吧！",
       "emptyHint": "你可以手动添加记忆，或在对话中使用「请记住」「记住这个」等话术让 AI 自动记忆。",
+      "emptyTab": "当前分类没有记忆",
       "preference": "偏好",
       "memory": "记忆",
       "replaced": "已替换",
@@ -643,6 +660,7 @@
       },
       "success": "成功",
       "saved": "记忆已保存",
+      "edited": "记忆已更新",
       "updated": "记忆已更新（已替换相似记忆）",
       "deleted": "记忆已删除",
       "cleared": "所有记忆已清空",
@@ -1161,6 +1179,10 @@
           "desc": "选择用于日常对话的主要 AI 模型"
         }
       },
+      "contentFontSize": {
+        "title": "生成内容字号",
+        "desc": "调整 AI 回答和 Markdown 预览内容的显示大小"
+      },
       "toolbar": {
         "title": "工具栏设置",
         "chatToolbar": {
@@ -1172,6 +1194,9 @@
           },
           "promptSelect": {
             "desc": "选择对话使用的预设提示词"
+          },
+          "promptEnhancer": {
+            "desc": "将简短输入增强为包含笔记上下文的完整任务提示词"
           },
           "chatLanguage": {
             "desc": "设置对话的语言"
@@ -1193,6 +1218,14 @@
           "clipboardMonitor": {
             "title": "剪贴板监听",
             "desc": "自动监听剪贴板内容变化"
+          },
+          "skillsPopover": {
+            "title": "Skills",
+            "desc": "查看当前安装并可供 Agent 使用的 Skills"
+          },
+          "webSearch": {
+            "title": "联网搜索",
+            "desc": "启用 Tavily 联网搜索按钮"
           },
           "newChat": {
             "desc": "开始新对话"
@@ -1424,6 +1457,10 @@
           "desc": "快速打开程序主窗口，并调出文本记录。"
         }
       }
+    },
+    "webSearch": {
+      "title": "\u8054\u7f51\u641c\u7d22",
+      "desc": "\u5728\u8fd9\u91cc\u914d\u7f6e Tavily \u8054\u7f51\u641c\u7d22\u80fd\u529b\uff0c\u5305\u62ec API Key\u3001\u641c\u7d22\u6df1\u5ea6\u548c\u5065\u5eb7\u68c0\u67e5\u3002"
     }
   },
   "record": {
@@ -1529,7 +1566,14 @@
         "cancel": "取消",
         "selectTag": "选择标签",
         "completed": "已完成",
-        "uncompleted": "未完成"
+        "uncompleted": "未完成",
+        "subtasks": "子任务",
+        "subtaskPlaceholder": "输入子任务标题，回车添加",
+        "addSubtask": "添加子任务",
+        "overdue": "逾期",
+        "dueToday": "今日截止",
+        "stats": "统计",
+        "noDueDate": "无截止日期"
       },
       "clipboard": {
         "detectedImage": "检测到剪贴板图片",
@@ -1838,6 +1882,9 @@
           "tooltip": "选择 Prompt",
           "placeholder": "搜索 Prompt"
         },
+        "promptEnhancer": {
+          "tooltip": "增强提示词"
+        },
         "newChat": "开始新对话",
         "chatLanguage": {
           "tooltip": "选择对话语言",
@@ -2007,6 +2054,19 @@
         "lineRange": "引用自 {fileName} 第 {startLine}-{endLine} 行",
         "noLine": "引用自 {fileName}"
       },
+      "citations": {
+        "title": "引用来源",
+        "open": "打开并定位引用内容",
+        "openDisabled": "缺少可打开的文件路径",
+        "currentNote": "当前笔记",
+        "linkedFile": "关联文件",
+        "quotedSelection": "选区引用",
+        "knowledgeBase": "知识库",
+        "mentionedSource": "提及来源",
+        "previewFallback": "点击打开来源文件",
+        "lineSingle": "第 {line} 行",
+        "lineRange": "第 {start}-{end} 行"
+      },
       "note": {
         "organize": "整理",
         "writing": "写作",
@@ -2061,6 +2121,14 @@
       "howToUse": "如何使用同步功能？"
     }
   },
+  "knowledgeGraph": {
+    "title": "知识图谱",
+    "current": "当前文件",
+    "hub": "核心节点",
+    "connected": "已连接",
+    "orphan": "独立笔记",
+    "connections": "个连接"
+  },
   "navigation": {
     "chat": "对话",
     "record": "记录",
@@ -2076,6 +2144,8 @@
     "setting": "设置",
     "activity": "活跃度",
     "files": "笔记",
+    "favorites": "收藏夹",
+    "removeFavorite": "取消收藏",
     "outline": "大纲",
     "showLeftSidebar": "显示左侧边栏",
     "hideLeftSidebar": "隐藏左侧边栏",
@@ -2106,7 +2176,9 @@
     "labels": {
       "record": "记录",
       "writing": "写作",
-      "chat": "对话"
+      "chat": "对话",
+      "ai": "AI",
+      "memory": "记忆"
     },
     "heatmap": {
       "title": "最近 26 周热力图",
@@ -2289,7 +2361,25 @@
         "importing": "正在导入...",
         "importSuccess": "导入成功",
         "importSuccessDesc": "成功导入 {count} 个文件",
-        "importError": "导入失败"
+        "importError": "导入失败",
+        "createMenu": "创建",
+        "newDiagram": "新建图表"
+      },
+      "browser": {
+        "title": "文件浏览",
+        "searchPlaceholder": "搜索文件名或后缀",
+        "clearSearch": "清除搜索",
+        "summary": "显示 {visibleFiles}/{totalFiles} 个文件 · {visibleFolders}/{totalFolders} 个文件夹",
+        "reset": "重置",
+        "emptyTitle": "没有匹配的文件",
+        "emptyDescription": "试试调整搜索词或筛选条件。",
+        "filters": {
+          "all": "全部",
+          "markdown": "Markdown",
+          "pdf": "PDF",
+          "image": "图片",
+          "folder": "文件夹"
+        }
       },
       "sync": {
         "syncingRemote": "正在拉取远程文件",
@@ -2398,8 +2488,37 @@
       },
       "deleteConfirm": "确认删除此文件吗？"
     },
+    "pdf": {
+      "prevPage": "上一页",
+      "nextPage": "下一页",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "fitPage": "适应宽度",
+      "loadError": "无法加载 PDF 文件",
+      "toggleSidebar": "批注面板",
+      "closeSidebar": "关闭",
+      "annotations": "批注",
+      "noAnnotations": "暂无批注",
+      "pageLabel": "第",
+      "deleteAnnotation": "删除批注",
+      "exportAnnotations": "导出批注",
+      "exportSuccess": "批注已导出为 Markdown",
+      "exportError": "导出失败",
+      "highlight": "高亮",
+      "underline": "下划线",
+      "note": "笔记",
+      "addNote": "添加笔记",
+      "cancelAnnotation": "取消",
+      "readingFile": "正在读取文件..."
+    },
     "editor": {
       "copySuccess": "复制成功",
+      "backlinks": "反向链接",
+      "noBacklinks": "暂无反向链接",
+      "outgoingLinks": "出站链接",
+      "unlinkedMentions": "未链接提及",
+      "relatedNotes": "相关笔记",
+      "loadingRelatedNotes": "正在分析相关笔记...",
       "copySuccessDescription": "已复制到剪贴板",
       "search": {
         "placeholder": "在文档中查找",
@@ -2545,7 +2664,7 @@
         "range": "最近 {count} 周",
         "rangePlaceholder": "最近 16 周",
         "drawerEmpty": "选择一个日期查看当天的活动详情。",
-        "drawerSummary": "当天共 {total} 条活动，含 {record} 条记录、{writing} 条写作、{chat} 条对话。"
+        "drawerSummary": "当天共 {total} 条活动，含 {record} 条记录、{writing} 条写作、{chat} 条对话、{ai} 次 AI、{memory} 条记忆。"
       },
       "sync": {
         "title": "同步",
@@ -2665,6 +2784,14 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "blockType": "块类型",
+      "paragraph": "正文",
+      "heading1": "一级标题",
+      "heading2": "二级标题",
+      "heading3": "三级标题",
+      "heading4": "四级标题",
+      "heading5": "五级标题",
+      "heading6": "六级标题",
       "polish": "润色",
       "concise": "精简",
       "expand": "扩展",
@@ -2680,7 +2807,17 @@
       "strike": "删除线",
       "underline": "下划线",
       "inlineCode": "行内代码",
+      "colorMenu": "颜色",
+      "textColor": "字体颜色",
+      "backgroundColor": "背景颜色",
+      "clearTextColor": "清除字体颜色",
       "highlight": "高亮",
+      "clearHighlight": "清除高亮",
+      "restoreDefault": "恢复默认",
+      "alignLeft": "左对齐",
+      "alignCenter": "居中对齐",
+      "alignRight": "右对齐",
+      "clearFormatting": "清除格式",
       "blockquote": "引用",
       "bulletList": "无序列表",
       "orderedList": "有序列表",
@@ -2698,6 +2835,29 @@
         "Arabic": "阿拉伯语"
       },
       "customLanguagePlaceholder": "自定义语言..."
+    },
+    "emptyLineMenu": {
+      "open": "插入或转换块",
+      "basic": "基础",
+      "common": "常用",
+      "task": "任务",
+      "image": "图片",
+      "file": "文件",
+      "videoFile": "视频或文件",
+      "table": "表格",
+      "tablePickerSize": "插入 {rows} 行 x {cols} 列表格",
+      "columns": "分栏",
+      "highlightBlock": "高亮块",
+      "divider": "分割线",
+      "linkFormTitle": "插入链接",
+      "linkText": "链接名称",
+      "linkHref": "链接地址",
+      "linkTextPlaceholder": "例如：OpenAI 文档",
+      "linkHrefPlaceholder": "例如：https://openai.com",
+      "insertLink": "插入",
+      "cancel": "取消",
+      "linkRequired": "请输入链接地址",
+      "insertFailed": "插入失败"
     },
     "aiSuggestion": {
       "accept": "接受",

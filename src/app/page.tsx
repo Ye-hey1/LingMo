@@ -2,11 +2,17 @@
 import { Store } from '@tauri-apps/plugin-store'
 import { useRouter  } from 'next/navigation'
 import { useEffect } from 'react'
-import { isMobileDevice } from '@/lib/check'
+import { checkIsTauri, isMobileDevice } from '@/lib/check'
+import { WebRuntimeNotice } from '@/components/web-runtime-notice'
 
 export default function Home() {
   const router = useRouter()
+  const isTauri = checkIsTauri()
   async function init() {
+    if (!isTauri) {
+      return
+    }
+
     const store = await Store.load('store.json')
     let currentPage = await store.get<string>('currentPage')
     
@@ -34,5 +40,11 @@ export default function Home() {
   }
   useEffect(() => {
     init()
-  }, [])
+  }, [isTauri])
+
+  if (!isTauri) {
+    return <WebRuntimeNotice />
+  }
+
+  return null
 }

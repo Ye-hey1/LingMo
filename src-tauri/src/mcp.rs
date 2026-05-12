@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use tauri::State;
 
 #[cfg(target_os = "windows")]
@@ -80,8 +80,8 @@ fn read_mcp_message<R: Read>(reader: &mut R) -> Result<String, String> {
         }
     }
 
-    let content_length =
-        content_length.ok_or_else(|| format!("Unsupported MCP response prelude: {}", first_line_trimmed))?;
+    let content_length = content_length
+        .ok_or_else(|| format!("Unsupported MCP response prelude: {}", first_line_trimmed))?;
     let mut body = vec![0; content_length];
     reader
         .read_exact(&mut body)
@@ -95,26 +95,45 @@ fn find_npx_path() -> Option<String> {
     // 常见的 npx 安装路径
     let common_paths = vec![
         // macOS/Linux - Volta
-        format!("{}/.volta/bin/npx", std::env::var("HOME").unwrap_or_default()),
+        format!(
+            "{}/.volta/bin/npx",
+            std::env::var("HOME").unwrap_or_default()
+        ),
         // macOS/Linux - Homebrew
         "/usr/local/bin/npx".to_string(),
         "/opt/homebrew/bin/npx".to_string(),
         // macOS/Linux - nvm
-        format!("{}/.nvm/versions/node/*/bin/npx", std::env::var("HOME").unwrap_or_default()),
+        format!(
+            "{}/.nvm/versions/node/*/bin/npx",
+            std::env::var("HOME").unwrap_or_default()
+        ),
         // macOS/Linux - 用户本地
-        format!("{}/.local/bin/npx", std::env::var("HOME").unwrap_or_default()),
+        format!(
+            "{}/.local/bin/npx",
+            std::env::var("HOME").unwrap_or_default()
+        ),
         format!("{}/bin/npx", std::env::var("HOME").unwrap_or_default()),
         // Windows - Volta
-        format!("{}\\AppData\\Local\\Volta\\bin\\npx.cmd", std::env::var("USERPROFILE").unwrap_or_default()),
+        format!(
+            "{}\\AppData\\Local\\Volta\\bin\\npx.cmd",
+            std::env::var("USERPROFILE").unwrap_or_default()
+        ),
         // Windows - Node.js
         "C:\\Program Files\\nodejs\\npx.cmd".to_string(),
-        format!("{}\\AppData\\Roaming\\npm\\npx.cmd", std::env::var("USERPROFILE").unwrap_or_default()),
+        format!(
+            "{}\\AppData\\Roaming\\npm\\npx.cmd",
+            std::env::var("USERPROFILE").unwrap_or_default()
+        ),
     ];
-    
+
     // 首先尝试从 PATH 环境变量中查找
     if let Ok(path_var) = std::env::var("PATH") {
         // Windows 使用分号，Unix 使用冒号
-        let separator = if cfg!(target_os = "windows") { ';' } else { ':' };
+        let separator = if cfg!(target_os = "windows") {
+            ';'
+        } else {
+            ':'
+        };
 
         // 在 Windows 上优先查找 npx.cmd
         if cfg!(target_os = "windows") {
@@ -141,7 +160,7 @@ fn find_npx_path() -> Option<String> {
             }
         }
     }
-    
+
     // 检查常见路径
     for path in &common_paths {
         // 处理通配符路径（nvm）
@@ -185,7 +204,7 @@ pub async fn start_mcp_stdio_server(
             }
         }
     }
-    
+
     // 处理 npx 命令 - 需要找到正确的 npx 路径
     let mut cmd = if command == "npx" || command.ends_with("/npx") || command.ends_with("\\npx") {
         // 尝试找到 npx 的完整路径
@@ -241,12 +260,12 @@ pub async fn start_mcp_stdio_server(
         cmd.args(&args);
         cmd
     };
-    
+
     // 设置标准输入输出
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    
+
     // 设置环境变量
     for (key, value) in env {
         cmd.env(key, value);
@@ -259,16 +278,17 @@ pub async fn start_mcp_stdio_server(
         cmd.creation_flags(CREATE_NO_WINDOW.0);
     }
 
-    let child = cmd.spawn()
+    let child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to spawn process: {}", e))?;
     let child = child;
-    
+
     // 存储进程
     {
         let mut processes = manager.processes.lock().unwrap();
         processes.insert(server_id.clone(), Arc::new(Mutex::new(child)));
     }
-    
+
     Ok(format!("Server {} started", server_id))
 }
 
@@ -285,7 +305,8 @@ pub async fn stop_mcp_server(
 
     if let Some(child) = child {
         let mut child = child.lock().unwrap();
-        child.kill()
+        child
+            .kill()
             .map_err(|e| format!("Failed to kill process: {}", e))?;
 
         Ok(())
@@ -311,17 +332,17 @@ pub async fn send_mcp_message(
         // 获取 stdin 和 stdout
         let payload = encode_mcp_message(&message);
         {
-            let stdin = child.stdin.as_mut()
-                .ok_or("Failed to get stdin")?;
-            stdin.write_all(&payload)
+            let stdin = child.stdin.as_mut().ok_or("Failed to get stdin")?;
+            stdin
+                .write_all(&payload)
                 .map_err(|e| format!("Failed to write framed MCP message: {}", e))?;
-            
-            stdin.flush()
+
+            stdin
+                .flush()
                 .map_err(|e| format!("Failed to flush stdin: {}", e))?;
         }
 
-        let stdout = child.stdout.as_mut()
-            .ok_or("Failed to get stdout")?;
+        let stdout = child.stdout.as_mut().ok_or("Failed to get stdout")?;
         read_mcp_message(stdout)
     } else {
         Err(format!("Server {} not found", server_id))
@@ -338,10 +359,7 @@ mod tests {
         let body = r#"{"jsonrpc":"2.0","id":1}"#;
         let encoded = encode_mcp_message(body);
 
-        assert_eq!(
-            encoded,
-            format!("{}\n", body).into_bytes()
-        );
+        assert_eq!(encoded, format!("{}\n", body).into_bytes());
     }
 
     #[test]

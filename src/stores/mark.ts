@@ -1,4 +1,4 @@
-import { deleteAllMarks, getAllMarks, getMarks, insertMarks, Mark, updateMark } from '@/db/marks'
+import { deleteAllMarks, getAllMarks, getMarks, insertMarks, Mark, updateMark, updateMarksProcessed } from '@/db/marks'
 import { uploadFile as uploadGithubFile, getFiles as githubGetFiles, decodeBase64ToString } from '@/lib/sync/github';
 import { uploadFile as uploadGiteeFile, getFiles as giteeGetFiles } from '@/lib/sync/gitee';
 import { uploadFile as uploadGitlabFile, getFiles as gitlabGetFiles, getFileContent as gitlabGetFileContent } from '@/lib/sync/gitlab';
@@ -23,13 +23,17 @@ export interface MarkQueue {
 }
 
 export type RecordTimePreset = 'all' | 'today' | 'last7Days' | 'last30Days'
+export type RecordProcessState = 'all' | 'unprocessed' | 'processed'
 export type RecordViewMode = 'list' | 'compact' | 'cards'
+
+const DEFAULT_RECORD_PROCESS_STATE: RecordProcessState = 'unprocessed'
 
 export interface RecordFilters {
   search: string
   selectedTypes: Mark["type"][]
   timePreset: RecordTimePreset
   tagId: number | 'all'
+  processState: RecordProcessState
 }
 
 const DEFAULT_RECORD_FILTERS: RecordFilters = {
@@ -37,6 +41,7 @@ const DEFAULT_RECORD_FILTERS: RecordFilters = {
   selectedTypes: [],
   timePreset: 'all',
   tagId: 'all',
+  processState: DEFAULT_RECORD_PROCESS_STATE,
 }
 
 async function persistRecordFilters(recordFilters: RecordFilters) {
@@ -52,10 +57,7 @@ async function persistRecordViewMode(recordViewMode: RecordViewMode) {
 async function fetchVisibleMarks(trashState: boolean) {
   if (trashState) {
     const res = await getAllMarks()
-    return res.map(item => ({
-      ...item,
-      content: item.content || ''
-    })).filter((item) => item.deleted === 1)
+    return res.map(normalizeMark).filter((item) => item.deleted === 1)
   }
 
   const store = await Store.load('store.json')
@@ -65,10 +67,25 @@ async function fetchVisibleMarks(trashState: boolean) {
   }
 
   const res = await getMarks(currentTagId)
-  return res.map(item => ({
-    ...item,
-    content: item.content || ''
-  })).filter((item) => item.deleted === 0)
+  return res.map(normalizeMark).filter((item) => item.deleted === 0)
+}
+
+function normalizeMark(mark: Mark): Mark {
+  return {
+    ...mark,
+    content: mark.content || '',
+    processed: mark.processed === 1 ? 1 : 0,
+    processedAt: mark.processedAt ?? null,
+    pinned: mark.pinned === 1 ? 1 : 0,
+  }
+}
+
+function areSameNumberList(left: number[], right: number[]) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((value, index) => value === right[index])
 }
 
 interface MarkState {
@@ -77,6 +94,7 @@ interface MarkState {
 
   marks: Mark[]
   updateMark: (mark: Mark) => Promise<void>
+  setMarksProcessed: (ids: number[], processed: boolean) => Promise<void>
   setMarks: (marks: Mark[]) => void
   fetchMarks: () => Promise<void>
   fetchAllTrashMarks: () => Promise<void>
@@ -109,6 +127,7 @@ interface MarkState {
   toggleRecordType: (type: Mark["type"]) => void
   setRecordTimePreset: (preset: RecordTimePreset) => void
   setRecordTagId: (tagId: number | 'all') => void
+  setRecordProcessState: (processState: RecordProcessState) => void
   resetRecordFilters: () => void
   hasActiveRecordFilters: () => boolean
   initRecordFilters: () => Promise<void>
@@ -116,6 +135,8 @@ interface MarkState {
   recordViewMode: RecordViewMode
   setRecordViewMode: (mode: RecordViewMode) => void
   initRecordViewMode: () => Promise<void>
+  expandedRecordTagIds: string[]
+  setExpandedRecordTagIds: (tagIds: string[]) => void
 
   // 同步
   syncState: boolean
@@ -151,6 +172,21 @@ const useMarkStore = create<MarkState>((set, get) => ({
     })
     await updateMark(mark)
   },
+  setMarksProcessed: async (ids, processed) => {
+    await updateMarksProcessed(ids, processed)
+    const nextProcessed = processed ? 1 : 0
+    const nextProcessedAt = processed ? Date.now() : null
+    set((state) => {
+      const patchMark = (item: Mark) => ids.includes(item.id)
+        ? { ...item, processed: nextProcessed as 0 | 1, processedAt: nextProcessedAt }
+        : item
+
+      return {
+        marks: state.marks.map(patchMark),
+        allMarks: state.allMarks.map(patchMark),
+      }
+    })
+  },
   setMarks: (marks) => {
     set({ marks })
   },
@@ -166,12 +202,7 @@ const useMarkStore = create<MarkState>((set, get) => ({
   allMarks: [],
   fetchAllMarks: async () => {
     const res = await getAllMarks()
-    const decodeRes = res.map(item => {
-      return {
-        ...item,
-        content: item.content || ''
-      }
-    }).filter((item) => item.deleted === 0)
+    const decodeRes = res.map(normalizeMark).filter((item) => item.deleted === 0)
     set({ allMarks: decodeRes })
   },
 
@@ -240,7 +271,11 @@ const useMarkStore = create<MarkState>((set, get) => ({
   },
   visibleMarkIds: [],
   setVisibleMarkIds: (ids) => {
-    set({ visibleMarkIds: ids })
+    set((state) => (
+      areSameNumberList(state.visibleMarkIds, ids)
+        ? state
+        : { visibleMarkIds: ids }
+    ))
   },
   pendingScrollMarkId: null,
   setPendingScrollMarkId: (id) => {
@@ -299,6 +334,16 @@ const useMarkStore = create<MarkState>((set, get) => ({
       return { recordFilters }
     })
   },
+  setRecordProcessState: (processState) => {
+    set((state) => {
+      const recordFilters = {
+        ...state.recordFilters,
+        processState,
+      }
+      void persistRecordFilters(recordFilters)
+      return { recordFilters }
+    })
+  },
   resetRecordFilters: () => {
     void persistRecordFilters(DEFAULT_RECORD_FILTERS)
     set({
@@ -311,7 +356,8 @@ const useMarkStore = create<MarkState>((set, get) => ({
       recordFilters.search.trim() ||
       recordFilters.selectedTypes.length > 0 ||
       recordFilters.timePreset !== 'all' ||
-      recordFilters.tagId !== 'all'
+      recordFilters.tagId !== 'all' ||
+      recordFilters.processState !== DEFAULT_RECORD_PROCESS_STATE
     )
   },
   initRecordFilters: async () => {
@@ -336,6 +382,10 @@ const useMarkStore = create<MarkState>((set, get) => ({
       await store.set('recordViewMode', recordViewMode)
     }
     set({ recordViewMode })
+  },
+  expandedRecordTagIds: [],
+  setExpandedRecordTagIds: (tagIds) => {
+    set({ expandedRecordTagIds: tagIds })
   },
 
   // 同步

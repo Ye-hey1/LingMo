@@ -1,5 +1,5 @@
-use rusqlite::Connection;
 use crate::skills_v2::error::SkillResult;
+use rusqlite::Connection;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE IF NOT EXISTS skills (
