@@ -28,6 +28,7 @@ import useArticleStore from '@/stores/article'
 import { useNoteIndexStore, type Backlink } from '@/stores/note-index'
 import { useKnowledgeGraphTagsStore, type GraphTagGroup } from '@/stores/knowledge-graph-tags'
 import { DetailPanel } from './detail-panel'
+import emitter from '@/lib/emitter'
 import {
   appendUniqueGraphTagQuery,
   getGraphTagNameFromPath,
@@ -557,21 +558,43 @@ function simulateStep(
 
   // 1a. Repulsion using Barnes-Hut approximation (O(n log n) instead of O(n²))
   if (nodes.length > 60) {
-    // 使用四叉树优化（节点多时）
-    const { buildQuadTree, computeBarnesHutForce, computeBounds } = require('./quadtree') as typeof import('./quadtree')
-    const positions = nodes.map(n => ({ x: n.x, y: n.y }))
-    const bounds = computeBounds(positions)
-    const tree = buildQuadTree(positions, bounds)
-    const theta = 0.7 // 精度参数（0.5=精确, 1.0=快速）
+    // 使用四叉树优化（节点多时）— 注意：这里用同步方式，因为 simulateStep 不是 async
+    // quadtree 模块会被 webpack 打包到同一个 chunk 中
+    try {
+      const quadtree = require('./quadtree')
+      const positions = nodes.map(n => ({ x: n.x, y: n.y }))
+      const bounds = quadtree.computeBounds(positions)
+      const tree = quadtree.buildQuadTree(positions, bounds)
+      const theta = 0.7
 
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i]
-      const { fx, fy } = computeBarnesHutForce(
-        tree, node.x, node.y, bounds.width, theta,
-        physicsRepulsion * effectiveAlpha, MIN_REPULSION_DIST
-      )
-      node.vx += fx
-      node.vy += fy
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i]
+        const { fx, fy } = quadtree.computeBarnesHutForce(
+          tree, node.x, node.y, bounds.width, theta,
+          physicsRepulsion * effectiveAlpha, MIN_REPULSION_DIST
+        )
+        node.vx += fx
+        node.vy += fy
+      }
+    } catch {
+      // quadtree 加载失败，降级到 O(n²)
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i]
+          const b = nodes[j]
+          let dx = b.x - a.x
+          let dy = b.y - a.y
+          if (dx === 0 && dy === 0) { dx = (Math.random() - 0.5) * 2; dy = (Math.random() - 0.5) * 2 }
+          const dist = Math.max(Math.sqrt(dx * dx + dy * dy), MIN_REPULSION_DIST)
+          const force = (physicsRepulsion / dist) * effectiveAlpha
+          const nx = dx / dist
+          const ny = dy / dist
+          a.vx -= nx * force
+          a.vy -= ny * force
+          b.vx += nx * force
+          b.vy += ny * force
+        }
+      }
     }
   } else {
     // 节点少时直接 O(n²)（开销更小因为没有树构建成本）
@@ -1032,10 +1055,10 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
       }
     }
 
-    const emitter = require('@/lib/emitter').default
-    emitter.on('graph-locate-node', handleLocateNode)
+    const emitterInstance = emitter
+    emitterInstance.on('graph-locate-node', handleLocateNode)
     return () => {
-      emitter.off('graph-locate-node', handleLocateNode)
+      emitterInstance.off('graph-locate-node', handleLocateNode)
     }
   }, [zoom])
 
@@ -1288,53 +1311,83 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
       const isHighlighted = highlightedNode === node.id
       const isConnected = activeFocusNode && focusedNeighbors.has(node.id)
       const muted = Boolean(activeFocusNode && !isHovered && !isHighlighted && !isConnected)
-      const radius = node.radius * settings.nodeScale
+      const baseRadius = node.radius * settings.nodeScale
       const alpha = muted ? 0.28 : 1
 
-      // Glow effect for current / hovered nodes
-      if (node.kind === 'current' || isHovered) {
-        ctx.globalAlpha = muted ? 0.1 : 0.4
+      // 呼吸动画：节点微微脉动（基于时间和节点索引错开相位）
+      const breathPhase = (now * 0.001 + index * 0.7) % (Math.PI * 2)
+      const breathScale = 1 + Math.sin(breathPhase) * 0.04 // ±4% 脉动
+
+      // 悬停弹性放大
+      const hoverScale = isHovered ? 1.35 : isHighlighted ? 1.2 : isConnected ? 1.08 : 1
+      const radius = baseRadius * breathScale * hoverScale
+
+      // 柔和外发光（径向渐变）
+      if ((node.kind === 'current' || isHovered || isHighlighted) && !muted) {
+        const glowRadius = radius * 2.5
+        const gradient = ctx.createRadialGradient(node.x, node.y, radius * 0.8, node.x, node.y, glowRadius)
+        const glowColor = node.kind === 'current' ? palette.accent : colors.fill
+        gradient.addColorStop(0, hexToRgba(glowColor, isHovered ? 0.25 : 0.15))
+        gradient.addColorStop(0.5, hexToRgba(glowColor, 0.06))
+        gradient.addColorStop(1, hexToRgba(glowColor, 0))
+        ctx.globalAlpha = 1
         ctx.beginPath()
-        ctx.arc(node.x, node.y, radius + 12, 0, Math.PI * 2)
-        ctx.fillStyle = hexToRgba(palette.accent, 0.12)
-        ctx.fill()
-        ctx.beginPath()
-        ctx.arc(node.x, node.y, radius + 6, 0, Math.PI * 2)
-        ctx.fillStyle = hexToRgba(palette.accent, 0.1)
+        ctx.arc(node.x, node.y, glowRadius, 0, Math.PI * 2)
+        ctx.fillStyle = gradient
         ctx.fill()
       }
 
-      // Hub glow (subtle)
-      if (node.kind === 'hub' && !muted) {
-        ctx.globalAlpha = 0.15
+      // Hub 节点柔和光晕
+      if (node.kind === 'hub' && !muted && !isHovered) {
+        const hubGlow = ctx.createRadialGradient(node.x, node.y, radius, node.x, node.y, radius * 1.8)
+        hubGlow.addColorStop(0, hexToRgba(colors.fill, 0.1))
+        hubGlow.addColorStop(1, hexToRgba(colors.fill, 0))
+        ctx.globalAlpha = 0.6
         ctx.beginPath()
-        ctx.arc(node.x, node.y, radius + 5, 0, Math.PI * 2)
-        ctx.fillStyle = hexToRgba(colors.fill, 0.12)
+        ctx.arc(node.x, node.y, radius * 1.8, 0, Math.PI * 2)
+        ctx.fillStyle = hubGlow
         ctx.fill()
       }
 
-      // Node circle
+      // 节点主体（带微妙渐变）
       ctx.globalAlpha = alpha
+      const nodeGradient = ctx.createRadialGradient(
+        node.x - radius * 0.3, node.y - radius * 0.3, 0,
+        node.x, node.y, radius
+      )
+      nodeGradient.addColorStop(0, isDark ? hexToRgba(colors.fill, 1) : hexToRgba(colors.fill, 0.9))
+      nodeGradient.addColorStop(1, colors.fill)
       ctx.beginPath()
       ctx.arc(node.x, node.y, radius, 0, Math.PI * 2)
-      ctx.fillStyle = colors.fill
+      ctx.fillStyle = nodeGradient
       ctx.fill()
-      // Subtle border
-      ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.55)'
-      ctx.lineWidth = isHovered ? 1.6 : 0.6
-      ctx.stroke()
 
-      // Label
+      // 边框：悬停时更明显
+      if (isHovered || isHighlighted) {
+        ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.8)'
+        ctx.lineWidth = 2
+        ctx.stroke()
+      } else if (!muted) {
+        ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.5)'
+        ctx.lineWidth = 0.8
+        ctx.stroke()
+      }
+
+      // 标签
       if (labelZoomAlpha > 0.02) {
         const label = node.label.length > 20 ? `${node.label.slice(0, 19)}...` : node.label
-        const labelY = node.y + radius + 12
-        ctx.font = `${settings.labelSize + (isHovered ? 1 : 0)}px "Microsoft YaHei", system-ui, sans-serif`
+        const labelY = node.y + radius + 11
+        const fontSize = settings.labelSize + (isHovered ? 1.5 : 0)
+        ctx.font = `${isHovered ? '600' : '400'} ${fontSize}px "Microsoft YaHei", system-ui, sans-serif`
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
-        ctx.globalAlpha = alpha * labelZoomAlpha
-        ctx.shadowColor = isDark ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.95)'
-        ctx.shadowBlur = 3
-        ctx.fillStyle = isDark ? 'rgba(200,200,210,0.9)' : colors.label
+        ctx.globalAlpha = alpha * labelZoomAlpha * (muted ? 0.5 : 1)
+        // 文字阴影（提高可读性）
+        ctx.shadowColor = isDark ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,1)'
+        ctx.shadowBlur = isDark ? 4 : 3
+        ctx.fillStyle = isHovered
+          ? (isDark ? '#ffffff' : palette.accent)
+          : (isDark ? 'rgba(200,200,210,0.85)' : colors.label)
         ctx.fillText(label, node.x, labelY)
         ctx.shadowBlur = 0
       }
@@ -1344,10 +1397,9 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
 
     ctx.restore()
 
-    // Continue animation loop if simulation is active, replaying, or time filtering
-    if (needsSimulationRef.current || isReplaying || timeThreshold !== null) {
-      animationRef.current = requestAnimationFrame(render)
-    }
+    // Continue animation loop: always run for breathing animation
+    // (requestAnimationFrame is efficient — browser skips when tab is hidden)
+    animationRef.current = requestAnimationFrame(render)
   }, [activeTagGroup, hoveredNode, highlightedNode, isReplaying, palette.accent, pan, settings, timeThreshold, timeRange, zoom])
 
   useEffect(() => {
@@ -1799,10 +1851,10 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
         </div>
       )}
 
-      {/* Timeline scrubber — 紧凑浮动条 */}
-      {timeRange && (
+      {/* Timeline scrubber — 只在回放或拖动时显示 */}
+      {timeRange && (isReplaying || isScrubbing || timeThreshold !== null) && (
         <div className="absolute bottom-3 left-1/2 z-[3] -translate-x-1/2 w-[calc(100%-2rem)] max-w-[640px]">
-          <div className="flex items-center gap-2.5 rounded-full border border-stone-200/60 bg-white/88 px-4 py-2 shadow-sm backdrop-blur-xl dark:border-white/8 dark:bg-zinc-900/88">
+          <div className="flex items-center gap-2.5 rounded-full border border-stone-200/60 bg-white/88 px-4 py-2 shadow-sm backdrop-blur-xl dark:border-white/8 dark:bg-zinc-900/88 animate-in fade-in slide-in-from-bottom-2 duration-200">
             {/* 播放/暂停按钮 */}
             <button
               type="button"
@@ -1853,14 +1905,18 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
               />
             </div>
 
-            {/* 日期标签 */}
-            {timeThreshold !== null && timelineSortedNodes[Math.floor(timeThreshold)]?.modifiedAt ? (
-              <span className="shrink-0 text-[10px] text-stone-400 dark:text-zinc-500">
-                {new Date(timelineSortedNodes[Math.floor(timeThreshold)].modifiedAt!).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
-              </span>
-            ) : (
-              <span className="shrink-0 text-[10px] text-stone-400 dark:text-zinc-500">全部</span>
-            )}
+            {/* 关闭按钮 */}
+            <button
+              type="button"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 dark:text-zinc-500 dark:hover:bg-zinc-800"
+              title="关闭时间线"
+              onClick={() => {
+                setTimeThreshold(null)
+                setIsReplaying(false)
+              }}
+            >
+              <X className="h-3 w-3" />
+            </button>
           </div>
         </div>
       )}

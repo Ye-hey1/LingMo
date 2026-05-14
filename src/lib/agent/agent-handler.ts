@@ -1,4 +1,5 @@
 import { ReActAgent, ReActConfig } from './react'
+import { FunctionCallAgent, FunctionCallAgentConfig } from './function-call-agent'
 import { AgentEvent, ToolCall, ReActStep } from './types'
 import useChatStore from '@/stores/chat'
 import { skillManager } from '@/lib/skills'
@@ -29,7 +30,7 @@ export interface AgentHandlerConfig {
 }
 
 export class AgentHandler {
-  private agent: ReActAgent | null = null
+  private agent: ReActAgent | FunctionCallAgent | null = null
   private config: AgentHandlerConfig
   private executing = false
 
@@ -265,7 +266,28 @@ export class AgentHandler {
       currentStepStartTime: Date.now()
     })
 
-    this.agent = new ReActAgent(reactConfig)
+    // 选择 Agent 模式：优先使用 Function Calling（更稳定），降级到 ReAct
+    const useFunctionCalling = await this.shouldUseFunctionCalling()
+
+    if (useFunctionCalling) {
+      // Function Calling 模式 — 通过 API 级别的 tool_calls 调用工具
+      const fcConfig: FunctionCallAgentConfig = {
+        maxIterations: 15,
+        webSearchEnabled: this.config.webSearchEnabled,
+        onIterationStart: reactConfig.onIterationStart,
+        onThought: reactConfig.onThought,
+        onAction: reactConfig.onAction,
+        onObservation: reactConfig.onObservation,
+        onToolCall: reactConfig.onToolCall,
+        onEvent: reactConfig.onEvent,
+        onFinalAnswerRender: reactConfig.onFinalAnswerRender,
+        requestConfirmation: reactConfig.requestConfirmation,
+      }
+      this.agent = new FunctionCallAgent(fcConfig)
+    } else {
+      // ReAct 模式 — 文本解析（降级方案）
+      this.agent = new ReActAgent(reactConfig)
+    }
 
     try {
       const result = await this.agent.run(userInput, contextOrMessages, imageUrls)
@@ -370,6 +392,41 @@ export class AgentHandler {
     } catch (error) {
       console.warn('[AgentHandler] Resume failed:', error)
       return ''
+    }
+  }
+
+  /**
+   * 判断是否应该使用 Function Calling 模式
+   * 条件：模型支持 function calling（大多数现代模型都支持）
+   */
+  private async shouldUseFunctionCalling(): Promise<boolean> {
+    try {
+      const { getAISettings } = await import('@/lib/ai/utils')
+      const aiConfig = await getAISettings()
+      if (!aiConfig) return false
+
+      // 检查模型是否支持 function calling
+      // 大多数现代模型都支持：OpenAI GPT-4/3.5, DeepSeek, Qwen, Claude (via OpenAI compat), etc.
+      // 只有非常老的模型或特殊模型不支持
+      const model = (aiConfig.model || '').toLowerCase()
+      const baseUrl = (aiConfig.baseURL || '').toLowerCase()
+
+      // 已知不支持 function calling 的情况
+      const noFunctionCalling = [
+        model.includes('text-davinci'),
+        model.includes('gpt-3.5-turbo-instruct'),
+        // Ollama 的某些小模型可能不支持
+        baseUrl.includes('ollama') && (model.includes('phi-2') || model.includes('tinyllama')),
+      ]
+
+      if (noFunctionCalling.some(Boolean)) {
+        return false
+      }
+
+      // 默认使用 Function Calling 模式
+      return true
+    } catch {
+      return false
     }
   }
 

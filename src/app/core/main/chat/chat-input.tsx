@@ -327,7 +327,7 @@ export const ChatInput = React.memo(function ChatInput() {
     }
 
     // 知识管理类命令不需要活动数据，直接执行
-    const knowledgeCommands = new Set(['discover-connections', 'generate-flashcards', 'note-summary', 'note-to-mindmap'])
+    const knowledgeCommands = new Set(['discover-connections', 'generate-flashcards', 'note-summary', 'note-to-mindmap', 'auto-wikilink'])
     let data: any = null
 
     if (!knowledgeCommands.has(commandId)) {
@@ -350,17 +350,23 @@ export const ChatInput = React.memo(function ChatInput() {
       return
     }
 
-    // 非 AI 命令（沉淀对话）：直接保存到笔记并打开
+    // 非 AI 命令：直接执行（不需要发送给 Agent）
     if (exec.prompt === null) {
       try {
-        const filePath = await createActivityReviewNote(exec.title, exec.directContent || '')
-        await loadFileTree({ skipRemoteSync: true })
-        const articleStore = useArticleStore.getState()
-        await articleStore.setActiveFilePath(filePath)
-        toast({ title: '已保存为笔记', description: filePath })
+        if (exec.directContent?.startsWith('已生成')) {
+          // 图表等已直接生成的内容，只显示提示
+          toast({ title: '完成', description: exec.directContent })
+        } else if (exec.directContent) {
+          // 有内容需要保存为笔记（如沉淀对话）
+          const filePath = await createActivityReviewNote(exec.title, exec.directContent)
+          await loadFileTree({ skipRemoteSync: true })
+          const articleStore = useArticleStore.getState()
+          await articleStore.setActiveFilePath(filePath)
+          toast({ title: '已保存为笔记', description: filePath })
+        }
       } catch (error) {
         toast({
-          title: '保存失败',
+          title: '执行失败',
           description: error instanceof Error ? error.message : String(error),
           variant: 'destructive',
         })
@@ -1224,8 +1230,15 @@ export const ChatInput = React.memo(function ChatInput() {
       }
 
       if (autoLinkSuppressedRef.current) {
-        removePreviousAutoResource()
-        return
+        // 如果当前打开的文件和之前自动链接的不同，说明用户打开了新文件
+        // 此时重置抑制状态，允许自动链接新文件
+        if (activeFilePath && previousAutoKey !== activeFilePath && !isVirtualEditorPath(activeFilePath)) {
+          autoLinkSuppressedRef.current = false
+          // 继续执行下面的自动链接逻辑
+        } else {
+          removePreviousAutoResource()
+          return
+        }
       }
 
       if (!activeFilePath) {

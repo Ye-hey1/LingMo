@@ -415,17 +415,19 @@ export class ReActAgent {
       this.currentIteration++
       this.emitEvent('iteration.started')
 
-      // 语义循环检测：防止 Agent 陷入无效循环
-      if (this.currentIteration > 3) {
+      // 语义循环检测：防止 Agent 陷入无效循环（只在 5 次迭代后才检测）
+      if (this.currentIteration > 5) {
         const { detectSemanticLoop } = await import('./safety-guards')
         const loopResult = detectSemanticLoop(this.steps)
         if (loopResult.isLoop) {
-          console.warn(`[Agent] Semantic loop detected: ${loopResult.reason}`)
-          finalAnswer = `检测到执行循环（${loopResult.reason}），已自动终止。基于已完成的步骤，以下是当前进展的总结。`
-          // 尝试从已有步骤中提取有用信息
-          const lastSuccessStep = [...this.steps].reverse().find(s => s.observation && !s.observation.includes('失败'))
-          if (lastSuccessStep?.observation) {
-            finalAnswer += `\n\n${lastSuccessStep.observation}`
+          console.warn(`[Agent] Loop detected: ${loopResult.reason}`)
+          // 尝试从已有步骤中提取有用信息作为最终答案
+          const successfulSteps = this.steps.filter(s => s.action && s.observation && !s.observation.includes('失败') && !s.observation.includes('无法解析') && !s.observation.includes('你只输出'))
+          if (successfulSteps.length > 0) {
+            const lastSuccess = successfulSteps[successfulSteps.length - 1]
+            finalAnswer = `基于已完成的分析：\n\n${lastSuccess.observation}`
+          } else {
+            finalAnswer = '抱歉，执行过程中遇到了格式问题，请重试。'
           }
           break
         }
@@ -523,8 +525,22 @@ export class ReActAgent {
         break
       }
 
-      const reasoningOnlyObservation = '你只输出了思考内容，没有给出 Action 或 Final Answer。当前请求如果可以基于已有上下文直接回答，请用 Final Answer 输出完整答案；如果需要工具，请输出有效的 Action。不要把 JSON thought 当作最终答案。'
+      // 根据当前进展生成不同的提示
+      const hasSuccessfulSteps = this.steps.some(s => s.action && s.observation && !s.observation.includes('失败'))
+      const reasoningOnlyObservation = hasSuccessfulSteps
+        ? '你已经获得了工具执行结果，现在请直接用 Final Answer 输出最终分析报告。格式：\n{"final_answer": "你的完整回答（Markdown 格式）"}'
+        : '你只输出了思考内容，没有给出 Action 或 Final Answer。如果需要工具，请输出：\n{"action": "工具名", "action_input": {"参数": "值"}}\n如果可以直接回答，请输出：\n{"final_answer": "你的回答"}'
       if (isIncompleteStructuredAgentJson(thought) || isStructuredThoughtOnlyJson(thought) || isLegacyThoughtOnlyResponse(thought)) {
+        // 如果连续 2 次格式错误且已有工具结果，直接把内容当作 Final Answer
+        const consecutiveFormatErrors = this.steps.slice(-2).filter(s => !s.action).length
+        if (consecutiveFormatErrors >= 2 && hasSuccessfulSteps) {
+          const content = thought.replace(/^(?:Thought|思考)[：:]\s*/i, '').replace(/\{[\s\S]*\}/, '').trim()
+          if (content.length > 20) {
+            finalAnswer = content
+            break
+          }
+        }
+
         this.emitObservation(reasoningOnlyObservation)
         this.steps.push({
           thought,
@@ -570,6 +586,48 @@ export class ReActAgent {
           !isStructuredThoughtOnlyJson(thought) &&
           !isLegacyThoughtOnlyResponse(thought)
         ) {
+          // 检查思考内容中是否提到了工具名——如果提到了，说明 AI 还想继续执行
+          const toolMentionMatch = thoughtContent.match(/\b(safe_grep|safe_read_file|safe_list_files|web_search|web_fetch|web_extract|create_file|read_markdown_file|list_markdown_files|get_editor_content|replace_editor_content|insert_at_cursor|create_diagram_from_outline|generate_flashcards|get_connected_notes|get_graph_overview|suggest_links_for_note|search_markdown_files|analyze_note_topics|build_semantic_relations|get_semantic_relations)\b/i)
+
+          if (toolMentionMatch && this.currentIteration < this.config.maxIterations - 1) {
+            // AI 提到了工具但没有正确格式化——自动构造 Action 让它继续
+            const mentionedTool = toolMentionMatch[1]
+
+            // 尝试从上下文推断参数
+            const autoParams: Record<string, any> = {}
+            if (mentionedTool === 'safe_grep') {
+              // 从文本中提取可能的搜索关键词
+              const keywordMatch = thoughtContent.match(/搜索[""「]?([^""」\n,，。]+)[""」]?|search.*?["']([^"']+)["']/i)
+              if (keywordMatch) {
+                autoParams.query = (keywordMatch[1] || keywordMatch[2]).trim()
+              }
+            } else if (mentionedTool === 'get_connected_notes' || mentionedTool === 'suggest_links_for_note') {
+              // 使用当前活跃文件
+              const { default: useArticleStore } = await import('@/stores/article')
+              const activePath = useArticleStore.getState().activeFilePath
+              if (activePath) autoParams.filePath = activePath
+            }
+
+            // 如果能推断出参数，直接执行；否则提示 AI 重新格式化
+            if (Object.keys(autoParams).length > 0) {
+              const observation = `检测到你想使用 ${mentionedTool}，已自动执行。请根据结果继续。`
+              this.config.onAction?.(mentionedTool, autoParams)
+              this.emitEvent('action.parsed', { tool: mentionedTool, params: autoParams })
+              const toolResult = await this.act(mentionedTool, autoParams, thought)
+              const { truncateObservation } = await import('./safety-guards')
+              const truncatedResult = truncateObservation(toolResult)
+              this.emitObservation(truncatedResult)
+              this.steps.push({ thought, action: { tool: mentionedTool, params: autoParams }, observation: truncatedResult })
+              continue
+            }
+
+            // 无法推断参数，提示重新格式化
+            const observation = `你提到了要使用 ${mentionedTool}，但没有按格式输出。请直接输出：\n{"action": "${mentionedTool}", "action_input": {"参数名": "参数值"}}`
+            this.emitObservation(observation)
+            this.steps.push({ thought, action: undefined, observation })
+            continue
+          }
+
           finalAnswer = thoughtContent
           break
         }

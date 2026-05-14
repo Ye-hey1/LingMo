@@ -143,31 +143,37 @@ export function DetailPanel({
   }, [graphRef, canvasRef, zoom, onSelectNode, onPan])
 
   return (
-    <div className="absolute right-0 top-0 z-[3] h-full w-80 border-l border-stone-200/70 bg-white/95 shadow-[0_14px_40px_-28px_rgba(28,25,23,0.55)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/95">
+    <div
+      className="absolute right-0 top-0 z-[3] h-full w-80 border-l border-stone-200/70 bg-white/95 shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.1)] backdrop-blur-xl transition-transform duration-200 ease-out animate-in slide-in-from-right dark:border-white/10 dark:bg-zinc-900/95 dark:shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.4)]"
+    >
       {/* 头部 */}
-      <div className="flex items-center justify-between border-b border-stone-200/70 px-4 py-3 dark:border-white/10">
-        <span className="text-[13px] font-semibold text-stone-900 dark:text-zinc-50">节点详情</span>
+      <div className="flex items-center justify-between border-b border-stone-200/70 px-4 py-2.5 dark:border-white/10">
+        <div className="flex items-center gap-2">
+          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-stone-100 dark:bg-zinc-800">
+            <FileText className="h-3.5 w-3.5 text-stone-600 dark:text-zinc-300" />
+          </div>
+          <span className="text-[13px] font-semibold text-stone-900 dark:text-zinc-50">详情</span>
+        </div>
         <button
           type="button"
-          className="rounded-full p-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-900 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          className="rounded-full p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-900 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
           onClick={onClose}
         >
-          <X className="h-4 w-4" />
+          <X className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      <div className="h-[calc(100%-52px)] overflow-y-auto">
+      <div className="h-[calc(100%-44px)] overflow-y-auto">
         {/* 笔记标题和元信息 */}
         <div className="border-b border-stone-100 px-4 py-3 dark:border-white/5">
-          <div className="mb-1 text-[14px] font-semibold text-stone-900 dark:text-zinc-50">{node.label}</div>
-          <div className="mb-2 text-[11px] text-stone-400 dark:text-zinc-500 truncate">{node.id}</div>
-          <div className="flex flex-wrap gap-1.5">
-            <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2 py-0.5 text-[10px] text-stone-500 dark:bg-zinc-800 dark:text-zinc-400">
-              <Link2 className="h-2.5 w-2.5" />{node.connections} 连接
+          <div className="mb-1.5 text-[14px] font-semibold leading-tight text-stone-900 dark:text-zinc-50">{node.label}</div>
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            <span className="inline-flex items-center gap-1 rounded-md bg-stone-100/80 px-2 py-0.5 text-[10px] text-stone-500 dark:bg-zinc-800 dark:text-zinc-400">
+              <Link2 className="h-2.5 w-2.5" />{node.connections}
             </span>
             {node.modifiedAt && (
-              <span className="rounded-full bg-stone-100 px-2 py-0.5 text-[10px] text-stone-500 dark:bg-zinc-800 dark:text-zinc-400">
-                {new Date(node.modifiedAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })} 修改
+              <span className="rounded-md bg-stone-100/80 px-2 py-0.5 text-[10px] text-stone-500 dark:bg-zinc-800 dark:text-zinc-400">
+                {new Date(node.modifiedAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
               </span>
             )}
           </div>
@@ -297,22 +303,14 @@ export function DetailPanel({
         </div>
 
         {/* 操作按钮 */}
-        <div className="px-4 py-3 space-y-2">
+        <div className="px-4 py-3">
           <button
             type="button"
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-stone-900 py-2.5 text-[12px] font-medium text-white transition hover:bg-stone-700 active:scale-[0.98] dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-stone-900 py-2 text-[11px] font-medium text-white transition hover:bg-stone-700 active:scale-[0.98] dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
             onClick={() => onOpenNote(selectedNode)}
           >
             <ExternalLink className="h-3.5 w-3.5" />
-            打开笔记
-          </button>
-          <button
-            type="button"
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-stone-200 py-2 text-[11px] font-medium text-stone-700 transition hover:bg-stone-50 active:scale-[0.98] dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-            onClick={() => onOpenNote(selectedNode)}
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            编辑笔记
+            打开并编辑
           </button>
         </div>
       </div>

@@ -712,7 +712,7 @@ export async function createSyncRepo(name: string, isPrivate: boolean = true): P
 
     const requestBody = {
       name: name,
-      description: `note-gen 同步仓库 - ${name}`,
+      description: `LingMo 同步仓库 - ${name}`,
       private: isPrivate,
       auto_init: true,
       default_branch: 'main'

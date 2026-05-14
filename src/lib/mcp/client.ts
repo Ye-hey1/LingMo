@@ -69,7 +69,7 @@ export class MCPClient {
       protocolVersion: '2024-11-05',
       capabilities: {},
       clientInfo: {
-        name: 'note-gen',
+        name: 'lingmo',
         version: '1.0.0',
       },
     })

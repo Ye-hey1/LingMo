@@ -2,7 +2,6 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Sparkles } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { AI_DOC_COMMANDS, filterAiDocCommands, type AiDocCommandId } from '@/lib/ai-doc-commands'
@@ -77,22 +76,17 @@ export function AiDocCommandPopover({
 
   const node = (
     <div
-      className="fixed z-[1000] w-[180px] overflow-hidden rounded-md border border-border/70 bg-popover/95 shadow-md backdrop-blur-sm"
+      className="fixed z-[1000] w-[156px] overflow-hidden rounded-lg border border-border/50 bg-popover/98 shadow-lg shadow-black/8 backdrop-blur-xl animate-in fade-in slide-in-from-bottom-1 duration-150 dark:border-white/10 dark:shadow-black/30"
       style={{
         left: rect.left,
-        bottom: `calc(100vh - ${rect.top}px + 6px)`,
+        bottom: `calc(100vh - ${rect.top}px + 4px)`,
       }}
       onMouseDown={(event) => event.preventDefault()}
     >
-      <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-muted-foreground/80">
-        <Sparkles className="h-2.5 w-2.5" />
-        <span>AI 命令</span>
-        <span className="ml-auto opacity-70">↑↓ Enter Esc</span>
-      </div>
-      <div className="max-h-[220px] overflow-y-auto px-1 pb-1">
+      <div className="max-h-[280px] overflow-y-auto py-1 scrollbar-thin">
         {commands.length === 0 ? (
-          <div className="px-2 py-2 text-center text-[11px] text-muted-foreground">
-            未匹配到命令
+          <div className="px-3 py-4 text-center text-[11px] text-muted-foreground">
+            无匹配命令
           </div>
         ) : (
           commands.map((cmd, index) => {
@@ -107,14 +101,14 @@ export function AiDocCommandPopover({
                   itemRefs.current[index] = el
                 }}
                 className={cn(
-                  'flex w-full items-center gap-2 rounded px-2 py-1 text-left transition-colors',
-                  isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50',
+                  'flex w-full items-center gap-2 px-2.5 py-[6px] text-left transition-colors',
+                  isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/40',
                 )}
                 onMouseEnter={() => onSelectionChange(index)}
                 onClick={() => onSelect(cmd.id)}
               >
-                <Icon className={cn('h-3 w-3 shrink-0', isSelected ? 'text-primary' : 'text-muted-foreground')} />
-                <span className="truncate text-xs font-medium">{cmd.title}</span>
+                <Icon className={cn('h-3.5 w-3.5 shrink-0', isSelected ? 'text-primary' : 'text-muted-foreground/70')} />
+                <span className="truncate text-[12px]">{cmd.title}</span>
               </button>
             )
           })

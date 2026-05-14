@@ -1,4 +1,4 @@
-export const NOTE_GEN_FILE_POINTER_DRAG_EVENT = 'note-gen:file-pointer-drag'
+export const NOTE_GEN_FILE_POINTER_DRAG_EVENT = 'lingmo:file-pointer-drag'
 export const NOTE_GEN_FILE_POINTER_DRAG_THRESHOLD = 5
 
 export type NoteGenFilePointerDragPhase = 'start' | 'move' | 'end' | 'cancel'

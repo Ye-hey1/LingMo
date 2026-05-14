@@ -266,7 +266,7 @@ export function BubbleMenu({
     const { selection } = editor.state
     const { from, to } = selection
 
-    const editorElement = document.querySelector('.ProseMirror')
+    const editorElement = editor.view.dom
     const scrollContainer = editorElement?.parentElement
     if (!editorElement || !scrollContainer) return
 
@@ -364,7 +364,7 @@ export function BubbleMenu({
       const rect = aiSubmenuRef.current!.getBoundingClientRect()
 
       // 直接获取最新编辑器边界
-      const editorElement = document.querySelector('.ProseMirror')
+      const editorElement = editor.view.dom
       if (!editorElement) return
 
       const editorBounds = editorElement.getBoundingClientRect()
@@ -397,7 +397,7 @@ export function BubbleMenu({
       const rect = translateSubmenuRef.current!.getBoundingClientRect()
 
       // 直接获取最新编辑器边界
-      const editorElement = document.querySelector('.ProseMirror')
+      const editorElement = editor.view.dom
       if (!editorElement) return
 
       const editorBounds = editorElement.getBoundingClientRect()
@@ -478,7 +478,7 @@ export function BubbleMenu({
 
   // Update position on scroll
   useEffect(() => {
-    const scrollContainer = document.querySelector('.ProseMirror')?.parentElement
+    const scrollContainer = editor.view.dom?.parentElement
     if (!scrollContainer) return
 
     const handleScroll = () => {

@@ -62,29 +62,31 @@ export async function initNoteRelationsDb() {
 }
 
 export async function upsertNoteRelation(relation: RelationInput) {
-  const db = await getDb()
-  const now = Date.now()
+  return serializedWrite(async () => {
+    const db = await getDb()
+    const now = Date.now()
 
-  await db.execute(
-    `insert into note_relations (source_note, target_note, relation_type, confidence, evidence, source_method, keyword_overlap_score, cosine_sim_score, llm_confirmed, updated_at)
+    await db.execute(
+      `insert into note_relations (source_note, target_note, relation_type, confidence, evidence, source_method, keyword_overlap_score, cosine_sim_score, llm_confirmed, updated_at)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      on conflict(source_note, target_note, source_method)
      do update set relation_type = excluded.relation_type, confidence = excluded.confidence, evidence = excluded.evidence,
        keyword_overlap_score = excluded.keyword_overlap_score, cosine_sim_score = excluded.cosine_sim_score,
        llm_confirmed = excluded.llm_confirmed, updated_at = excluded.updated_at`,
-    [
-      relation.source_note,
-      relation.target_note,
-      relation.relation_type,
-      relation.confidence,
-      relation.evidence || null,
-      relation.source_method,
-      relation.keyword_overlap_score || 0,
-      relation.cosine_sim_score || 0,
-      relation.llm_confirmed || 0,
-      now,
-    ],
-  )
+      [
+        relation.source_note,
+        relation.target_note,
+        relation.relation_type,
+        relation.confidence,
+        relation.evidence || null,
+        relation.source_method,
+        relation.keyword_overlap_score || 0,
+        relation.cosine_sim_score || 0,
+        relation.llm_confirmed || 0,
+        now,
+      ],
+    )
+  })
 }
 
 export async function upsertNoteRelationsBatch(relations: RelationInput[]) {
@@ -161,19 +163,23 @@ export async function getAllRelations(method?: string): Promise<NoteRelation[]> 
 }
 
 export async function deleteRelationsForNote(filename: string) {
-  const db = await getDb()
-  await db.execute(
-    'delete from note_relations where source_note = $1 or target_note = $1',
-    [filename],
-  )
+  return serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute(
+      'delete from note_relations where source_note = $1 or target_note = $1',
+      [filename],
+    )
+  })
 }
 
 export async function deleteRelationsByMethod(method: string) {
-  const db = await getDb()
-  await db.execute(
-    'delete from note_relations where source_method = $1',
-    [method],
-  )
+  return serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute(
+      'delete from note_relations where source_method = $1',
+      [method],
+    )
+  })
 }
 
 export async function getRelationCount(): Promise<{ method: string; count: number }[]> {

@@ -89,7 +89,7 @@ export default function Updater() {
         <div className="flex flex-col md:flex-row md:justify-between w-full md:items-center gap-4 md:gap-0">
           <div className="flex items-center gap-4">
             <div className="size-24">
-              <Image src="/app-icon.png" alt="logo" className="size-24 dark:invert" width={0} height={0} />
+              <Image src="/app-icon.png" alt="logo" className="size-24 rounded-2xl" width={96} height={96} />
             </div>
             <div className="h-24 flex-1 flex flex-col justify-between">
               <span className="text-xl md:text-2xl font-bold flex items-center gap-2">灵墨</span>

@@ -32,6 +32,7 @@ export type AiDocCommandId =
   | 'generate-flashcards'
   | 'note-summary'
   | 'note-to-mindmap'
+  | 'auto-wikilink'
 
 export interface AiDocCommandExecution {
   /** 当为 null 时表示无需调用 AI，使用 directContent 直接写入 */
@@ -266,18 +267,20 @@ export const AI_DOC_COMMANDS: AiDocCommand[] = [
       const contentPreview = currentArticle.slice(0, 3000)
 
       return {
-        prompt: `请分析当前笔记"${fileName}"的内容，找出其中的核心概念和主题，然后使用 get_connected_notes 工具查找与之相关的笔记。如果没有直接关联，请使用 safe_grep 搜索笔记中出现的关键词，发现潜在的关联笔记。
+        prompt: `分析笔记"${fileName}"的关联关系。
 
-当前笔记内容：
+第一步：调用 get_connected_notes 工具查找已有关联：
+{"action": "get_connected_notes", "action_input": {"filePath": "${activeFilePath}"}}
+
+第二步：如果第一步没有找到关联，调用 safe_grep 搜索关键词：
+{"action": "safe_grep", "action_input": {"query": "AI产品经理"}}
+
+第三步：基于搜索结果，用 Final Answer 输出关联分析报告。
+
+当前笔记核心内容（用于提取搜索关键词）：
 ${contentPreview}
 
-请完成以下任务：
-1. 提取当前笔记的 3-5 个核心关键词
-2. 使用工具查找相关笔记
-3. 分析关联关系，给出关联建议（哪些笔记可以互相链接）
-4. 如果发现孤立的知识点，建议创建新的关联
-
-输出格式要求：用清晰的 Markdown 列表展示发现的关联。`,
+注意：每一步必须严格使用 JSON 格式输出 action，不要用自然语言描述你要做什么。`,
         title: `关联发现-${fileName}`,
         rangeLabel: '当前笔记',
         maxTokens: 1600,
@@ -426,36 +429,178 @@ ${contentPreview}
 
       const fileName = activeFilePath.split('/').pop()?.replace(/\.md$/i, '') || '思维导图'
 
-      // 预提取笔记的结构骨架（标题+列表），帮助 AI 快速理解层次
-      const structureSkeleton = extractNoteSkeleton(currentArticle)
-      const isLongNote = currentArticle.length > 3000
+      // 直接生成模式：不走 Agent，直接让 AI 输出大纲，然后本地生成图表
+      // 这比走 Agent 快 5-10 倍（省去工具定义、system prompt、多轮对话）
+      try {
+        const { fetchAi } = await import('@/lib/ai/chat')
+        const { createDiagramContentFromOutline } = await import('@/lib/diagram')
+        const { writeTextFile } = await import('@tauri-apps/plugin-fs')
+        const { getFilePathOptions } = await import('@/lib/workspace')
+        const useArticleStore = (await import('@/stores/article')).default
 
-      // 对长笔记：顶部放结构骨架，底部附完整内容；短笔记直接发全文
-      const contentSection = isLongNote
-        ? `## 笔记结构概览（快速参考）\n\n${structureSkeleton}\n\n## 笔记完整内容（用于补充细节）\n\n${currentArticle}`
-        : `## 笔记完整内容\n\n${currentArticle}`
+        // 提取结构骨架帮助 AI 快速理解
+        const skeleton = extractNoteSkeleton(currentArticle)
+        // 限制内容长度（骨架 + 前 4000 字符足够理解全貌）
+        const contentForAI = skeleton
+          ? `结构概览:\n${skeleton}\n\n正文前段:\n${currentArticle.slice(0, 4000)}`
+          : currentArticle.slice(0, 6000)
 
-      return {
-        prompt: `将笔记"${fileName}"转为思维导图。先看结构概览把握全貌，再从完整内容中补充细节。
+        const aiPrompt = `将以下笔记内容转为思维导图大纲。只输出 Markdown 列表格式的大纲，不要输出其他内容。
+
+规则（diagram-designer 规范）：
+- 不要包含根节点（根节点是"${fileName}"）
+- 直接从一级分支开始，用 "- " 表示
+- 二级用 "  - "，三级用 "    - "
+- 一级分支 4-7 个，覆盖文章所有主要章节
+- 二级分支每个 2-5 个，保留关键数据和术语
+- 三级分支（可选）：重要细节、数据、例子
+- 每个节点用一句话概括，不要缩减为几个字
+- 保留：数字、年份、人名、术语、因果关系
+- 禁止：节点过度精简、遗漏重要段落、同级节点数量严重不均衡
+
+笔记内容:
+${contentForAI}
+
+直接输出大纲（不要解释）:`
+
+        const outline = await fetchAi(aiPrompt)
+
+        if (!outline || outline.trim().length < 20) {
+          return {
+            prompt: null,
+            title: '笔记转图',
+            rangeLabel: '当前笔记',
+            maxTokens: 0,
+            temperature: 0,
+            skipReason: 'AI 未能生成有效大纲，请重试。',
+          }
+        }
+
+        // 本地生成图表文件
+        const diagramFileName = `${fileName}-思维导图.drawio`
+        const content = createDiagramContentFromOutline('mindmap', outline.trim(), {
+          title: fileName,
+          layout: 'mindmap',
+        })
+
+        // 写入文件
+        const { path, baseDir } = await getFilePathOptions(diagramFileName)
+        if (baseDir) {
+          await writeTextFile(path, content, { baseDir })
+        } else {
+          await writeTextFile(path, content)
+        }
+
+        // 刷新文件树并打开
+        const articleStore = useArticleStore.getState()
+        await articleStore.loadFileTree({ skipRemoteSync: true })
+        await articleStore.setActiveFilePath(diagramFileName)
+
+        // 在源笔记中添加链接
+        try {
+          const sourceOpts = await getFilePathOptions(activeFilePath)
+          const sourceContent = sourceOpts.baseDir
+            ? await (await import('@tauri-apps/plugin-fs')).readTextFile(sourceOpts.path, { baseDir: sourceOpts.baseDir })
+            : await (await import('@tauri-apps/plugin-fs')).readTextFile(sourceOpts.path)
+          const diagramName = diagramFileName.replace(/\.drawio$/, '')
+          if (!sourceContent.includes(`[[${diagramName}]]`)) {
+            const updated = sourceContent.trimEnd() + `\n\n---\n相关图表: [[${diagramName}]]\n`
+            if (sourceOpts.baseDir) {
+              await writeTextFile(sourceOpts.path, updated, { baseDir: sourceOpts.baseDir })
+            } else {
+              await writeTextFile(sourceOpts.path, updated)
+            }
+          }
+        } catch { /* 链接创建失败不影响主流程 */ }
+
+        return {
+          prompt: null,
+          directContent: `已生成思维导图: ${diagramFileName}`,
+          title: `思维导图-${fileName}`,
+          rangeLabel: '当前笔记',
+          maxTokens: 0,
+          temperature: 0,
+        }
+      } catch (error) {
+        // 直接生成失败，降级到 Agent 模式
+        const structureSkeleton = extractNoteSkeleton(currentArticle)
+        const contentSection = currentArticle.length > 3000
+          ? `## 结构概览\n\n${structureSkeleton}\n\n## 完整内容\n\n${currentArticle.slice(0, 5000)}`
+          : `## 完整内容\n\n${currentArticle}`
+
+        return {
+          prompt: `将笔记"${fileName}"转为思维导图。
 
 ${contentSection}
 
-## 要求
-
-- 根节点：核心主题。一级分支：主要章节。二级：知识点。三级：细节/数据。
-- 保留重要数据、术语、因果关系，每节点一句话以内。
-- 禁止：根节点与一级重复、遗漏重要段落、过度压缩为几个字。
-
 调用 create_diagram_from_outline，参数：
-- outline: Markdown 列表层级大纲（不含根节点，从一级分支开始）
+- outline: Markdown 列表大纲（不含根节点）
 - title: "${fileName}"
 - kind: "mindmap"
 - layout: "mindmap"
 - fileName: "${fileName}-思维导图"
 - openAfterCreate: true`,
-        title: `思维导图-${fileName}`,
+          title: `思维导图-${fileName}`,
+          rangeLabel: '当前笔记',
+          maxTokens: 2000,
+          temperature: 0.2,
+        }
+      }
+    },
+  },
+  {
+    id: 'auto-wikilink',
+    title: '双向链接',
+    description: '自动发现并建立当前笔记与其他笔记的双向 [[wiki-link]]',
+    icon: Link2,
+    searchTerms: ['双向链接', '链接', 'wikilink', 'wiki', 'link', '自动链接', '反向链接', 'backlink', 'sxlj', 'lianjie'],
+    buildExecution: async () => {
+      const { activeFilePath, currentArticle } = (await import('@/stores/article')).default.getState()
+
+      if (!activeFilePath || !activeFilePath.endsWith('.md')) {
+        return {
+          prompt: null,
+          title: '双向链接',
+          rangeLabel: '当前笔记',
+          maxTokens: 0,
+          temperature: 0,
+          skipReason: '请先打开一篇 Markdown 笔记再使用此命令。',
+        }
+      }
+
+      if (!currentArticle || currentArticle.trim().length < 20) {
+        return {
+          prompt: null,
+          title: '双向链接',
+          rangeLabel: '当前笔记',
+          maxTokens: 0,
+          temperature: 0,
+          skipReason: '当前笔记内容太少，无法进行链接分析。',
+        }
+      }
+
+      const fileName = activeFilePath.split('/').pop()?.replace(/\.md$/, '') || ''
+
+      return {
+        prompt: `请为当前笔记"${fileName}"自动建立双向 wiki-link。
+
+执行步骤：
+1. 先调用 suggest_links_for_note 工具获取链接建议：
+   {"action": "suggest_links_for_note", "action_input": {"filePath": "${activeFilePath}", "maxSuggestions": 12}}
+
+2. 根据返回的建议，对每个高相关性的建议，在当前笔记中找到对应文本并替换为 [[wiki-link]] 格式。使用 get_editor_content 获取当前内容，然后用 replace_editor_content 进行替换。
+
+3. 对于被链接的笔记，如果它们还没有链接回当前笔记，也在它们末尾添加 [[${fileName}]] 的反向链接。
+
+规则：
+- 只链接确实在笔记中出现的其他笔记名称
+- 不要链接已经是 [[xxx]] 格式的文本（避免重复链接）
+- 每个笔记名只链接第一次出现的位置
+- 反向链接添加在目标笔记末尾，格式为：\\n\\n相关笔记: [[${fileName}]]
+- 完成后用 Final Answer 报告建立了哪些链接`,
+        title: `双向链接-${fileName}`,
         rangeLabel: '当前笔记',
-        maxTokens: 3000,
+        maxTokens: 1600,
         temperature: 0.2,
       }
     },

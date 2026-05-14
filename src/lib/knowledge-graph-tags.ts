@@ -1,5 +1,5 @@
 export const KNOWLEDGE_GRAPH_TAG_GROUPS_STORAGE_KEY = 'knowledge-graph-tag-groups'
-export const KNOWLEDGE_GRAPH_TAG_DRAG_TYPE = 'application/x-note-gen-graph-tag-resource'
+export const KNOWLEDGE_GRAPH_TAG_DRAG_TYPE = 'application/x-lingmo-graph-tag-resource'
 
 export interface GraphTagGroup {
   id: string

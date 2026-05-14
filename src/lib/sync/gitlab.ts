@@ -636,7 +636,7 @@ export async function createSyncProject(name: string, isPrivate: boolean = true)
     const requestBody = {
       name: name,
       path: name,
-      description: `note-gen 同步项目 - ${name}`,
+      description: `LingMo 同步项目 - ${name}`,
       visibility: isPrivate ? 'private' : 'public',
       initialize_with_readme: true,
       default_branch: 'main'
