@@ -32,6 +32,7 @@ type RuntimeDefinition = {
   key: string
   label: string
   command: string
+  args?: string[]
 }
 
 const RUNTIMES: RuntimeDefinition[] = [
@@ -39,6 +40,8 @@ const RUNTIMES: RuntimeDefinition[] = [
   { key: 'uvx', label: 'uv / uvx', command: 'uvx' },
   { key: 'bunx', label: 'Bun / bunx', command: 'bunx' },
   { key: 'python3', label: 'Python 3', command: 'python3' },
+  { key: 'python', label: 'Python', command: 'python' },
+  { key: 'py', label: 'Python Launcher / py', command: 'py', args: ['-3'] },
 ]
 
 export function RuntimeEnvironmentCard() {
@@ -110,7 +113,7 @@ export function RuntimeEnvironmentCard() {
   }, [installStage, t])
 
   const runInspection = async (runtime: RuntimeDefinition) => {
-    const inspection = await inspectMcpRuntime(runtime.command)
+    const inspection = await inspectMcpRuntime(runtime.command, runtime.args || [])
     setInspections((prev) => ({ ...prev, [runtime.key]: inspection }))
     return inspection
   }

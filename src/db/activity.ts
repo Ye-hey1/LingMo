@@ -1,4 +1,4 @@
-import { getDb } from './index'
+import { getDb, serializedWrite } from './index'
 import { getAllChats } from './chats'
 import { getAllMarks } from './marks'
 import { getAllMarkdownFiles } from '@/lib/files'
@@ -66,23 +66,25 @@ export async function initActivityDb() {
 }
 
 export async function insertActivityEvent(event: InsertActivityEventInput) {
-  const db = await getDb()
   const createdAt = event.createdAt ?? Date.now()
 
-  return await db.execute(
-    `insert or ignore into activity_events
-      (source, title, description, path, tagId, dedupeKey, createdAt)
-     values ($1, $2, $3, $4, $5, $6, $7)`,
-    [
-      event.source,
-      event.title,
-      event.description ?? null,
-      event.path ?? null,
-      event.tagId ?? null,
-      event.dedupeKey ?? null,
-      createdAt,
-    ]
-  )
+  return serializedWrite(async () => {
+    const db = await getDb()
+    return await db.execute(
+      `insert or ignore into activity_events
+        (source, title, description, path, tagId, dedupeKey, createdAt)
+       values ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        event.source,
+        event.title,
+        event.description ?? null,
+        event.path ?? null,
+        event.tagId ?? null,
+        event.dedupeKey ?? null,
+        createdAt,
+      ]
+    )
+  })
 }
 
 export async function getAllActivityEvents() {

@@ -1,8 +1,8 @@
 import { Chat } from "@/db/chats"
 import useChatStore from "@/stores/chat"
-import { XIcon } from "lucide-react"
+import { CornerUpLeft, RefreshCw, XIcon } from "lucide-react"
 import { clear, hasText, readText } from "tauri-plugin-clipboard-api"
-import { Children, cloneElement, isValidElement, useEffect, useRef, useState } from "react"
+import { Children, cloneElement, isValidElement, Fragment, useEffect, useRef, useState } from "react"
 import { MessageInfo } from "./message-info"
 import { CondensedIndicator } from "./condensed-indicator"
 import { TranslateControl } from "./translate-control"
@@ -10,9 +10,10 @@ import { CopyControl } from "./copy-control"
 import { ReadAloudControl } from "./read-aloud-control"
 import { TooltipButton } from "@/components/tooltip-button"
 import { useTranslations } from 'next-intl';
+import emitter from "@/lib/emitter"
 
 export default function MessageControl({chat, children}: {chat: Chat, children: React.ReactNode}) {
-  const { deleteChat } = useChatStore()
+  const { deleteChat, chats, loading } = useChatStore()
   const [translatedContent, setTranslatedContent] = useState<string>('')
   const [compact, setCompact] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -54,8 +55,58 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
     deleteChat(chat.id)
   }
 
+  function parseMessageImages(chat: Chat) {
+    if (!chat.images) return []
+
+    try {
+      const images = JSON.parse(chat.images)
+      return Array.isArray(images) ? images.filter((image): image is string => typeof image === 'string') : []
+    } catch {
+      return []
+    }
+  }
+
+  function parseMessageQuote(chat: Chat) {
+    if (!chat.quoteData) return null
+
+    try {
+      const quoteData = JSON.parse(chat.quoteData)
+      return quoteData && typeof quoteData === 'object' ? quoteData : null
+    } catch {
+      return null
+    }
+  }
+
+  function emitResendFromUserMessage(targetChat: Chat, restartConversation = false) {
+    const content = targetChat.content?.trim()
+    if (!content || loading) return
+
+    emitter.emit('chat-message-resend', {
+      content,
+      images: parseMessageImages(targetChat),
+      quoteData: parseMessageQuote(targetChat),
+      restartConversation,
+    })
+  }
+
+  function regenerateHandler() {
+    const currentIndex = chats.findIndex(item => item.id === chat.id)
+    const previousUserChat = currentIndex >= 0
+      ? [...chats.slice(0, currentIndex)].reverse().find(item => item.role === 'user' && item.type === 'chat')
+      : null
+
+    if (previousUserChat) {
+      emitResendFromUserMessage(previousUserChat)
+    }
+  }
+
+  function restartFromMessageHandler() {
+    emitResendFromUserMessage(chat, true)
+  }
+
   const actionChildren = Children.map(children, (child) => {
     if (!isValidElement(child)) return child
+    if (child.type === Fragment) return child
     return cloneElement(child, { compact } as Record<string, unknown>)
   })
 
@@ -94,11 +145,35 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
             compact={compact}
           />
 
-          <ReadAloudControl
+            <ReadAloudControl
             chat={chat}
             translatedContent={translatedContent}
             compact={compact}
           />
+
+          {chat.role === 'system' && chat.type === 'chat' ? (
+            <TooltipButton
+              icon={<RefreshCw className='size-4' />}
+              tooltipText="重新生成"
+              variant={"ghost"}
+              size={"sm"}
+              buttonClassName={actionButtonClass}
+              onClick={regenerateHandler}
+              disabled={loading}
+            />
+          ) : null}
+
+          {chat.role === 'user' && chat.type === 'chat' ? (
+            <TooltipButton
+              icon={<CornerUpLeft className='size-4' />}
+              tooltipText="从这里重新开始"
+              variant={"ghost"}
+              size={"sm"}
+              buttonClassName={actionButtonClass}
+              onClick={restartFromMessageHandler}
+              disabled={loading}
+            />
+          ) : null}
 
           <TooltipButton
             icon={<XIcon className='size-4' />}

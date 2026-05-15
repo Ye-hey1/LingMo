@@ -13,6 +13,49 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  useEffect(() => {
+    const shouldReloadForChunkError = (value: unknown) => {
+      const message = value instanceof Error
+        ? `${value.name} ${value.message}`
+        : typeof value === 'string'
+          ? value
+          : String(value ?? '')
+
+      return /ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module|importing a module script failed/i.test(message)
+    }
+
+    const reloadOnce = () => {
+      const key = 'chunk-error-reload'
+      const now = Date.now()
+      const lastReload = Number(sessionStorage.getItem(key) || 0)
+      if (now - lastReload < 3000) {
+        return
+      }
+      sessionStorage.setItem(key, String(now))
+      window.location.reload()
+    }
+
+    const handleError = (event: ErrorEvent) => {
+      if (shouldReloadForChunkError(event.error || event.message)) {
+        event.preventDefault()
+        reloadOnce()
+      }
+    }
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      if (shouldReloadForChunkError(event.reason)) {
+        event.preventDefault()
+        reloadOnce()
+      }
+    }
+
+    window.addEventListener('error', handleError)
+    window.addEventListener('unhandledrejection', handleUnhandledRejection)
+    return () => {
+      window.removeEventListener('error', handleError)
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection)
+    }
+  }, [])
   // 初始化同步推送队列
   useEffect(() => {
     getSyncPushQueue()

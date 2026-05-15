@@ -165,7 +165,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
   const t = useTranslations('article.file')
   const isMobile = useIsMobile()
 
-  // 妫€鏌ヨ矾寰勬槸鍚﹀湪 skills 鏂囦欢澶逛笅
+  // Check whether the path is inside a skills folder.
   const isInSkillsFolder = (itemPath: string): boolean => {
     const parts = itemPath.split('/')
     return parts.some(part => isSkillsFolder(part))
@@ -177,7 +177,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     checkFileVectorIndexed(path)
   }, [path, checkFileVectorIndexed])
 
-  // 鏍规嵁鏂囧瓧澶у皬鏄犲皠鍥炬爣澶у皬
+  // Map text size settings to icon size classes.
   const getIconSize = (textSize: string) => {
     const sizeMap = {
       'xs': 'size-3',
@@ -191,7 +191,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
 
   const iconSize = getIconSize(fileManagerTextSize)
 
-  // 妫€鏌ユ枃浠舵槸鍚﹁鍓垏
+  // Check whether this file is currently cut.
   const isCut = clipboardOperation === 'cut' && clipboardItem?.path === path
 
   const hasVector = item.isFile && !isInSkillsFolder(path) && vectorIndexedFiles.has(path)
@@ -212,7 +212,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
 
   const isRoot = path.split('/').length === 1
   const folderPath = path.includes('/') ? path.split('/').slice(0, -1).join('/') : ''
-  // 涓嶉渶瑕?cloneDeep锛屽洜涓?getCurrentFolder 鍙鍙栨暟鎹笉淇敼
+  // No cloneDeep is needed because getCurrentFolder only reads data here.
   const currentFolder = getCurrentFolder(folderPath, fileTree)
 
   function handleToggleFavorite(event: React.MouseEvent<HTMLButtonElement>) {
@@ -277,19 +277,19 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     setIsComposing(true)
   }, [])
 
-  // 杈撳叆娉曞悎鎴愮粨鏉燂紝杩涜绌烘牸鏇挎崲
+  // Replace spaces after IME composition finishes.
   const handleCompositionEnd = useCallback((e: React.CompositionEvent<HTMLInputElement>) => {
     setIsComposing(false)
     const input = e.currentTarget
     const value = input.value
     const cursorPosition = input.selectionStart || 0
     
-    // 鍙湁褰撳€煎寘鍚┖鏍兼椂鎵嶉渶瑕佹浛鎹㈠拰鎭㈠鍏夋爣浣嶇疆
+    // Only sanitize and restore the cursor when the value contains spaces.
     if (value.includes(' ')) {
       const sanitizedValue = value.replace(/\s+/g, '_')
       setName(sanitizedValue)
       
-      // 璁＄畻鏂扮殑鍏夋爣浣嶇疆锛堢┖鏍煎彉涓轰笅鍒掔嚎锛岄暱搴︿笉鍙橈紝鎵€浠ヤ綅缃繚鎸佷笉鍙橈級
+      // Spaces become underscores, so the cursor offset remains unchanged.
       requestAnimationFrame(() => {
         if (input.selectionStart !== null) {
           input.setSelectionRange(cursorPosition, cursorPosition)
@@ -301,11 +301,11 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
   }, [])
 
   async function handleSelectFile() {
-    // 璁╂枃浠剁鐞嗗櫒鑾峰緱鐒︾偣锛屼互渚垮搷搴斿揩鎹烽敭
+    // Focus the file manager so keyboard shortcuts keep working.
     focusSidebar?.()
     const currentPath = computedParentPath(item)
 
-    // 纭繚涓棿缂栬緫鍣ㄩ潰鏉垮睍寮€
+    // Ensure the center editor panel is visible before selecting the file.
     if (!centerPanelVisible) {
       useSidebarStore.setState({ centerPanelVisible: true })
       localStorage.setItem('centerPanelVisible', 'true')
@@ -423,18 +423,18 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
   }
 
   async function handleDeleteFile() {
-    // 娣诲姞纭寮圭獥
+    // Show delete confirmation before removing the file.
     const answer = await ask(t('deleteConfirm'), {
       title: item.name,
       kind: 'warning',
     });
-    // 濡傛灉鐢ㄦ埛纭鍒犻櫎锛屽垯缁х画鎵ц
+    // Continue only after the user confirms deletion.
     if (answer) {
       try {
         const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
         const workspace = await getWorkspacePath()
 
-        // 浣跨敤褰撳墠璺緞锛岃€屼笉鏄噸鏂拌绠楃殑璺緞
+        // Use the current path instead of recalculating from mutated state.
         const currentPath = computedParentPath(item)
 
         const pathOptions = await getFilePathOptions(currentPath)
@@ -460,10 +460,10 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
           if (index !== undefined && index !== -1 && currentFolder.children) {
             const current = currentFolder.children[index]
             if (current.sha) {
-              // 鏈変簯绔増鏈細鍙爣璁颁负闈炴湰鍦版枃浠讹紝淇濈暀浜戠鏂囦欢
+              // Remote-backed files keep the remote copy and only clear local state.
               current.isLocale = false
             } else {
-              // 绾湰鍦版枃浠讹細鐩存帴浠庢枃浠舵爲涓Щ闄?
+              // Pure local files can be removed from the local tree.
               currentFolder.children.splice(index, 1)
             }
           }
@@ -473,10 +473,10 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
           if (index !== undefined && index !== -1) {
             const current = cacheTree[index]
             if (current.sha) {
-              // 鏈変簯绔増鏈細鍙爣璁颁负闈炴湰鍦版枃浠讹紝淇濈暀浜戠鏂囦欢
+              // Remote-backed files keep the remote copy and only clear local state.
               current.isLocale = false
             } else {
-              // 绾湰鍦版枃浠讹細鐩存帴浠庢枃浠舵爲涓Щ闄?
+              // Pure local files can be removed from the local tree.
               cacheTree.splice(index, 1)
             }
           }
@@ -486,12 +486,12 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         try {
           const { deleteVectorDocumentsByFilename } = await import('@/db/vector')
           await deleteVectorDocumentsByFilename(path)
-          // 浠庡悜閲忕储寮曟槧灏勪腑绉婚櫎
+          // Remove the file from the vector index map.
           const newMap = new Map(vectorIndexedFiles)
           newMap.delete(path)
           setArticleState({ vectorIndexedFiles: newMap })
         } catch (error) {
-          console.error(`鍒犻櫎鏂囦欢 ${item.name} 鐨勫悜閲忔暟鎹け璐?`, error)
+          console.error(`删除文件 ${item.name} 的向量数据失败`, error)
         }
 
         await cleanTabsByDeletedFile(currentPath)
@@ -530,7 +530,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
       }
 
       try {
-        // 鑾峰彇褰撳墠涓昏澶囦唤鏂瑰紡
+        // Read the primary backup method before deleting remotely.
         const store = await Store.load('store.json');
         const backupMethod = await store.get<'github' | 'gitee' | 'gitlab' | 'gitea' | 's3' | 'webdav'>('primaryBackupMethod') || 'github';
         const repoName = backupMethod === 's3' || backupMethod === 'webdav'
@@ -578,21 +578,21 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         }
 
         if (success) {
-          // 鍙洿鏂板綋鍓嶆枃浠剁殑鐘舵€侊紝涓嶅埛鏂版暣涓枃浠舵爲
+          // Update only this file state instead of refreshing the whole file tree.
           const cacheTree = cloneDeep(fileTree)
 
-          // 閫掑綊鏌ユ壘骞舵洿鏂?鍒犻櫎鏂囦欢
+          // Recursively find and update or remove the deleted file.
           const updateOrRemoveFile = (items: typeof cacheTree): boolean => {
             for (let i = 0; i < items.length; i++) {
               const entry = items[i]
               const entryPath = computedParentPath(entry)
               if (entryPath === currentPath && entry.isFile) {
                 if (entry.isLocale) {
-                  // 鏈湴瀛樺湪锛氬彧娓呴櫎杩滅▼ SHA
+                  // Local file still exists, so only clear the remote SHA.
                   entry.sha = undefined
                   entry.loading = undefined
                 } else {
-                  // 鏈湴涓嶅瓨鍦細浠庡垪琛ㄤ腑绉婚櫎
+                  // Local file no longer exists, so remove it from the list.
                   items.splice(i, 1)
                 }
                 return true
@@ -630,7 +630,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
           if (clearLoadingStatus(cacheTree)) {
             setFileTree(cacheTree)
           }
-          throw new Error('鍒犻櫎鎿嶄綔杩斿洖澶辫触')
+          throw new Error('删除操作返回失败')
         }
       } catch (error) {
         const cacheTree = cloneDeep(fileTree)
@@ -650,7 +650,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         if (clearLoadingStatus(cacheTree)) {
           setFileTree(cacheTree)
         }
-        console.error('[handleDeleteSyncFile] 鍒犻櫎杩滅▼鏂囦欢澶辫触:', error);
+        console.error('[handleDeleteSyncFile] 删除远程文件失败:', error);
         toast({
           title: t('context.delete'),
           description: t('context.deleteSyncFileError'),
@@ -661,14 +661,14 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
   }
 
   async function handleStartRename() {
-    // 寤惰繜鎵ц锛岀‘淇濅笂涓嬫枃鑿滃崟瀹屽叏鍏抽棴
+    // Delay until the context menu has fully closed.
     setTimeout(() => {
       setIsEditing(true)
       setTimeout(() => {
         const input = inputRef.current
         if (input) {
           input.focus()
-          // 鍙€変腑鏂囦欢鍚嶏紝涓嶅寘鍚墿灞曞悕
+          // Select only the base file name, excluding the extension.
           const lastDotIndex = item.name.lastIndexOf('.')
           if (lastDotIndex > 0) {
             input.setSelectionRange(0, lastDotIndex)
@@ -690,7 +690,8 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
       finalName = await generateUniqueFilename(parentPath, 'Untitled')
       setName(finalName)
     } else {
-      // 缁熶竴澶勭悊锛氬皢绌烘牸鏇挎崲涓轰笅鍒掔嚎锛岀‘淇濇湰鍦板拰杩滅▼鏂囦欢鍚嶄竴鑷?      finalName = sanitizeFileName(name.replace(/\s+/g, '_'))
+      // Normalize spaces to underscores so local and remote file names stay consistent.
+      finalName = sanitizeFileName(name.replace(/\s+/g, '_'))
       setName(finalName)
     }
   
@@ -723,7 +724,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
           }
 
           if (targetExists) {
-            toast({ title: '鏂囦欢鍚嶅凡瀛樺湪' })
+            toast({ title: '文件名已存在' })
             setTimeout(() => inputRef.current?.focus(), 300)
             return
           }
@@ -748,7 +749,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
           }
 
           if (isExists) {
-            toast({ title: '鏂囦欢鍚嶅凡瀛樺湪' })
+            toast({ title: '文件名已存在' })
             setTimeout(() => inputRef.current?.focus(), 300)
             return
           }
@@ -784,7 +785,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
           newPath = newPath.slice(1)
         }
         setActiveFilePath(newPath)
-        // 鏂板缓鏂囦欢鍚庤嚜鍔ㄩ€夋嫨璇ユ枃浠跺苟璇诲彇鍐呭
+        // Select and read the file after it is created.
         readArticle(newPath, '', shouldAutoSyncOnInitialRead({ isNewFile: operation === 'create' }))
         setIsEditing(false)
       } catch (error) {
@@ -794,13 +795,13 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         await loadFileTree({ skipRemoteSync: true })
         toast({
           title: t('context.rename'),
-          description: '閲嶅懡鍚嶅け璐ワ紝宸叉仮澶嶆枃浠跺垪琛? ' + error,
+          description: '重命名失败，已恢复文件列表：' + error,
           variant: 'destructive',
         })
       }
     } else {
       if (originalName === '') {
-        // 鍙湁褰撳師鏂囦欢鍚嶄负绌猴紙鏂板缓鏂囦欢锛夋椂鎵嶅垹闄ゅ垪琛ㄩ」
+        // Remove the placeholder list item only for a newly-created empty file.
         if (currentFolder && currentFolder.children) {
           const index = currentFolder?.children?.findIndex(item => item.name === '')
           if (index !== undefined && index !== -1 && currentFolder?.children) {
@@ -839,15 +840,15 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
     const workspace = await getWorkspacePath()
     
-    // 纭畾鏂囦欢鎵€鍦ㄧ殑鐩綍璺緞
+    // Resolve the folder path that contains this file.
     const folderPath = item.parent ? computedParentPath(item.parent) : ''
     
-    // 鏍规嵁宸ヤ綔鍖虹被鍨嬬‘瀹氭纭殑璺緞
+    // Open the correct filesystem path based on workspace type.
     if (workspace.isCustom) {
       const pathOptions = await getFilePathOptions(folderPath)
       openPath(pathOptions.path)
     } else {
-      // 榛樿宸ヤ綔鍖?- 浣跨敤 AppData 鐩綍
+      // Default workspace uses the AppData article directory.
       const appDir = await appDataDir()
       openPath(await join(appDir, 'article', folderPath))
     }
@@ -902,12 +903,12 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
       const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
       const workspace = await getWorkspacePath()
 
-      // 绮樿创鐩爣锛氭枃浠舵墍鍦ㄧ殑鐩綍锛堝悓绾х矘璐达級
+      // Paste into the directory that contains the selected file.
       const targetDir = path.includes('/') ? path.split('/').slice(0, -1).join('/') : ''
 
-      // 妫€鏌ユ槸鍚︿細閫犳垚寰幆宓屽
+      // Prevent recursive folder paste operations.
       if (clipboardItem.isDirectory) {
-        // 妫€鏌ユ槸鍚︾矘璐村埌鍏跺瓙鏂囦欢澶瑰唴閮紙targetDir 浠?clipboardItem.path/ 寮€澶达級
+        // Do not paste a parent folder into one of its own child folders.
         if (targetDir.startsWith(clipboardItem.path + '/')) {
           toast({ title: '无法将父文件夹粘贴到其子文件夹内部', variant: 'destructive' })
           return
@@ -923,7 +924,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         const targetPathOptions = await getFilePathOptions(targetPathRelative)
         const sourcePathOptions = await getFilePathOptions(clipboardItem.path)
 
-        // 妫€鏌ユ槸鍚︽槸绮樿创鍒拌嚜韬唴閮紙闇€瑕侀伩鍏嶅惊鐜紩鐢級
+        // Detect pasting a folder into itself so the copy loop can skip the new target.
         const isPasteIntoSelf = targetDir === clipboardItem.path
 
         if (workspace.isCustom) {
@@ -972,19 +973,19 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
 
         await copyDirRecursively(sourcePathOptions.path, targetPathOptions.path)
 
-        // 濡傛灉鏄壀鍒囨搷浣滐紝鍒犻櫎鍘熸枃浠跺す
+        // Remove the original folder after a cut operation.
         if (clipboardOperation === 'cut') {
           if (workspace.isCustom) {
             await remove(sourcePathOptions.path, { recursive: true })
           } else {
             await remove(sourcePathOptions.path, { baseDir: sourcePathOptions.baseDir, recursive: true })
           }
-          // 娓呯悊宸茶鍒犻櫎鐨勫師鏂囦欢澶瑰搴旂殑 tabs
+          // Clean tabs that pointed to the removed source folder.
           await cleanTabsByDeletedFolder(clipboardItem?.path || '')
           setClipboardItem(null, 'none')
         }
       } else {
-        // 绮樿创鏂囦欢
+        // Paste a file.
         const sourcePathOptions = await getFilePathOptions(clipboardItem.path)
         const { generateCopyFilename } = await import('@/lib/default-filename')
         const uniqueFilename = await generateCopyFilename(targetDir, clipboardItem.name)
@@ -1008,7 +1009,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
           } else {
             await remove(sourcePathOptions.path, { baseDir: sourcePathOptions.baseDir })
           }
-          // 娓呯悊宸茶鍒犻櫎鐨勫師鏂囦欢瀵瑰簲鐨?tabs
+          // Clean tabs that pointed to the removed source file.
           await cleanTabsByDeletedFile(clipboardItem?.path || '')
           // Clear clipboard after cut & paste operation
           setClipboardItem(null, 'none')
@@ -1136,7 +1137,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
                   onCompositionStart={handleCompositionStart}
                   onCompositionEnd={handleCompositionEnd}
                   onKeyDown={(e) => {
-                    // 闃绘鍒犻櫎蹇嵎閿啋娉″埌鍏ㄥ眬蹇嵎閿鐞嗗櫒
+                    // Stop delete shortcuts from bubbling to the global handler.
                     if (e.key === 'Backspace' || e.key === 'Delete') {
                       e.stopPropagation()
                     }

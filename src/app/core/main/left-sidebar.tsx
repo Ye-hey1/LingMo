@@ -1,31 +1,32 @@
 'use client'
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Button } from "@/components/ui/button"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { cn } from "@/lib/utils"
-import { ArrowLeft, Brain, Files, Globe, Highlighter, Network, Settings, Star, WalletCards } from "lucide-react"
-import useArticleStore from "@/stores/article"
-import { FileSidebar } from "./file"
-import { FileActions } from "./file/file-actions"
-import { FavoritesSection } from "./file/favorites-section"
-import { NoteSidebar } from "./mark"
-import { MarkActions } from "./mark/mark-actions"
-import { useTranslations } from "next-intl"
-import { useSidebarStore } from "@/stores/sidebar"
-import useFavoritesStore from "@/stores/favorites"
-import { KNOWLEDGE_GRAPH_TAB_PATH } from "./knowledge/knowledge-graph-constants"
-import { FLASHCARD_TAB_PATH } from "./flashcard/flashcard-constants"
-import { MEMORY_TAB_PATH } from "./memory/memory-constants"
-import { useEffect, useRef, type ReactNode } from "react"
-import useUpdateStore from "@/stores/update"
-import { useSettingsDialogStore } from "@/stores/settings-dialog"
-const SIDEBAR_TABS = [
-  { title: "files", icon: Files },
-  { title: "notes", icon: Highlighter },
-] as const
+import { useEffect, useRef, type ReactNode } from 'react'
+import { useTranslations } from 'next-intl'
+import { ArrowLeft, Brain, Files, Highlighter, Network, Settings, Star, WalletCards } from 'lucide-react'
 
-const WEB_CLIPS_FOLDER_PATH = 'web-clips'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { cn } from '@/lib/utils'
+import useArticleStore from '@/stores/article'
+import useFavoritesStore from '@/stores/favorites'
+import { useSettingsDialogStore } from '@/stores/settings-dialog'
+import { useSidebarStore } from '@/stores/sidebar'
+import useUpdateStore from '@/stores/update'
+
+import { FavoritesSection } from './file/favorites-section'
+import { FileActions } from './file/file-actions'
+import { FileSidebar } from './file/index'
+import { FLASHCARD_TAB_PATH } from './flashcard/flashcard-constants'
+import { KNOWLEDGE_GRAPH_TAB_PATH } from './knowledge/knowledge-graph-constants'
+import { MarkActions } from './mark/mark-actions'
+import { NoteSidebar } from './mark/index'
+import { MEMORY_TAB_PATH } from './memory/memory-constants'
+
+const SIDEBAR_TABS = [
+  { title: 'files', icon: Files },
+  { title: 'notes', icon: Highlighter },
+] as const
 
 function SidebarRailButton({
   active,
@@ -34,7 +35,7 @@ function SidebarRailButton({
   label,
   className,
   onClick,
-  tooltipSide = "right",
+  tooltipSide = 'right',
 }: {
   active?: boolean
   disabled?: boolean
@@ -42,7 +43,7 @@ function SidebarRailButton({
   label: string
   className?: string
   onClick?: () => void
-  tooltipSide?: "left" | "right"
+  tooltipSide?: 'left' | 'right'
 }) {
   return (
     <Tooltip>
@@ -55,8 +56,8 @@ function SidebarRailButton({
           disabled={disabled}
           onClick={onClick}
           className={cn(
-            "size-8 rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
-            active && "bg-background text-foreground shadow-sm ring-1 ring-border/70",
+            'size-8 rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground',
+            active && 'bg-background text-foreground shadow-sm ring-1 ring-border/70',
             className,
           )}
         >
@@ -71,47 +72,20 @@ function SidebarRailButton({
 }
 
 export function LeftSidebarRail() {
-  const {
-    leftSidebarTab,
-    leftSidebarVisible,
-    centerPanelVisible,
-    setLeftSidebarTab,
-    toggleLeftSidebar,
-    toggleCenterPanel,
-  } = useSidebarStore()
-  const {
-    activeFilePath,
-    setActiveFilePath,
-    ensurePathExpanded,
-    loadFileTree,
-  } = useArticleStore()
+  const { leftSidebarTab, leftSidebarVisible, centerPanelVisible, setLeftSidebarTab, toggleLeftSidebar, toggleCenterPanel } = useSidebarStore()
+  const { activeFilePath, setActiveFilePath } = useArticleStore()
   const { hasUpdate } = useUpdateStore()
-  const isSettingsOpen = useSettingsDialogStore(state => state.isOpen)
-  const closeSettingsDialog = useSettingsDialogStore(state => state.close)
-  const openSettingsDialog = useSettingsDialogStore(state => state.open)
+  const isSettingsOpen = useSettingsDialogStore((state) => state.isOpen)
+  const closeSettingsDialog = useSettingsDialogStore((state) => state.close)
+  const openSettingsDialog = useSettingsDialogStore((state) => state.open)
   const t = useTranslations()
-  const tCommon = useTranslations("common")
-  const isWebClipsActive = activeFilePath === WEB_CLIPS_FOLDER_PATH || activeFilePath.startsWith(`${WEB_CLIPS_FOLDER_PATH}/`)
+  const tCommon = useTranslations('common')
 
   const openFavorites = async () => {
     if (!leftSidebarVisible) {
       await toggleLeftSidebar()
     }
-    await setLeftSidebarTab("favorites")
-  }
-
-  const openWebClips = async () => {
-    if (!leftSidebarVisible) {
-      await toggleLeftSidebar()
-    }
-    await setLeftSidebarTab("files")
-    try {
-      await loadFileTree({ skipRemoteSync: true })
-    } catch {
-      // Keep quick access responsive even if refresh fails.
-    }
-    await ensurePathExpanded(WEB_CLIPS_FOLDER_PATH)
-    await setActiveFilePath(WEB_CLIPS_FOLDER_PATH)
+    await setLeftSidebarTab('favorites')
   }
 
   const openKnowledgeGraph = async () => {
@@ -140,19 +114,11 @@ export function LeftSidebarRail() {
       <aside className="left-sidebar-rail">
         <div className="left-sidebar-rail-actions">
           <SidebarRailButton
-            active={leftSidebarVisible && leftSidebarTab === "favorites"}
+            active={leftSidebarVisible && leftSidebarTab === 'favorites'}
             icon={<Star className="size-4" />}
             label={t('navigation.favorites')}
             onClick={() => {
               void openFavorites()
-            }}
-          />
-          <SidebarRailButton
-            active={leftSidebarVisible && leftSidebarTab === "files" && isWebClipsActive}
-            icon={<Globe className="size-4" />}
-            label="网页剪藏"
-            onClick={() => {
-              void openWebClips()
             }}
           />
           <SidebarRailButton
@@ -183,15 +149,15 @@ export function LeftSidebarRail() {
         <div className="mt-auto flex flex-col items-center gap-2 pb-1">
           <SidebarRailButton
             active={isSettingsOpen}
-            icon={
+            icon={(
               <span className="relative">
                 <Settings className="size-4" />
                 {hasUpdate && !isSettingsOpen ? (
                   <span className="absolute -right-1 -top-1 size-2 rounded-full bg-red-500" />
                 ) : null}
               </span>
-            }
-            label={tCommon("settings")}
+            )}
+            label={tCommon('settings')}
             className="relative"
             onClick={() => {
               if (isSettingsOpen) {
@@ -210,16 +176,16 @@ export function LeftSidebarRail() {
 export function LeftSidebar() {
   const { leftSidebarTab, leftSidebarVisible, setLeftSidebarTab } = useSidebarStore()
   const { initFavorites } = useFavoritesStore()
-  const previousPrimaryTabRef = useRef<"files" | "notes">("files")
+  const previousPrimaryTabRef = useRef<'files' | 'notes'>('files')
   const t = useTranslations()
-  const isFavoritesTab = leftSidebarTab === "favorites"
+  const isFavoritesTab = leftSidebarTab === 'favorites'
 
   useEffect(() => {
     void initFavorites()
   }, [initFavorites])
 
   useEffect(() => {
-    if (leftSidebarTab === "files" || leftSidebarTab === "notes") {
+    if (leftSidebarTab === 'files' || leftSidebarTab === 'notes') {
       previousPrimaryTabRef.current = leftSidebarTab
     }
   }, [leftSidebarTab])
@@ -230,11 +196,11 @@ export function LeftSidebar() {
 
   return (
     <TooltipProvider>
-      <div className={cn("left-sidebar-shell h-full w-full overflow-hidden", !leftSidebarVisible && "is-collapsed")}>
+      <div className={cn('left-sidebar-shell h-full w-full overflow-hidden', !leftSidebarVisible && 'is-collapsed')}>
         <Tabs
           value={leftSidebarTab}
           onValueChange={(value) => {
-            void setLeftSidebarTab(value as typeof SIDEBAR_TABS[number]["title"])
+            void setLeftSidebarTab(value as (typeof SIDEBAR_TABS)[number]['title'])
           }}
           className="flex h-full w-full flex-col"
         >
@@ -277,8 +243,8 @@ export function LeftSidebar() {
                   })}
                 </TabsList>
                 <div className="shrink-0">
-                  {leftSidebarTab === "files" ? <FileActions compact showImport={false} /> : null}
-                  {leftSidebarTab === "notes" ? <MarkActions /> : null}
+                  {leftSidebarTab === 'files' ? <FileActions compact showImport={false} /> : null}
+                  {leftSidebarTab === 'notes' ? <MarkActions /> : null}
                 </div>
               </div>
             )}

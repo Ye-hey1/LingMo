@@ -1,8 +1,7 @@
 import { readTextFile, readDir, BaseDirectory, DirEntry } from "@tauri-apps/plugin-fs";
 import { fetchEmbedding, rerankDocuments } from "./ai";
 import {
-  upsertVectorDocument,
-  deleteVectorDocumentsByFilename,
+  replaceVectorDocumentsForFile,
   getSimilarDocuments,
   getVectorDocumentsByFilename,
   initVectorDb,
@@ -529,35 +528,41 @@ export async function processMarkdownFile(
       }
     }
 
-    await deleteVectorDocumentsByFilename(vectorDocumentKey);
-    if (legacyFilename !== vectorDocumentKey) {
-      await deleteVectorDocumentsByFilename(legacyFilename);
-    }
-
     const indexedAt = Date.now();
-    const results = await runWithConcurrencyLimit(
+    const vectorDocs = (
+      await runWithConcurrencyLimit(
       chunks.map((chunk, index) => async () => {
         const embedding = await getEmbeddingForChunk(chunk, persistedEmbeddingCache);
         if (!embedding) {
           console.error(`Failed to compute embedding for ${vectorDocumentKey} chunk ${index + 1}`);
-          return false;
+          return null;
         }
 
-        await upsertVectorDocument({
+        return {
           filename: vectorDocumentKey,
           chunk_id: index,
           content: chunk,
           embedding: JSON.stringify(embedding),
           updated_at: indexedAt
-        });
-        return true;
+        } satisfies Omit<VectorDocument, 'id'>;
       }),
       2
-    );
+    )).filter((doc): doc is Omit<VectorDocument, 'id'> => Boolean(doc));
 
-    if (!results.some(Boolean)) {
+    if (vectorDocs.length === 0) {
+      await replaceVectorDocumentsForFile(
+        vectorDocumentKey,
+        [],
+        legacyFilename !== vectorDocumentKey ? [legacyFilename] : [],
+      );
       return false;
     }
+
+    await replaceVectorDocumentsForFile(
+      vectorDocumentKey,
+      vectorDocs,
+      legacyFilename !== vectorDocumentKey ? [legacyFilename] : [],
+    );
 
     return true;
   } catch (error) {

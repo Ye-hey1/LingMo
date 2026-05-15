@@ -12,6 +12,7 @@ import {
 import { ModelSelector } from "./model-selector"
 import { PromptSelector } from "./prompt-selector"
 import { ClipboardToggle } from "./clipboard-toggle"
+import { ChatModeSelector } from "./chat-mode-selector"
 import { useTranslations } from "next-intl"
 
 export function ChatSettingsDrawer() {
@@ -37,6 +38,7 @@ export function ChatSettingsDrawer() {
             <div className="h-16 flex items-center w-full">
               <ModelSelector />
             </div>
+            <ChatModeSelector />
             <div className="h-16 flex items-center w-full">
               <PromptSelector />
             </div>

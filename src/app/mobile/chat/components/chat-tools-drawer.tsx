@@ -13,6 +13,7 @@ import { RagToggle } from "./rag-toggle"
 import { McpSelector } from "./mcp-selector"
 import { ModelSelector } from "./model-selector"
 import { PromptSelector } from "./prompt-selector"
+import { ChatModeSelector } from "./chat-mode-selector"
 import { useTranslations } from "next-intl"
 
 export function ChatToolsDrawer() {
@@ -38,6 +39,7 @@ export function ChatToolsDrawer() {
             <div className="h-16 flex items-center w-full">
               <ModelSelector />
             </div>
+            <ChatModeSelector />
             <div className="h-16 flex items-center w-full">
               <PromptSelector />
             </div>

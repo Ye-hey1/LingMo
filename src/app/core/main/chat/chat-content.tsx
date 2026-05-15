@@ -18,12 +18,14 @@ import { Button } from '@/components/ui/button'
 import { McpToolCallCard } from './mcp-tool-call'
 import { AgentExecutionStatus } from './agent-execution-status'
 import { AgentPanelWithRag } from './agent-panel-with-rag'
+import { TaskPlanProgress } from './task-plan-progress'
 import { ChatImages } from "./chat-images"
 import { useIsMobile } from '@/hooks/use-mobile'
 import { MessageCitations } from './message-citations'
 import { cleanAssistantGeneratedContent } from '@/lib/ai/assistant-content'
 import { extractWebCitationDetails, parseStoredAgentHistory, type MessageCitationDetail } from '@/lib/ai/citations'
 import { highlightTextReact } from '@/lib/highlight'
+import { parseResearchProgressView } from '@/lib/research/progress-status'
 
 const BOTTOM_THRESHOLD = 24
 const USER_SCROLL_GRACE_MS = 300
@@ -299,6 +301,11 @@ const MessageWrapper = React.memo(function MessageWrapper({ chat, children }: { 
           <div className='text-sm leading-6 wrap-break-word text-primary-foreground'>
             {children}
           </div>
+          <div className="mt-1">
+            <MessageControl chat={chat}>
+              <></>
+            </MessageControl>
+          </div>
           {shouldShowDelete && (
             <Button
               onClick={(event) => {
@@ -342,6 +349,10 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
   const liveFinalAnswerContent = useMemo(
     () => cleanAssistantGeneratedContent(agentState.finalAnswerContent || ''),
     [agentState.finalAnswerContent]
+  )
+  const researchProgress = useMemo(
+    () => chat.role === 'system' ? parseResearchProgressView(content) : null,
+    [chat.role, content],
   )
 
   const handleRemoveClearContext = useCallback(() => {
@@ -507,7 +518,11 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
             )}
 
             <ChatThinking chat={chat} />
-            <ChatPreview text={displayContent || ''} streaming={loading && isActiveAgentMessage} highlightQuery={searchQuery} />
+            {researchProgress ? (
+              <TaskPlanProgress content={content || ''} compact={false} className="max-w-2xl" />
+            ) : (
+              <ChatPreview text={displayContent || ''} streaming={loading && isActiveAgentMessage} highlightQuery={searchQuery} />
+            )}
             <MessageCitations
               sources={ragSources}
               details={citationDetails}

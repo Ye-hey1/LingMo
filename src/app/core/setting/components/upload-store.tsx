@@ -1,4 +1,14 @@
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { DownloadCloud, Loader2, UploadCloud } from "lucide-react";
 import { Store } from "@tauri-apps/plugin-store";
 import { uint8ArrayToBase64, uploadFile as uploadGithubFile, getFiles as githubGetFiles, decodeBase64ToString } from "@/lib/sync/github";
@@ -11,7 +21,6 @@ import { toast } from "@/hooks/use-toast";
 import { useState } from "react";
 import { isMobileDevice } from "@/lib/check";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { useTranslations } from "next-intl";
 import useUsername from "@/hooks/use-username";
 import { filterSyncData, mergeSyncData } from "@/config/sync-exclusions";
@@ -19,12 +28,11 @@ import { filterSyncData, mergeSyncData } from "@/config/sync-exclusions";
 export default function UploadStore() {
   const [upLoading, setUploading] = useState(false)
   const [downLoading, setDownLoading] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<'upload' | 'download' | null>(null)
   const t = useTranslations('settings.uploadStore')
   const username = useUsername()
 
   async function upload() {
-    const confirmRef = await confirm(t('uploadConfirm'))
-    if (!confirmRef) return
     setUploading(true)
     const path = '.settings'
     const filename = 'store.json'
@@ -106,8 +114,6 @@ export default function UploadStore() {
   }
 
   async function download() {
-    const res = await confirm(t('downloadConfirm'))
-    if (!res) return
     setDownLoading(true)
     const path = '.settings'
     const filename = 'store.json'
@@ -167,15 +173,60 @@ export default function UploadStore() {
     username ? (
     <div className="flex gap-1 flex-col md:border-t justify-center items-center">
       <div className="flex gap-2">
-        <Button variant={'ghost'} size={'sm'} onClick={upload} disabled={upLoading}>
+        <Button
+          variant={'ghost'}
+          size={'sm'}
+          onClick={() => setConfirmAction('upload')}
+          disabled={upLoading}
+        >
           {upLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud />}
           <span className="hidden md:inline">{t('upload')}</span>
         </Button>
-        <Button variant={'ghost'} size={'sm'} onClick={download} disabled={downLoading}>
+        <Button
+          variant={'ghost'}
+          size={'sm'}
+          onClick={() => setConfirmAction('download')}
+          disabled={downLoading}
+        >
           {downLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <DownloadCloud />}
           <span className="hidden md:inline">{t('download')}</span>
         </Button>
       </div>
+      <AlertDialog
+        open={confirmAction !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setConfirmAction(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction === 'upload' ? t('upload') : t('download')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction === 'upload' ? t('uploadConfirm') : t('downloadConfirm')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = confirmAction
+                setConfirmAction(null)
+                if (action === 'upload') {
+                  void upload()
+                } else if (action === 'download') {
+                  void download()
+                }
+              }}
+            >
+              {t('common.confirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
     ) : null
   )

@@ -1137,16 +1137,15 @@ const useSettingStore = create<SettingState>((set, get) => ({
   // 聊天工具栏配置 - PC 端
   chatToolbarConfigPc: [
     // 底部工具栏（可排序）
-      { id: 'modelSelect', enabled: true, order: 0 },
-      { id: 'promptSelect', enabled: true, order: 1 },
-      { id: 'promptEnhancer', enabled: true, order: 2 },
-      { id: 'mcpButton', enabled: true, order: 3 },
-      { id: 'ragSwitch', enabled: true, order: 4 },
-      { id: 'clipboardMonitor', enabled: true, order: 5 },
-      { id: 'skillsPopover', enabled: true, order: 6 },
-      { id: 'webSearch', enabled: true, order: 7 },
+      { id: 'chatModeSelect', enabled: true, order: 0 },
+      { id: 'promptEnhancer', enabled: true, order: 1 },
+      { id: 'mcpButton', enabled: true, order: 2 },
+      { id: 'ragSwitch', enabled: true, order: 3 },
+      { id: 'clipboardMonitor', enabled: true, order: 4 },
+      { id: 'skillsPopover', enabled: true, order: 5 },
+      { id: 'webSearch', enabled: true, order: 6 },
       // 顶部工具栏 - 右侧（不参与排序）
-      { id: 'newChat', enabled: true, order: 8 },
+      { id: 'newChat', enabled: true, order: 7 },
   ],
   setChatToolbarConfigPc: async (config: ChatToolbarItem[]) => {
     set({ chatToolbarConfigPc: config })
@@ -1157,15 +1156,14 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   // 聊天工具栏配置 - 移动端
   chatToolbarConfigMobile: [
-      { id: 'modelSelect', enabled: true, order: 0 },
-      { id: 'promptSelect', enabled: true, order: 1 },
-      { id: 'promptEnhancer', enabled: true, order: 2 },
-      { id: 'mcpButton', enabled: true, order: 3 },
-      { id: 'ragSwitch', enabled: true, order: 4 },
-      { id: 'clipboardMonitor', enabled: true, order: 5 },
-      { id: 'skillsPopover', enabled: true, order: 6 },
-      { id: 'webSearch', enabled: true, order: 7 },
-      { id: 'newChat', enabled: true, order: 8 },
+      { id: 'chatModeSelect', enabled: true, order: 0 },
+      { id: 'promptEnhancer', enabled: true, order: 1 },
+      { id: 'mcpButton', enabled: true, order: 2 },
+      { id: 'ragSwitch', enabled: true, order: 3 },
+      { id: 'clipboardMonitor', enabled: true, order: 4 },
+      { id: 'skillsPopover', enabled: true, order: 5 },
+      { id: 'webSearch', enabled: true, order: 6 },
+      { id: 'newChat', enabled: true, order: 7 },
   ],
   setChatToolbarConfigMobile: async (config: ChatToolbarItem[]) => {
     set({ chatToolbarConfigMobile: config })

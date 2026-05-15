@@ -9,7 +9,12 @@ import { cn } from "@/lib/utils"
 import { Check } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
 
-export function PromptSelect() {
+interface PromptSelectProps {
+  trigger?: React.ReactNode
+  triggerClassName?: string
+}
+
+export function PromptSelect({ trigger, triggerClassName = "hidden md:block" }: PromptSelectProps) {
   const { promptList, currentPrompt, initPromptData, setCurrentPrompt } = usePromptStore()
   const [open, setOpen] = React.useState(false)
   const t = useTranslations('record.chat.input.promptSelect')
@@ -29,13 +34,23 @@ export function PromptSelect() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <div className="hidden md:block">
-          <TooltipButton
-            icon={<Drama />}
-            tooltipText={t('tooltip')}
-            size="icon"
-          />
-        </div>
+        {trigger ? (
+          <button
+            type="button"
+            className={triggerClassName}
+            aria-label={t('tooltip')}
+          >
+            {trigger}
+          </button>
+        ) : (
+          <div className={triggerClassName}>
+            <TooltipButton
+              icon={<Drama />}
+              tooltipText={t('tooltip')}
+              size="icon"
+            />
+          </div>
+        )}
       </PopoverTrigger>
       <PopoverContent className="w-[180px] p-0">
         <Command>

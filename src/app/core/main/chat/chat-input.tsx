@@ -13,9 +13,8 @@ import { enhanceChatPrompt } from "@/lib/ai/prompt-enhancer"
 import { estimateTokens } from "@/lib/ai/token-counter"
 import { useTranslations } from 'next-intl'
 import { useLocalStorage } from 'react-use';
-import { ModelSelect } from "./model-select"
+import { ChatModeSelect } from "./chat-mode-select"
 import { getWorkspacePath } from "@/lib/workspace"
-import { PromptSelect } from "./prompt-select"
 import { ChatSend } from "./chat-send"
 import { SkillsPopover } from "./skills-popover"
 import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFolder } from "@/lib/files"
@@ -26,7 +25,7 @@ import emitter from "@/lib/emitter"
 import { ChatToolsDrawer } from "@/app/mobile/chat/components/chat-tools-drawer"
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { ImageAttachment } from "./image-attachments"
-import { ChevronRight, Globe2, ImageIcon, Loader2, MousePointer2, QuoteIcon, WandSparkles } from "lucide-react"
+import { ChevronRight, GlobeIcon, ImageIcon, Loader2, MousePointer2, QuoteIcon, WandSparkles } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
 import { isMobileDevice } from '@/lib/check'
 import type { PendingQuote } from "@/stores/chat"
@@ -35,7 +34,6 @@ import { readTextFile, writeFile, BaseDirectory, exists } from "@tauri-apps/plug
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ShineBorder } from "@/components/ui/shine-border"
 import { toast } from "@/hooks/use-toast"
-import { TaskPlanProgress } from "./task-plan-progress"
 import {
   getNoteGenFilePointerDragDetail,
   isPointInsideElement,
@@ -136,7 +134,7 @@ function supportsImageInputForModel(aiModelList: AiConfig[], primaryModel: strin
   return IMAGE_CAPABLE_MODEL_PATTERNS.some(pattern => pattern.test(capabilityText))
 }
 
-// ChatInput re-render 婵犵數鍋炲娆撳触鐎ｎ喗鏅梺璇查叄濞佳冾嚕閸撲胶鐭欏鑸靛姇缁犲鏌ょ粙璺ㄤ粵婵?props 闂傚倷娴囬～澶嬬娴犲纾块弶鍫亖娴?
+// Memoize toolbar item rendering to reduce ChatInput re-renders caused by prop churn.
 interface SortableToolbarItemProps {
   id: string
   loading: boolean
@@ -169,13 +167,11 @@ const SortableToolbarItem = React.memo(function SortableToolbarItem({
     opacity: isDragging ? 0.5 : 1,
   }
 
-  // 濠电偞鎸稿鍫曟偂鐎ｎ兘鍋撻悽鍨殌缂併劍鐓￠幆鍐礋椤愶紕鐭楅梺绋跨箻閺€閬嶆偉椤斿墽纾奸柛鏇ㄤ簼椤?
+  // Render the configured toolbar item by id.
   const renderToolbarItem = () => {
     switch (id) {
-      case 'modelSelect':
-        return <ModelSelect />
-      case 'promptSelect':
-        return <PromptSelect />
+      case 'chatModeSelect':
+        return <ChatModeSelect />
       case 'mcpButton':
         return <McpButton />
       case 'ragSwitch':
@@ -201,7 +197,7 @@ const SortableToolbarItem = React.memo(function SortableToolbarItem({
           <TooltipButton
             variant={webSearchEnabled ? "secondary" : "ghost"}
             size="icon"
-            icon={<Globe2 className={webSearchEnabled ? "size-4 text-primary" : "size-4"} />}
+            icon={<GlobeIcon className={webSearchEnabled ? "size-4 text-primary" : "size-4"} />}
             tooltipText={webSearchEnabled ? '已启用 Web 搜索（Tavily）' : '启用 Web 搜索（Tavily）'}
             onClick={onToggleWebSearch}
             disabled={loading}
@@ -228,8 +224,7 @@ const SortableToolbarItem = React.memo(function SortableToolbarItem({
 SortableToolbarItem.displayName = 'SortableToolbarItem'
 
 const REQUIRED_CHAT_TOOLBAR_ITEMS = [
-  'modelSelect',
-  'promptSelect',
+  'chatModeSelect',
   'promptEnhancer',
   'mcpButton',
   'ragSwitch',
@@ -238,6 +233,10 @@ const REQUIRED_CHAT_TOOLBAR_ITEMS = [
   'webSearch',
   'newChat',
 ]
+
+const CHAT_TOOLBAR_ORDER: Record<string, number> = {
+  chatModeSelect: 0,
+}
 
 type ResourceContextOrigin = 'auto' | 'manual' | 'diagram'
 type ResourceContentMode = 'active-editor' | 'full-file' | 'folder-rag' | 'pdf-active' | 'pdf-pending' | 'diagram-file'
@@ -270,6 +269,8 @@ export const ChatInput = React.memo(function ChatInput() {
   const {
     chats,
     loading,
+    researchRunning,
+    chatMode,
     setLinkedResources: setChatLinkedResources,
     clearLinkedResources: clearChatLinkedResources,
     setLinkedResourcePreview,
@@ -278,6 +279,7 @@ export const ChatInput = React.memo(function ChatInput() {
     pendingQuote,
     setPendingQuote,
     clearPendingQuote,
+    startNewConversation,
   } = useChatStore()
   const { marks, trashState } = useMarkStore()
   const { activeFilePath, currentArticle, loadFileTree } = useArticleStore()
@@ -286,6 +288,10 @@ export const ChatInput = React.memo(function ChatInput() {
   const [isComposing, setIsComposing] = useState(false)
   const [enhancingPrompt, setEnhancingPrompt] = useState(false)
   const [placeholder, setPlaceholder] = useState('')
+  const isResearchActive = researchRunning || (loading && chatMode === 'research')
+  const effectivePlaceholder = isResearchActive
+    ? '深度研究运行中，预计 3-6 分钟完成。你可以点击停止按钮中断。'
+    : placeholder
 
   // 斜杠命令面板状态
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
@@ -574,6 +580,60 @@ export const ChatInput = React.memo(function ChatInput() {
     setAttachedImages([])
   }, [clearLinkedFiles, clearPendingQuote])
 
+  const sendPresetMessage = useCallback(async (detail: {
+    content: string
+    images?: string[]
+    quoteData?: PendingQuote | null
+    restartConversation?: boolean
+  }) => {
+    const content = detail.content.trim()
+    if (!content || loading) return
+
+    if (detail.restartConversation) {
+      await startNewConversation()
+    }
+
+    const restoredImages: ImageAttachment[] = (detail.images || []).map((url, index) => ({
+      id: `resend-${Date.now()}-${index}`,
+      url,
+      name: url.split('/').pop() || `image-${index + 1}`,
+      source: 'record',
+    }))
+
+    clearLinkedFiles()
+    setPendingQuote(detail.quoteData || null)
+    setAttachedImages(restoredImages)
+    applyTypedText(content)
+
+    window.setTimeout(() => {
+      chatSendRef.current?.sendChat()
+    }, 30)
+  }, [applyTypedText, clearLinkedFiles, loading, setPendingQuote, startNewConversation])
+
+  useEffect(() => {
+    const handleResend = (detail: unknown) => {
+      const payload = detail as {
+        content?: string
+        images?: string[]
+        quoteData?: PendingQuote | null
+        restartConversation?: boolean
+      }
+
+      if (!payload?.content) return
+      void sendPresetMessage({
+        content: payload.content,
+        images: payload.images,
+        quoteData: payload.quoteData,
+        restartConversation: payload.restartConversation,
+      })
+    }
+
+    emitter.on('chat-message-resend', handleResend)
+    return () => {
+      emitter.off('chat-message-resend', handleResend)
+    }
+  }, [sendPresetMessage])
+
   // 拖拽排序传感器
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -714,13 +774,13 @@ export const ChatInput = React.memo(function ChatInput() {
         return
       }
 
-      // 缂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾閽樻繈鏌熼崜浣烘憘闁轰礁顑囬幉鍛婃償閵娿儳鐤勯梺闈浥堥弲娑㈡偂濞戙垺鐓曢柟鏉垮悁缁ㄨ崵鈧娲忛崕閬嶁€旈崘顔嘉ч柛鈩冪懃椤囨⒑閼姐倕鏋傞柛搴ｆ暬瀹曟椽濮€閿濆洨鏉稿┑鐐村灦閻熝囧储?HTML5 file input
+      // On mobile, use the native HTML file input.
       if (isMobileDevice_) {
         imageInputRef.current?.click()
         return
       }
 
-      // PC缂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇楀亾閾荤偤鐓崶銊р槈闁搞劌鍊归妵鍕冀閵娧佲偓鎺旂磼閻樿崵鐣洪柡灞剧洴婵＄兘顢欓悡搴浇闂?Tauri dialog
+      // On desktop, use the Tauri file dialog.
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({
         multiple: true,
@@ -745,7 +805,7 @@ export const ChatInput = React.memo(function ChatInput() {
     }
   }
 
-  // 缂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾閽樻繈鏌熼崜浣烘憘闁轰礁顑囬幉鍛婃償閵娿儳鐤勯梺闈浥堥弲娑㈡偂濞戙垺鐓曢柟鏉垮悁缁ㄨ崵鈧娲忛崕閬嶁€旈崘顔嘉ч柛鈩冪懃椤呯磼閻愵剚绶茬紒澶婂閸掓帞鈧綆鍠栭柋鍥煏婢舵稑顩柛妯挎閳规垶骞婇柛濠冨姍瀹曟垿骞樼€靛摜顔曢悗鐟板閸犳牕顕ｉ鈧弻娑㈠煘閹傚濠碉紕鍋戦崐鏍ь啅婵犳艾纾婚柟鐐暘娴滄粓鏌ㄩ弮鍥棄妞ゃ儱顑夐弻宥堫檨闁告挻宀稿畷顐ｆ償閵娿儳顦梺纭呮彧缁犳垿寮告担琛″亾楠炲灝鍔氭繛璇х到閳讳粙顢旈崼鐔哄幈闂婎偄娲﹀ú鏍暜閸洘鐓涢柍褜鍓熼、姗€鎮╅悽纰夌闯闂備胶顭堥張顒勬偡瑜斿畷婵嗩吋婢跺鍘介梺缁樻⒐缁诲倸煤閿曞倹鍊垮Δ锝呭暞閸婄敻姊婚崼鐔衡姇闁规彃鎽滈惀顏堝箚瑜嬮崑銏ゆ煛瀹€瀣М鐎殿噮鍓熷畷褰掝敊閸欘偀鏅犲娲传閸曢潧鍓梺绋款儐閹瑰洤顫忛搹瑙勫珰闁告瑥顦弨顓烆渻閵堝骸浜滄い锔炬暬楠炲棗鐣濋崟鍨櫓闂佽鍨庨崘顏冨枈闂傚倷鑳剁划顖炩€﹂崶鈺佸灊妞ゆ牜鍋涚壕鍧楀箹鏉堝墽鎮肩痪鎯с偢閹鏁愭惔婵堟晼婵炲濮伴崹浠嬪蓟閿熺姴纾兼俊銈傚亾濞存粓绠栧缁樻媴閸涘﹥鍎撳銈忓瘜閸嬪﹤顕ｉ幓鎺濈叆闁糕剝蓱閸ｅ嘲鈹戦悩娈挎毌闁逞屽墮閸熻法鐥閺岀喖顢欓悡搴樺亾閸ф宓侀柛鈩冪☉缁€瀣亜閺嶃劏澹樼紒鎰⊕缁绘繈鎮介棃娴躲垽鏌涢悢璺哄祮闁诡垰鍟换婵嗩潩椤撴稒瀚奸梻浣侯焾缁绘帡宕㈣瀹曟繈濡舵径瀣幈闂侀潧楠忕徊浠嬫嫊婵傚憡鐓?
+  // Open the gallery picker on mobile.
   async function handleSelectFromGallery() {
     if (!ensureImageInputSupported()) {
       return
@@ -759,7 +819,7 @@ export const ChatInput = React.memo(function ChatInput() {
     }
   }
 
-  // 婵犵數濮烽弫鍛婃叏娴兼潙鍨傞柣鎾崇岸閺嬫牗绻涢幋鐐茬劰闁稿鎸搁～婵嬫偂鎼淬垻褰庢俊銈囧Х閸嬫盯宕婊勫床婵犻潧顑呯粈瀣亜閹捐泛啸闁告濞€濮婃椽鎳￠妶鍛呫垺绻涚拠褏鐣抽柕鍥ㄥ姍瀹曟﹢顢樿濠㈡牜绱撻崒姘偓鎼佸磹閻戣姤鍊块柨鏇楀亾閾荤偤鐓崶銊р槈闁搞劌鍊垮娲敆閳ь剛绮旈幘顔肩闁绘绮悡鏇㈡煙閼割剙濡芥繛鍛处閵囧嫰鍩￠崘銊ュ箣闂佸搫鏈惄顖炪€侀弴銏℃櫜闁糕剝鐟辩槐鈺呮⒒娴ｄ警鐒炬い鎴濇楠炴劗鎷犲顔兼闂佸憡娲﹂崢鎼佸磻閹剧粯鏅查幖瀛樼箖閸犳碍绻?
+  // Handle images selected from the hidden file input.
   async function handleImageInputChange(event: React.ChangeEvent<HTMLInputElement>) {
     try {
       if (!ensureImageInputSupported()) {
@@ -784,7 +844,7 @@ export const ChatInput = React.memo(function ChatInput() {
 
       setAttachedImages(prev => [...prev, ...newImages])
       
-      // 闂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇氶檷娴滃綊鏌涢幇鍏哥敖闁活厽鎹囬弻娑㈩敃閿濆棛顦ㄩ梺?input
+      // Clear the input so selecting the same file again still triggers change.
       event.target.value = ''
     } catch (error) {
       console.error('Error in handleImageInputChange:', error)
@@ -874,7 +934,7 @@ export const ChatInput = React.memo(function ChatInput() {
     }
   }
 
-  // 闂傚啫寮舵慨鍫ユ偨閻旂鐏囬柛妤冨С缂嶅懘骞撻幇顔轰粵
+  // Debounce quick prompt placeholder generation.
   const debouncedGenPlaceholder = useCallback(() => {
     if (placeholderTimerRef.current) {
       clearTimeout(placeholderTimerRef.current)
@@ -916,8 +976,8 @@ export const ChatInput = React.memo(function ChatInput() {
 
   const bottomToolbarItems = useMemo(() => {
     return chatToolbarConfigPc
-      .filter(item => item.enabled && item.id !== 'newChat')
-      .sort((a, b) => a.order - b.order)
+      .filter(item => item.enabled && item.id !== 'newChat' && item.id !== 'modelSelect' && item.id !== 'promptSelect')
+      .sort((a, b) => (CHAT_TOOLBAR_ORDER[a.id] ?? a.order + 10) - (CHAT_TOOLBAR_ORDER[b.id] ?? b.order + 10))
   }, [chatToolbarConfigPc])
 
   useEffect(() => {
@@ -941,7 +1001,7 @@ export const ChatInput = React.memo(function ChatInput() {
   }, [chatToolbarConfigPc, setChatToolbarConfigPc])
 
   useEffect(() => {
-    // 婵犵數濮烽弫鍛婃叏閻戝鈧倹绂掔€ｎ亞鍔﹀銈嗗坊閸嬫捇鏌涢悢閿嬪仴闁糕斁鍋撳銈嗗坊閸嬫挾绱撳鍜冭含妤犵偛鍟灒閻犲洩灏欑粣鐐烘⒑瑜版帒浜伴柛鎾寸懇閹?marks闂傚倸鍊搁崐鐑芥倿閿旈敮鍋撶粭娑樻噽閻瑩鏌熸潏楣冩闁稿孩鏌ㄩ埞鎴﹀磼濠婂海鍔搁梺鍝勵儎缁舵岸寮婚悢鐓庣闁逛即娼у▓顓犵磽?AI 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块弶鍫氭櫅閸ㄦ繃銇勯弽顐粶缂佲偓婢跺绻嗛柕鍫濇噺閸ｇ懓顩奸崨顓涙斀妞ゆ梻鐡旈悞鎯ь渻閺夋垶鎲搁柍褜鍓氱喊宥咁潩閵娾晛鐒垫い鎺嗗亾缂佺姴绉瑰畷鏇熸綇閳规儳浜炬慨妯煎帶閺嬨倗绱掗鐣屾噭缂佺粯绻堝畷鎺懳旀笟鍥ㄧ秾?placeholder
+    // Generate AI placeholder suggestions when marks are available.
     if (marks.length > 0) {
       genInputPlaceholder()
     } else {
@@ -962,11 +1022,12 @@ export const ChatInput = React.memo(function ChatInput() {
     emitter.on('insert-quote', (event: unknown) => {
       const data = event as PendingQuote
       setPendingQuote(data)
-      // 闂傚倷娴囬褍霉閻戣棄纾婚柨婵嗩槸绾惧綊鏌″搴″箹缁炬儳娼￠弻銈吤圭€ｎ偅鐝曢悗瑙勬礀瀵墎鎹㈠┑鍥╃瘈闁稿本绮岄·鈧梻浣规偠閸婃洟宕愯ぐ鎺戠疄闁靛鍎欓悢鐓庝紶闁告洦鍠栭悡妯衡攽閻樻鏆柍褜鍓濈亸娆撴儗濞嗘挻鐓涢悘鐐插⒔濞插瓨顨ラ悙鏉戞诞妤犵偞锕㈤獮鍥ㄦ媴閹绘帊澹曞┑鐘诧工閹虫劗澹曢悡骞盯鎮ч崼銏㈢暤閻庢鍣崰姘跺焵椤掑喚娼愭繛鍙夛耿閵嗗啯绻濋崘褏绠氶梺缁樺灱婵倝寮插鍛＝濞达綀鍋傞幋锕€姹?
+      // Focus the textarea after inserting a quote.
       setTimeout(() => {
         textareaRef.current?.focus()
       }, 50)
-      // 闂傚倸鍊峰ù鍥х暦閻㈢绐楅柟鎵閸嬶繝寮堕崼姘珖濞戞挸绉归弻鐔告綇閸撗呫偡婵炲瓨绮岀紞濠囧蓟濞戞鏆嗛柍褜鍓熷畷鎴︽倷閸濆嫮鍘遍梺鐟板⒔缁垶鎮￠弴鐔虹闁糕剝顨嗙粋瀣繆閹绘帗鍟為柕鍥у椤㈡洟濮€閳跺灕鍥ㄧ厸?placeholder 闂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇氶檷娴滃綊鏌涢幇鍏哥敖闁活厽鎹囬弻锝夊閵忊晝鍔搁梺钘夊暟閸犲酣鍩為幋锔藉亹闁告瑥顦ˇ鈺呮⒑缁嬫鍎嶉柛鏃€鍨垮濠氭晲婢跺﹦鐫勯梺绋胯閸婃宕濋幖浣光拺?      debouncedGenPlaceholder()
+      // Refresh placeholder suggestions after quote insertion.
+      debouncedGenPlaceholder()
     })
     emitter.on('diagramSelected', (event: unknown) => {
       void attachResourceWithContextRef.current?.(event as MarkdownFile, 'diagram')
@@ -1212,7 +1273,7 @@ export const ChatInput = React.memo(function ChatInput() {
 
   const autoLinkedKeyRef = useRef<string | null>(null)
 
-  // 闂傚倸鍊搁崐鐑芥嚄閸洖鍌ㄧ憸鏃堝Υ閸愨晜鍎熼柕蹇嬪焺濞茬鈹戦悩璇у伐閻庢凹鍙冨畷锝堢疀濞戞瑧鍘撻梺鍛婄箓鐎氼參宕抽崷顓犵＜闁逞屽墴瀹曟帡鎮欓弶鎴斿亾閻㈠憡鐓曢柨鏃囶嚙楠炴牜浜歌箛鏇犵＝濞撴艾娲ら弸鐔兼煙閹间胶鐣烘鐐差樀楠炴牗鎷呴悷棰佺綍闂備礁澹婇崑鍡涘窗鎼达絽鏋堢€广儱妫涚弧鈧梺鍐茬殱閸嬫捇鏌涘☉鍗炲箰闁哄鎳庤灃闁绘﹢娼ф禒婊呯磼婢跺﹦绉洪柣娑卞枛铻ｉ柧蹇氼潐濞堥箖姊洪幖鐐插姉闁哄拋浜炲Σ鎰版焼瀹ュ棌鎷?markdown 闂傚倸鍊搁崐椋庣矆娓氣偓楠炴牠顢曢敃鈧壕鍦磼鐎ｎ偓绱╂繛宸簼閺呮煡鏌涘☉鍙樼凹闁诲骸顭峰娲濞戞氨鐤勯梺绋匡攻濞叉粎鍒掓繝姘櫜濠㈣泛顑囬崢鎼佹倵楠炲灝鍔氶柛鐕佸亝娣囧﹥绂掔€ｎ偆鍘介柟鍏兼儗閸犳牠寮稿☉銏☆梿濠㈣埖鍔栭悡鐔镐繆椤栨粌甯堕柛鏂款儑閻ヮ亪顢橀姀銏㈡毇闂?
+  // Auto-link the current editor file when it can provide useful context.
   useEffect(() => {
     async function linkCurrentResource() {
       const previousAutoKey = autoLinkedKeyRef.current
@@ -1257,7 +1318,7 @@ export const ChatInput = React.memo(function ChatInput() {
 
       const workspace = await getWorkspacePath()
 
-      // 濠电姷鏁告慨鐑姐€傞挊澹╋綁宕ㄩ弶鎴狅紱闂侀€炲苯澧撮柡灞剧〒閳ь剨缍嗛崑鍛暦瀹€鍕厸鐎光偓鐎ｎ剛锛熸繛瀵稿婵″洭骞忛悩璇茬闁圭儤鍩堝銉モ攽閻樻鏆柍褜鍓欓崯璺ㄧ棯瑜旈弻鐔碱敊閻撳簶鍋撻幖浣瑰仼闁绘垼妫勫敮闂佸啿鎼崐鐟扳枍閸℃稒鈷戦柛蹇涙？閼割亪鏌涙惔銏㈡创闁轰礁鍟村畷鎺戔槈濮橆剙绠伴梻鍌欑窔閳ь剛鍋涢懟顖涙櫠鐎涙ǜ浜滈柕蹇ョ磿閳藉鏌嶉挊澶樻Ц閾伙綁鏌涜箛鎾变粴闁靛鏅滈埛鎺懨归敐鍛础婵犫偓娴犲鐓曢柡鍌濇硶閻忛亶鏌嶈閸撴岸宕欒ぐ鎺戠煑闁告劦鐓堥崵鏇㈡煙闂傚顦︾紒鈧崘顔界厓闁告繂瀚弸銈嗙箾閺夋垵顏慨濠冩そ瀹曘劍绻濋崘銊х叝婵犵數鍋炲娆徝洪銏℃櫜闁绘劗鍎ら弲婵嬫煕鐏炲墽銆掗柛姗€浜跺娲濞戣京鍔搁梺绋垮濡炶棄鐣烽弴鐑嗙叆闁告侗鍨抽敍婊堟煛婢跺﹦澧戦柛鏂块叄楠炲﹪宕堕埞鎯т壕閻熸瑥瀚粈鍫濃攽閻愨晛浜鹃柣搴ゎ潐濞插繘宕濋幋锔衡偓浣糕枎閹存繃鐎抽梺鍛婄懄椤洤螞?markdown闂傚倸鍊搁崐椋庢濮橆剦鐒界憸宥堢亱闂佸搫鍊归娆忋€掓繝姘厵闁绘垶锕╁▓鏃堟煠濮濆矈娼愰柕鍥у楠炴帡骞嬪┑鎰棯闂備胶顭堢€涒晠鏁嬮梻鍥ь樀閺屻劌鈹戦崱娆忊拡濠电偛鍚嬮崝娆撳蓟閿濆棙鍎熸い鏂垮悑閻忓牓姊婚崶褜妯€闁哄矉绲借灒闁圭瀵掓禒鈺呮⒑閸撴彃浜藉ù婊庝邯瀵顓奸崼顐ｎ€囬梻浣侯焾缁绘垹绮欓幘璇茬鐟滃海鎹㈠┑瀣ㄢ偓?缂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏂垮⒔閻瑩鏌熷▎鈥崇湴閸旀垿宕洪埀顒併亜閹烘垵鈧崵澹?
+      // Only auto-link text-like files that can be read as Markdown/context.
       if (activeFilePath.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|pdf)$/i)) {
         const fileName = activeFilePath.split('/').pop() || activeFilePath
         let fullPath: string
@@ -1356,7 +1417,7 @@ export const ChatInput = React.memo(function ChatInput() {
 
   return (
     <footer id="onboarding-target-chat-input" className="flex flex-col w-full p-1 justify-between items-center">
-      {/* 缂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾閽樻繈鏌熼崜浣烘憘闁轰礁顑囬幉鍛婃償閵娿儳鐤勯梺闈浥堥弲娑㈡偂濞戙垺鐓曢柟鏉垮悁缁ㄨ崵鈧娲忛崕閬嶁€旈崘顔嘉ч柛鈩冪懃椤呯磼閻愵剚绶茬紒澶婂閸掓帞鈧綆鍠栭柋鍥煏婢舵稑顩柛妯挎閳规垶骞婇柛濠冨姍瀹曟垿骞樼€靛摜顔曢悗鐟板閸犳牕顕ｉ鈧弻娑㈠煘閹傚濠碉紕鍋戦崐鏍ь啅婵犳艾纾婚柟鐐暘娴滄粓鏌ㄩ弮鍥棄妞ゃ儱顑夐弻?*/}
+      {/* Hidden image input for mobile selection */}
       {isMobileDevice_ && (
         <input
           ref={imageInputRef}
@@ -1436,7 +1497,6 @@ export const ChatInput = React.memo(function ChatInput() {
           </CollapsibleContent>
         </Collapsible>
       )}
-      <TaskPlanProgress />
       <div
         ref={inputDropZoneRef}
         className={`group relative z-10 flex w-full flex-col gap-1 overflow-hidden rounded-xl border border-border/80 bg-background p-1 transition-colors focus-within:border-primary ${isFilePointerOverInput ? 'border-primary bg-primary/5 shadow-[0_0_0_1px_hsl(var(--primary)/0.25)]' : ''}`}
@@ -1449,11 +1509,11 @@ export const ChatInput = React.memo(function ChatInput() {
             <span>拖到这里附加为上下文</span>
           </div>
         ) : null}
-        {loading && (
+        {isResearchActive && (
           <ShineBorder
             borderWidth={1}
             duration={5}
-            shineColor={["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A"]}
+            shineColor={["#5B8DEF", "#7DD3FC", "#34D399"]}
           />
         )}
         <div className="relative w-full flex items-start">
@@ -1469,7 +1529,7 @@ export const ChatInput = React.memo(function ChatInput() {
             ref={textareaRef}
             className="flex-1 p-2 relative border-none text-xs placeholder:text-sm md:placeholder:text-sm md:text-sm focus-visible:ring-0 shadow-none min-h-[36px] max-h-[240px] resize-none overflow-y-auto"
             rows={1}
-            disabled={!primaryModel || loading}
+            disabled={!primaryModel || isResearchActive}
             value={text}
             onChange={(e) => {
               setText(e.target.value)
@@ -1478,7 +1538,7 @@ export const ChatInput = React.memo(function ChatInput() {
               const newHeight = Math.min(textarea.scrollHeight, 240)
               textarea.style.height = `${newHeight}px`
             }}
-            placeholder={placeholder}
+            placeholder={effectivePlaceholder}
             onKeyDown={(e) => {
               const textarea = e.target as HTMLTextAreaElement
               const cursorPosition = textarea.selectionStart
@@ -1532,7 +1592,8 @@ export const ChatInput = React.memo(function ChatInput() {
                   navigateHistory('up', text)
                 } else if (isAtEnd) {
                   e.preventDefault()
-                  // 缂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾閽樻繈鏌熼崜浣烘憘闁轰礁顑囬幉鍛婃償閵娿儳鐤勯梺闈浥堥弲娑㈡偂濞戙垺鐓曟繛鎴濆船楠炴ɑ銇勮熁閸曨厾鐦堥梺闈涢獜缁插墽娑甸悙顑句簻闁瑰瓨绻冮崰妯尖偓瑙勬礉椤缂撴禒瀣窛濠电姴瀚獮鍫ユ⒒娴ｅ憡璐￠柛搴涘€濋獮鎰版嚒閵堝棭鍋ㄩ梺鑲┾拡閸撴稓澹曟總绋跨骇闁割偅绋戞俊濂告煟韫囥儱顩柍?                  textarea.setSelectionRange(0, 0)
+                  // Move caret to the beginning before navigating history upward.
+                  textarea.setSelectionRange(0, 0)
                 }
               }
               if (e.key === "ArrowDown" && !isComposing) {
@@ -1541,7 +1602,8 @@ export const ChatInput = React.memo(function ChatInput() {
                   navigateHistory('down', text)
                 } else if (isAtEnd) {
                   e.preventDefault()
-                  // 缂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾閽樻繈鏌熼崜浣烘憘闁轰礁顑囬幉鍛婃償閵娿儳鐤勯梺闈浥堥弲娑㈡偂濞戙垺鐓曟繛鎴濆船楠炴ɑ銇勮熁閸曨厾鐦堥梺闈涢獜缁插墽娑甸悙顑句簻闁瑰瓨绻冮崰妯尖偓瑙勬礉椤缂撴禒瀣窛濠电姴瀚獮鍫ユ⒒娴ｅ憡璐￠柛搴涘€濋獮鎰版嚒閵堝棭鍋ㄩ梺鑲┾拡閸撴稓澹曟總绋跨骇闁割偅绋戞俊濂告煟韫囥儱顩柍?                  textarea.setSelectionRange(0, 0)
+                  // Move caret to the beginning before navigating history downward.
+                  textarea.setSelectionRange(0, 0)
                 }
               }
               if (e.key === "Backspace") {
@@ -1561,7 +1623,7 @@ export const ChatInput = React.memo(function ChatInput() {
         <div className="flex w-full items-center gap-2 overflow-hidden">
           <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg bg-muted/30 px-1 py-0.5">
             <div className="min-w-0 flex-1">
-              {/* 闂傚倸鍊搁崐椋庣矆娓氣偓楠炲鏁撻悩鍐蹭画濡炪倖鐗滈崑娑㈠垂閸岀偛绾ч柛顐ｇ閺夊綊鏌涚€ｎ偅灏い顐ｇ箞椤㈡寰勬繝鍌氼棑濠德板€楁慨鐑藉磻濞戞碍宕叉慨妞诲亾妤犵偛锕幃娆撳传閸曞簺鍔戦弻鏇熺珶椤栨碍鍣洪柛锝勫嵆濮婄粯鎷呴悜妯烘畬闂佸憡鑹鹃鍛粹€﹂崶褉鏋庨柟瀵稿仜鎼村﹪姊洪崷顓炲妺闁搞劎鍠栧鎼佸籍閸喓鍘甸柡澶婄墕婢т粙鎮炬潏鈺冪＜闁绘娅曠欢鍙夈亜椤撶偞鍋ラ柟铏矒濡啫鈽夊鍡樼秾闂備浇顕х换鎰殽韫囨洜涓嶉柟鎹愵嚙缁犳牗淇婇妶鍛櫣闁圭鍩栭妵鍕箻鐠虹儤鐎诲┑鐐茬墕閼活垶鍩為幋锔藉€烽柛娆忣槸濞呫倝鏌ｉ姀鈺佺伈缂佺粯绻傞锝夘敃閵忊晛鎮戞繝銏ｆ硾閿曨亪宕崼鏇熲拺缂備焦蓱绾惧鏌ｉ幒鐐电暤鐎殿噮鍓熼崺鈧い鎺戝閳锋帡鏌涚仦鎹愬闁逞屽墯閹倿骞冭瀹曠喖顢涘顒傗偓顓熺節閻㈤潧校闁告垵缍婂顐﹀磼濞戞牔绨婚梺鍦劋閸ㄧ敻顢旈鍫熺厸闁告粈绀佹晶顔姐亜椤撯剝纭堕柟鐟板缁楃喖顢涘顒€顥嶉梻鍌欐祰椤曆呮崲閹达负鈧啯绻濋崶褑鎽曢梺璺ㄥ枔婵潙顪冮挊澹濆綊鏁愰崨顔兼殘闂佺粯绻冪换鍫濐潖濞差亝鐒婚柣鎰蔼鐎氭澘顭胯閸ㄥ爼寮婚妶鍫涗汗闁圭儤姊婚弳顐㈩渻閵堝啫鐏柣鐔叉櫊閻涱噣宕堕鈧痪褔鏌涜椤ㄥ棝鏁嶅Δ浣风箚闁绘劦浜滈埀顑惧€濆畷銏ゆ偩鐏炵偓娈伴梺缁樺姉閺佹悂鎯岄崱娑欑厱闁哄洢鍔岄獮妯肩棯閸撗冨付妞ゎ叀娉曢幑鍕传閸曨厽袨闂備焦鎮堕崐鏍偡閵夆晛鐓橀柟杈惧瘜閺佸﹪鎮峰▎蹇擃仾闁绘繃鐗滅槐鎾寸瑹閸パ勭亐闂佸搫鎳愭繛鈧柕鍡曠閳藉濮€閻樻爠鍥ㄧ厱闁靛鍨哄▍鎾翠繆?*/}
+              {/* Bottom toolbar */}
               {!isMobile ? (
                 <DndContext
                   sensors={sensors}
@@ -1605,7 +1667,7 @@ export const ChatInput = React.memo(function ChatInput() {
               icon={<ImageIcon className="size-4" />}
               tooltipText={t('record.chat.input.attachImage')}
               onClick={isMobile ? handleSelectFromGallery : handleSelectLocalImages}
-              disabled={!primaryModel || loading}
+              disabled={!primaryModel || isResearchActive}
               buttonClassName="h-8 w-8 rounded-lg"
             />
             <ChatSend
@@ -1628,10 +1690,4 @@ export const ChatInput = React.memo(function ChatInput() {
   )
 })
 ChatInput.displayName = 'ChatInput'
-
-
-
-
-
-
 

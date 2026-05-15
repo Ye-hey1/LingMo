@@ -176,6 +176,46 @@ export async function upsertVectorDocumentsBatch(docs: Omit<VectorDocument, 'id'
   })
 }
 
+export async function replaceVectorDocumentsForFile(
+  filename: string,
+  docs: Omit<VectorDocument, 'id'>[],
+  legacyFilenames: string[] = [],
+) {
+  return serializedWrite(async () => {
+    const db = await getDb();
+    const filenamesToDelete = Array.from(
+      new Set([filename, ...legacyFilenames].filter(Boolean)),
+    );
+
+    await db.execute('BEGIN');
+    try {
+      for (const filenameToDelete of filenamesToDelete) {
+        await db.execute(
+          'delete from vector_documents where filename = $1',
+          [filenameToDelete],
+        );
+      }
+
+      for (const doc of docs) {
+        await db.execute(
+          'insert into vector_documents (filename, chunk_id, content, embedding, updated_at) values ($1, $2, $3, $4, $5) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at',
+          [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at],
+        );
+      }
+
+      await db.execute('COMMIT');
+    } catch (error) {
+      await db.execute('ROLLBACK');
+      throw error;
+    }
+
+    for (const filenameToDelete of filenamesToDelete) {
+      vectorCache.deleteByFilename(filenameToDelete);
+    }
+    await vectorCache.update();
+  });
+}
+
 export async function getVectorDocumentsByFilename(filename: string) {
   const db = await getDb();
   return await db.select<VectorDocument[]>(

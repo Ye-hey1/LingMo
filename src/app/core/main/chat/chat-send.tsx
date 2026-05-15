@@ -8,6 +8,7 @@ import { useImperativeHandle, forwardRef, useRef, useEffect } from "react"
 import { useTranslations } from "next-intl"
 import useVectorStore from "@/stores/vector"
 import { getContextForQuery, getContextForQueryInFolder } from '@/lib/rag'
+import { fetchAiStream } from "@/lib/ai/chat"
 import { invoke } from "@tauri-apps/api/core"
 import { type LinkedResource, isLinkedFolder } from "@/lib/files"
 import { readTextFile } from "@tauri-apps/plugin-fs"
@@ -23,6 +24,18 @@ import {
 import { ImageAttachment } from "./image-attachments"
 import type { RagSource } from "@/lib/rag"
 import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
+import { searchWeb } from "@/lib/tavily"
+import {
+  completeResearchClarification,
+  generateResearchClarification,
+  runDeepResearch,
+  type DeepResearchProgress,
+} from "@/lib/research/deep-research"
+import {
+  buildResearchProgressView,
+  encodeResearchProgressView,
+} from "@/lib/research/progress-status"
+import type { Chat } from "@/db/chats"
 import { toast } from "@/hooks/use-toast"
 import { ToastAction } from "@/components/ui/toast"
 
@@ -222,6 +235,150 @@ function addCitationSource(
   }
 }
 
+async function buildWebSearchContext(
+  query: string,
+  signal?: AbortSignal
+): Promise<{ context: string; sources: ChatCitationSource[] }> {
+  const response = await searchWeb({
+    query,
+    maxResults: 5,
+    includeAnswer: true,
+    signal,
+  })
+
+  const lines = [
+    '## Web search results',
+    '',
+    `Provider: ${response.provider}${response.degraded ? ' (fallback)' : ''}`,
+  ]
+
+  if (response.answer?.trim()) {
+    lines.push('', `Answer: ${response.answer.trim()}`)
+  }
+
+  if (response.results.length > 0) {
+    lines.push('', 'Sources:')
+    response.results.forEach((result, index) => {
+      const title = result.title?.trim() || result.url || `Result ${index + 1}`
+      lines.push(`${index + 1}. ${title}`)
+      if (result.url?.trim()) {
+        lines.push(`   URL: ${result.url.trim()}`)
+      }
+      if (result.publishedDate?.trim()) {
+        lines.push(`   Published: ${result.publishedDate.trim()}`)
+      }
+      if (result.content?.trim()) {
+        lines.push(`   Snippet: ${result.content.trim()}`)
+      }
+    })
+  } else {
+    lines.push('', 'No web results were found.')
+  }
+
+  const sources = response.results
+    .filter(result => result.url || result.title || result.content)
+    .map((result, index): ChatCitationSource => ({
+      filepath: result.url || `web-search:${query}:${index + 1}`,
+      filename: result.title || result.url || `Web result ${index + 1}`,
+      content: result.content || response.answer || '',
+      sourceType: 'rag',
+    }))
+
+  return {
+    context: `${lines.join('\n')}\n\n`,
+    sources,
+  }
+}
+
+function formatResearchProgress(progress: DeepResearchProgress, query: string, startedAt: number) {
+  const view = buildResearchProgressView(progress, {
+    query,
+    startedAt,
+    estimatedMinutes: progress.estimatedMinutes,
+  })
+  return encodeResearchProgressView(view)
+}
+
+function formatResearchBackgroundStatus(
+  status: 'starting' | 'collecting' | 'writing',
+  query: string,
+  startedAt: number,
+) {
+  const view = buildResearchProgressView(null, {
+    query,
+    startedAt,
+    estimatedMinutes: '3-6 分钟',
+  })
+  return encodeResearchProgressView({
+    ...view,
+    statusText: {
+      starting: '正在准备任务',
+      collecting: '正在搜集和分析资料',
+      writing: '正在整理研究报告',
+    }[status],
+    currentStep: {
+      starting: '梳理研究目标',
+      collecting: '执行联网检索',
+      writing: '生成研究报告',
+    }[status],
+    steps: view.steps.map((step, index) => ({
+      ...step,
+      status: index === 0 ? 'active' : 'pending',
+    })),
+  })
+}
+
+const RESEARCH_CLARIFICATION_PREFIX = '<!-- deep-research-clarification '
+const RESEARCH_CLARIFICATION_SUFFIX = ' -->'
+
+type ResearchClarificationMeta = {
+  originalQuery: string
+  questions: string[]
+}
+
+function encodeResearchClarificationMeta(meta: ResearchClarificationMeta) {
+  return `${RESEARCH_CLARIFICATION_PREFIX}${encodeURIComponent(JSON.stringify(meta))}${RESEARCH_CLARIFICATION_SUFFIX}`
+}
+
+function parseResearchClarificationMeta(content?: string): ResearchClarificationMeta | null {
+  if (!content?.startsWith(RESEARCH_CLARIFICATION_PREFIX)) {
+    return null
+  }
+
+  const endIndex = content.indexOf(RESEARCH_CLARIFICATION_SUFFIX)
+  if (endIndex < 0) {
+    return null
+  }
+
+  try {
+    return JSON.parse(decodeURIComponent(content.slice(RESEARCH_CLARIFICATION_PREFIX.length, endIndex)))
+  } catch {
+    return null
+  }
+}
+
+function stripResearchClarificationMeta(content: string) {
+  if (!content.startsWith(RESEARCH_CLARIFICATION_PREFIX)) {
+    return content
+  }
+  const endIndex = content.indexOf(RESEARCH_CLARIFICATION_SUFFIX)
+  return endIndex >= 0 ? content.slice(endIndex + RESEARCH_CLARIFICATION_SUFFIX.length).trimStart() : content
+}
+
+function formatResearchClarificationMessage(originalQuery: string, questions: string[]) {
+  const meta = encodeResearchClarificationMeta({ originalQuery, questions })
+  return [
+    meta,
+    '为了让深度研究更贴合你的真实目标，我需要先确认几个问题：',
+    '',
+    ...questions.map((question, index) => `${index + 1}. ${question}`),
+    '',
+    '你可以直接按序号简单回答。信息足够后，我会自动开始深度研究。',
+    '',
+    '如果你想跳过梳理，也可以直接回复“直接开始研究”。',
+  ].join('\n')
+}
+
 export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, options?: { maxTokens?: number; temperature?: number }) => void }, ChatSendProps>(({
   inputValue,
   onSent,
@@ -238,7 +395,10 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
   const {
     insert,
     loading,
+    researchRunning,
+    chatMode,
     setLoading,
+    setResearchRunning,
     saveChat,
     setAgentState,
     maybeCondense,
@@ -258,6 +418,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
       : []
   const linkedFolders = effectiveLinkedResources.filter(isLinkedFolder)
   const linkedFiles = effectiveLinkedResources.filter(resource => !isLinkedFolder(resource))
+  const isRunning = loading || researchRunning
 
   // 跟踪上一次的 loading 状态
   const wasLoadingRef = useRef(false)
@@ -437,6 +598,429 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
         </ToastAction>
       ),
     })
+  }
+
+  async function handleChatMode(imageUrls: string[], instructionOverride?: string) {
+    const effectiveInstruction = instructionOverride ?? inputValue
+    const placeholderMessage = await insert({
+      tagId: currentTagId,
+      role: 'system',
+      content: '',
+      type: 'chat',
+      inserted: false,
+    })
+
+    if (!placeholderMessage) return
+
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+
+    try {
+      let context = ''
+      const ragSources: string[] = []
+      const ragSourceDetails: ChatCitationSource[] = []
+
+      if (webSearchEnabled) {
+        try {
+          const webSearchContext = await buildWebSearchContext(effectiveInstruction, abortController.signal)
+          context += webSearchContext.context
+          webSearchContext.sources.forEach(source => {
+            addCitationSource(ragSources, ragSourceDetails, source)
+          })
+        } catch (error) {
+          if (abortController.signal.aborted) {
+            throw error
+          }
+          console.error('Failed to get web search context in Chat mode:', error)
+          context += `## Web search results\n\nWeb search was enabled, but the search request failed: ${error instanceof Error ? error.message : String(error)}\n\n`
+        }
+      }
+
+      if (isRagEnabled) {
+        try {
+          let keywords = await invoke<{ text: string; weight: number }[]>('rank_keywords', {
+            text: effectiveInstruction,
+            topK: 15,
+          })
+          keywords = filterRAGKeywords(keywords)
+
+          if (keywords.length > 0) {
+            const linkedFolder = linkedFolders[0]
+            const ragResult = linkedFolder
+              ? await getContextForQueryInFolder(keywords, linkedFolder.relativePath)
+              : await getContextForQuery(keywords)
+
+            ragResult.sources.forEach(source => {
+              if (!ragSources.includes(source)) {
+                ragSources.push(source)
+              }
+            })
+            ragResult.sourceDetails.forEach(sourceDetail => {
+              addCitationSource(ragSources, ragSourceDetails, {
+                ...sourceDetail,
+                sourceType: 'rag',
+              })
+            })
+
+            if (ragResult.context) {
+              context += `## 知识库检索结果\n\n${ragResult.context}\n\n`
+            }
+          }
+        } catch (error) {
+          console.error('Failed to get RAG context in Chat mode:', error)
+        }
+      }
+
+      if (quoteData) {
+        context += `## 用户引用内容\n\n文件: ${quoteData.fileName}\n\n---\n${quoteData.fullContent}\n---\n\n`
+        addCitationSource(ragSources, ragSourceDetails, {
+          filepath: quoteData.articlePath,
+          filename: quoteData.fileName,
+          content: quoteData.fullContent,
+          sourceType: 'quote',
+          startLine: quoteData.startLine,
+          endLine: quoteData.endLine,
+          from: quoteData.from,
+          to: quoteData.to,
+        })
+      }
+
+      const { chats: currentChats } = useChatStore.getState()
+      const latestUserChatId = currentChats
+        .filter(chat => chat.role === 'user')
+        .at(-1)?.id
+      const messages = [
+        ...currentChats
+          .filter(chat => chat.id !== latestUserChatId)
+          .filter(chat => chat.type === 'chat' && (chat.role === 'user' || chat.role === 'system') && chat.content)
+          .map(chat => ({
+            role: chat.role === 'user' ? 'user' as const : 'assistant' as const,
+            content: chat.condensedContent || chat.content || '',
+          })),
+        ...(context
+          ? [{
+              role: 'system' as const,
+              content: context,
+            }]
+          : []),
+        {
+          role: 'user' as const,
+          content: effectiveInstruction,
+        },
+      ]
+
+      if (ragSources.length > 0 || ragSourceDetails.length > 0) {
+        await saveChat({
+          ...placeholderMessage,
+          ragSources: ragSources.length > 0 ? JSON.stringify(ragSources) : undefined,
+          ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+        }, true)
+      }
+
+      let finalContent = ''
+      const result = await fetchAiStream(
+        effectiveInstruction,
+        async (content) => {
+          finalContent = content
+          await saveChat({
+            ...placeholderMessage,
+            content,
+            ragSources: ragSources.length > 0 ? JSON.stringify(ragSources) : undefined,
+            ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+          }, false)
+        },
+        abortController.signal,
+        undefined,
+        t,
+        placeholderMessage.id,
+        imageUrls,
+        undefined,
+        messages
+      )
+      if (!finalContent && result) {
+        finalContent = result
+      }
+
+      await saveChat({
+        ...placeholderMessage,
+        content: abortController.signal.aborted ? (finalContent || t('record.chat.input.stopped')) : finalContent,
+        ragSources: ragSources.length > 0 ? JSON.stringify(ragSources) : undefined,
+        ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+      }, true)
+    } catch (error) {
+      await saveChat({
+        ...placeholderMessage,
+        content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+      }, true)
+    } finally {
+      abortControllerRef.current = null
+    }
+  }
+
+  async function executeDeepResearch(
+    placeholderMessage: Chat,
+    query: string,
+    abortController: AbortController
+  ) {
+    if (!placeholderMessage) return
+    const startedAt = Date.now()
+    let researchFinished = false
+    let lastProgressSavedAt = 0
+    setResearchRunning(true)
+
+    try {
+      await saveChat({
+        ...placeholderMessage,
+        content: formatResearchBackgroundStatus('starting', query, startedAt),
+      }, false)
+
+      const result = await runDeepResearch({
+        query,
+        abortSignal: abortController.signal,
+        onProgress: (progress) => {
+          if (researchFinished) {
+            return
+          }
+
+          const now = Date.now()
+          const shouldSaveImmediately = progress.stage === 'writing' || progress.stage === 'done'
+          if (!shouldSaveImmediately && now - lastProgressSavedAt < 700) {
+            return
+          }
+          lastProgressSavedAt = now
+
+          void saveChat({
+            ...placeholderMessage,
+            content: formatResearchProgress(progress, query, startedAt),
+          }, false).catch(error => {
+            console.error('[DeepResearch] Failed to save progress:', error)
+          })
+        },
+      })
+      researchFinished = true
+
+      const ragSourceDetails: ChatCitationSource[] = result.visitedUrls.map((url, index) => ({
+        filepath: url,
+        filename: url,
+        content: result.learnings[index] || '',
+        sourceType: 'rag',
+      }))
+
+      await saveChat({
+        ...placeholderMessage,
+        content: abortController.signal.aborted ? t('record.chat.input.stopped') : result.report,
+        ragSources: result.visitedUrls.length > 0 ? JSON.stringify(result.visitedUrls) : undefined,
+        ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+      }, true)
+
+      if (!abortController.signal.aborted) {
+        // 保存报告为文件并在编辑器中打开
+        try {
+          const { writeTextFile, mkdir, exists } = await import('@tauri-apps/plugin-fs')
+
+          const workspace = await getWorkspacePath()
+          const now = new Date()
+          const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+          const timeStr = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+          // 从 query 中提取简短标题（取前20个字符，去除特殊字符）
+          const shortTitle = query.replace(/[\\/:*?"<>|\n\r]/g, '').trim().slice(0, 20).trim() || '研究报告'
+          const fileName = `${dateStr}-${timeStr}-${shortTitle}.md`
+          const researchDir = 'research'
+          // 相对于工作区的文件路径（用于 setActiveFilePath）
+          const relativeFilePath = `${researchDir}/${fileName}`
+
+          // 确保 research 目录存在
+          const dirOptions = await getFilePathOptions(researchDir)
+          if (workspace.isCustom) {
+            const dirExists = await exists(dirOptions.path)
+            if (!dirExists) await mkdir(dirOptions.path, { recursive: true })
+          } else {
+            const dirExists = await exists(dirOptions.path, { baseDir: dirOptions.baseDir })
+            if (!dirExists) await mkdir(dirOptions.path, { baseDir: dirOptions.baseDir, recursive: true })
+          }
+
+          // 写入文件
+          const fileOptions = await getFilePathOptions(relativeFilePath)
+          if (workspace.isCustom) {
+            await writeTextFile(fileOptions.path, result.report)
+          } else {
+            await writeTextFile(fileOptions.path, result.report, { baseDir: fileOptions.baseDir })
+          }
+
+          // 在编辑器中打开
+          const useArticleStore = (await import('@/stores/article')).default
+          const { default: useSidebarStore } = await import('@/stores/sidebar')
+          const articleStore = useArticleStore.getState()
+          const sidebarStore = useSidebarStore.getState()
+
+          await articleStore.loadFileTree({ skipRemoteSync: true })
+          await sidebarStore.setLeftSidebarTab('files')
+          // 先设置路径，再手动设置内容（避免 readArticle 的竞态问题）
+          await articleStore.setActiveFilePath(relativeFilePath)
+          // 确保编辑器显示报告内容
+          articleStore.setCurrentArticle(result.report)
+
+          toast({
+            title: '深度研究已完成',
+            description: '报告已保存并在编辑器中打开。',
+          })
+        } catch (fileError) {
+          console.error('[DeepResearch] Failed to save report as file:', fileError, 
+            fileError instanceof Error ? fileError.stack : '')
+          toast({
+            title: '深度研究已完成',
+            description: '报告已生成，但保存文件失败，可在对话中查看。',
+          })
+        }
+      }
+    } catch (error) {
+      researchFinished = true
+      await saveChat({
+        ...placeholderMessage,
+        content: abortController.signal.aborted
+          ? t('record.chat.input.stopped')
+          : `## 深度研究失败\n\n${error instanceof Error ? error.message : String(error)}`,
+      }, true)
+
+      if (!abortController.signal.aborted) {
+        toast({
+          title: '深度研究失败',
+          description: error instanceof Error ? error.message : String(error),
+          variant: 'destructive',
+        })
+      }
+    } finally {
+      researchFinished = true
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null
+      }
+      setResearchRunning(false)
+      setLoading(false)
+    }
+  }
+
+  function startBackgroundDeepResearch(
+    placeholderMessage: Chat,
+    query: string,
+    abortController: AbortController
+  ) {
+    void executeDeepResearch(placeholderMessage, query, abortController)
+      .catch(error => {
+        console.error('[DeepResearch] Unhandled error in background research:', error)
+      })
+      .finally(() => {
+        void maybeCondense()
+      })
+  }
+
+  async function handleClarifiedResearchMode(instructionOverride?: string) {
+    const effectiveInstruction = instructionOverride ?? inputValue
+    const trimmedInstruction = effectiveInstruction.trim()
+    let backgroundResearchStarted = false
+    const placeholderMessage = await insert({
+      tagId: currentTagId,
+      role: 'system',
+      content: '',
+      type: 'chat',
+      inserted: false,
+    })
+
+    if (!placeholderMessage) return
+
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+
+    try {
+      const wantsDirectStart = /直接开始研究|直接研究|开始研究|跳过|不用问|no questions/i.test(trimmedInstruction)
+      const { chats: currentChats } = useChatStore.getState()
+      const previousResearchMessage = [...currentChats]
+        .reverse()
+        .find(chat => chat.role === 'system' && chat.type === 'chat' && chat.content)
+      let pendingClarification = parseResearchClarificationMeta(previousResearchMessage?.content)
+
+      // 如果当前会话中找不到澄清消息，但用户想直接开始研究，
+      // 尝试从最近的其他会话中查找（处理会话切换/重建的情况）
+      if (!pendingClarification && wantsDirectStart) {
+        try {
+          const { getDb } = await import('@/db')
+          const db = await getDb()
+          const recentMessages = await db.select<{ content: string }[]>(
+            `select content from chats where role = 'system' and type = 'chat' and content like '%deep-research-clarification%' order by createdAt desc limit 1`,
+            [],
+          )
+          if (recentMessages.length > 0) {
+            pendingClarification = parseResearchClarificationMeta(recentMessages[0].content)
+          }
+        } catch (error) {
+          console.warn('[DeepResearch] Failed to search clarification from other conversations:', error)
+        }
+      }
+
+      if (pendingClarification && !wantsDirectStart) {
+        await saveChat({
+          ...placeholderMessage,
+          content: '正在整理你的补充信息，判断是否可以开始深度研究...',
+        }, false)
+
+        const completed = await completeResearchClarification({
+          originalQuery: pendingClarification.originalQuery,
+          questions: pendingClarification.questions,
+          answer: trimmedInstruction,
+          abortSignal: abortController.signal,
+        })
+
+        if (!completed.canStart && completed.missingQuestions.length > 0) {
+          await saveChat({
+            ...placeholderMessage,
+            content: formatResearchClarificationMessage(pendingClarification.originalQuery, completed.missingQuestions),
+          }, true)
+          return
+        }
+
+        backgroundResearchStarted = true
+        startBackgroundDeepResearch(placeholderMessage, completed.researchBrief, abortController)
+        return
+      }
+
+      if (pendingClarification && wantsDirectStart) {
+        backgroundResearchStarted = true
+        startBackgroundDeepResearch(placeholderMessage, pendingClarification.originalQuery, abortController)
+        return
+      }
+
+      await saveChat({
+        ...placeholderMessage,
+        content: '正在梳理你的研究需求...',
+      }, false)
+
+      const clarification = await generateResearchClarification({
+        query: trimmedInstruction,
+        abortSignal: abortController.signal,
+      })
+
+      if (!clarification.canStart && clarification.questions.length > 0) {
+        await saveChat({
+          ...placeholderMessage,
+          content: formatResearchClarificationMessage(trimmedInstruction, clarification.questions),
+        }, true)
+        return
+      }
+
+      backgroundResearchStarted = true
+      startBackgroundDeepResearch(placeholderMessage, clarification.researchBrief || trimmedInstruction, abortController)
+    } catch (error) {
+      await saveChat({
+        ...placeholderMessage,
+        content: `## 深度研究失败\n\n${error instanceof Error ? error.message : String(error)}`,
+      }, true)
+    } finally {
+      if (!backgroundResearchStarted && abortControllerRef.current === abortController) {
+        abortControllerRef.current = null
+      }
+      if (!backgroundResearchStarted) {
+        setResearchRunning(false)
+      }
+    }
   }
 
   useImperativeHandle(ref, () => ({
@@ -1031,9 +1615,12 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
   }
 
   // 对话（Agent 模式）
-  async function handleSubmit(instructionOverride?: string) {
+  async function handleSubmit(instructionOverride?: unknown) {
     if (inputValue === '') return
     onSent?.()
+
+    const effectiveInstruction =
+      typeof instructionOverride === 'string' ? instructionOverride : undefined
 
     setLoading(true)
     const imageUrls = attachedImages.map(img => img.url)
@@ -1046,8 +1633,18 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
       images: imageUrls.length > 0 ? JSON.stringify(imageUrls) : undefined,
       quoteData: quoteData ? JSON.stringify(quoteData) : undefined,
     })
-    await handleAgentMode(imageUrls, instructionOverride)
-    setLoading(false)
+    let keepLoading = false
+    if (chatMode === 'chat') {
+      await handleChatMode(imageUrls, effectiveInstruction)
+    } else if (chatMode === 'research') {
+      await handleClarifiedResearchMode(effectiveInstruction)
+      keepLoading = abortControllerRef.current !== null
+    } else {
+      await handleAgentMode(imageUrls, effectiveInstruction)
+    }
+    if (!keepLoading) {
+      setLoading(false)
+    }
   }
 
   const handleStop = async () => {
@@ -1065,18 +1662,26 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
 
     // 重置 loading 状态
     setAgentState({ pendingConfirmation: undefined })
+    setResearchRunning(false)
     setLoading(false)
   }
 
   return (
     <>
       <TooltipButton 
-        variant={loading ? "destructive" : "default"}
+        variant={isRunning ? "destructive" : "default"}
         size="sm"
-        icon={loading ? <Square className="size-4" /> : <Send className="size-4" />} 
-        disabled={!loading && (!primaryModel || !inputValue.trim())} 
-        tooltipText={loading ? t('record.chat.input.stop') : t('record.chat.input.send')} 
-        onClick={loading ? handleStop : handleSubmit} 
+        icon={isRunning ? <Square className="size-4" /> : <Send className="size-4" />} 
+        disabled={!isRunning && (!primaryModel || !inputValue.trim())} 
+        tooltipText={isRunning ? t('record.chat.input.stop') : t('record.chat.input.send')} 
+        onClick={() => {
+          if (isRunning) {
+            void handleStop()
+            return
+          }
+
+          void handleSubmit()
+        }} 
       />
     </>
   )

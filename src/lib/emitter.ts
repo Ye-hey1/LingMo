@@ -88,6 +88,21 @@ interface Events {
   'refresh-marks': unknown;
   'quick-prompt-insert': string;
   'quick-prompt-send': string;
+  'chat-message-resend': {
+    content: string;
+    images?: string[];
+    quoteData?: {
+      quote: string;
+      fullContent: string;
+      fileName: string;
+      startLine: number;
+      endLine: number;
+      from: number;
+      to: number;
+      articlePath: string;
+    } | null;
+    restartConversation?: boolean;
+  };
   'ai-placeholder-generated': string;
   'ai-prompts-generated': QuickPrompt[];
   'start-ai-streaming': {

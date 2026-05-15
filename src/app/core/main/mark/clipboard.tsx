@@ -8,14 +8,13 @@ import useTagStore from "@/stores/tag";
 import useSettingStore from "@/stores/setting";
 import useMarkStore from "@/stores/mark";
 import { v4 as uuid } from 'uuid'
-import ocr from "@/lib/ocr";
-import { fetchAiDesc, fetchAiDescByImage } from "@/lib/ai/description";
 import { insertMark, Mark } from "@/db/marks";
 import { uint8ArrayToBase64, uploadFile } from "@/lib/sync/github";
 import { RepoNames } from "@/lib/sync/github.types";
 import { CheckCircle, CircleX } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { convertBytesToSize } from "@/lib/utils";
+import { recognizeStructuredImage } from "@/lib/mark-image-recognition";
 
 export function Clipboard() {
   const t = useTranslations();
@@ -24,7 +23,7 @@ export function Clipboard() {
   const [image, setImage] = useState('')
   const [fileSize, setFileSize] = useState('')
   const { currentTagId, fetchTags, getCurrentTag } = useTagStore()
-  const { primaryModel, githubUsername, primaryImageMethod, enableImageRecognition } = useSettingStore()
+  const { githubUsername, primaryImageMethod, enableImageRecognition } = useSettingStore()
   const { fetchMarks, addQueue, setQueue, removeQueue } = useMarkStore()
 
   async function readHandler() {
@@ -40,56 +39,55 @@ export function Clipboard() {
     }
   }
 
+  async function ensureImageDir() {
+    const isImageFolderExists = await exists('image', { baseDir: BaseDirectory.AppData })
+    if (!isImageFolderExists) {
+      await mkdir('image', { baseDir: BaseDirectory.AppData })
+    }
+  }
+
   async function handleImage() {
-    const image = await readImageBase64()
-    const uint8Array = Uint8Array.from(atob(image), c => c.charCodeAt(0))
+    const base64Image = await readImageBase64()
+    const uint8Array = Uint8Array.from(atob(base64Image), c => c.charCodeAt(0))
     await writeFile('clipboard.png', uint8Array, { baseDir: BaseDirectory.AppData })
     setFileSize(convertBytesToSize(uint8Array.length))
-    setImage(`data:image/png;base64, ${image}`)
+    setImage(`data:image/png;base64, ${base64Image}`)
   }
 
   async function handleText() {
-    const text = await readText()
-    setText(text)
+    const clipboardText = await readText()
+    setText(clipboardText)
   }
 
   async function handleInset() {
     await clear()
     setImage('')
     const queueId = uuid()
-    // 获取文件后缀
     addQueue({ queueId, tagId: currentTagId!, progress: t('record.mark.progress.saveImage'), type: 'image', startTime: Date.now() })
-    const isImageFolderExists = await exists('image', { baseDir: BaseDirectory.AppData})
-    if (!isImageFolderExists) {
-      await mkdir('image', { baseDir: BaseDirectory.AppData})
-    }
-    await copyFile('clipboard.png', `image/${queueId}.png`, { fromPathBaseDir: BaseDirectory.AppData, toPathBaseDir: BaseDirectory.AppData})
+
+    await ensureImageDir()
+    await copyFile('clipboard.png', `image/${queueId}.png`, { fromPathBaseDir: BaseDirectory.AppData, toPathBaseDir: BaseDirectory.AppData })
+
     let content = ''
     let desc = ''
-    
-    // Skip image recognition if disabled
+
     if (!enableImageRecognition) {
-      setQueue(queueId, { progress: t('record.mark.progress.save') });
-      content = ''
-      desc = ''
-    } else if (primaryImageMethod === 'vlm') {
-      // 使用 VLM 识别图片
-      setQueue(queueId, { progress: t('record.mark.progress.aiAnalysis') });
-      const file = await readFile(`image/${queueId}.png`, { baseDir: BaseDirectory.AppData })
-      const base64 = `data:image/png;base64,${Buffer.from(file).toString('base64')}`
-      content = await fetchAiDescByImage(base64) || 'VLM Error'
-      desc = content
+      setQueue(queueId, { progress: t('record.mark.progress.save') })
     } else {
-      // 使用 OCR 识别图片
-      setQueue(queueId, { progress: t('record.mark.progress.ocr') });
-      content = await ocr(`image/${queueId}.png`)
-      setQueue(queueId, { progress: t('record.mark.progress.aiAnalysis') });
-      if (primaryModel) {
-        desc = await fetchAiDesc(content).then(res => res ? res : content) || content
-      } else {
-        desc = content
-      }
+      setQueue(queueId, {
+        progress: primaryImageMethod === 'vlm' ? t('record.mark.progress.aiAnalysis') : t('record.mark.progress.ocr'),
+      })
+      const file = await readFile(`image/${queueId}.png`, { baseDir: BaseDirectory.AppData })
+      const recognition = await recognizeStructuredImage({
+        path: `image/${queueId}.png`,
+        base64: primaryImageMethod === 'vlm' ? `data:image/png;base64,${Buffer.from(file).toString('base64')}` : undefined,
+        method: primaryImageMethod,
+        sourceLabel: '剪贴板图片',
+      })
+      content = recognition.content
+      desc = recognition.desc
     }
+
     const mark: Partial<Mark> = {
       tagId: currentTagId,
       type: 'image',
@@ -97,22 +95,22 @@ export function Clipboard() {
       url: `${queueId}.png`,
       desc,
     }
-    const file = await readFile(`image/${queueId}.png`, { baseDir: BaseDirectory.AppData  })
+
+    const file = await readFile(`image/${queueId}.png`, { baseDir: BaseDirectory.AppData })
     if (githubUsername) {
-      setQueue(queueId, { progress: t('record.mark.progress.uploadImage') });
+      setQueue(queueId, { progress: t('record.mark.progress.uploadImage') })
       const res = await uploadFile({
         file: uint8ArrayToBase64(file),
         filename: `${queueId}.png`,
-        repo: RepoNames.image
+        repo: RepoNames.image,
       })
       if (res) {
-        setQueue(queueId, { progress: t('record.mark.progress.jsdelivrCache') });
+        setQueue(queueId, { progress: t('record.mark.progress.jsdelivrCache') })
         await fetch(`https://purge.jsdelivr.net/gh/${githubUsername}/${RepoNames.image}@main/${res.data.content.name}`)
         mark.url = `https://cdn.jsdelivr.net/gh/${githubUsername}/${RepoNames.image}@main/${res.data.content.name}`
-      } else {
-        mark.url = `${queueId}.png}`
       }
     }
+
     removeQueue(queueId)
     await insertMark(mark)
     await fetchMarks()
@@ -129,9 +127,9 @@ export function Clipboard() {
       content: text,
       desc: text,
     }
-    insertMark(mark)
-    fetchMarks()
-    fetchTags()
+    await insertMark(mark)
+    await fetchMarks()
+    await fetchTags()
     getCurrentTag()
   }
 

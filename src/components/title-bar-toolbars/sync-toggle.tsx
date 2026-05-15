@@ -20,6 +20,16 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer"
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -331,6 +341,7 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [open, setOpen] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<'upload' | 'download' | null>(null)
   const [providers, setProviders] = useState<ProviderInfo[]>(DEFAULT_PROVIDER_LIST)
 
   const { primaryBackupMethod, setPrimaryBackupMethod } = useSettingStore()
@@ -580,8 +591,6 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
 
   // 上传到云端
   async function uploadAll() {
-    const confirmRef = await confirm(t('settings.uploadStore.uploadConfirm'))
-    if (!confirmRef) return
     setSyncing(true)
 
     try {
@@ -716,8 +725,6 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
 
   // 从云端下载
   async function downloadAll() {
-    const res = await confirm(t('settings.uploadStore.downloadConfirm'))
-    if (!res) return
     setSyncing(true)
 
     try {
@@ -981,7 +988,10 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
         <Button
           variant="outline"
           size="sm"
-          onClick={uploadAll}
+          onClick={() => {
+            setOpen(false)
+            setConfirmAction('upload')
+          }}
           disabled={syncing}
         >
           <UploadCloud className="mr-2 h-4 w-4" />
@@ -990,7 +1000,10 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
         <Button
           variant="outline"
           size="sm"
-          onClick={downloadAll}
+          onClick={() => {
+            setOpen(false)
+            setConfirmAction('download')
+          }}
           disabled={syncing}
         >
           <DownloadCloud className="mr-2 h-4 w-4" />
@@ -1029,37 +1042,115 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
 
   if (presentation === 'drawer') {
     return (
-      <Drawer open={open} onOpenChange={setOpen}>
-        <DrawerTrigger asChild>
-          {syncButton}
-        </DrawerTrigger>
-        <DrawerContent className="max-h-[82vh] rounded-t-[24px]">
-          <DrawerHeader className="text-left">
-            <DrawerTitle>{t('common.sync')}</DrawerTitle>
-          </DrawerHeader>
-          <div className="overflow-y-auto px-4 pb-6">
-            {syncPanel}
-          </div>
-        </DrawerContent>
-      </Drawer>
+      <>
+        <Drawer open={open} onOpenChange={setOpen}>
+          <DrawerTrigger asChild>
+            {syncButton}
+          </DrawerTrigger>
+          <DrawerContent className="max-h-[82vh] rounded-t-[24px]">
+            <DrawerHeader className="text-left">
+              <DrawerTitle>{t('common.sync')}</DrawerTitle>
+            </DrawerHeader>
+            <div className="overflow-y-auto px-4 pb-6">
+              {syncPanel}
+            </div>
+          </DrawerContent>
+        </Drawer>
+        <AlertDialog
+          open={confirmAction !== null}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) {
+              setConfirmAction(null)
+            }
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {confirmAction === 'upload' ? t('settings.sync.uploadRecords') : t('settings.sync.downloadConfig')}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {confirmAction === 'upload'
+                  ? t('settings.uploadStore.uploadConfirm')
+                  : t('settings.uploadStore.downloadConfirm')}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  const action = confirmAction
+                  setConfirmAction(null)
+                  if (action === 'upload') {
+                    void uploadAll()
+                  } else if (action === 'download') {
+                    void downloadAll()
+                  }
+                }}
+              >
+                {t('common.confirm')}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>
     )
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            {syncButton}
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          <p>{t('common.sync')}</p>
-        </TooltipContent>
-      </Tooltip>
-      <PopoverContent align="end" className="w-72">
-        {syncPanel}
-      </PopoverContent>
-    </Popover>
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              {syncButton}
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <p>{t('common.sync')}</p>
+          </TooltipContent>
+        </Tooltip>
+        <PopoverContent align="end" className="w-72">
+          {syncPanel}
+        </PopoverContent>
+      </Popover>
+      <AlertDialog
+        open={confirmAction !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setConfirmAction(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction === 'upload' ? t('settings.sync.uploadRecords') : t('settings.sync.downloadConfig')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction === 'upload'
+                ? t('settings.uploadStore.uploadConfirm')
+                : t('settings.uploadStore.downloadConfirm')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = confirmAction
+                setConfirmAction(null)
+                if (action === 'upload') {
+                  void uploadAll()
+                } else if (action === 'download') {
+                  void downloadAll()
+                }
+              }}
+            >
+              {t('common.confirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }

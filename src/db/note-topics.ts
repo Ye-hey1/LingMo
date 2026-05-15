@@ -100,11 +100,13 @@ export async function getAllTopics(): Promise<NoteTopic[]> {
 }
 
 export async function deleteTopicsForNote(filename: string) {
-  const db = await getDb()
-  await db.execute(
-    'delete from note_topics where filename = $1',
-    [filename],
-  )
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute(
+      'delete from note_topics where filename = $1',
+      [filename],
+    )
+  })
 }
 
 export async function getAllTopicFilenames(): Promise<{ filename: string }[]> {

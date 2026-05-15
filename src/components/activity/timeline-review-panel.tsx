@@ -163,6 +163,13 @@ export function TimelineReviewPanel({
   ] as const
   const topRecordTypes = scopeAnalysis.recordTypeDistribution.slice(0, 6)
   const topTags = scopeAnalysis.recordTagDistribution.slice(0, 8)
+  const reviewStatusText = reviewLoading
+    ? `正在生成${lastReviewKind === 'today' ? '今日回顾' : lastReviewKind === 'week' ? '本周回顾' : lastReviewKind === 'report' ? '复盘文档' : '回顾内容'}`
+    : savingNote
+      ? '正在写入笔记...'
+      : reviewMarkdown.trim()
+        ? '回顾结果已就绪，可继续编辑或写入'
+        : '尚未生成回顾结果'
 
   function getReviewAnalysis(kind: ActivityReviewKind) {
     if (kind === 'today') return todayAnalysis
@@ -555,10 +562,27 @@ export function TimelineReviewPanel({
                 <Badge variant="secondary">{scopeAnalysis.rangeLabel}</Badge>
                 {appendableCurrentNote && activeFilePath ? (
                   <Badge variant="secondary" className="max-w-[240px] truncate">
-                    当前笔记：{activeFilePath.split('/').pop() || activeFilePath}
+                  当前笔记：{activeFilePath.split('/').pop() || activeFilePath}
                   </Badge>
                 ) : null}
               </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs">
+              <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                {(reviewLoading || savingNote) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-primary" />}
+                {reviewStatusText}
+              </span>
+              {reviewMarkdown.trim() ? (
+                <span className="text-muted-foreground">
+                  {reviewMarkdown.trim().length} 字
+                </span>
+              ) : null}
+              {appendableCurrentNote && activeFilePath ? (
+                <span className="text-muted-foreground">
+                  可直接追加到当前笔记
+                </span>
+              ) : null}
             </div>
 
             <div className="grid gap-2 lg:grid-cols-2">

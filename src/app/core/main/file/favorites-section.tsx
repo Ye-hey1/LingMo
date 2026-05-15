@@ -1,11 +1,13 @@
 'use client'
 
 import type { CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FileText, Star } from 'lucide-react'
 import { useTranslations } from 'next-intl'
-import useFavoritesStore from '@/stores/favorites'
+
 import useArticleStore from '@/stores/article'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import useFavoritesStore from '@/stores/favorites'
+
 import { KnowledgeGraphTagsPanel } from './knowledge-graph-tags-panel'
 
 interface FavoritesSectionProps {
@@ -73,12 +75,12 @@ export function FavoritesSection({ showEmpty = false, standalone = false }: Favo
   }, [initFavorites])
 
   const favoriteList = (
-    <section className={standalone ? "overflow-hidden rounded-lg border border-border/60 bg-background" : ""}>
+    <section className={standalone ? 'overflow-hidden rounded-lg border border-border/60 bg-background' : ''}>
       <button
+        type="button"
         className={standalone
-          ? "flex h-9 w-full items-center gap-1.5 border-b border-border/60 bg-muted/20 px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-          : "flex w-full items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-        }
+          ? 'flex h-9 w-full items-center gap-1.5 border-b border-border/60 bg-muted/20 px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground'
+          : 'flex w-full items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground'}
         onClick={() => setIsExpanded(!isExpanded)}
       >
         {isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
@@ -90,7 +92,7 @@ export function FavoritesSection({ showEmpty = false, standalone = false }: Favo
       </button>
 
       {isExpanded ? (
-        <div className={standalone ? "p-1.5" : "space-y-0.5 px-2 pb-1"}>
+        <div className={standalone ? 'p-1.5' : 'space-y-0.5 px-2 pb-1'}>
           {favorites.length > 0 ? favorites.map((fav) => (
             <div
               key={fav.path}
@@ -101,8 +103,8 @@ export function FavoritesSection({ showEmpty = false, standalone = false }: Favo
               <FavoriteNameLabel name={fav.name} />
               <button
                 className="flex size-6 shrink-0 items-center justify-center rounded-md text-amber-500 opacity-100 transition hover:bg-background hover:text-amber-600"
-                onClick={(e) => {
-                  e.stopPropagation()
+                onClick={(event) => {
+                  event.stopPropagation()
                   void removeFavorite(fav.path)
                 }}
                 title={t('navigation.removeFavorite')}
@@ -117,7 +119,7 @@ export function FavoritesSection({ showEmpty = false, standalone = false }: Favo
               </div>
               <p className="text-sm font-medium text-foreground">还没有收藏</p>
               <p className="mt-1 max-w-52 text-xs leading-5 text-muted-foreground">
-                悬停文件行，点击右侧星标即可加入收藏夹。
+                悬停在文件行上，点击右侧星标即可加入收藏夹。
               </p>
             </div>
           )}

@@ -1,17 +1,24 @@
 'use client'
 
-import { FileText, MessageSquareText, Search, FolderOpen } from 'lucide-react'
-import useArticleStore from '@/stores/article'
-import { useTranslations } from 'next-intl'
+import { FileText, FolderOpen, MessageSquareText, Search } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Store } from '@tauri-apps/plugin-store'
 import Image from 'next/image'
-import emitter from '@/lib/emitter'
+import { useTranslations } from 'next-intl'
 import { useEffect, useState } from 'react'
-import useShortcutStore from '@/stores/shortcut'
+
+import emitter from '@/lib/emitter'
+import useArticleStore from '@/stores/article'
 import useSettingStore from '@/stores/setting'
 import { useSidebarStore } from '@/stores/sidebar'
-import { getActiveOnboardingStep, getNextOnboardingStep, type OnboardingProgress, type OnboardingStepId } from './onboarding-state'
+import useShortcutStore from '@/stores/shortcut'
+
+import {
+  getActiveOnboardingStep,
+  getNextOnboardingStep,
+  type OnboardingProgress,
+  type OnboardingStepId,
+} from './onboarding-state'
 
 interface ActionItem {
   icon: React.ReactNode
@@ -52,10 +59,8 @@ export function EmptyState({
     emitter.emit('template-select-dialog:open')
   }
 
-  // 注册快捷键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl + N 创建笔记
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()
         void handleCreateNote()
@@ -66,11 +71,9 @@ export function EmptyState({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [newFile, setLeftSidebarTab])
 
-  // 读取文本记录快捷键
   useEffect(() => {
-    const shortcut = shortcuts.find(s => s.key === 'quickRecordText')
+    const shortcut = shortcuts.find((item) => item.key === 'quickRecordText')
     if (shortcut) {
-      // 转换快捷键格式：CommandOrControl+Shift+T -> ⌘ ⇧ T
       const formatted = shortcut.value
         .replace('CommandOrControl', '⌘')
         .replace('Command', '⌘')
@@ -87,18 +90,14 @@ export function EmptyState({
       const selected = await open({
         directory: true,
         multiple: false,
-        title: '选择工作区目录'
+        title: '选择工作区目录',
       })
-      
+
       if (selected && typeof selected === 'string') {
         const store = await Store.load('store.json')
         await store.set('workspacePath', selected)
         await store.save()
-        
-        // 添加到历史记录
         await addWorkspaceHistory(selected)
-        
-        // 重新加载页面以应用新工作区
         window.location.reload()
       }
     } catch (error) {
@@ -107,49 +106,47 @@ export function EmptyState({
   }
 
   const handleOpenRecord = () => {
-    // 触发文本记录弹窗
     emitter.emit('quickRecordTextHandler')
   }
 
   const handleGlobalSearch = () => {
-    // 触发全局搜索弹窗 (Cmd/Ctrl + F)
     const event = new KeyboardEvent('keydown', {
       key: 'f',
       metaKey: true,
       ctrlKey: true,
-      bubbles: true
+      bubbles: true,
     })
     window.dispatchEvent(event)
   }
 
   const actions: ActionItem[] = [
     {
-      icon: <FileText className="w-5 h-5" />,
+      icon: <FileText className="h-5 w-5" />,
       title: t('actions.newNote.title'),
       description: t('actions.newNote.desc'),
       shortcut: '⌘ N',
-      onClick: () => void handleCreateNote()
+      onClick: () => void handleCreateNote(),
     },
     {
-      icon: <MessageSquareText className="w-5 h-5" />,
+      icon: <MessageSquareText className="h-5 w-5" />,
       title: t('actions.newRecord.title'),
       description: t('actions.newRecord.desc'),
       shortcut: textRecordShortcut,
-      onClick: handleOpenRecord
+      onClick: handleOpenRecord,
     },
     {
-      icon: <Search className="w-5 h-5" />,
+      icon: <Search className="h-5 w-5" />,
       title: t('actions.globalSearch.title'),
       description: t('actions.globalSearch.desc'),
       shortcut: '⌘ F',
-      onClick: handleGlobalSearch
+      onClick: handleGlobalSearch,
     },
     {
-      icon: <FolderOpen className="w-5 h-5" />,
+      icon: <FolderOpen className="h-5 w-5" />,
       title: t('actions.openWorkspace.title'),
       description: t('actions.openWorkspace.desc'),
-      onClick: handleOpenWorkspace
-    }
+      onClick: handleOpenWorkspace,
+    },
   ]
 
   const onboardingSteps: Array<{ id: OnboardingStepId; title: string; description: string }> = [
@@ -169,10 +166,12 @@ export function EmptyState({
       description: t('onboarding.steps.aiPolish.desc'),
     },
   ]
+
   const completedStep = onboardingSteps.find((step) => step.id === completedOnboardingStep) || null
   const nextOnboardingStepId = getNextOnboardingStep(onboardingProgress, completedOnboardingStep)
   const hasPendingNextStep = getActiveOnboardingStep(onboardingProgress) !== null
-  const currentOnboardingStep = onboardingSteps.find((step) => step.id === activeOnboardingStep)
+  const currentOnboardingStep =
+    onboardingSteps.find((step) => step.id === activeOnboardingStep)
     || onboardingSteps.find((step) => step.id === nextOnboardingStepId)
     || null
   const currentOnboardingIndex = currentOnboardingStep
@@ -185,31 +184,24 @@ export function EmptyState({
   const showOnboardingCard = !onboardingProgress.dismissed && (showCompletedCard || Boolean(currentOnboardingStep))
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center h-full bg-background p-8">
-      <div className="max-w-2xl w-full space-y-8">
-        {/* Header */}
-        <div className="text-center space-y-3">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <Image 
-              src="/app-icon.png" 
+    <div className="flex h-full flex-1 flex-col items-center justify-center bg-background p-8">
+      <div className="w-full max-w-2xl space-y-8">
+        <div className="space-y-3 text-center">
+          <div className="mb-2 flex items-center justify-center gap-3">
+            <Image
+              src="/app-icon.png"
               alt="灵墨"
               width={60}
               height={60}
-              className="w-10 h-10 rounded-lg"
+              className="h-10 w-10 rounded-lg"
             />
-            <h1 className="text-4xl font-bold tracking-tight">
-              灵墨
-            </h1>
+            <h1 className="text-4xl font-bold tracking-tight">灵墨</h1>
           </div>
-          <h2 className="text-xl font-semibold tracking-tight">
-            {t('title')}
-          </h2>
-          <p className="text-muted-foreground text-sm">
-            {t('subtitle')}
-          </p>
+          <h2 className="text-xl font-semibold tracking-tight">{t('title')}</h2>
+          <p className="text-sm text-muted-foreground">{t('subtitle')}</p>
         </div>
 
-        {showOnboardingCard && (
+        {showOnboardingCard ? (
           <div className="rounded-2xl border bg-card/80 p-5 shadow-sm">
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
@@ -266,47 +258,41 @@ export function EmptyState({
               </div>
             ) : null}
           </div>
-        )}
+        ) : null}
 
-        {/* Actions Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {actions.map((action, index) => (
             <button
               key={index}
               onClick={action.onClick}
-              className="group relative flex items-start gap-4 p-4 rounded-lg border bg-card hover:bg-accent hover:border-primary/50 transition-all duration-200 text-left"
+              className="group relative flex items-start gap-4 rounded-lg border bg-card p-4 text-left transition-all duration-200 hover:border-primary/50 hover:bg-accent"
             >
-              <div className="flex-shrink-0 mt-1 text-muted-foreground group-hover:text-primary transition-colors">
+              <div className="mt-1 shrink-0 text-muted-foreground transition-colors group-hover:text-primary">
                 {action.icon}
               </div>
-              <div className="flex-1 min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="font-medium text-sm">
-                    {action.title}
-                  </h3>
-                  {action.shortcut && (
-                    <kbd className="hidden sm:inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+                  <h3 className="text-sm font-medium">{action.title}</h3>
+                  {action.shortcut ? (
+                    <kbd className="hidden h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:inline-flex">
                       {action.shortcut}
                     </kbd>
-                  )}
+                  ) : null}
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {action.description}
-                </p>
+                <p className="mt-1 text-xs text-muted-foreground">{action.description}</p>
               </div>
             </button>
           ))}
         </div>
 
-        {/* Tips */}
-        <div className="text-center space-y-2 pt-4">
+        <div className="space-y-2 pt-4 text-center">
           <p className="text-xs text-muted-foreground">
             查看使用文档：
-            <a 
-              href="https://notegen.top/" 
-              target="_blank" 
+            <a
+              href="https://notegen.top/"
+              target="_blank"
               rel="noopener noreferrer"
-              className="text-primary hover:underline ml-1"
+              className="ml-1 text-primary hover:underline"
             >
               https://notegen.top/
             </a>

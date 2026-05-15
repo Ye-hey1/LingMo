@@ -30,7 +30,12 @@ interface GroupedModel {
   model: ModelConfig
 }
 
-export function ModelSelect() {
+interface ModelSelectProps {
+  trigger?: React.ReactNode
+  triggerClassName?: string
+}
+
+export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: ModelSelectProps) {
   const [groupedModels, setGroupedModels] = useState<GroupedModel[]>([])
   const { primaryModel, setPrimaryModel, aiModelList } = useSettingStore()
   const [open, setOpen] = React.useState(false)
@@ -104,13 +109,23 @@ export function ModelSelect() {
   return (
     <Popover open={open} onOpenChange={handleSetOpen}>
       <PopoverTrigger asChild>
-        <div className="hidden md:block">
-          <TooltipButton
-            icon={groupedModels.length > 0 ? <BotMessageSquare className="size-4" /> : <BotOff className="size-4" />}
-            tooltipText={t('tooltip')}
-            size="icon"
-          />
-        </div>
+        {trigger ? (
+          <button
+            type="button"
+            className={triggerClassName}
+            aria-label={t('tooltip')}
+          >
+            {trigger}
+          </button>
+        ) : (
+          <div className={triggerClassName}>
+            <TooltipButton
+              icon={groupedModels.length > 0 ? <BotMessageSquare className="size-4" /> : <BotOff className="size-4" />}
+              tooltipText={t('tooltip')}
+              size="icon"
+            />
+          </div>
+        )}
       </PopoverTrigger>
       <PopoverContent className="w-[400px] p-0">
         <Command>

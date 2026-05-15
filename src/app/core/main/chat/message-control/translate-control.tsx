@@ -1,5 +1,5 @@
 import { Chat } from "@/db/chats"
-import { GlobeIcon, Loader2 } from "lucide-react"
+import { Languages, Loader2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useState } from "react"
 import { fetchAiTranslate } from "@/lib/ai/translate"
@@ -73,7 +73,7 @@ export function TranslateControl({ chat, onTranslatedContent, compact = false }:
       <DropdownMenuTrigger asChild>
         <div>
           <TooltipButton
-            icon={isTranslating ? <Loader2 className="size-4 animate-spin" /> : <GlobeIcon className="size-4" />}
+            icon={isTranslating ? <Loader2 className="size-4 animate-spin" /> : <Languages className="size-4" />}
             tooltipText={translateT('tooltip')}
             disabled={isTranslating}
             variant="ghost"

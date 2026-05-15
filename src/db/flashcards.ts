@@ -1,4 +1,4 @@
-import { getDb } from './index'
+import { getDb, serializedWrite } from './index'
 import type {
   CreateFlashcardInput,
   Flashcard,
@@ -13,7 +13,7 @@ import { scheduleFlashcardReview } from '@/lib/flashcard-scheduler'
 const DEFAULT_EASE = 2.5
 const DEFAULT_INTERVAL = 0
 const DEFAULT_DECK_NAME = '默认牌组'
-const LEGACY_DEFAULT_DECK_NAMES = new Set(['榛樿鐗岀粍'])
+const LEGACY_DEFAULT_DECK_NAMES = new Set([DEFAULT_DECK_NAME])
 
 function now() {
   return Date.now()
@@ -102,14 +102,16 @@ export async function ensureDefaultFlashcardDeck() {
 }
 
 export async function createFlashcardDeck(input: { name: string; description?: string }) {
-  const db = await getDb()
-  const ts = now()
-  await db.execute(
-    'insert into flashcard_decks (name, description, createdAt, updatedAt) values ($1, $2, $3, $4)',
-    [input.name, input.description ?? null, ts, ts],
-  )
-  const rows = await db.select<FlashcardDeck[]>('select * from flashcard_decks where name = $1 limit 1', [input.name])
-  return rows[0]
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    await db.execute(
+      'insert into flashcard_decks (name, description, createdAt, updatedAt) values ($1, $2, $3, $4)',
+      [input.name, input.description ?? null, ts, ts],
+    )
+    const rows = await db.select<FlashcardDeck[]>('select * from flashcard_decks where name = $1 limit 1', [input.name])
+    return rows[0]
+  })
 }
 
 export async function getFlashcardDecks() {
@@ -147,55 +149,90 @@ export async function getFlashcardDeckSummaries() {
 }
 
 export async function updateFlashcardDeck(deckId: number, input: { name: string; description?: string | null }) {
-  const db = await getDb()
-  const ts = now()
-  await db.execute(
-    'update flashcard_decks set name = $1, description = $2, updatedAt = $3 where id = $4',
-    [input.name, input.description ?? null, ts, deckId],
-  )
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    await db.execute(
+      'update flashcard_decks set name = $1, description = $2, updatedAt = $3 where id = $4',
+      [input.name, input.description ?? null, ts, deckId],
+    )
 
-  return await getFlashcardDeckById(deckId)
+    const rows = await db.select<FlashcardDeck[]>('select * from flashcard_decks where id = $1 limit 1', [deckId])
+    return rows[0] || null
+  })
 }
 
 export async function createFlashcard(input: CreateFlashcardInput) {
-  const db = await getDb()
-  const ts = now()
-  await db.execute(
-    `insert into flashcards
-      (deckId, noteId, notePath, type, front, back, clozeText, tags, status, ease, interval, repetitions, dueAt, lastReviewAt, createdAt, updatedAt)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-    [
-      input.deckId,
-      input.noteId ?? null,
-      input.notePath ?? null,
-      input.type,
-      input.front ?? null,
-      input.back ?? null,
-      input.clozeText ?? null,
-      normalizeTags(input.tags),
-      'new',
-      DEFAULT_EASE,
-      DEFAULT_INTERVAL,
-      0,
-      ts,
-      null,
-      ts,
-      ts,
-    ],
-  )
+  await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    await db.execute(
+      `insert into flashcards
+        (deckId, noteId, notePath, type, front, back, clozeText, tags, status, ease, interval, repetitions, dueAt, lastReviewAt, createdAt, updatedAt)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      [
+        input.deckId,
+        input.noteId ?? null,
+        input.notePath ?? null,
+        input.type,
+        input.front ?? null,
+        input.back ?? null,
+        input.clozeText ?? null,
+        normalizeTags(input.tags),
+        'new',
+        DEFAULT_EASE,
+        DEFAULT_INTERVAL,
+        0,
+        ts,
+        null,
+        ts,
+        ts,
+      ],
+    )
+  })
 }
 
 export async function createFlashcardsBatch(inputs: CreateFlashcardInput[]) {
   if (inputs.length === 0) return
 
-  for (let index = 0; index < inputs.length; index += 1) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute('BEGIN TRANSACTION')
     try {
-      await createFlashcard(inputs[index])
+      for (let index = 0; index < inputs.length; index += 1) {
+        const input = inputs[index]
+        const ts = now()
+        await db.execute(
+          `insert into flashcards
+            (deckId, noteId, notePath, type, front, back, clozeText, tags, status, ease, interval, repetitions, dueAt, lastReviewAt, createdAt, updatedAt)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+          [
+            input.deckId,
+            input.noteId ?? null,
+            input.notePath ?? null,
+            input.type,
+            input.front ?? null,
+            input.back ?? null,
+            input.clozeText ?? null,
+            normalizeTags(input.tags),
+            'new',
+            DEFAULT_EASE,
+            DEFAULT_INTERVAL,
+            0,
+            ts,
+            null,
+            ts,
+            ts,
+          ],
+        )
+      }
+      await db.execute('COMMIT')
     } catch (error) {
+      await db.execute('ROLLBACK')
       const detail = error instanceof Error ? error.message : JSON.stringify(error)
-      throw new Error(`第 ${index + 1} 张闪卡保存失败：${detail}`)
+      throw new Error(`批量保存闪卡失败：${detail}`)
     }
-  }
+  })
 }
 
 export async function getFlashcardsByDeckId(deckId: number) {
@@ -207,41 +244,49 @@ export async function getFlashcardsByDeckId(deckId: number) {
 }
 
 export async function moveFlashcardToDeck(flashcardId: number, targetDeckId: number) {
-  const db = await getDb()
-  const ts = now()
-  await db.execute(
-    'update flashcards set deckId = $1, updatedAt = $2 where id = $3',
-    [targetDeckId, ts, flashcardId],
-  )
+  await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    await db.execute(
+      'update flashcards set deckId = $1, updatedAt = $2 where id = $3',
+      [targetDeckId, ts, flashcardId],
+    )
+  })
 }
 
 export async function deleteFlashcard(flashcardId: number) {
-  const db = await getDb()
-  await db.execute('delete from flashcard_reviews where flashcardId = $1', [flashcardId])
-  await db.execute('delete from flashcards where id = $1', [flashcardId])
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute('delete from flashcard_reviews where flashcardId = $1', [flashcardId])
+    await db.execute('delete from flashcards where id = $1', [flashcardId])
+  })
 }
 
 export async function updateFlashcardTags(flashcardId: number, tags: string[]) {
-  const db = await getDb()
-  const ts = now()
-  await db.execute(
-    'update flashcards set tags = $1, updatedAt = $2 where id = $3',
-    [normalizeTags(tags), ts, flashcardId],
-  )
+  await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    await db.execute(
+      'update flashcards set tags = $1, updatedAt = $2 where id = $3',
+      [normalizeTags(tags), ts, flashcardId],
+    )
+  })
 }
 
 export async function deleteFlashcardDeck(deckId: number) {
-  const db = await getDb()
-  const result = await db.select<{ count: number }[]>(
-    'select count(*) as count from flashcards where deckId = $1',
-    [deckId],
-  )
+  await serializedWrite(async () => {
+    const db = await getDb()
+    const result = await db.select<{ count: number }[]>(
+      'select count(*) as count from flashcards where deckId = $1',
+      [deckId],
+    )
 
-  if (Number(result[0]?.count || 0) > 0) {
-    throw new Error('牌组下仍有卡片，无法删除。请先移动或删除卡片。')
-  }
+    if (Number(result[0]?.count || 0) > 0) {
+      throw new Error('牌组下仍有卡片，无法删除。请先移动或删除卡片。')
+    }
 
-  await db.execute('delete from flashcard_decks where id = $1', [deckId])
+    await db.execute('delete from flashcard_decks where id = $1', [deckId])
+  })
 }
 
 export async function getDueFlashcards(deckId?: number) {
@@ -329,40 +374,42 @@ export async function getFlashcardLearningStats(): Promise<FlashcardLearningStat
 }
 
 export async function updateFlashcardReview(flashcardId: number, rating: FlashcardReviewRating) {
-  const db = await getDb()
-  const current = (await db.select<Flashcard[]>('select * from flashcards where id = $1 limit 1', [flashcardId]))[0]
-  if (!current) throw new Error('Flashcard not found')
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    const current = (await db.select<Flashcard[]>('select * from flashcards where id = $1 limit 1', [flashcardId]))[0]
+    if (!current) throw new Error('Flashcard not found')
 
-  const prevEase = current.ease
-  const prevInterval = current.interval
-  const ts = now()
-  const scheduled = scheduleFlashcardReview({
-    ease: prevEase,
-    interval: prevInterval,
-    repetitions: current.repetitions,
-    rating,
+    const prevEase = current.ease
+    const prevInterval = current.interval
+    const ts = now()
+    const scheduled = scheduleFlashcardReview({
+      ease: prevEase,
+      interval: prevInterval,
+      repetitions: current.repetitions,
+      rating,
+    })
+    const nextEase = scheduled.ease
+    const nextInterval = scheduled.interval
+    const repetitions = scheduled.repetitions
+    const status = rating <= 1 ? 'learning' : 'review'
+    const nextDueAt = ts + nextInterval * 24 * 60 * 60 * 1000
+
+    await db.execute(
+      `update flashcards
+       set ease = $1, interval = $2, repetitions = $3, dueAt = $4, lastReviewAt = $5, status = $6, updatedAt = $7
+       where id = $8`,
+      [nextEase, nextInterval, repetitions, nextDueAt, ts, status, ts, flashcardId],
+    )
+
+    await db.execute(
+      `insert into flashcard_reviews
+       (flashcardId, rating, reviewedAt, prevEase, nextEase, prevInterval, nextInterval)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [flashcardId, rating, ts, prevEase, nextEase, prevInterval, nextInterval],
+    )
+
+    return { nextEase, nextInterval, nextDueAt }
   })
-  const nextEase = scheduled.ease
-  const nextInterval = scheduled.interval
-  const repetitions = scheduled.repetitions
-  const status = rating <= 1 ? 'learning' : 'review'
-  const nextDueAt = ts + nextInterval * 24 * 60 * 60 * 1000
-
-  await db.execute(
-    `update flashcards
-     set ease = $1, interval = $2, repetitions = $3, dueAt = $4, lastReviewAt = $5, status = $6, updatedAt = $7
-     where id = $8`,
-    [nextEase, nextInterval, repetitions, nextDueAt, ts, status, ts, flashcardId],
-  )
-
-  await db.execute(
-    `insert into flashcard_reviews
-     (flashcardId, rating, reviewedAt, prevEase, nextEase, prevInterval, nextInterval)
-     values ($1,$2,$3,$4,$5,$6,$7)`,
-    [flashcardId, rating, ts, prevEase, nextEase, prevInterval, nextInterval],
-  )
-
-  return { nextEase, nextInterval, nextDueAt }
 }
 
 export async function getFlashcardReviews(flashcardId: number) {

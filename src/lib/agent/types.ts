@@ -180,5 +180,5 @@ export interface ReActStep {
     params: Record<string, any>
   }
   observation?: string
-  duration?: number  // 鑰楁椂锛堟绉掞級
+  duration?: number  // Duration in milliseconds.
 }

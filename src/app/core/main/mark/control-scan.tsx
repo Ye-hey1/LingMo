@@ -29,13 +29,12 @@ import useTagStore from "@/stores/tag"
 import useMarkStore from "@/stores/mark"
 import { v4 as uuid } from "uuid"
 import useSettingStore from "@/stores/setting"
-import ocr from "@/lib/ocr"
-import { fetchAiDesc, fetchAiDescByImage } from "@/lib/ai/description"
 import { insertMark } from "@/db/marks"
 import emitter from '@/lib/emitter'
 import { useRouter } from 'next/navigation'
 import { handleRecordComplete } from '@/lib/record-navigation'
 import { Button } from "@/components/ui/button"
+import { recognizeStructuredImage } from "@/lib/mark-image-recognition"
 
 export function ControlScan() {
   const t = useTranslations();
@@ -47,7 +46,7 @@ export function ControlScan() {
   const cropBoxRef = useRef<Element | null>(null)
   const { currentTagId, fetchTags, getCurrentTag } = useTagStore()
   const { fetchMarks, addQueue, removeQueue, setQueue } = useMarkStore()
-  const { primaryModel, primaryImageMethod, enableImageRecognition } = useSettingStore()
+  const { primaryImageMethod, enableImageRecognition } = useSettingStore()
 
   const cleanupTempScreenshots = useCallback(async () => {
     try {
@@ -126,20 +125,22 @@ export function ControlScan() {
         addQueue({ queueId, tagId: currentTagId!, progress: t('record.mark.progress.save'), type: 'scan', startTime: Date.now() })
         content = ''
         desc = ''
-      } else if (primaryImageMethod === 'vlm') {
-        addQueue({ queueId, tagId: currentTagId!, progress: t('record.mark.progress.aiAnalysis'), type: 'scan', startTime: Date.now() })
-        const base64 = `data:image/png;base64,${Buffer.from(uint8Array).toString('base64')}`
-        content = await fetchAiDescByImage(base64) || 'VLM Error'
-        desc = content
       } else {
-        addQueue({ queueId, tagId: currentTagId!, progress: t('record.mark.progress.ocr'), type: 'scan', startTime: Date.now() })
-        content = await ocr(`screenshot/${queueId}.png`) || 'OCR Error'
-        if (primaryModel) {
-          setQueue(queueId, { progress: t('record.mark.progress.aiAnalysis') });
-          desc = await fetchAiDesc(content).then(res => res ? res : content) || content
-        } else {
-          desc = content
-        }
+        addQueue({
+          queueId,
+          tagId: currentTagId!,
+          progress: primaryImageMethod === 'vlm' ? t('record.mark.progress.aiAnalysis') : t('record.mark.progress.ocr'),
+          type: 'scan',
+          startTime: Date.now(),
+        })
+        const recognition = await recognizeStructuredImage({
+          path: `screenshot/${queueId}.png`,
+          base64: primaryImageMethod === 'vlm' ? `data:image/png;base64,${Buffer.from(uint8Array).toString('base64')}` : undefined,
+          method: primaryImageMethod,
+          sourceLabel: '截图',
+        })
+        content = recognition.content
+        desc = recognition.desc
       }
       setQueue(queueId, { progress: t('record.mark.progress.save') });
       await insertMark({ tagId: currentTagId, type: 'scan', content, url: `${queueId}.png`, desc })
@@ -156,7 +157,6 @@ export function ControlScan() {
     fetchTags,
     getCurrentTag,
     primaryImageMethod,
-    primaryModel,
     removeQueue,
     router,
     setQueue,

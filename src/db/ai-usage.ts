@@ -1,4 +1,4 @@
-import { getDb } from './index'
+import { getDb, serializedWrite } from './index'
 
 export type AiUsageRole = 'request' | 'tool'
 
@@ -86,34 +86,36 @@ export async function initAiUsageDb() {
 }
 
 export async function insertAiUsageEvent(event: InsertAiUsageEventInput) {
-  const db = await getDb()
   const createdAt = event.createdAt ?? Date.now()
 
-  return await db.execute(
-    `insert into ai_usage_events
-      (platform, provider, model, modelType, storeKey, cwd, sessionId, conversationId,
-       role, messageCount, tokenEstimate, toolName, toolCallCount, success, errorKind, latencyMs, createdAt)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-    [
-      event.platform || 'lingmo',
-      event.provider || 'unknown',
-      event.model || '',
-      event.modelType ?? null,
-      event.storeKey ?? null,
-      event.cwd ?? null,
-      event.sessionId ?? null,
-      event.conversationId ?? null,
-      event.role || 'request',
-      event.messageCount ?? 0,
-      event.tokenEstimate ?? 0,
-      event.toolName ?? null,
-      event.toolCallCount ?? 0,
-      event.success === false ? 0 : 1,
-      event.errorKind ?? null,
-      event.latencyMs ?? null,
-      createdAt,
-    ]
-  )
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    return await db.execute(
+      `insert into ai_usage_events
+        (platform, provider, model, modelType, storeKey, cwd, sessionId, conversationId,
+         role, messageCount, tokenEstimate, toolName, toolCallCount, success, errorKind, latencyMs, createdAt)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+      [
+        event.platform || 'lingmo',
+        event.provider || 'unknown',
+        event.model || '',
+        event.modelType ?? null,
+        event.storeKey ?? null,
+        event.cwd ?? null,
+        event.sessionId ?? null,
+        event.conversationId ?? null,
+        event.role || 'request',
+        event.messageCount ?? 0,
+        event.tokenEstimate ?? 0,
+        event.toolName ?? null,
+        event.toolCallCount ?? 0,
+        event.success === false ? 0 : 1,
+        event.errorKind ?? null,
+        event.latencyMs ?? null,
+        createdAt,
+      ],
+    )
+  })
 }
 
 export async function getAllAiUsageEvents() {

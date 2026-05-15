@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tauri::State;
 use tauri::{AppHandle, Emitter, Runtime};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::Command as TokioCommand;
 use tokio::sync::Mutex;
 
@@ -215,7 +215,7 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
         | (RuntimeKind::Python3, "linux") => Some(InstallRecipe {
             id: "install-python-manual",
             title: "Install Python",
-            command_preview: "Install Python 3 in your user environment, then re-check in NoteGen.",
+            command_preview: "Install Python 3 in your user environment, or make sure python / py is on PATH, then re-check in NoteGen.",
             post_install_hint: Some("Use the official Python installer for your platform, then restart NoteGen or open a new terminal session before re-checking."),
             scope: "current_user",
             manual_only: true,
@@ -241,19 +241,38 @@ fn find_command_path(command: &str) -> Option<PathBuf> {
     } else {
         ':'
     };
-    let candidates: &[&str] = if cfg!(target_os = "windows") {
-        &[
-            command,
-            &format!("{command}.cmd"),
-            &format!("{command}.exe"),
-            &format!("{command}.bat"),
-        ]
+    let candidates: Vec<String> = if cfg!(target_os = "windows") {
+        let mut items = vec![
+            command.to_string(),
+            format!("{command}.cmd"),
+            format!("{command}.exe"),
+            format!("{command}.bat"),
+        ];
+
+        if command.eq_ignore_ascii_case("python3") {
+            items.extend([
+                "python".to_string(),
+                "python.exe".to_string(),
+                "python3.exe".to_string(),
+                "py".to_string(),
+                "py.exe".to_string(),
+            ]);
+        }
+
+        if command.eq_ignore_ascii_case("bunx") {
+            items.extend([
+                "bun".to_string(),
+                "bun.exe".to_string(),
+            ]);
+        }
+
+        items
     } else {
-        &[command]
+        vec![command.to_string()]
     };
 
     for dir in path_var.split(separator) {
-        for candidate in candidates {
+        for candidate in &candidates {
             let path = PathBuf::from(dir).join(candidate);
             if path.exists() {
                 return Some(path);
@@ -267,6 +286,7 @@ fn find_command_path(command: &str) -> Option<PathBuf> {
 fn version_args_for(command: &str) -> &'static [&'static str] {
     match command {
         "python" | "python3" => &["--version"],
+        "py" => &["-3", "--version"],
         _ => &["--version"],
     }
 }
@@ -426,26 +446,64 @@ async fn collect_process_output<R: Runtime>(
     reader: impl tokio::io::AsyncRead + Unpin,
     buffer: Arc<Mutex<String>>,
 ) -> Result<(), String> {
-    let mut lines = BufReader::new(reader).lines();
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .map_err(|error| format!("Failed to read install output: {error}"))?
-    {
-        {
-            let mut locked = buffer.lock().await;
-            locked.push_str(&line);
-            locked.push('\n');
+    let mut reader = BufReader::new(reader);
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 1024];
+
+    loop {
+        let read = tokio::io::AsyncReadExt::read(&mut reader, &mut chunk)
+            .await
+            .map_err(|error| format!("Failed to read install output: {error}"))?;
+        if read == 0 {
+            break;
         }
 
-        emit_install_event(
-            &app,
-            &recipe_id,
-            InstallProgressStage::Running,
-            Some(stream_name),
-            Some(line),
-            None,
-        )?;
+        raw.extend_from_slice(&chunk[..read]);
+        while let Some(position) = raw.iter().position(|byte| *byte == b'\n') {
+            let mut line = raw.drain(..=position).collect::<Vec<u8>>();
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+
+            let normalized_line = String::from_utf8_lossy(&line).to_string();
+            {
+                let mut locked = buffer.lock().await;
+                locked.push_str(&normalized_line);
+                locked.push('\n');
+            }
+
+            emit_install_event(
+                &app,
+                &recipe_id,
+                InstallProgressStage::Running,
+                Some(stream_name),
+                Some(normalized_line),
+                None,
+            )?;
+        }
+    }
+
+    if !raw.is_empty() {
+        let normalized_line = String::from_utf8_lossy(&raw).trim_end().to_string();
+        if !normalized_line.is_empty() {
+            {
+                let mut locked = buffer.lock().await;
+                locked.push_str(&normalized_line);
+                locked.push('\n');
+            }
+
+            emit_install_event(
+                &app,
+                &recipe_id,
+                InstallProgressStage::Running,
+                Some(stream_name),
+                Some(normalized_line),
+                None,
+            )?;
+        }
     }
 
     Ok(())

@@ -6,7 +6,7 @@ import { Switch } from '@/components/ui/switch'
 import {
   BotMessageSquare,
   Drama,
-  Globe2,
+  GlobeIcon,
   ServerCrash,
   Database,
   Clipboard,
@@ -70,7 +70,7 @@ const TOOL_CONFIGS = {
     descKey: 'settings.chat.toolbar.chatToolbar.skillsPopover.desc',
   },
   webSearch: {
-    icon: <Globe2 className="size-4" />,
+    icon: <GlobeIcon className="size-4" />,
     titleKey: 'settings.chat.toolbar.chatToolbar.webSearch.title',
     descKey: 'settings.chat.toolbar.chatToolbar.webSearch.desc',
   },

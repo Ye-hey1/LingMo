@@ -30,6 +30,32 @@ function compactText(value?: string) {
   return value?.replace(/\s+/g, ' ').trim() || ''
 }
 
+function extractStructuredTitle(value?: string) {
+  const text = value || ''
+  const lines = text
+    .split('\n')
+    .map((line) => compactText(line.replace(/^#+\s*/, '')))
+    .filter(Boolean)
+
+  const structuredIndex = lines.findIndex((line) => line === '主题')
+  if (structuredIndex !== -1 && lines[structuredIndex + 1]) {
+    return lines[structuredIndex + 1]
+  }
+
+  return ''
+}
+
+function extractStructuredPreview(value?: string) {
+  const text = value || ''
+  const bulletLines = text
+    .split('\n')
+    .map((line) => compactText(line.replace(/^[-*]\s*/, '')))
+    .filter(Boolean)
+    .filter((line) => !['主题', '关键信息', '文本摘录', '可操作区域'].includes(line))
+
+  return bulletLines.slice(0, 3).join(' ')
+}
+
 function splitTitleAndPreview(value?: string) {
   const text = compactText(value)
   if (!text) {
@@ -81,10 +107,12 @@ export function getMarkListItemContent(mark: Mark): MarkListItemContent {
   }
   case 'scan':
   case 'image': {
-    const title = compactText(mark.desc) || compactText(mark.content)
+    const structuredTitle = extractStructuredTitle(mark.content)
+    const structuredPreview = extractStructuredPreview(mark.content)
+    const title = compactText(mark.desc) || structuredTitle || compactText(mark.content)
     return {
       title,
-      preview: compactText(mark.content) || title,
+      preview: structuredPreview || compactText(mark.content) || title,
       imageUrl: mark.url,
     }
   }

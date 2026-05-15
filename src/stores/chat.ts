@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { Chat, clearChatsByTagId, deleteChat, initChatsDb, insertChat, updateChat, updateChatsInsertedById, getAllChats, deleteAllChats, insertChats, updateChatCondensedContent, getChatsByConversation } from '@/db/chats'
+import { Chat, clearChatsByTagId, deleteChat, deleteChatsByConversationId, initChatsDb, insertChat, updateChat, updateChatsInsertedById, getAllChats, deleteAllChats, insertChats, updateChatCondensedContent, getChatsByConversation } from '@/db/chats'
 import { uploadFile as uploadGithubFile, getFiles as githubGetFiles, decodeBase64ToString } from '@/lib/sync/github';
 import { uploadFile as uploadGiteeFile, getFiles as giteeGetFiles } from '@/lib/sync/gitee';
 import { uploadFile as uploadGitlabFile, getFiles as gitlabGetFiles, getFileContent as gitlabGetFileContent } from '@/lib/sync/gitlab';
@@ -159,6 +159,8 @@ export interface PendingQuote {
 }
 
 // MCP 工具调用记录（临时，不保存到数据库）
+export type ChatMode = 'chat' | 'agent' | 'research'
+
 export interface McpToolCall {
   id: string
   chatId: number // 关联的 chat ID
@@ -174,6 +176,10 @@ export interface McpToolCall {
 interface ChatState {
   loading: boolean
   setLoading: (loading: boolean) => void
+  researchRunning: boolean
+  setResearchRunning: (running: boolean) => void
+  chatMode: ChatMode
+  setChatMode: (mode: ChatMode) => Promise<void>
 
   isCondensing: boolean // 压缩状态
   _condenseLock: boolean // 内部锁，防止并发压缩
@@ -273,6 +279,19 @@ const useChatStore = create<ChatState>((set, get) => ({
 
   setLoading: (loading: boolean) => {
     set({ loading })
+  },
+
+  researchRunning: false,
+  setResearchRunning: (researchRunning: boolean) => {
+    set({ researchRunning })
+  },
+
+  chatMode: 'agent',
+  setChatMode: async (chatMode: ChatMode) => {
+    const store = await Store.load('store.json')
+    await store.set('chatMode', chatMode)
+    await store.save()
+    set({ chatMode })
   },
 
   isCondensing: false,
@@ -560,6 +579,14 @@ const useChatStore = create<ChatState>((set, get) => ({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   init: async (_tagId: number) => {
     await initChatsDb()
+    const store = await Store.load('store.json')
+    const savedChatMode = await store.get<ChatMode>('chatMode')
+    if (savedChatMode === 'chat' || savedChatMode === 'agent' || savedChatMode === 'research') {
+      set({ chatMode: savedChatMode })
+    } else {
+      await store.set('chatMode', get().chatMode)
+      await store.save()
+    }
     // 先初始化会话列表
     await get().initConversations()
 
@@ -701,8 +728,7 @@ const useChatStore = create<ChatState>((set, get) => ({
       const count = chats.length
 
       // 删除数据库中的记录
-      const db = await import('@/db').then(m => m.getDb())
-      await db.execute("delete from chats where conversationId = $1", [currentConversationId])
+      await deleteChatsByConversationId(currentConversationId)
 
       const { updateConversationMessageCount } = await import('@/db/conversations')
       await updateConversationMessageCount(currentConversationId, -count)
