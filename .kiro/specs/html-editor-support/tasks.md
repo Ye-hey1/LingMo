@@ -6,13 +6,13 @@
 
 ## Tasks
 
-- [ ] 1. 安装依赖并修改文件路由
-  - [-] 1.1 安装 CodeMirror 相关依赖
+- [x] 1. 安装依赖并修改文件路由
+  - [x] 1.1 安装 CodeMirror 相关依赖
     - 执行 `pnpm add codemirror @codemirror/lang-html @codemirror/view @codemirror/state`
     - 项目已有 `@codemirror/commands`，新增 HTML 语言支持和核心包
     - _Requirements: 2.1, 2.2_
 
-  - [~] 1.2 修改 EditorLayout 文件路由逻辑
+  - [x] 1.2 修改 EditorLayout 文件路由逻辑
     - 在 `src/app/core/main/editor/editor-layout.tsx` 中：
     - 新增 `HTML_EXTENSIONS = new Set(['html', 'htm'])` 常量
     - 从 `MARKDOWN_EXTENSIONS` 集合中移除 `'html'`
@@ -20,8 +20,8 @@
     - 返回类型联合中添加 `'html'`
     - _Requirements: 1.1, 1.2_
 
-- [ ] 2. 实现 HTML 编辑器核心组件
-  - [~] 2.1 创建 HtmlPreview 预览组件
+- [x] 2. 实现 HTML 编辑器核心组件
+  - [x] 2.1 创建 HtmlPreview 预览组件
     - 创建 `src/app/core/main/editor/html/html-preview.tsx`
     - 实现 `HtmlPreviewProps { content: string }` 接口
     - 使用 `<iframe srcDoc={content} sandbox="allow-same-origin">` 渲染
@@ -29,7 +29,7 @@
     - 添加 `title="HTML Preview"` 无障碍属性
     - _Requirements: 3.1, 3.2_
 
-  - [~] 2.2 创建 HtmlCodeEditor 代码编辑组件
+  - [x] 2.2 创建 HtmlCodeEditor 代码编辑组件
     - 创建 `src/app/core/main/editor/html/html-code-editor.tsx`
     - 实现 `HtmlCodeEditorProps { content: string; onChange: (value: string) => void }` 接口
     - 配置 CodeMirror 6：`basicSetup`、`html()` 语言模式、`lineWrapping`
@@ -37,7 +37,7 @@
     - 设置编辑器高度 100%，scroller overflow auto
     - _Requirements: 2.1, 2.2, 2.3_
 
-  - [~] 2.3 创建 HtmlEditor 主容器组件
+  - [x] 2.3 创建 HtmlEditor 主容器组件
     - 创建 `src/app/core/main/editor/html/html-editor.tsx`
     - 实现 `HtmlEditorProps { filePath: string; tabContentsRef: RefObject<Record<string, string>> }` 接口
     - 管理内部状态：`mode: 'code' | 'preview'`（默认 `'code'`）、`content: string`
@@ -65,18 +65,18 @@
     - 验证预览模式下 iframe 的 `srcdoc` 属性等于当前内容字符串
     - **Validates: Requirements 3.1, 3.3**
 
-- [~] 3. Checkpoint - 确保核心组件正常工作
+- [x] 3. Checkpoint - 确保核心组件正常工作
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 4. 集成到 EditorLayout 并实现 Tab 管理
-  - [~] 4.1 在 EditorLayout 中集成 HtmlEditor
+- [x] 4. 集成到 EditorLayout 并实现 Tab 管理
+  - [x] 4.1 在 EditorLayout 中集成 HtmlEditor
     - 在 `editor-layout.tsx` 顶部添加 `HtmlEditor` 的 dynamic import
     - 在 `renderContentPanel` 函数中添加 `itemType === 'html'` 的渲染分支
     - 传入 `filePath={tab.path}` 和 `tabContentsRef={tabContentsRef}` props
     - 使用 `<Suspense>` 包裹，与其他编辑器组件模式一致
     - _Requirements: 1.1, 1.3, 5.1, 5.2_
 
-  - [~] 4.2 实现 Tab 切换时的状态恢复
+  - [x] 4.2 实现 Tab 切换时的状态恢复
     - 在 `HtmlEditor` 中监听 `filePath` 变化，重新从 `currentArticle` 加载内容
     - 利用 `tabContentsRef` 缓存当前编辑内容，Tab 切回时恢复
     - 确保模式状态（code/preview）在 Tab 切换时保留
@@ -94,7 +94,7 @@
     - 测试 iframe sandbox 属性包含 `allow-same-origin` 且不包含 `allow-scripts`
     - _Requirements: 3.2, 4.4_
 
-- [~] 5. Final checkpoint - 确保所有测试通过
+- [x] 5. Final checkpoint - 确保所有测试通过
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

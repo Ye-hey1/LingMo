@@ -1,12 +1,15 @@
 import type OpenAI from 'openai'
-import type { AgentEvent, ReActStep, Tool, ToolCall, ToolResult, ToolExecutionContext } from './types'
+import type { AgentEvent, ReActStep, ToolCall } from './types'
 import { createAgentEventBus, type AgentEventBus } from './event-bus'
 import { convertToolsToOpenAIFormat } from './tool-definitions'
 import { executeWithTimeout } from './tool-executor'
+import { compressToolResult } from './tool-result-compression'
 import { truncateObservation } from './safety-guards'
 import { getToolByName, getAllToolsSync } from './tools'
 import { deriveIntentPolicy, evaluateIntentAwareToolPolicy, type IntentPolicy } from './tool-policy'
 import { ToolResultCache } from './tool-cache'
+import { buildToolExecutionPrompt } from './tool-intent'
+import useArticleStore from '@/stores/article'
 
 /**
  * Function Calling Agent — 基于 OpenAI tool_calls 的稳定 Agent 引擎
@@ -31,6 +34,14 @@ export interface FunctionCallAgentConfig {
   formatAutoFinalAnswer?: (key: string, values?: Record<string, string>) => string
   requestConfirmation?: (toolName: string, params: Record<string, any>, context?: any) => Promise<boolean>
   activeSkills?: string[]
+  currentQuote?: {
+    fileName: string
+    startLine: number
+    endLine: number
+    from: number
+    to: number
+    fullContent?: string
+  }
 }
 
 export class FunctionCallAgent {
@@ -57,6 +68,17 @@ export class FunctionCallAgent {
       iteration: this.currentIteration || undefined,
     })
     this.config.onEvent?.(event)
+  }
+
+  private emitToolCall(toolCall: ToolCall) {
+    this.config.onToolCall?.(toolCall)
+    this.emitEvent('tool.updated', {
+      toolCall: {
+        ...toolCall,
+        params: toolCall.params,
+        result: toolCall.result,
+      },
+    })
   }
 
   stop() {
@@ -99,6 +121,7 @@ export class FunctionCallAgent {
     // 获取可用工具并转换为 OpenAI 格式
     const allTools = getAllToolsSync()
     const openaiTools = convertToolsToOpenAIFormat(allTools)
+    const toolExecutionPrompt = buildToolExecutionPrompt(this.currentUserInput)
 
     // 构建初始消息
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = []
@@ -152,11 +175,12 @@ export class FunctionCallAgent {
 
       let response: OpenAI.Chat.ChatCompletion
       try {
+        const forceToolCall = toolExecutionPrompt.length > 0
         response = await openai.chat.completions.create({
           model: aiConfig.model || '',
           messages,
           tools: openaiTools.length > 0 ? openaiTools : undefined,
-          tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
+          tool_choice: openaiTools.length > 0 ? (forceToolCall ? 'required' : 'auto') : undefined,
           temperature: aiConfig.temperature,
           top_p: aiConfig.topP,
         }, {
@@ -264,14 +288,15 @@ export class FunctionCallAgent {
           status: 'running',
           timestamp: Date.now(),
         }
-        this.config.onToolCall?.(toolCall)
+        this.emitToolCall(toolCall)
 
-        const result = await executeWithTimeout(tool, params, {
+        let result = await executeWithTimeout(tool, params, {
           abortSignal: this.abortController?.signal,
           runId: this.eventBus.getRunId(),
           iteration: this.currentIteration,
           userInput: this.currentUserInput,
         })
+        result = compressToolResult(tool, result)
 
         if (this.stopped) throw new Error('USER_STOPPED')
 
@@ -293,7 +318,7 @@ export class FunctionCallAgent {
         // 更新 toolCall 状态
         toolCall.status = result.success ? 'success' : 'error'
         toolCall.result = result
-        this.config.onToolCall?.(toolCall)
+        this.emitToolCall(toolCall)
         this.config.onObservation?.(observation)
         this.emitEvent('observation.created', { observation })
 
@@ -331,24 +356,29 @@ export class FunctionCallAgent {
   }
 
   private async buildSystemPrompt(): Promise<string> {
-    // 加载记忆
+    // 加载统一上下文：用户记忆、Agent 工作记忆、当前笔记知识图谱
     let memoryPrompt = ''
     try {
-      const { contextLoader } = await import('@/lib/context/loader')
-      const memoryContext = await contextLoader.getContextForQuery(this.currentUserInput)
-      if (memoryContext.preferences.length > 0 || memoryContext.memory.length > 0) {
-        memoryPrompt = contextLoader.formatMemoriesForPrompt(memoryContext)
+      const { unifiedContextLoader } = await import('@/lib/context/unified-loader')
+      const activeFilePath = useArticleStore.getState().activeFilePath || this.config.currentQuote?.fileName
+      const unifiedContext = await unifiedContextLoader.getContextForAgent(this.currentUserInput, {
+        activeFilePath,
+      })
+      if (unifiedContext.prompt.trim()) {
+        memoryPrompt = unifiedContext.prompt
       }
     } catch { /* non-critical */ }
 
     const webControl = this.config.webSearchEnabled
       ? '联网搜索已启用。可以使用 web_search、web_extract、web_fetch 工具获取实时信息。'
       : '联网搜索未启用。不要调用 web_search 等网络工具。'
+    const toolExecutionPrompt = buildToolExecutionPrompt(this.currentUserInput)
 
     return `你是一个高效的 AI 助手，通过调用工具来帮助用户完成任务。
 
 规则：
-- 如果用户的问题可以直接回答，不要调用工具，直接回复。
+- 如果当前输入是命令式工作流或明确的工具执行请求，优先调用工具，不要先做概念介绍。
+- 如果用户的问题可以直接回答，且没有明确要求执行工具，再直接回复。
 - 如果需要操作文件、搜索内容等，使用对应的工具。
 - 每次只调用必要的工具，避免不必要的调用。
 - 工具执行完成后，基于结果给出清晰的回答。
@@ -356,6 +386,7 @@ export class FunctionCallAgent {
 
 ${webControl}
 
-${memoryPrompt ? `## 用户记忆\n${memoryPrompt}` : ''}`
+${toolExecutionPrompt ? `${toolExecutionPrompt}\n` : ''}
+${memoryPrompt ? `## Unified Context\n${memoryPrompt}` : ''}`
   }
 }

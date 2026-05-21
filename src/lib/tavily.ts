@@ -130,6 +130,8 @@ interface DuckDuckGoRawResponse {
   Results?: unknown
 }
 
+const DUCKDUCKGO_QUERY_CHAR_LIMIT = 500
+
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(parsed)) {
@@ -137,6 +139,10 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
   }
 
   return Math.min(max, Math.max(min, Math.floor(parsed)))
+}
+
+function normalizeFallbackSearchQuery(query: string): string {
+  return query.replace(/\s+/g, ' ').trim().slice(0, DUCKDUCKGO_QUERY_CHAR_LIMIT)
 }
 
 function normalizeSearchDepth(value: unknown): TavilySearchDepth {
@@ -489,7 +495,8 @@ async function requestDuckDuckGoFallback(
   signal?: AbortSignal,
 ): Promise<TavilySearchResponse> {
   signal?.throwIfAborted()
-  const encodedQuery = encodeURIComponent(query)
+  const normalizedQuery = normalizeFallbackSearchQuery(query)
+  const encodedQuery = encodeURIComponent(normalizedQuery)
   const payload = await invokeAiJson<DuckDuckGoRawResponse>({
     config: {
       baseUrl: 'https://api.duckduckgo.com',
@@ -506,7 +513,7 @@ async function requestDuckDuckGoFallback(
       : undefined
 
   return {
-    query,
+    query: normalizedQuery,
     answer,
     results,
     provider: 'duckduckgo',

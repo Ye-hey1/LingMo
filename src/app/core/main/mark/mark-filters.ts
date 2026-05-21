@@ -15,7 +15,7 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000
 const VALID_TYPES = new Set<Mark['type']>(['scan', 'text', 'image', 'link', 'file', 'recording', 'todo'])
 const VALID_TIME_PRESETS = new Set<RecordTimePreset>(['all', 'today', 'last7Days', 'last30Days'])
 const VALID_PROCESS_STATES = new Set<RecordProcessState>(['all', 'unprocessed', 'processed'])
-const DEFAULT_PROCESS_STATE: RecordProcessState = 'unprocessed'
+const DEFAULT_PROCESS_STATE: RecordProcessState = 'all'
 
 function normalizeText(value?: string | null): string {
   return (value || '').trim().toLowerCase()

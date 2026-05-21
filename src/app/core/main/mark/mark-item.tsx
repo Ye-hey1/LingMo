@@ -1,6 +1,6 @@
 'use client'
 import React from "react"
-import { delMark, delMarkForever, Mark, pinMark, unpinMark, restoreMark, updateMark, TRASH_RETENTION_DAYS } from "@/db/marks";
+import { delMark, delMarkForever, Mark, pinMark, unpinMark, restoreMark, restoreMarks, updateMark, TRASH_RETENTION_DAYS } from "@/db/marks";
 import { useTranslations } from 'next-intl';
 import {
   ContextMenu,
@@ -19,12 +19,14 @@ import useMarkStore from "@/stores/mark";
 import useTagStore from "@/stores/tag";
 import { LocalImage } from "@/components/local-image";
 import { fetchAiDesc } from "@/lib/ai/description";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { appDataDir } from "@tauri-apps/api/path";
-import { CheckSquare, ImageUp, Pencil, Pin, PinOff, RefreshCw, Save, Settings2, Square } from "lucide-react";
+import { CheckSquare, Code2, ExternalLink, FileIcon, GitFork, ImageIcon, ImageUp, LinkIcon, ListTree, Loader2, Mic, NotebookText, Pencil, Pin, PinOff, RefreshCw, Save, Settings2, Sparkles, Square, Star, TextIcon } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { Input } from "@/components/ui/input";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AudioPlayer } from "@/components/audio-player";
 import { ImageViewer } from "@/components/image-viewer";
 import ChatPreview from "../chat/chat-preview";
@@ -37,13 +39,16 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { BaseDirectory, readFile } from "@tauri-apps/plugin-fs";
 import { useRouter } from "next/navigation";
 import { NO_TRANSCRIPTION_MESSAGE, transcribeRecording } from "@/lib/audio";
-import { getMarkTypeListBadgeClasses } from "./mark-type-meta";
 import { getMarkListItemContent } from "./mark-list-item-content";
 import { TodoEditTrigger } from "./todo-edit-button";
 import { canOpenMarkSource, getMarkOpenAction } from "./mark-open-path";
 import useArticleStore from "@/stores/article";
 import { useSidebarStore } from "@/stores/sidebar";
 import { appendRecordsToNote, createNoteFromRecords } from "@/lib/record-to-note";
+import { ToastAction } from "@/components/ui/toast";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import { getGitHubProjectDetailContent, getGitHubProjectDisplayName, getGitHubProjectIntro, getGitHubProjectMeta, isGitHubProjectMark, updateGitHubProjectMarkTitle } from "@/lib/github-project";
+import { isVideoTranscriptMark, mergeVideoTranscriptSummary, parseVideoTranscriptRecord, summarizeVideoTranscript } from "@/lib/video-transcript-record";
 
 dayjs.extend(relativeTime)
 
@@ -77,7 +82,244 @@ const getWordCount = (text: string): number => {
   return text.replace(/\s/g, '').length;
 };
 
-const DetailViewer = React.memo(({mark, content, path, className}: {mark: Mark, content: string, path?: string, className?: string}) => {
+function compactTooltipText(value?: string) {
+  const text = value?.replace(/\s+/g, ' ').trim() || ''
+  return text.length > 120 ? `${text.slice(0, 120)}...` : text
+}
+
+function GitHubProjectDetailView({ mark }: { mark: Mark }) {
+  const meta = useMemo(() => getGitHubProjectMeta(mark), [mark])
+  const detailContent = useMemo(() => getGitHubProjectDetailContent(mark), [mark])
+  const displayUrl = meta.url || mark.url
+  const stats = [
+    { label: '语言', value: meta.language, icon: Code2 },
+    { label: 'Stars', value: meta.stars || '0', icon: Star },
+    { label: 'Forks', value: meta.forks || '0', icon: GitFork },
+    { label: 'License', value: meta.license, icon: FileIcon },
+  ].filter(item => item.value)
+
+  return (
+    <div className="mx-auto w-full max-w-4xl space-y-6">
+      <div className="rounded-lg border border-border bg-background">
+        <div className="border-b border-border px-5 py-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0 space-y-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <LinkIcon className="size-4 shrink-0 text-muted-foreground" />
+                <h2 className="truncate text-xl font-semibold tracking-normal text-foreground">
+                  {meta.displayName || 'GitHub 项目'}
+                </h2>
+              </div>
+              {meta.intro ? (
+                <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+                  {meta.intro}
+                </p>
+              ) : null}
+            </div>
+            {displayUrl ? (
+              <a
+                href={displayUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent"
+              >
+                <ExternalLink className="size-3.5" />
+                GitHub
+              </a>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
+          {stats.map(({ label, value, icon: Icon }) => (
+            <div key={label} className="min-w-0 bg-muted/25 px-4 py-3">
+              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <Icon className="size-3.5" />
+                {label}
+              </div>
+              <div className="mt-1 truncate text-sm font-medium text-foreground" title={value}>
+                {value}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {meta.topics ? (
+          <div className="flex flex-wrap gap-1.5 border-t border-border px-5 py-3">
+            {meta.topics.split(',').map(topic => topic.trim()).filter(Boolean).slice(0, 12).map(topic => (
+              <span key={topic} className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-xs text-muted-foreground">
+                {topic}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="rounded-lg border border-border bg-background px-5 py-5">
+        <ChatPreview
+          text={detailContent}
+          className="github-project-markdown w-full max-w-none overflow-x-auto"
+        />
+      </div>
+    </div>
+  )
+}
+
+function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
+  const video = useMemo(() => parseVideoTranscriptRecord(mark), [mark])
+  const [activeView, setActiveView] = useState<'timeline' | 'body' | 'summary'>('timeline')
+  const [isSummarizing, setIsSummarizing] = useState(false)
+  const { updateMark: updateMarkInStore } = useMarkStore()
+  const views = [
+    { key: 'timeline' as const, label: '时间线', icon: ListTree },
+    { key: 'body' as const, label: '正文', icon: TextIcon },
+    { key: 'summary' as const, label: '总结', icon: NotebookText },
+  ]
+  const text = activeView === 'timeline'
+    ? video.timeline || video.body
+    : activeView === 'body'
+      ? video.body
+      : video.summaryMarkdown || video.description
+  const hasSummary = Boolean(video.meta.summary || video.meta.highlights?.length || video.meta.notes?.length)
+  const platformLabel = video.meta.platform === 'youtube' ? 'YouTube' : 'B站'
+
+  const handleGenerateSummary = useCallback(async () => {
+    if (isSummarizing) return
+    setIsSummarizing(true)
+    try {
+      const summary = await summarizeVideoTranscript({
+        title: video.title,
+        transcript: video.body || video.timeline,
+        sourceUrl: video.meta.sourceUrl || mark.url || '',
+      })
+      if (!summary) {
+        toast({
+          title: '总结生成失败',
+          description: '未获取到有效总结，请检查 AI 整理模型配置后重试。',
+          variant: 'destructive',
+        })
+        return
+      }
+      const nextContent = mergeVideoTranscriptSummary(mark.content || '', summary)
+      await updateMarkInStore({
+        ...mark,
+        desc: [video.title, summary.summary || '', video.meta.transcriptSource ? `提取方式：${video.meta.transcriptSource}` : ''].filter(Boolean).join('\n'),
+        content: nextContent,
+      })
+      setActiveView('summary')
+      toast({
+        title: '视频总结已生成',
+        description: '已从摘要、章节、要点、术语和复盘问题等角度完成整理。',
+      })
+    } catch (error) {
+      toast({
+        title: '总结生成失败',
+        description: error instanceof Error ? error.message : '请稍后重试。',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSummarizing(false)
+    }
+  }, [isSummarizing, mark, updateMarkInStore, video])
+
+  return (
+    <div className="mx-auto w-full max-w-6xl space-y-4">
+      <div className="overflow-hidden rounded-lg border border-border bg-background shadow-sm">
+        <div className="bg-gradient-to-b from-muted/40 to-background px-5 py-5">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-md border border-border bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                  {platformLabel}
+                </span>
+                <span className="rounded-md border border-border bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                  {video.meta.transcriptSource || '视频转写'}
+                </span>
+              </div>
+              <h2 className="max-w-4xl text-2xl font-semibold leading-snug tracking-normal text-foreground">{video.title}</h2>
+              {video.description ? (
+                <p className="max-w-4xl text-sm leading-6 text-muted-foreground">{video.description}</p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleGenerateSummary}
+                disabled={isSummarizing}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSummarizing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                {hasSummary ? '重新生成总结' : '生成总结'}
+              </button>
+              {video.meta.sourceUrl || mark.url ? (
+                <a
+                  href={video.meta.sourceUrl || mark.url || '#'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-accent"
+                >
+                  <ExternalLink className="size-3.5" />
+                  原视频
+                </a>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex w-fit rounded-md border border-border bg-background p-1 shadow-sm">
+        {views.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setActiveView(key)}
+            className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm transition-colors ${activeView === key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            <Icon className="size-3.5" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="rounded-lg border border-border bg-background px-5 py-5 shadow-sm">
+        {activeView === 'summary' && !hasSummary ? (
+          <div className="flex min-h-56 flex-col items-center justify-center rounded-md border border-dashed border-border bg-muted/20 px-6 py-10 text-center">
+            <NotebookText className="mb-3 size-8 text-muted-foreground" />
+            <h3 className="text-base font-semibold text-foreground">还没有生成总结</h3>
+            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+              点击“生成总结”后，会从摘要、章节导读、核心要点、关键观点、术语解释、行动清单和复盘问题等角度整理视频内容。
+            </p>
+            <button
+              type="button"
+              onClick={handleGenerateSummary}
+              disabled={isSummarizing}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSummarizing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+              生成总结
+            </button>
+          </div>
+        ) : (
+          <ChatPreview text={text || '暂无内容'} className="video-transcript-markdown w-full max-w-none overflow-x-auto" />
+        )}
+      </div>
+    </div>
+  )
+}
+
+const DetailViewer = React.memo(({
+  mark,
+  content,
+  path,
+  className,
+  tooltipText,
+}: {
+  mark: Mark
+  content: string
+  path?: string
+  className?: string
+  tooltipText?: string
+}) => {
   const [value, setValue] = useState('')
   const [descValue, setDescValue] = useState('')
   const [isEditing, setIsEditing] = useState(false)
@@ -91,6 +333,8 @@ const DetailViewer = React.memo(({mark, content, path, className}: {mark: Mark, 
   const imageSize = useMemo(() => getImageSize(recordTextSize), [recordTextSize])
 
   const isTextType = mark.type === 'text'
+  const isGitHubProject = isGitHubProjectMark(mark)
+  const isVideoTranscript = isVideoTranscriptMark(mark)
 
   const textDescChangeHandler = useCallback(async (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setDescValue(e.target.value)
@@ -113,12 +357,40 @@ const DetailViewer = React.memo(({mark, content, path, className}: {mark: Mark, 
 
   // For text type, always show Textarea
   const showEditor = isTextType || isEditing
+  const compactTooltip = compactTooltipText(tooltipText)
+  const trigger = (
+    <DialogTrigger asChild>
+      <span className={className || `line-clamp-2 ${lineHeight} mt-2 text-${recordTextSize} break-words cursor-pointer hover:underline`}>
+        {content}
+      </span>
+    </DialogTrigger>
+  )
+
   return (
     <Dialog>
-      <DialogTrigger asChild>
-        <span className={className || `line-clamp-2 ${lineHeight} mt-2 text-${recordTextSize} break-words cursor-pointer hover:underline`}>{content}</span>
-      </DialogTrigger>
-      <DialogContent className="lg:max-w-[800px] max-h-[85vh] flex flex-col p-0">
+      {compactTooltip ? (
+        <TooltipProvider delayDuration={350}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {trigger}
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start" className="max-w-[260px] bg-popover px-3 py-2 text-popover-foreground shadow-md">
+              <div className="space-y-1">
+                <div className="text-[11px] font-medium text-muted-foreground">项目简介</div>
+                <p className="line-clamp-4 text-xs leading-5">{compactTooltip}</p>
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      ) : trigger}
+      <DialogContent
+        className={isGitHubProject || isVideoTranscript ? "lg:max-w-[1040px] max-h-[88vh] flex flex-col p-0" : "lg:max-w-[800px] max-h-[85vh] flex flex-col p-0"}
+        onInteractOutside={(event) => {
+          if (mark.type === 'image' || mark.type === 'scan') {
+            event.preventDefault()
+          }
+        }}
+      >
         <DialogHeader className="p-4 border-b shrink-0">
           <div className="flex items-center gap-3 pr-8">
             <DialogTitle>{t(mark.type)}</DialogTitle>
@@ -149,26 +421,34 @@ const DetailViewer = React.memo(({mark, content, path, className}: {mark: Mark, 
             </span>
           </div>
         </DialogHeader>
-        <div className="flex-1 overflow-y-auto md:p-8 p-2">
+        <div className={(isGitHubProject || isVideoTranscript) && !showEditor ? "flex-1 overflow-y-auto bg-muted/20 p-4 md:p-6" : "flex-1 overflow-y-auto md:p-8 p-2"}>
           {
             mark.url && (mark.type === 'image' || mark.type === 'scan') ?
-            <LocalImage
-              src={mark.url.includes('http') ? mark.url : `/${path}/${mark.url}`}
-              alt=""
-              className={`w-full ${imageSize} object-contain`}
-            /> :
+            <div className="mb-5 flex justify-center">
+              <ImageViewer
+                url={mark.url}
+                path={path}
+                imageClassName="max-h-[360px] w-auto max-w-full rounded-md border border-border bg-muted/30 object-contain cursor-zoom-in"
+              />
+            </div> :
             null
           }
           {
-            mark.type === 'text' || mark.desc === mark.content ? null :
+            isGitHubProject || isVideoTranscript || mark.type === 'text' || mark.desc === mark.content ? null :
             <>
               <span className="block my-4 text-md text-zinc-900 font-bold">{markT('desc')}</span>
               <Textarea placeholder="在此输入文本记录内容..." rows={3} value={descValue} onChange={textDescChangeHandler} />
             </>
           }
-          <span className="block my-4 text-md text-zinc-900 font-bold">{markT('content')}</span>
+          {(isGitHubProject || isVideoTranscript) && !showEditor ? null : (
+            <span className="block my-4 text-md text-zinc-900 font-bold">{markT('content')}</span>
+          )}
           {showEditor ? (
             <Textarea placeholder="在此输入文本记录内容..." rows={14} value={value} onChange={textMarkChangeHandler} />
+          ) : isGitHubProject ? (
+            <GitHubProjectDetailView mark={mark} />
+          ) : isVideoTranscript ? (
+            <VideoTranscriptDetailView mark={mark} />
           ) : (
             <ChatPreview text={mark.content || ''} />
           )}
@@ -182,18 +462,102 @@ DetailViewer.displayName = 'DetailViewer'
 export type MarkItemVariant = 'list' | 'compact' | 'cards'
 
 function MarkProcessedChip({ processed }: { processed: boolean }) {
-  if (!processed) {
-    return null
-  }
+  return null
+}
 
+function getMarkTypeIcon(markType: Mark['type']) {
+  switch (markType) {
+  case 'scan':
+    return <ImageIcon className="size-3.5" />
+  case 'image':
+    return <ImageIcon className="size-3.5" />
+  case 'link':
+    return <LinkIcon className="size-3.5" />
+  case 'recording':
+    return <Mic className="size-3.5" />
+  case 'file':
+    return <FileIcon className="size-3.5" />
+  case 'todo':
+    return <CheckSquare className="size-3.5" />
+  case 'text':
+  default:
+    return <TextIcon className="size-3.5" />
+  }
+}
+
+function MarkTypeIcon({ markType, label }: { markType: Mark['type']; label: string }) {
   return (
-    <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium leading-none text-emerald-700 ring-1 ring-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20">
-      已处理
+    <span
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground"
+      title={label}
+      aria-label={label}
+    >
+      {getMarkTypeIcon(markType)}
     </span>
   )
 }
 
-export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, variant?: MarkItemVariant}) => {
+function ProjectNameDialog({
+  open,
+  value,
+  onOpenChange,
+  onChange,
+  onSave,
+}: {
+  open: boolean
+  value: string
+  onOpenChange: (open: boolean) => void
+  onChange: (value: string) => void
+  onSave: () => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>编辑项目名称</DialogTitle>
+          <DialogDescription>
+            只修改记录列表里的显示名，原始仓库链接和项目内容会保留。
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              onSave()
+            }
+          }}
+          autoFocus
+        />
+        <DialogFooter>
+          <button
+            type="button"
+            className="rounded-md border border-input px-3 py-2 text-sm hover:bg-accent"
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90"
+            onClick={onSave}
+          >
+            保存
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export const MarkWrapper = React.memo(({
+  mark,
+  variant = 'list',
+}: {
+  mark: Mark
+  variant?: MarkItemVariant
+}) => {
   const t = useTranslations('record.mark.type');
   const todoT = useTranslations('record.mark.todo');
   const recordingT = useTranslations('recording');
@@ -208,6 +572,11 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
   const isProcessed = mark.processed === 1
   const shouldShowRecordingAction = mark.type === 'recording' && mark.content === NO_TRANSCRIPTION_MESSAGE
   const itemContent = useMemo(() => getMarkListItemContent(mark), [mark])
+  const isGitHubProject = isGitHubProjectMark(mark)
+  const gitHubProjectIntro = useMemo(
+    () => isGitHubProject ? getGitHubProjectIntro(mark) : '',
+    [isGitHubProject, mark]
+  )
 
   const todoPriorityDotClass = itemContent.todo
     ? itemContent.todo.priority === 'high'
@@ -288,9 +657,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
             />
           </div>
         )}
-        <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
-          {t(mark.type)}
-        </span>
+        <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
         <MarkProcessedChip processed={isProcessed} />
         {mark.type === 'todo' && itemContent.todo ? (
           <span className={`size-2 shrink-0 rounded-full ${todoPriorityDotClass}`} />
@@ -306,6 +673,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
               content={itemContent.title || itemContent.preview || t(mark.type)}
               path={mark.type === 'scan' ? 'screenshot' : mark.type === 'image' ? 'image' : undefined}
               className={`block truncate text-${recordTextSize} font-medium hover:underline`}
+              tooltipText={gitHubProjectIntro || undefined}
             />
           )}
         </div>
@@ -323,9 +691,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
     return (
       <div className="space-y-2.5">
         <div className="flex items-center gap-2 text-zinc-500">
-          <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
-            {t(mark.type)}
-          </span>
+          <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
           <MarkProcessedChip processed={isProcessed} />
           {mark.type === 'todo' && itemContent.todo ? (
             <span className={`size-2 shrink-0 rounded-full ${todoPriorityDotClass}`} />
@@ -352,6 +718,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
               content={itemContent.title || itemContent.preview || t(mark.type)}
               path={mark.type === 'scan' ? 'screenshot' : mark.type === 'image' ? 'image' : undefined}
               className={`block truncate text-${recordTextSize} font-semibold hover:underline`}
+              tooltipText={gitHubProjectIntro || undefined}
             />
           )}
           {!isImageCard && itemContent.preview ? (
@@ -393,9 +760,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
     return (
         <div className={`flex-1 overflow-hidden text-${recordTextSize} ${lineHeight} pr-10 md:pr-2`}>
           <div className="flex w-full items-center gap-2 text-zinc-500">
-            <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
-              {t(mark.type)}
-            </span>
+            <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
             <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
           </div>
@@ -406,9 +771,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
     return (
         <div className={`flex-1 overflow-hidden text-${recordTextSize} ${lineHeight} pr-10 md:pr-2`}>
           <div className="flex w-full items-center gap-2 text-zinc-500">
-            <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
-              {t(mark.type)}
-            </span>
+            <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
             {mark.url.includes('http') ? <ImageUp className="size-3 text-zinc-400" /> : null}
             <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
@@ -420,13 +783,11 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
     return (
         <div className="flex-1 pr-10 md:pr-0">
           <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
-            <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
-              {t(mark.type)}
-            </span>
+            <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
             <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
           </div>
-          <DetailViewer mark={mark} content={mark.desc || ''} />
+          <DetailViewer mark={mark} content={itemContent.title || mark.desc || ''} tooltipText={gitHubProjectIntro || undefined} />
           <div className="mt-1">
             <a 
               href={mark.url} 
@@ -443,9 +804,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
       return (
           <div className="flex-1 pr-10 md:pr-0">
             <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
-              <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
-                {t(mark.type)}
-              </span>
+              <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
               <MarkProcessedChip processed={isProcessed} />
               <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
             </div>
@@ -456,9 +815,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
       return (
           <div className="flex-1 pr-10 md:pr-0">
             <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
-              <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
-                {t(mark.type)}
-              </span>
+              <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
               <MarkProcessedChip processed={isProcessed} />
               {shouldShowRecordingAction && (
                 <button
@@ -491,9 +848,7 @@ export const MarkWrapper = React.memo(({mark, variant = 'list'}: {mark: Mark, va
       return (
           <div className="flex-1 pr-10 md:pr-0">
             <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
-              <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
-                {t(mark.type)}
-              </span>
+              <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
               <MarkProcessedChip processed={isProcessed} />
               <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
             </div>
@@ -561,6 +916,14 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
     saveCurrentArticle,
   } = useArticleStore()
   const { setLeftSidebarTab } = useSidebarStore()
+  const { fetchAllMarks } = useMarkStore()
+  const isGitHubProject = isGitHubProjectMark(mark)
+  const gitHubProjectDisplayName = useMemo(
+    () => isGitHubProject ? getGitHubProjectDisplayName(mark) : '',
+    [isGitHubProject, mark]
+  )
+  const [editingProjectName, setEditingProjectName] = useState(false)
+  const [projectNameDraft, setProjectNameDraft] = useState('')
 
   const getActionMarks = useCallback(() => {
     if (isMultiSelectMode && selectedMarkIds.size > 0) {
@@ -598,23 +961,89 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
     }
   }, []);
 
+  const handleOpenProjectNameEditor = useCallback((event?: React.MouseEvent) => {
+    event?.stopPropagation()
+    setProjectNameDraft(gitHubProjectDisplayName || getMarkListItemContent(mark).title || '')
+    setEditingProjectName(true)
+  }, [gitHubProjectDisplayName, mark])
+
+  const handleSaveProjectName = useCallback(async () => {
+    const nextTitle = projectNameDraft.trim()
+    if (!nextTitle) {
+      toast({
+        title: '项目名称不能为空',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    try {
+      const next = updateGitHubProjectMarkTitle(mark, nextTitle)
+      await updateMark({
+        ...mark,
+        desc: next.desc,
+        content: next.content,
+      })
+      await fetchMarks()
+      await fetchAllMarks()
+      setEditingProjectName(false)
+      toast({
+        title: '已更新项目名称',
+        description: nextTitle,
+      })
+    } catch (error) {
+      toast({
+        title: '更新项目名称失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
+  }, [fetchAllMarks, fetchMarks, mark, projectNameDraft])
+
   const handleDelMark = useCallback(async (e?: React.MouseEvent) => {
     e?.stopPropagation()
+    const targetMarks = getActionMarks()
+    const ids = targetMarks.map(item => item.id)
+
+    if (ids.length > 1) {
+      const confirmed = await confirm(`确定要删除 ${ids.length} 条记录吗？删除后会进入回收站。`, {
+        title: '删除记录',
+        kind: 'warning',
+      })
+      if (!confirmed) return
+    }
+
     if (isMultiSelectMode && selectedMarkIds.size > 0) {
-      // 多选删除
-      const selectedMarks = Array.from(selectedMarkIds)
-      for (const markId of selectedMarks) {
+      for (const markId of ids) {
         await delMark(markId)
       }
       clearSelection()
     } else {
-      // 单个删除
       await delMark(mark.id)
     }
     await fetchMarks()
     await fetchTags()
     getCurrentTag()
-  }, [isMultiSelectMode, selectedMarkIds, clearSelection, fetchMarks, fetchTags, getCurrentTag, mark.id])
+    toast({
+      title: ids.length > 1 ? `已删除 ${ids.length} 条记录` : '已删除记录',
+      description: '记录已移入回收站',
+      action: (
+        <ToastAction
+          altText="撤销删除"
+          onClick={() => {
+            void (async () => {
+              await restoreMarks(ids)
+              await fetchMarks()
+              await fetchTags()
+              getCurrentTag()
+            })()
+          }}
+        >
+          撤销
+        </ToastAction>
+      ),
+    })
+  }, [clearSelection, fetchMarks, fetchTags, getActionMarks, getCurrentTag, isMultiSelectMode, mark.id, selectedMarkIds.size])
 
   const handleDelForever = useCallback(async (e?: React.MouseEvent) => {
     e?.stopPropagation()
@@ -886,15 +1315,29 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
   )
 
   if (isMobile) {
-    return markCard
+    return (
+      <>
+        {markCard}
+        {isGitHubProject ? (
+          <ProjectNameDialog
+            open={editingProjectName}
+            value={projectNameDraft}
+            onOpenChange={setEditingProjectName}
+            onChange={setProjectNameDraft}
+            onSave={handleSaveProjectName}
+          />
+        ) : null}
+      </>
+    )
   }
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        {markCard}
-      </ContextMenuTrigger>
-      <ContextMenuContent>
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          {markCard}
+        </ContextMenuTrigger>
+        <ContextMenuContent>
         {
           trashState ? null :
           <>
@@ -958,6 +1401,11 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
         <ContextMenuItem inset disabled={isMultiSelectMode || mark.type === 'text'} onClick={regenerateDesc} menuType="record">
           {t('record.mark.toolbar.regenerateDesc')}
         </ContextMenuItem>
+        {isGitHubProject ? (
+          <ContextMenuItem inset disabled={isMultiSelectMode} onClick={handleOpenProjectNameEditor} menuType="record">
+            编辑项目名称
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuSeparator />
         <ContextMenuItem inset disabled={isMultiSelectMode || !canOpenMarkSource(mark)} onClick={handelShowInFolder} menuType="record">
           {t('record.mark.toolbar.viewFolder')}
@@ -989,8 +1437,18 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
             </span>
           </ContextMenuItem>
         }
-      </ContextMenuContent>
-    </ContextMenu>
+        </ContextMenuContent>
+      </ContextMenu>
+      {isGitHubProject ? (
+        <ProjectNameDialog
+          open={editingProjectName}
+          value={projectNameDraft}
+          onOpenChange={setEditingProjectName}
+          onChange={setProjectNameDraft}
+          onSave={handleSaveProjectName}
+        />
+      ) : null}
+    </>
   )
 })
 MarkItem.displayName = 'MarkItem'

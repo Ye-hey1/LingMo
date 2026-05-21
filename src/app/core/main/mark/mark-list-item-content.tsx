@@ -1,6 +1,8 @@
 import type { Mark } from "@/db/marks"
 import type { Priority } from "./todo-form"
 import type { Subtask } from "./todo-form"
+import { getGitHubProjectDisplayName, isGitHubProjectMark } from "@/lib/github-project"
+import { isVideoTranscriptMark, parseVideoTranscriptRecord } from "@/lib/video-transcript-record"
 
 export type ParsedTodoMark = {
   title: string
@@ -117,7 +119,16 @@ export function getMarkListItemContent(mark: Mark): MarkListItemContent {
     }
   }
   case 'link': {
-    const title = compactText(mark.desc) || compactText(mark.url)
+    if (isVideoTranscriptMark(mark)) {
+      const video = parseVideoTranscriptRecord(mark)
+      return {
+        title: video.title,
+        preview: video.description || compactText(mark.url),
+        linkUrl: mark.url,
+      }
+    }
+
+    const title = getGitHubProjectDisplayName(mark) || compactText(mark.desc) || compactText(mark.url)
     return {
       title,
       preview: compactText(mark.url),

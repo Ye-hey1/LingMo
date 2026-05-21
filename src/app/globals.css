@@ -717,6 +717,25 @@ ol {
   z-index: 10020 !important;
 }
 
+/* Keep image preview above record/detail dialogs. */
+.PhotoView-Portal,
+[class*="PhotoView-Portal"] {
+  z-index: 10050 !important;
+}
+
+.app-photo-preview-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5vh 5vw;
+}
+
+.app-photo-preview-image {
+  max-width: min(88vw, 1180px) !important;
+  max-height: 78vh !important;
+  object-fit: contain !important;
+}
+
 /* Tiptap 搜索替换高亮样式 */
 .search-result {
   background-color: #ffeb3b !important;

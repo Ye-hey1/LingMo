@@ -1,6 +1,6 @@
 'use client'
 
-import { CheckCircle2, ChevronsDownUp, ChevronsUpDown, FileInput, FilePlus, ListChecks, SquareCheckBig, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronsDownUp, ChevronsUpDown, FileInput, FilePlus, ListChecks, SquareCheckBig, Table2, XCircle } from "lucide-react";
 import { useTranslations } from 'next-intl';
 import useMarkStore from "@/stores/mark";
 import { MarkViewModeToggle } from "./mark-view-mode-toggle";
@@ -8,8 +8,10 @@ import { BottomBarIconButton } from "@/components/bottom-bar-icon-button";
 import useTagStore from "@/stores/tag";
 import useArticleStore from "@/stores/article";
 import { useSidebarStore } from "@/stores/sidebar";
-import { appendRecordsToNote, createNoteFromRecords } from "@/lib/record-to-note";
+import { appendRecordsToNote, createGitHubProjectsComparisonNote, createNoteFromRecords } from "@/lib/record-to-note";
 import { toast } from "@/hooks/use-toast";
+import { isGitHubProjectMark } from "@/lib/github-project";
+import { MarkHealthButton } from "./mark-health-button";
 
 export function MarkToolbar() {
   const { 
@@ -63,6 +65,7 @@ export function MarkToolbar() {
   const selectedMarks = marks.filter(mark => selectedMarkIds.has(mark.id))
   const selectedTagName = tags.find(tag => tag.id === currentTagId)?.name
   const canAppendToCurrentNote = Boolean(activeFilePath && /\.md$/i.test(activeFilePath))
+  const canCreateGitHubComparison = selectedMarks.length > 1 && selectedMarks.every(isGitHubProjectMark)
 
   const markSelectionAsProcessed = async () => {
     if (selectedMarks.length === 0) return
@@ -100,6 +103,29 @@ export function MarkToolbar() {
     } catch (error) {
       toast({
         title: '转为笔记失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleCreateGitHubComparison = async () => {
+    if (!canCreateGitHubComparison) return
+
+    try {
+      const { filePath } = await createGitHubProjectsComparisonNote(selectedMarks, { tagName: selectedTagName })
+      await loadFileTree({ skipRemoteSync: true })
+      await setLeftSidebarTab('files')
+      setActiveFilePath(filePath)
+      await markSelectionAsProcessed()
+      clearSelection()
+      toast({
+        title: '已生成技术对比表',
+        description: filePath,
+      })
+    } catch (error) {
+      toast({
+        title: '生成技术对比失败',
         description: error instanceof Error ? error.message : String(error),
         variant: 'destructive',
       })
@@ -173,6 +199,12 @@ export function MarkToolbar() {
               disabled={selectedMarks.length === 0 || !canAppendToCurrentNote}
             />
             <BottomBarIconButton
+              icon={<Table2 className="size-3" />}
+              label="生成技术选型对比表"
+              onClick={handleCreateGitHubComparison}
+              disabled={!canCreateGitHubComparison}
+            />
+            <BottomBarIconButton
               icon={<CheckCircle2 className="size-3" />}
               label="标记为已处理"
               onClick={handleMarkSelectionProcessed}
@@ -199,6 +231,7 @@ export function MarkToolbar() {
               active={areRecordTagsExpanded}
               disabled={recordTagIds.length === 0}
             />
+            <MarkHealthButton />
             <BottomBarIconButton
               icon={<SquareCheckBig className="size-3" />}
               label={t('multiSelect')}

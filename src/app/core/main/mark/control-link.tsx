@@ -1,7 +1,6 @@
 import { TooltipButton } from "@/components/tooltip-button"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Label } from "@/components/ui/label"
 import { useTranslations } from 'next-intl'
 import {
   Dialog,
@@ -22,10 +21,11 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { insertMark } from "@/db/marks"
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
-import { Link, CircleX } from "lucide-react"
+import { CircleX, Link, Sparkles } from "lucide-react"
 import { useState, useEffect, useCallback } from "react"
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { v4 as uuidv4 } from 'uuid'
@@ -40,6 +40,20 @@ import { toast } from "@/hooks/use-toast"
 import { parseWebPageContent, type ParsedWebPageContent } from "@/lib/web/content-extractor"
 import { organizeLinkRecord } from "@/lib/ai/link-organizer"
 import { tavilyExtract } from "@/lib/tavily"
+import {
+  buildGitHubProjectRecord,
+  fetchGitHubProjectInfo,
+  getGitHubProjectApiToken,
+  getGitHubProjectErrorMessage,
+  getGitHubProjectMarkUrl,
+  GITHUB_PROJECT_TAG_NAME,
+  isGitHubProjectMark,
+  parseGitHubRepoUrl,
+  summarizeGitHubProject,
+} from "@/lib/github-project"
+import { ensureTagByName } from "@/db/tags"
+import { fetchWechatArticleAsMarkdown, isWechatArticleUrl, parseWechatArticleHtml, WECHAT_ARTICLE_TAG_NAME } from "@/lib/wechat-article"
+import { fetchVideoTranscript, getVideoPlatform, isVideoTranscriptUrl, VIDEO_TRANSCRIPT_TAG_NAME } from "@/lib/video-transcript"
 
 export function ControlLink() {
   const t = useTranslations();
@@ -50,6 +64,9 @@ export function ControlLink() {
   const [autoReadClipboard, setAutoReadClipboard] = useState(true)
   const [organizeAfterSave, setOrganizeAfterSave] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
+  const [githubTokenConfigured, setGithubTokenConfigured] = useState(false)
+  const [wechatHtmlFallback, setWechatHtmlFallback] = useState('')
+  const [showWechatHtmlFallback, setShowWechatHtmlFallback] = useState(false)
   const isMobile = useIsMobile() || checkIsMobileDevice()
 
   const { currentTagId, fetchTags, getCurrentTag } = useTagStore()
@@ -68,6 +85,8 @@ export function ControlLink() {
         if (savedOrganize !== null && savedOrganize !== undefined) {
           setOrganizeAfterSave(savedOrganize)
         }
+        const githubToken = await getGitHubProjectApiToken()
+        setGithubTokenConfigured(Boolean(githubToken))
       } catch {
         // 忽略加载错误
       }
@@ -142,6 +161,8 @@ export function ControlLink() {
       setErrorMessage('')
     }
     if (open) {
+      const githubToken = await getGitHubProjectApiToken()
+      setGithubTokenConfigured(Boolean(githubToken))
       await checkClipboard()
     }
   }, [checkClipboard])
@@ -202,6 +223,10 @@ export function ControlLink() {
   }
 
   function getLinkErrorMessage(error: LinkCaptureError): string {
+    if (/invalid utf-8 sequence/i.test(error.message)) {
+      return '链接返回内容包含异常编码，当前解析器无法稳定读取。若是 B站视频，请确认视频可公开访问，并稍后重试音频转写。'
+    }
+
     if (error.code === 'http') {
       if (error.status === 403) {
         return '请求被目标站点拒绝（403）。该站点可能开启了 Cloudflare/WAF，请更换可直连链接，或改用支持浏览器渲染的抓取方式。'
@@ -280,35 +305,362 @@ export function ControlLink() {
   function handleClear() {
     setUrl('')
     setErrorMessage('')
+    setWechatHtmlFallback('')
+    setShowWechatHtmlFallback(false)
   }
 
-  async function handleSuccess() {
-    if (!url) return
-    setErrorMessage('')
+  const githubRepoPreview = parseGitHubRepoUrl(url)
+  const githubHint = githubRepoPreview
+    ? githubTokenConfigured
+      ? `已识别 GitHub 仓库 ${githubRepoPreview.owner}/${githubRepoPreview.repo}，将保存到「${GITHUB_PROJECT_TAG_NAME}」。`
+      : '已识别 GitHub 仓库。未配置 GitHub Token，将按普通链接保存；可在设置中配置后启用项目卡片。'
+    : ''
+  const wechatArticlePreview = isWechatArticleUrl(url)
+  const wechatHint = wechatArticlePreview
+    ? `已识别微信公众号文章，将提取正文并保存到「${WECHAT_ARTICLE_TAG_NAME}」。`
+    : ''
+  const videoPlatformPreview = getVideoPlatform(url)
+  const videoHint = videoPlatformPreview
+    ? `已识别${videoPlatformPreview === 'youtube' ? ' YouTube' : ' B站'}视频，将优先提取公开字幕并保存到「${VIDEO_TRANSCRIPT_TAG_NAME}」。`
+    : ''
+  const canSubmit = Boolean(url.trim()) && !loading
 
-    let targetUrl = url.trim()
-    if (!targetUrl.startsWith('http')) {
-      targetUrl = `https://${targetUrl}`
-      setUrl(targetUrl)
+  const inputSection = (
+    <div className="space-y-3">
+      <div className="relative">
+        <Link className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          placeholder="https://github.com/owner/repo"
+          value={url}
+          onChange={(e) => {
+            setUrl(e.target.value)
+            if (errorMessage) setErrorMessage('')
+          }}
+          disabled={loading}
+          className="h-10 border-border/80 bg-muted/30 pl-9 pr-10 text-sm shadow-sm"
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              handleSuccess()
+            }
+          }}
+        />
+        {url && !loading && (
+          <button
+            type="button"
+            onClick={handleClear}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="清空链接"
+          >
+            <CircleX className="size-4" />
+          </button>
+        )}
+      </div>
+      {githubHint ? (
+        <div className={githubTokenConfigured
+          ? "flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700"
+          : "flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700"
+        }>
+          <Sparkles className="mt-0.5 size-3.5 shrink-0" />
+          <span>{githubHint}</span>
+        </div>
+      ) : null}
+      {!githubHint && wechatHint ? (
+        <div className="space-y-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-700">
+          <div className="flex items-start gap-2">
+            <Sparkles className="mt-0.5 size-3.5 shrink-0" />
+            <span className="flex-1">{wechatHint}</span>
+            <button
+              type="button"
+              className="shrink-0 font-medium text-sky-800 underline-offset-2 hover:underline"
+              onClick={() => setShowWechatHtmlFallback(value => !value)}
+            >
+              {showWechatHtmlFallback ? '收起 HTML' : '粘贴 HTML'}
+            </button>
+          </div>
+          {showWechatHtmlFallback ? (
+            <div className="space-y-1.5">
+              <Textarea
+                value={wechatHtmlFallback}
+                onChange={(event) => setWechatHtmlFallback(event.target.value)}
+                disabled={loading}
+                placeholder="如果直接抓取失败，可在浏览器打开文章后复制网页 HTML 源码粘贴到这里。"
+                className="max-h-40 min-h-24 resize-y border-sky-200 bg-white/80 text-xs text-slate-800 placeholder:text-sky-700/60"
+              />
+              <p className="text-[11px] leading-4 text-sky-700/80">
+                粘贴后会优先使用这段 HTML 提取正文，不再请求微信页面。
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {!githubHint && !wechatHint && videoHint ? (
+        <div className="flex items-start gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-700">
+          <Sparkles className="mt-0.5 size-3.5 shrink-0" />
+          <span>{videoHint}</span>
+        </div>
+      ) : null}
+      {errorMessage ? (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+          {errorMessage}
+        </div>
+      ) : null}
+    </div>
+  )
+
+  const optionSection = (mobile = false) => (
+    <div className={mobile ? "grid gap-3" : "flex min-w-0 flex-wrap items-center gap-4"}>
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Checkbox
+          id={mobile ? "auto-read-clipboard-mobile" : "auto-read-clipboard"}
+          checked={autoReadClipboard}
+          onCheckedChange={(checked) => handleAutoReadChange(checked === true)}
+          disabled={loading}
+        />
+        <span>自动读取剪贴板链接</span>
+      </label>
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Checkbox
+          id={mobile ? "auto-organize-link-mobile" : "auto-organize-link"}
+          checked={organizeAfterSave}
+          onCheckedChange={(checked) => handleOrganizeChange(checked === true)}
+          disabled={loading}
+        />
+        <span>保存后 AI 整理</span>
+      </label>
+    </div>
+  )
+
+  function findExistingGitHubProjectMark(projectUrl: string) {
+    const normalizedUrl = getGitHubProjectMarkUrl({
+      id: 0,
+      tagId: 0,
+      type: 'link',
+      content: '',
+      desc: '',
+      url: projectUrl,
+      deleted: 0,
+      createdAt: Date.now(),
+    })
+    const { allMarks, marks } = useMarkStore.getState()
+    return [...allMarks, ...marks]
+      .filter(mark => mark.deleted !== 1)
+      .find(mark => isGitHubProjectMark(mark) && getGitHubProjectMarkUrl(mark) === normalizedUrl)
+  }
+
+  function normalizeTargetUrl(value: string) {
+    const trimmed = value.trim()
+    return trimmed.startsWith('http') ? trimmed : `https://${trimmed}`
+  }
+
+  function getUrlDisplayName(targetUrl: string) {
+    const githubRepo = parseGitHubRepoUrl(targetUrl)
+    if (githubRepo) {
+      return `${githubRepo.owner}/${githubRepo.repo}`
     }
-    
-    setLoading(true)
+
+    try {
+      return new URL(targetUrl).hostname.replace(/^www\./, '')
+    } catch {
+      return targetUrl
+    }
+  }
+
+  function handleSuccess() {
+    if (!url || loading) return
+
+    if (!isValidUrl(url)) {
+      setErrorMessage('请输入有效链接，例如 https://github.com/owner/repo')
+      return
+    }
+
+    const targetUrl = normalizeTargetUrl(url)
     const queueId = uuidv4()
-    
-    // 添加到队列中显示加载状态
+    const targetTagId = currentTagId!
+    const shouldOrganizeAfterSave = organizeAfterSave
+    const isGitHubRepo = Boolean(parseGitHubRepoUrl(targetUrl))
+    const isWechatArticle = isWechatArticleUrl(targetUrl)
+    const isVideoLink = isVideoTranscriptUrl(targetUrl)
+
+    setErrorMessage('')
+    setLoading(true)
+    const wechatHtmlSource = isWechatArticle ? wechatHtmlFallback.trim() : ''
+
     addQueue({
       queueId,
-      tagId: currentTagId!,
+      tagId: targetTagId,
       type: 'link',
       progress: '0%',
       startTime: Date.now()
     })
-    
-    // 记录完成后的导航处理（桌面端切换tab，移动端跳转页面）
+
     handleRecordComplete(router)
-    
+    setUrl('')
+    setWechatHtmlFallback('')
+    setShowWechatHtmlFallback(false)
+    setOpen(false)
+    setLoading(false)
+
+    toast({
+      title: '已转入后台解析',
+      description: isGitHubRepo
+        ? `状态：识别中。正在识别 GitHub 项目：${getUrlDisplayName(targetUrl)}`
+        : isWechatArticle
+          ? `状态：提取中。正在转换微信公众号文章：${getUrlDisplayName(targetUrl)}`
+          : isVideoLink
+            ? `状态：提取中。正在提取视频字幕：${getUrlDisplayName(targetUrl)}`
+        : `状态：解析中。正在抓取并整理：${getUrlDisplayName(targetUrl)}`,
+    })
+
+    void processLinkInBackground({
+      targetUrl,
+      queueId,
+      targetTagId,
+      shouldOrganizeAfterSave,
+      wechatHtmlSource,
+    })
+  }
+
+  async function processLinkInBackground({
+    targetUrl,
+    queueId,
+    targetTagId,
+    shouldOrganizeAfterSave,
+    wechatHtmlSource,
+  }: {
+    targetUrl: string
+    queueId: string
+    targetTagId: number
+    shouldOrganizeAfterSave: boolean
+    wechatHtmlSource?: string
+  }) {
     try {
       setQueue(queueId, { progress: '30%' });
+
+      const githubRepo = parseGitHubRepoUrl(targetUrl)
+      const githubToken = await getGitHubProjectApiToken()
+      if (githubRepo && githubToken) {
+        try {
+          setQueue(queueId, { progress: '45%' })
+          const projectInfo = await fetchGitHubProjectInfo(githubRepo, githubToken)
+          setQueue(queueId, { progress: '70%' })
+          const summary = await summarizeGitHubProject(projectInfo)
+          const projectRecord = buildGitHubProjectRecord({ ...projectInfo, summary })
+          const projectTag = await ensureTagByName(GITHUB_PROJECT_TAG_NAME)
+
+          const { fetchAllMarks } = useMarkStore.getState()
+          await fetchAllMarks()
+          const existingMark = findExistingGitHubProjectMark(projectInfo.url)
+          if (existingMark) {
+            const { updateMark: updateMarkInStore } = useMarkStore.getState()
+            await updateMarkInStore({
+              ...existingMark,
+              tagId: projectTag.id,
+              desc: projectRecord.desc,
+              content: projectRecord.content,
+              url: projectInfo.url,
+              deleted: 0,
+              processed: 0,
+              processedAt: null,
+            })
+
+            setQueue(queueId, { progress: '100%', tagId: projectTag.id })
+            await fetchMarks()
+            await fetchAllMarks()
+            await fetchTags()
+            getCurrentTag()
+            toast({
+              title: '已更新 GitHub 项目',
+              description: `状态：完成。${projectInfo.fullName} 的项目卡片已刷新。`,
+            })
+            return
+          }
+
+          await insertMark({
+            tagId: projectTag.id,
+            type: 'link',
+            desc: projectRecord.desc,
+            content: projectRecord.content,
+            url: projectInfo.url,
+          })
+
+          setQueue(queueId, { progress: '100%', tagId: projectTag.id })
+          await fetchMarks()
+          await fetchAllMarks()
+          await fetchTags()
+          getCurrentTag()
+          toast({
+            title: '已收藏 GitHub 项目',
+            description: `状态：完成。${projectInfo.fullName} 已归入「${GITHUB_PROJECT_TAG_NAME}」。`,
+          })
+          return
+        } catch (githubError) {
+          console.warn('[Link] GitHub project capture failed, fallback to normal link:', githubError)
+          const githubMessage = getGitHubProjectErrorMessage(githubError)
+          toast({
+            title: 'GitHub 项目识别失败',
+            description: `${githubMessage} 已回退为普通链接记录流程。`,
+          })
+        }
+      }
+
+      if (isWechatArticleUrl(targetUrl)) {
+        setQueue(queueId, { progress: '55%' })
+        const wechatArticle = wechatHtmlSource
+          ? parseWechatArticleHtml(wechatHtmlSource, targetUrl)
+          : await fetchWechatArticleAsMarkdown(targetUrl)
+        const articleTag = await ensureTagByName(WECHAT_ARTICLE_TAG_NAME)
+
+        await insertMark({
+          tagId: articleTag.id,
+          type: 'link',
+          desc: wechatArticle.desc,
+          content: wechatArticle.content,
+          url: targetUrl,
+        })
+
+        setQueue(queueId, { progress: '100%', tagId: articleTag.id })
+        const { fetchAllMarks } = useMarkStore.getState()
+        await fetchMarks()
+        await fetchAllMarks()
+        await fetchTags()
+        getCurrentTag()
+        toast({
+          title: '公众号文章已保存',
+          description: `状态：完成。${wechatArticle.title} 已归入「${WECHAT_ARTICLE_TAG_NAME}」。`,
+        })
+        return
+      }
+
+      if (isVideoTranscriptUrl(targetUrl)) {
+        setQueue(queueId, { progress: '55%' })
+        const videoTranscript = await fetchVideoTranscript(targetUrl, {
+          onProgress: ({ progress, message }) => {
+            setQueue(queueId, { progress: `${progress}% ${message}` })
+          },
+        })
+        const videoTag = await ensureTagByName(VIDEO_TRANSCRIPT_TAG_NAME)
+
+        await insertMark({
+          tagId: videoTag.id,
+          type: 'link',
+          desc: videoTranscript.desc,
+          content: videoTranscript.content,
+          url: videoTranscript.sourceUrl,
+        })
+
+        setQueue(queueId, { progress: '100%', tagId: videoTag.id })
+        const { fetchAllMarks } = useMarkStore.getState()
+        await fetchMarks()
+        await fetchAllMarks()
+        await fetchTags()
+        getCurrentTag()
+        toast({
+          title: '视频转写已保存',
+          description: `状态：完成。${videoTranscript.title} 已归入「${VIDEO_TRANSCRIPT_TAG_NAME}」。`,
+        })
+        return
+      }
 
       let pageContent: ParsedWebPageContent
       try {
@@ -348,6 +700,9 @@ export function ControlLink() {
         setQueue(queueId, { progress: '60%' });
 
         const html = await extractResponseText(response);
+        if (!html) {
+          throw new LinkCaptureError('网页内容编码异常，无法稳定解码为文本。', 'parse')
+        }
         pageContent = parseWebPageContent(html, targetUrl);
         const directContent = pageContent.mainContent || pageContent.bodyText || pageContent.metaDesc
         if (shouldFallbackToTavily(directContent || '')) {
@@ -381,7 +736,7 @@ export function ControlLink() {
 
       // 保存到数据库
       const insertResult = await insertMark({
-        tagId: currentTagId,
+        tagId: targetTagId,
         type: 'link',
         desc: desc,
         content: content,
@@ -393,15 +748,12 @@ export function ControlLink() {
       await fetchTags();
       getCurrentTag();
 
-      setUrl('');
-      setOpen(false);
-
       // 保存后后台异步整理，避免阻塞弹窗
       const insertedId = Number(insertResult.lastInsertId || 0)
-      if (organizeAfterSave && insertedId > 0) {
+      if (shouldOrganizeAfterSave && insertedId > 0) {
         toast({
           title: '链接已保存',
-          description: 'AI 正在后台整理内容，你可以继续操作。',
+          description: '状态：已保存。AI 正在后台整理内容，你可以继续操作。',
         })
 
         void (async () => {
@@ -432,10 +784,10 @@ export function ControlLink() {
 
             toast({
               title: 'AI 整理完成',
-              description: '链接内容已优化为结构化摘要。',
+              description: '状态：完成。链接内容已优化为结构化摘要。',
             })
           } catch (backgroundError) {
-            console.error('Background link organize failed:', backgroundError)
+            console.warn('[Link] Background link organize failed:', backgroundError)
           }
         })()
       }
@@ -443,23 +795,20 @@ export function ControlLink() {
     } catch (error) {
       const typedError = toLinkCaptureError(error)
       const message = getLinkErrorMessage(typedError)
-      setErrorMessage(message)
       toast({
         title: '链接处理失败',
         description: message,
         variant: 'destructive',
       })
-      console.error('Error crawling page:', error);
+      console.warn('[Link] Crawling page failed:', error)
     } finally {
       removeQueue(queueId);
-      setLoading(false);
     }
   }
 
   async function extractResponseText(response: Response): Promise<string> {
     const contentType = response.headers.get('content-type')
     const contentEncoding = response.headers.get('content-encoding') || ''
-    const fallbackResponse = response.clone()
 
     try {
       const sourceBuffer = await response.arrayBuffer()
@@ -479,11 +828,11 @@ export function ControlLink() {
       if (!looksLikeGarbledText(text)) {
         return text
       }
-    } catch {
-      // 忽略并使用 text() 回退
+    } catch (error) {
+      console.warn('[Link] response text decode fallback failed:', error)
     }
 
-    return await fallbackResponse.text()
+    return ''
   }
 
   function decodeBestEffortText(bytes: Uint8Array, contentType: string | null): string {
@@ -617,81 +966,27 @@ export function ControlLink() {
           <DrawerTrigger asChild>
             <TooltipButton icon={<Link />} tooltipText={t('record.mark.type.link') || '链接'} />
           </DrawerTrigger>
-          <DrawerContent>
-            <DrawerHeader>
-              <DrawerTitle>{t('record.mark.link.title') || '链接记录'}</DrawerTitle>
-              <DrawerDescription>
-                {t('record.mark.link.description') || '输入网页链接，系统将自动爬取页面内容并保存'}
+          <DrawerContent className="px-1">
+            <DrawerHeader className="text-left">
+              <DrawerTitle className="text-base">链接记录</DrawerTitle>
+              <DrawerDescription className="text-xs">
+                输入网页链接，系统将在后台抓取内容并保存为记录。
               </DrawerDescription>
             </DrawerHeader>
             <div className="px-4">
-              <div className="relative">
-                <Input
-                  placeholder="https://example.com"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  disabled={loading}
-                  className="pr-10"
-                />
-                {url && !loading && (
-                  <button
-                    onClick={handleClear}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 transition-colors"
-                  >
-                    <CircleX className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
+              {inputSection}
             </div>
-            <DrawerFooter className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-4 whitespace-nowrap">
-                <div className="flex items-center gap-2 whitespace-nowrap">
-                  <Checkbox
-                    id="auto-read-clipboard-mobile"
-                    checked={autoReadClipboard}
-                    onCheckedChange={(checked) => handleAutoReadChange(checked === true)}
-                    disabled={loading}
-                  />
-                  <Label
-                    htmlFor="auto-read-clipboard-mobile"
-                    className="text-sm cursor-pointer"
-                  >
-                    {t('record.mark.link.autoReadClipboard') || '自动读取剪贴板链接'}
-                  </Label>
-                </div>
-                <div className="flex items-center gap-2 whitespace-nowrap">
-                  <Checkbox
-                    id="auto-organize-link-mobile"
-                    checked={organizeAfterSave}
-                    onCheckedChange={(checked) => handleOrganizeChange(checked === true)}
-                    disabled={loading}
-                  />
-                  <Label
-                    htmlFor="auto-organize-link-mobile"
-                    className="text-sm cursor-pointer"
-                  >
-                    保存后 AI 整理
-                  </Label>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <p className="text-sm text-zinc-500">
-                  {loading ? '正在爬取页面内容...' : ''}
-                </p>
-                <Button
-                  type="submit"
-                  onClick={handleSuccess}
-                  disabled={!url || loading}
-                >
-                  {loading ? '处理中...' : (t('record.mark.link.save') || '保存')}
-                </Button>
-              </div>
+            <DrawerFooter className="gap-4">
+              {optionSection(true)}
+              <Button
+                type="submit"
+                onClick={handleSuccess}
+                disabled={!canSubmit}
+                className="h-10 w-full"
+              >
+                保存并解析
+              </Button>
             </DrawerFooter>
-            {errorMessage ? (
-              <div className="px-4 pb-4 text-sm text-red-600">
-                {errorMessage}
-              </div>
-            ) : null}
           </DrawerContent>
         </Drawer>
       ) : (
@@ -699,79 +994,25 @@ export function ControlLink() {
           <DialogTrigger asChild>
             <TooltipButton icon={<Link />} tooltipText={t('record.mark.type.link') || '链接'} />
           </DialogTrigger>
-          <DialogContent className="min-w-full md:min-w-[500px]">
-            <DialogHeader>
-              <DialogTitle>{t('record.mark.link.title') || '链接记录'}</DialogTitle>
-              <DialogDescription>
-                {t('record.mark.link.description') || '输入网页链接，系统将自动爬取页面内容并保存'}
+          <DialogContent className="w-[calc(100vw-2rem)] gap-5 rounded-lg border-border/80 p-5 shadow-2xl sm:max-w-[560px]">
+            <DialogHeader className="space-y-1 pr-6">
+              <DialogTitle className="text-base font-semibold">链接记录</DialogTitle>
+              <DialogDescription className="text-xs">
+                输入网页链接，系统将在后台抓取内容并保存为记录。
               </DialogDescription>
             </DialogHeader>
-            <div className="relative">
-              <Input
-                placeholder="https://example.com"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                disabled={loading}
-                className="pr-10"
-              />
-              {url && !loading && (
-                <button
-                  onClick={handleClear}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 transition-colors"
-                >
-                  <CircleX className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-            <DialogFooter className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-4 whitespace-nowrap">
-                <div className="flex items-center gap-2 whitespace-nowrap">
-                  <Checkbox
-                    id="auto-read-clipboard"
-                    checked={autoReadClipboard}
-                    onCheckedChange={(checked) => handleAutoReadChange(checked === true)}
-                    disabled={loading}
-                  />
-                  <Label
-                    htmlFor="auto-read-clipboard"
-                    className="text-sm cursor-pointer"
-                  >
-                    {t('record.mark.link.autoReadClipboard') || '自动读取剪贴板链接'}
-                  </Label>
-                </div>
-                <div className="flex items-center gap-2 whitespace-nowrap">
-                  <Checkbox
-                    id="auto-organize-link"
-                    checked={organizeAfterSave}
-                    onCheckedChange={(checked) => handleOrganizeChange(checked === true)}
-                    disabled={loading}
-                  />
-                  <Label
-                    htmlFor="auto-organize-link"
-                    className="text-sm cursor-pointer"
-                  >
-                    保存后 AI 整理
-                  </Label>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <p className="text-sm text-zinc-500">
-                  {loading ? '正在爬取页面内容...' : ''}
-                </p>
-                <Button
-                  type="submit"
-                  onClick={handleSuccess}
-                  disabled={!url || loading}
-                >
-                  {loading ? '处理中...' : (t('record.mark.link.save') || '保存')}
-                </Button>
-              </div>
+            {inputSection}
+            <DialogFooter className="flex-row items-center justify-between gap-4 sm:justify-between sm:space-x-0">
+              {optionSection(false)}
+              <Button
+                type="submit"
+                onClick={handleSuccess}
+                disabled={!canSubmit}
+                className="h-10 min-w-32 shrink-0"
+              >
+                保存并解析
+              </Button>
             </DialogFooter>
-            {errorMessage ? (
-              <div className="text-sm text-red-600">
-                {errorMessage}
-              </div>
-            ) : null}
           </DialogContent>
         </Dialog>
       )}

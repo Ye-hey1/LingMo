@@ -1,7 +1,7 @@
 "use client"
 import * as React from "react"
 import { useTranslations } from 'next-intl'
-import { Plus, TagIcon, Inbox, SquareCheck, GripVertical } from "lucide-react"
+import { Plus, TagIcon, Inbox, SquareCheck, Archive } from "lucide-react"
 import {
   Accordion,
   AccordionContent,
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/accordion"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Empty,
   EmptyHeader,
@@ -28,6 +29,7 @@ import { filterMarks } from './mark-filters'
 import { MarkListDefaultView } from './mark-list-default-view'
 import { MarkListCompactView } from './mark-list-compact-view'
 import { MarkListCardView } from './mark-list-card-view'
+import { MARK_TYPE_OPTIONS } from './mark-type-meta'
 import emitter from '@/lib/emitter'
 import { EmitterRecordEvents } from '@/config/emitters'
 import {
@@ -167,11 +169,13 @@ export function TagManage() {
 
   const {
     marks,
+    allMarks,
     queues,
     fetchMarks,
     recordFilters,
     recordViewMode,
     hasActiveRecordFilters,
+    resetRecordFilters,
     setVisibleMarkIds,
     pendingScrollMarkId,
     setPendingScrollMarkId,
@@ -180,6 +184,11 @@ export function TagManage() {
     expandedRecordTagIds,
     setExpandedRecordTagIds,
   } = useMarkStore()
+
+  const recordMarks = React.useMemo(() => {
+    const sourceMarks = allMarks.length > 0 ? allMarks : marks
+    return sourceMarks.filter((mark) => mark.deleted !== 1)
+  }, [allMarks, marks])
 
   const openRecordTag = React.useCallback((tagId: number | string) => {
     const nextTagId = tagId.toString()
@@ -236,7 +245,7 @@ export function TagManage() {
 
   // 获取当前标签下的记录
   const getTagMarks = (tagId: number) => {
-    return marks.filter(mark => mark.tagId === tagId)
+    return recordMarks.filter(mark => mark.tagId === tagId)
   }
 
   const filtersActive = hasActiveRecordFilters()
@@ -246,7 +255,7 @@ export function TagManage() {
       ...recordFilters,
       tagId: 'all',
     })
-  }, [marks, recordFilters])
+  }, [recordMarks, recordFilters])
 
   const getRenderableTagMarks = React.useCallback((tagId: number) => {
     return getFilteredTagMarks(tagId).filter((mark: Mark) => {
@@ -262,19 +271,29 @@ export function TagManage() {
   }, [getRenderableTagMarks])
 
   const visibleTags = React.useMemo(() => {
-    return tags.filter((tag) => {
-      if (recordFilters.tagId !== 'all' && tag.id !== recordFilters.tagId) {
-        return false
-      }
-
-      if (!filtersActive) {
-        return true
-      }
-
-      const hasQueue = queues.some((queue) => queue.tagId === tag.id)
-      return getFilteredTagMarks(tag.id).length > 0 || hasQueue
+    const orderedTags = [...tags].sort((left, right) => {
+      if (left.name === '中转站' && right.name !== '中转站') return -1
+      if (right.name === '中转站' && left.name !== '中转站') return 1
+      return (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.id - right.id
     })
-  }, [filtersActive, getFilteredTagMarks, queues, recordFilters.tagId, tags])
+
+    if (recordFilters.tagId === 'all') {
+      return orderedTags
+    }
+
+    return orderedTags.filter((tag) => tag.id === recordFilters.tagId)
+  }, [recordFilters.tagId, tags])
+
+  const getTagTypeStats = React.useCallback((tagId: number) => {
+    const tagMarks = getTagMarks(tagId)
+    return MARK_TYPE_OPTIONS
+      .map(type => ({
+        type,
+        count: tagMarks.filter(mark => mark.type === type).length,
+      }))
+      .filter(item => item.count > 0)
+      .slice(0, 4)
+  }, [recordMarks])
 
   const visibleMarkIds = React.useMemo(() => {
     return visibleTags.flatMap((tag) => getRenderableTagMarks(tag.id).map((mark: Mark) => mark.id))
@@ -341,7 +360,7 @@ export function TagManage() {
       return
     }
 
-    if (!marks.some((mark) => mark.id === pendingScrollMarkId && mark.tagId === currentTagId)) {
+    if (!recordMarks.some((mark) => mark.id === pendingScrollMarkId && mark.tagId === currentTagId)) {
       return
     }
 
@@ -374,7 +393,7 @@ export function TagManage() {
     return () => {
       cancelled = true
     }
-  }, [currentTagId, expandedRecordTagIds, marks, pendingScrollMarkId, setHighlightedMarkId, setPendingScrollMarkId])
+  }, [currentTagId, expandedRecordTagIds, pendingScrollMarkId, recordMarks, setHighlightedMarkId, setPendingScrollMarkId])
 
   React.useEffect(() => {
     if (!highlightedMarkId) {
@@ -399,16 +418,24 @@ export function TagManage() {
     const filteredMarks = getRenderableTagMarks(tagId)
 
     if (filteredMarks.length === 0 && queues.filter(queue => queue.tagId === tagId).length === 0) {
+      const hasRawRecords = getTagMarks(tagId).length > 0
       return (
         <Empty className="border-0 py-8">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <Inbox />
             </EmptyMedia>
-            <EmptyTitle className="text-sm">{t('record.mark.empty')}</EmptyTitle>
+            <EmptyTitle className="text-sm">
+              {filtersActive && hasRawRecords ? t('record.mark.list.emptyFiltered') : t('record.mark.empty')}
+            </EmptyTitle>
             <EmptyDescription className="text-xs">
-              {t('record.mark.mark.emptyHint')}
+              {filtersActive && hasRawRecords ? t('record.mark.list.emptyFilteredHint') : t('record.mark.mark.emptyHint')}
             </EmptyDescription>
+            {filtersActive ? (
+              <Button variant="outline" size="sm" className="mt-3 h-7 text-xs" onClick={resetRecordFilters}>
+                清除筛选
+              </Button>
+            ) : null}
           </EmptyHeader>
         </Empty>
       )
@@ -423,7 +450,7 @@ export function TagManage() {
     default:
       return <MarkListDefaultView marks={filteredMarks} />
     }
-  }, [getRenderableTagMarks, queues, recordViewMode, t])
+  }, [filtersActive, getRenderableTagMarks, queues, recordViewMode, resetRecordFilters, t])
 
   return (
     <div className="w-full">
@@ -461,6 +488,7 @@ export function TagManage() {
               const displayCount = tag.id === currentTagId
                 ? (renderableCount > 0 ? renderableCount : '')
                 : fallbackTotal
+              const typeStats = getTagTypeStats(tag.id)
               return (
               <SortableTagItem key={tag.id} tag={tag}>
                 <AccordionItemWrapper value={tag.id.toString()}>
@@ -475,7 +503,9 @@ export function TagManage() {
                         }}
                       >
                         <div className="flex items-center gap-2 flex-1">
-                          {tag.color ? (
+                          {tag.name === '中转站' ? (
+                            <Archive className="size-3 text-blue-600" />
+                          ) : tag.color ? (
                             <span
                               className="inline-block size-2.5 shrink-0 rounded-full"
                               style={{ backgroundColor: tag.color }}
@@ -499,17 +529,36 @@ export function TagManage() {
                               autoFocus
                             />
                           ) : (
-                            <div className="text-xs w-full flex items-center justify-between gap-2">
-                              <span className={`flex-1 ${currentTagId === tag.id && 'font-bold'}`}>{tag.name}</span>
-                              <span className="text-muted-foreground">
-                                {displayCount}
-                              </span>
-                              <span
-                                className="inline-flex items-center justify-center text-muted-foreground/70 cursor-grab active:cursor-grabbing select-none"
-                                title="拖动排序"
-                              >
-                                <GripVertical className="size-3" />
-                              </span>
+                            <div className="text-xs w-full flex min-w-0 items-center justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <span className={`truncate ${currentTagId === tag.id && 'font-bold'}`}>{tag.name}</span>
+                                  {tag.name === '中转站' ? (
+                                    <span className="shrink-0 rounded bg-blue-50 px-1 py-0.5 text-[10px] text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">收集箱</span>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="shrink-0 text-muted-foreground">
+                                      {displayCount}
+                                    </span>
+                                  </TooltipTrigger>
+                                  {typeStats.length > 0 ? (
+                                    <TooltipContent side="top" align="end">
+                                      <div className="space-y-1">
+                                        <div>共 {displayCount || 0} 条记录</div>
+                                        <div className="flex flex-wrap gap-x-2 gap-y-1">
+                                          {typeStats.map(item => (
+                                            <span key={item.type}>{t(`record.mark.type.${item.type}`)} {item.count}</span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </TooltipContent>
+                                  ) : null}
+                                </Tooltip>
+                              </TooltipProvider>
                               <TagMobileActions 
                                 tag={tag}
                                 onRename={startEditing}

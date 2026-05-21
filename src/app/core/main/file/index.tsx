@@ -238,7 +238,7 @@ function useFileManagerShortcuts() {
 }
 
 export function FileSidebar() {
-  const { fileTree, initCollapsibleList, initSortSettings, initShowCloudFiles, showCloudFiles } = useArticleStore()
+  const { fileTree, initCollapsibleList, initSortSettings, initShowCloudFiles, loadFileStatsIfNeeded, showCloudFiles } = useArticleStore()
   const { sidebarRef, focusSidebar } = useFileManagerShortcuts()
   const tBrowser = useTranslations('article.file.browser')
   const [searchQuery, setSearchQuery] = useState('')
@@ -263,6 +263,12 @@ export function FileSidebar() {
   const totalStats = useMemo(() => collectFileBrowserStats(cloudVisibleTree), [cloudVisibleTree])
   const visibleStats = useMemo(() => collectFileBrowserStats(filteredTree), [filteredTree])
   const hasActiveFilters = searchQuery.trim().length > 0 || activeFilter !== 'all'
+
+  useEffect(() => {
+    if (activeFilter === 'recent-created' || activeFilter === 'generated') {
+      void loadFileStatsIfNeeded()
+    }
+  }, [activeFilter, loadFileStatsIfNeeded])
 
   return (
     <div

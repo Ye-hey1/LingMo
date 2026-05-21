@@ -27,6 +27,8 @@ import emitter from '@/lib/emitter'
 
 // Store 实例缓存
 let storeInstance: Store | null = null
+let networkCheckCache: { checkedAt: number; value: boolean; key: string } | null = null
+const NETWORK_CHECK_CACHE_MS = 30_000
 
 /**
  * 获取 Store 实例
@@ -798,6 +800,7 @@ async function performSync(path: string, enableConflictResolution: boolean): Pro
  * 检查网络连接状态
  */
 export async function hasNetworkConnection(): Promise<boolean> {
+  let cacheKey = 'unknown'
   try {
     const store = await Store.load('store.json')
     const primaryBackupMethod = await store.get<string>('primaryBackupMethod') || 'github'
@@ -843,6 +846,16 @@ export async function hasNetworkConnection(): Promise<boolean> {
       return false
     }
 
+    cacheKey = `${primaryBackupMethod}:${url}:${token.slice(0, 8)}`
+    if (
+      networkCheckCache
+      && networkCheckCache.key === cacheKey
+      && Date.now() - networkCheckCache.checkedAt < NETWORK_CHECK_CACHE_MS
+    ) {
+      clearTimeout(timeoutId)
+      return networkCheckCache.value
+    }
+
     const fetchOptions: any = {
       method: 'GET',
       signal: controller.signal,
@@ -859,10 +872,20 @@ export async function hasNetworkConnection(): Promise<boolean> {
     const response = await fetch(url, fetchOptions)
 
     clearTimeout(timeoutId)
+    networkCheckCache = {
+      checkedAt: Date.now(),
+      value: response.ok,
+      key: cacheKey,
+    }
     return response.ok
   } catch (error) {
-    // 网络错误、超时等
-    console.error('Network connection check failed:', error)
+    // 网络错误、超时等属于同步探测的正常离线分支，不应触发 Next 错误浮层。
+    networkCheckCache = {
+      checkedAt: Date.now(),
+      value: false,
+      key: cacheKey,
+    }
+    console.debug('[sync] Network connection check unavailable:', error)
     return false
   }
 }

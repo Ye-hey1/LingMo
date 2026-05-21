@@ -326,6 +326,19 @@ export const ChatInput = React.memo(function ChatInput() {
     const command = findAiDocCommand(commandId)
     if (!command) return
 
+    if (command.executionMode === 'agent' && chatMode !== 'agent') {
+      toast({
+        title: '请切换到 Agent 模式',
+        description: `/${command.title} 需要执行本地工具或编辑文件，对话模式只用于问答、联网搜索和阅读上下文。`,
+        variant: 'destructive',
+      })
+      setText('')
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto'
+      }
+      return
+    }
+
     // 立即清空 popover（先把 text 置空，等下面再写入 prompt）
     setText('')
     if (textareaRef.current) {
@@ -333,7 +346,7 @@ export const ChatInput = React.memo(function ChatInput() {
     }
 
     // 知识管理类命令不需要活动数据，直接执行
-    const knowledgeCommands = new Set(['discover-connections', 'generate-flashcards', 'note-summary', 'note-to-mindmap', 'auto-wikilink'])
+    const knowledgeCommands = new Set(['discover-connections', 'generate-flashcards', 'feynman-socratic', 'note-summary', 'note-to-mindmap', 'auto-wikilink'])
     let data: any = null
 
     if (!knowledgeCommands.has(commandId)) {
@@ -382,9 +395,13 @@ export const ChatInput = React.memo(function ChatInput() {
 
     // AI 命令：输入框只显示 /命令名，但发送给 LLM 的是完整 prompt
     const displayLabel = `/${command.title}`
-    pendingSendRef.current = { display: displayLabel, instruction: exec.prompt, maxTokens: exec.maxTokens, temperature: exec.temperature }
+    const commandInstruction = `你正在执行一个应用内命令：${displayLabel}。
+这是明确的操作任务，不要先解释概念，不要做泛化介绍，必须直接按命令目标执行工具。
+
+${exec.prompt}`
+    pendingSendRef.current = { display: displayLabel, instruction: commandInstruction, maxTokens: exec.maxTokens, temperature: exec.temperature }
     setText(displayLabel)
-  }, [loadFileTree])
+  }, [chatMode, loadFileTree])
 
   // 当显示文本已同步到 input 后，使用 instruction override 触发发送
   useEffect(() => {
@@ -560,11 +577,6 @@ export const ChatInput = React.memo(function ChatInput() {
     }
   }, [getLinkedResourceKey, setChatLinkedResources, setLinkedResourcePreview])
 
-  const removeLinkedResource = useCallback((resource: LinkedResource) => {
-    const key = getLinkedResourceKey(resource)
-    removeLinkedResourceByKey(key, { suppressAutoLinkOnEmpty: true })
-  }, [getLinkedResourceKey, removeLinkedResourceByKey])
-
   const clearLinkedFiles = useCallback(() => {
     linkedResourcesRef.current = []
     autoLinkSuppressedRef.current = true
@@ -678,14 +690,6 @@ export const ChatInput = React.memo(function ChatInput() {
     } else {
       setText(inputHistory[newIndex])
     }
-  }
-
-  function removeImage(id: string) {
-    setAttachedImages(prev => prev.filter(img => img.id !== id))
-  }
-
-  function removeQuote() {
-    clearPendingQuote()
   }
 
   const handleLinkedTagsWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
@@ -1690,4 +1694,3 @@ export const ChatInput = React.memo(function ChatInput() {
   )
 })
 ChatInput.displayName = 'ChatInput'
-

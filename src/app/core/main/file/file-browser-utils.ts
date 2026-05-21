@@ -1,15 +1,55 @@
 import type { DirTree } from "@/stores/article"
+import { computedParentPath } from "@/lib/path"
 
-export type FileBrowserFilter = "all" | "markdown" | "pdf" | "drawio" | "json" | "folder"
+export type FileBrowserFilter = "all" | "markdown" | "pdf" | "drawio" | "json" | "folder" | "recent-created" | "generated"
 
 const MARKDOWN_FILE_PATTERN = /\.md$/i
 const PDF_FILE_PATTERN = /\.pdf$/i
 const DRAWIO_FILE_PATTERN = /\.(drawio|drawio\.xml)$/i
+const EXCALIDRAW_FILE_PATTERN = /\.(excalidraw|excalidraw\.json)$/i
 const JSON_FILE_PATTERN = /\.json$/i
+const RECENT_CREATED_DAYS = 7
+const GENERATED_PATH_PATTERNS = [
+  /^research\//i,
+  /^memory-notes\//i,
+  /^screenshot\//i,
+  /^screenshots\//i,
+  /^generated\//i,
+  /^diagrams?\//i,
+]
+const GENERATED_NAME_PATTERNS = [
+  DRAWIO_FILE_PATTERN,
+  EXCALIDRAW_FILE_PATTERN,
+  /^\d{4}-\d{2}-\d{2}[-_].+\.(md|markdown|pdf|html)$/i,
+  /research|deep[-_\s]?research|report|summary|diagram|mind[-_\s]?map|generated/i,
+]
 
 export interface FileBrowserStats {
   files: number
   folders: number
+}
+
+function isRecentlyCreated(item: DirTree, days = RECENT_CREATED_DAYS) {
+  if (!item.createdAt) {
+    return false
+  }
+
+  const createdAt = new Date(item.createdAt).getTime()
+  if (Number.isNaN(createdAt)) {
+    return false
+  }
+
+  return Date.now() - createdAt <= days * 24 * 60 * 60 * 1000
+}
+
+export function isGeneratedFile(item: DirTree) {
+  if (!item.isFile) {
+    return false
+  }
+
+  const path = computedParentPath(item).replace(/\\/g, "/")
+  return GENERATED_PATH_PATTERNS.some(pattern => pattern.test(path))
+    || GENERATED_NAME_PATTERNS.some(pattern => pattern.test(item.name))
 }
 
 export function filterTreeByCloudVisibility(tree: DirTree[], showCloudFiles: boolean): DirTree[] {
@@ -52,6 +92,14 @@ function matchesFilter(item: DirTree, filter: FileBrowserFilter) {
 
   if (filter === "json") {
     return JSON_FILE_PATTERN.test(item.name)
+  }
+
+  if (filter === "recent-created") {
+    return isRecentlyCreated(item)
+  }
+
+  if (filter === "generated") {
+    return isGeneratedFile(item)
   }
 
   return true

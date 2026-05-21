@@ -197,7 +197,7 @@ export function MessageCitations({ details }: MessageCitationsProps) {
             const url = detail.url?.trim()
             const sourcePath = getCitationPath(detail)
             const isWebSource = detail.sourceType === 'web' && !!url
-            const canJump = !!sourcePath
+            const canJump = !!sourcePath && detail.sourceType !== 'web' && !/^https?:\/\//i.test(sourcePath)
             const citationKey = `${url || label}-${index}`
             const isSaving = savingKey === citationKey
 

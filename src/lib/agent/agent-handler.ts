@@ -282,6 +282,7 @@ export class AgentHandler {
         onEvent: reactConfig.onEvent,
         onFinalAnswerRender: reactConfig.onFinalAnswerRender,
         requestConfirmation: reactConfig.requestConfirmation,
+        currentQuote: this.config.currentQuote,
       }
       this.agent = new FunctionCallAgent(fcConfig)
     } else {
@@ -299,6 +300,7 @@ export class AgentHandler {
         completedSteps: steps,
         currentIteration: this.agent.getCurrentIteration(),
       })
+      await this.persistRunSummary(userInput, result, steps, false)
       this.config.onComplete?.(result, steps, false)
       this.executing = false
       return result
@@ -331,6 +333,7 @@ export class AgentHandler {
           completedSteps: steps,
           currentIteration: this.agent.getCurrentIteration(),
         })
+        await this.persistRunSummary(userInput, '', steps, true)
         // 调用 onComplete，传入空结果和已产生的步骤，标记为已停止
         this.config.onComplete?.('', steps, true)
         this.executing = false
@@ -352,6 +355,28 @@ export class AgentHandler {
       })
       this.config.onError?.(errorMessage)
       throw error
+    }
+  }
+
+  private async persistRunSummary(
+    userInput: string,
+    result: string,
+    steps: ReActStep[],
+    stopped: boolean,
+  ) {
+    try {
+      const store = useChatStore.getState()
+      const { buildAgentRunSummary, saveAgentRunSummary } = await import('./run-summary')
+      const summary = buildAgentRunSummary({
+        userGoal: userInput,
+        result,
+        stopped,
+        steps,
+        events: store.agentState.agentEvents || [],
+      })
+      await saveAgentRunSummary(summary)
+    } catch (error) {
+      console.warn('[Agent Handler] Failed to persist run summary:', error)
     }
   }
 

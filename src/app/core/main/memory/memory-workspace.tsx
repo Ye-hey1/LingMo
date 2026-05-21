@@ -2346,7 +2346,7 @@ export function MemoryWorkspace() {
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
       {supportsLingmoMemories ? (
         <div className="border-b px-4 py-3">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="flex min-w-0 items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <Brain className="size-5 text-primary" />
@@ -2359,32 +2359,17 @@ export function MemoryWorkspace() {
             </div>
 
             <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'sessions' | 'ai-memories')}>
-              <TabsList className="grid h-auto w-full min-w-[260px] grid-cols-2 rounded-lg bg-muted/40 p-1 xl:w-[320px]">
-                <TabsTrigger value="sessions" className="flex flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left data-[state=active]:shadow-sm">
-                  <span className="text-xs font-semibold">会话记录</span>
-                  <span className="text-[11px] text-muted-foreground">查看对话、摘要与项目轨迹</span>
+              <TabsList className="h-8 shrink-0 rounded-md border bg-background p-0.5 shadow-sm">
+                <TabsTrigger value="sessions" className="h-7 gap-1.5 rounded px-3 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                  <History className="size-3.5" />
+                  <span>会话记录</span>
                 </TabsTrigger>
-                <TabsTrigger value="ai-memories" className="flex flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left data-[state=active]:shadow-sm">
-                  <span className="text-xs font-semibold">长期记忆</span>
-                  <span className="text-[11px] text-muted-foreground">管理偏好与可复用记忆</span>
+                <TabsTrigger value="ai-memories" className="h-7 gap-1.5 rounded px-3 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                  <Brain className="size-3.5" />
+                  <span>长期记忆</span>
                 </TabsTrigger>
               </TabsList>
             </Tabs>
-          </div>
-
-          <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
-              <div className="text-[11px] text-muted-foreground">当前模式</div>
-              <div className="mt-1 text-sm font-medium">{viewMode === 'ai-memories' ? '长期记忆整理' : '会话浏览与筛选'}</div>
-            </div>
-            <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
-              <div className="text-[11px] text-muted-foreground">主要目标</div>
-              <div className="mt-1 text-sm font-medium">{viewMode === 'ai-memories' ? '沉淀长期可复用信息' : '快速定位历史 AI 会话'}</div>
-            </div>
-            <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 sm:col-span-2 xl:col-span-1">
-              <div className="text-[11px] text-muted-foreground">建议路径</div>
-              <div className="mt-1 text-sm font-medium">{viewMode === 'ai-memories' ? '先看记忆，再编辑或清理' : '先筛选会话，再查看详情或导出'}</div>
-            </div>
           </div>
         </div>
       ) : null}

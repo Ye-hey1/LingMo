@@ -89,6 +89,7 @@ export const READ_ONLY_TOOLS = new Set([
   'find_path_between_notes',
   'discover_note_clusters',
   'suggest_links_for_note',
+  'list_agent_run_summaries',
 ])
 
 const writePatterns = [

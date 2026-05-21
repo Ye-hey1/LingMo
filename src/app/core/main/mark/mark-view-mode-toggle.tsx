@@ -3,7 +3,6 @@
 import { LayoutGrid, Rows3, StretchHorizontal } from "lucide-react"
 import { useTranslations } from "next-intl"
 import type { RecordViewMode } from "@/stores/mark"
-import { cn } from "@/lib/utils"
 import { BottomBarIconButton } from "@/components/bottom-bar-icon-button"
 
 type MarkViewModeToggleProps = {
@@ -22,19 +21,18 @@ const VIEW_MODE_ITEMS: Array<{
 
 export function MarkViewModeToggle({ value, onChange }: MarkViewModeToggleProps) {
   const t = useTranslations('record.mark.toolbar.view')
+  const currentIndex = VIEW_MODE_ITEMS.findIndex((item) => item.mode === value)
+  const currentItem = VIEW_MODE_ITEMS[currentIndex >= 0 ? currentIndex : 0]
+  const CurrentIcon = currentItem.icon
+  const nextMode = VIEW_MODE_ITEMS[((currentIndex >= 0 ? currentIndex : 0) + 1) % VIEW_MODE_ITEMS.length].mode
 
   return (
-    <div className="flex items-center gap-1">
-      {VIEW_MODE_ITEMS.map(({ mode, icon: Icon }) => (
-        <BottomBarIconButton
-          key={mode}
-          icon={<Icon className="size-3" />}
-          label={t(mode)}
-          onClick={() => onChange(mode)}
-          active={value === mode}
-          className={cn(value === mode && "text-foreground")}
-        />
-      ))}
-    </div>
+    <BottomBarIconButton
+      icon={<CurrentIcon className="size-3" />}
+      label={`${t(value)}，点击切换到${t(nextMode)}`}
+      onClick={() => onChange(nextMode)}
+      active
+      className="text-foreground"
+    />
   )
 }

@@ -14,7 +14,9 @@ import {
   FileText,
   FolderTree,
   ListFilter,
+  Sparkles,
   Search,
+  Clock3,
   X,
   FileType2,
 } from "lucide-react"
@@ -32,6 +34,8 @@ const FILTER_ITEMS: Array<{
   { value: "drawio", icon: DraftingCompass },
   { value: "json", icon: Braces },
   { value: "folder", icon: FolderTree },
+  { value: "recent-created", icon: Clock3 },
+  { value: "generated", icon: Sparkles },
 ]
 
 const FILTER_LABELS: Record<FileBrowserFilter, string> = {
@@ -41,6 +45,8 @@ const FILTER_LABELS: Record<FileBrowserFilter, string> = {
   drawio: "Draw.io",
   json: "JSON",
   folder: "文件夹",
+  "recent-created": "最近创建",
+  generated: "生成文件",
 }
 
 interface FileBrowserHeaderProps {

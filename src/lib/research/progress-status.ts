@@ -29,8 +29,9 @@ const STAGE_INDEX: Record<DeepResearchProgress['stage'], number> = {
   planning: 2,
   searching: 3,
   analyzing: 4,
-  writing: 6,
-  done: 6,
+  verifying: 6,
+  writing: 7,
+  done: 7,
 }
 
 const STEP_BLUEPRINTS = [
@@ -63,6 +64,11 @@ const STEP_BLUEPRINTS = [
     id: 'deepen',
     title: '递归扩展研究',
     description: '围绕新问题继续检索，补足证据链。',
+  },
+  {
+    id: 'verify',
+    title: '核验证据链',
+    description: '检查来源独立性、置信度和引用映射。',
   },
   {
     id: 'report',

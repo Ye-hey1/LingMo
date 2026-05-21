@@ -107,6 +107,9 @@ interface SettingState {
   webSearchEnabled: boolean
   setWebSearchEnabled: (enabled: boolean) => Promise<void>
 
+  githubProjectApiToken: string
+  setGithubProjectApiToken: (token: string) => Promise<void>
+
   templateList: GenTemplate[]
   setTemplateList: (templateList: GenTemplate[]) => Promise<void>
 
@@ -663,6 +666,14 @@ const useSettingStore = create<SettingState>((set, get) => ({
     await store.set('webSearchEnabled', webSearchEnabled)
     await store.save()
     set({ webSearchEnabled })
+  },
+
+  githubProjectApiToken: '',
+  setGithubProjectApiToken: async (githubProjectApiToken) => {
+    const store = await Store.load('store.json')
+    await store.set('githubProjectApiToken', githubProjectApiToken)
+    await store.save()
+    set({ githubProjectApiToken })
   },
 
   templateList: [

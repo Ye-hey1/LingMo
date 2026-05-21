@@ -50,6 +50,7 @@ const RelatedNotesPanel = dynamic(() => import('@/lib/related-notes').then(m => 
 const ImageEditor = dynamic(() => import('./image/image-editor').then(m => m.ImageEditor), { ssr: false })
 const PdfViewer = dynamic(() => import('./pdf/pdf-viewer').then(m => m.PdfViewer), { ssr: false })
 const DiagramEditor = dynamic(() => import('./diagram/diagram-editor').then(m => m.DiagramEditor), { ssr: false })
+const HtmlEditor = dynamic(() => import('./html/html-editor').then(m => m.HtmlEditor), { ssr: false })
 const KnowledgeGraph = dynamic(() => import('../knowledge/knowledge-graph').then(m => m.KnowledgeGraph), { ssr: false })
 const FlashcardWorkspace = dynamic(() => import('../flashcard/flashcard-workspace').then(m => m.FlashcardWorkspace), { ssr: false })
 const MemoryWorkspace = dynamic(() => import('../memory/memory-workspace').then(m => m.MemoryWorkspace), { ssr: false })
@@ -70,9 +71,11 @@ import {
 } from './empty-state-actions'
 
 // 常量：扩展名到类型的映射（避免每次渲染时重新创建）
+const HTML_EXTENSIONS = new Set(['html', 'htm'])
+
 const MARKDOWN_EXTENSIONS = new Set([
   'md', 'txt', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'css', 'scss', 'less',
-  'html', 'xml', 'json', 'yaml', 'yml', 'sh', 'bash', 'java', 'c', 'cpp', 'h', 'go',
+  'xml', 'json', 'yaml', 'yml', 'sh', 'bash', 'java', 'c', 'cpp', 'h', 'go',
   'rs', 'sql', 'rb', 'php', 'vue', 'svelte', 'astro', 'toml', 'ini', 'conf', 'cfg',
   'gitignore', 'env', 'example', 'template'
 ])
@@ -258,7 +261,7 @@ export function EditorLayout() {
   }, [])
 
   // Get item type based on path
-  const getItemType = useCallback((path: string): 'knowledgeGraph' | 'flashcards' | 'memory' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'folder' | 'unknown' => {
+  const getItemType = useCallback((path: string): 'knowledgeGraph' | 'flashcards' | 'memory' | 'html' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'folder' | 'unknown' => {
     if (!path) return 'unknown'
     if (isKnowledgeGraphTabPath(path)) return 'knowledgeGraph'
     if (isFlashcardTabPath(path)) return 'flashcards'
@@ -276,6 +279,9 @@ export function EditorLayout() {
     const extension = path.split('.').pop()?.toLowerCase()
     if (!extension) return 'unknown'
 
+    if (HTML_EXTENSIONS.has(extension)) {
+      return 'html'
+    }
     if (MARKDOWN_EXTENSIONS.has(extension)) {
       return 'markdown'
     }
@@ -355,7 +361,7 @@ export function EditorLayout() {
     const extension = path.split('.').pop()?.toLowerCase()
     if (!extension) return false
 
-    const validExtensions = ['md', 'txt', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'css', 'scss', 'less', 'html', 'xml', 'json', 'yaml', 'yml', 'sh', 'bash', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'sql', 'rb', 'php', 'vue', 'svelte', 'astro', 'toml', 'ini', 'conf', 'cfg', 'gitignore', 'env', 'example', 'template', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'pdf']
+    const validExtensions = ['md', 'txt', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'css', 'scss', 'less', 'html', 'htm', 'xml', 'json', 'yaml', 'yml', 'sh', 'bash', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'sql', 'rb', 'php', 'vue', 'svelte', 'astro', 'toml', 'ini', 'conf', 'cfg', 'gitignore', 'env', 'example', 'template', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'pdf']
 
     if (!validExtensions.includes(extension)) return false
 
@@ -717,6 +723,11 @@ export function EditorLayout() {
             <div className="flex min-h-0 flex-1 overflow-hidden">
               <MemoryWorkspace />
             </div>
+          </Suspense>
+        )}
+        {itemType === 'html' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <HtmlEditor filePath={tab.path} tabContentsRef={tabContentsRef} />
           </Suspense>
         )}
         {itemType === 'markdown' && (

@@ -8,6 +8,27 @@ import useChatStore from '@/stores/chat'
 import emitter from '@/lib/emitter'
 import { getVectorDocumentKey } from '@/lib/vector-document-key'
 
+function formatToolError(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error
+  }
+
+  try {
+    const serialized = JSON.stringify(error)
+    if (serialized && serialized !== '{}') {
+      return serialized
+    }
+  } catch {
+    // ignore serialization failures
+  }
+
+  return String(error) === '[object Object]' ? '未知文件系统错误' : String(error)
+}
+
 function normalizeLinkedCandidate(candidate: unknown): string {
   return typeof candidate === 'string' ? candidate.trim() : ''
 }
@@ -173,8 +194,25 @@ export const readMarkdownFileTool: Tool = {
     },
   ],
   execute: async (params): Promise<ToolResult> => {
+    let normalizedFilePath = ''
+    let resolvedReadPath = ''
+    let resolvedBaseDir: BaseDirectory | undefined
+
     try {
-      const normalizedFilePath = await ensureSafeWorkspaceRelativePath(params.filePath)
+      normalizedFilePath = await ensureSafeWorkspaceRelativePath(params.filePath)
+
+      const articleStore = useArticleStore.getState()
+      if (articleStore.activeFilePath === normalizedFilePath) {
+        return {
+          success: true,
+          data: {
+            filePath: normalizedFilePath,
+            content: articleStore.currentArticle || '',
+            source: 'active-editor',
+          },
+          message: `成功读取当前编辑器内容: ${normalizedFilePath}`,
+        }
+      }
 
       // 检查是否已关联该文件到对话中（避免重复读取）
       const linkedFile = getEffectiveLinkedFiles().find(resource =>
@@ -197,6 +235,8 @@ export const readMarkdownFileTool: Tool = {
 
       // 统一使用 getFilePathOptions 来处理路径，无论是自定义工作区还是默认工作区
       const { path, baseDir } = await getFilePathOptions(normalizedFilePath)
+      resolvedReadPath = path
+      resolvedBaseDir = baseDir
 
       if (baseDir) {
         content = await readTextFile(path, { baseDir })
@@ -210,15 +250,25 @@ export const readMarkdownFileTool: Tool = {
         message: `成功读取文件: ${normalizedFilePath}`,
       }
     } catch (error) {
-      console.error('[read_markdown_file] 读取失败', {
+      const errorMessage = formatToolError(error)
+      console.warn('[read_markdown_file] 读取失败', {
         filePath: params.filePath,
-        error: String(error),
-        errorName: error instanceof Error ? error.name : 'unknown',
-        errorMessage: error instanceof Error ? error.message : String(error),
+        normalizedFilePath,
+        resolvedReadPath,
+        resolvedBaseDir,
+        error: errorMessage,
       })
       return {
         success: false,
-        error: `读取文件失败: ${error}`,
+        error: `读取文件失败: ${errorMessage}`,
+        data: {
+          filePath: params.filePath,
+          normalizedFilePath,
+          resolvedReadPath,
+          hint: normalizedFilePath
+            ? '请确认该路径在当前工作区内存在；若读取当前打开文件，请优先使用 get_editor_content。'
+            : '请传入工作区相对路径，例如 folder/note.md。',
+        },
       }
     }
   },
@@ -707,7 +757,12 @@ Use folderPath to limit scope to a specific folder.`,
       results.sort((a, b) => b._score - a._score)
 
       // Strip internal score from output
-      const cleanResults = results.map(({ _score, ...rest }) => rest)
+      const cleanResults = results.map((result) => ({
+        filePath: result.filePath,
+        fileName: result.fileName,
+        matchedContent: result.matchedContent,
+        lineNumber: result.lineNumber,
+      }))
 
       return {
         success: true,

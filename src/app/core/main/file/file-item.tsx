@@ -4,7 +4,7 @@ import { Kbd } from "@/components/ui/kbd";
 import useArticleStore, { DirTree } from "@/stores/article";
 import { BaseDirectory, exists, readTextFile, remove, rename, writeTextFile } from "@tauri-apps/plugin-fs";
 import { Copy, File, FileDown, FileUp, FolderOpen, ImageIcon, LoaderCircle, RefreshCwOff, Trash2, FileText, Star } from "lucide-react"
-import { useEffect, useRef, useState, useCallback, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, type CSSProperties } from "react";
 import { ask } from '@tauri-apps/plugin-dialog';
 import { platform } from '@tauri-apps/plugin-os';
 import { Store } from '@tauri-apps/plugin-store';
@@ -40,6 +40,8 @@ import {
 } from "@/lib/file-pointer-drag";
 import { sanitizeFileName } from "@/lib/sync/filename-utils";
 import useFavoritesStore from "@/stores/favorites";
+import { isGeneratedFile } from "./file-browser-utils";
+import { getFileSystemMetadata } from "@/lib/file-activity";
 
 type Platform = 'macos' | 'windows' | 'linux' | 'unknown'
 
@@ -91,6 +93,36 @@ function getDisplayFileName(fileName: string) {
     .replace(/\.(md|markdown|pdf|drawio|json|txt)$/i, '')
 
   return displayName || fileName
+}
+
+function parseFileDate(value?: string) {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function formatFileDateTime(value?: string) {
+  const date = parseFileDate(value)
+  if (!date) return ''
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function formatFileSize(size?: number) {
+  if (typeof size !== 'number' || Number.isNaN(size)) return ''
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function buildFileMetadataTitle(item: DirTree, path: string, generated: boolean) {
+  return [
+    `路径: ${path}`,
+    item.createdAt ? `创建: ${formatFileDateTime(item.createdAt)}` : '',
+    item.modifiedAt ? `修改: ${formatFileDateTime(item.modifiedAt)}` : '',
+    typeof item.size === 'number' ? `大小: ${formatFileSize(item.size)}` : '',
+    generated ? '类型: 生成文件' : '',
+    item.isLocale ? '位置: 本地' : '位置: 远程',
+  ].filter(Boolean).join('\n')
 }
 
 function FileNameLabel({ name, title, textSize }: { name: string; title?: string; textSize: string }) {
@@ -209,11 +241,41 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
 
   const isFavorite = favorites.some(favorite => favorite.path === path)
   const displayFileName = item.isFile ? getDisplayFileName(item.name) : item.name
+  const [runtimeStats, setRuntimeStats] = useState<Pick<DirTree, 'createdAt' | 'modifiedAt' | 'size'> | null>(null)
+  const isGenerated = isGeneratedFile(item)
+  const displayItem = useMemo(() => (runtimeStats ? { ...item, ...runtimeStats } : item), [item, runtimeStats])
+  const [metadataTitle, setMetadataTitle] = useState(() => buildFileMetadataTitle(displayItem, path, isGenerated))
+  const fileMetadataTitle = metadataTitle
 
   const isRoot = path.split('/').length === 1
   const folderPath = path.includes('/') ? path.split('/').slice(0, -1).join('/') : ''
   // No cloneDeep is needed because getCurrentFolder only reads data here.
   const currentFolder = getCurrentFolder(folderPath, fileTree)
+
+  useEffect(() => {
+    let cancelled = false
+    const baseTitle = buildFileMetadataTitle(displayItem, path, isGenerated)
+    setMetadataTitle(baseTitle)
+
+    if (!item.isFile || !item.isLocale || (displayItem.createdAt && displayItem.modifiedAt && typeof displayItem.size === 'number')) {
+      return
+    }
+
+    void getFileSystemMetadata(path).then((metadata) => {
+      if (cancelled || !metadata) return
+      const nextStats = {
+        createdAt: metadata.createdAt ? new Date(metadata.createdAt).toISOString() : undefined,
+        modifiedAt: metadata.modifiedAt ? new Date(metadata.modifiedAt).toISOString() : undefined,
+        size: metadata.size,
+      }
+      setRuntimeStats(nextStats)
+      setMetadataTitle(buildFileMetadataTitle({ ...item, ...nextStats }, path, isGenerated))
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [displayItem, isGenerated, item, path])
 
   function handleToggleFavorite(event: React.MouseEvent<HTMLButtonElement>) {
     event.preventDefault()
@@ -456,16 +518,36 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         }
 
         if (currentFolder) {
-          const index = currentFolder.children?.findIndex(file => file.name === item.name)
-          if (index !== undefined && index !== -1 && currentFolder.children) {
-            const current = currentFolder.children[index]
-            if (current.sha) {
-              // Remote-backed files keep the remote copy and only clear local state.
-              current.isLocale = false
-            } else {
-              // Pure local files can be removed from the local tree.
-              currentFolder.children.splice(index, 1)
+          const cacheTree = cloneDeep(fileTree)
+
+          // 在克隆的树中找到对应的文件夹并删除文件
+          const findAndRemoveFromFile = (items: DirTree[]): boolean => {
+            for (let i = 0; i < items.length; i++) {
+              const entry = items[i]
+              const entryPath = computedParentPath(entry)
+              if (entryPath === computedParentPath(currentFolder) && entry.children) {
+                const fileIndex = entry.children.findIndex(file => file.name === item.name)
+                if (fileIndex !== -1) {
+                  const current = entry.children[fileIndex]
+                  if (current.sha) {
+                    // Remote-backed files keep the remote copy and only clear local state.
+                    current.isLocale = false
+                  } else {
+                    // Pure local files can be removed from the local tree.
+                    entry.children.splice(fileIndex, 1)
+                  }
+                  return true
+                }
+              }
+              if (entry.children && findAndRemoveFromFile(entry.children)) {
+                return true
+              }
             }
+            return false
+          }
+
+          if (findAndRemoveFromFile(cacheTree)) {
+            setFileTree(cacheTree)
           }
         } else {
           const cacheTree = cloneDeep(fileTree)
@@ -1152,15 +1234,15 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
               item.name.match(/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i) ?
               <span
                 draggable={false}
-                title={path}
+                title={fileMetadataTitle}
                 className={`${!item.isLocale || isCut ? 'opacity-50' : ''} flex min-w-0 flex-1 select-none items-center justify-between gap-1 dark:hover:text-white`}>
-                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-center gap-1.5">
+                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-start gap-1.5">
                   <span className={item.parent ? 'size-0' : `${iconSize} ml-1`}></span>
                   <div className="file-manager-icon-anchor relative flex items-center">
                     {renderFavoriteButton()}
                     <ImageIcon className={iconSize} />
                   </div>
-                  <FileNameLabel name={displayFileName} title={item.name} textSize={fileManagerTextSize} />
+                  <FileNameLabel name={displayFileName} title={fileMetadataTitle} textSize={fileManagerTextSize} />
                   {renderVectorIcon()}
                 </div>
                 {isMobile && (
@@ -1194,23 +1276,23 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
               item.name.match(/\.pdf$/i) ?
               <span
                 draggable={false}
-                title={path}
+                title={fileMetadataTitle}
                 className={`${!item.isLocale || isCut ? 'opacity-50' : ''} flex min-w-0 flex-1 select-none items-center justify-between gap-1 dark:hover:text-white`}>
-                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-center gap-1.5">
+                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-start gap-1.5">
                   <span className={item.parent ? 'size-0' : `${iconSize} ml-1`}></span>
                   <div className="file-manager-icon-anchor relative flex items-center">
                     {renderFavoriteButton()}
                     <FileText className={`${iconSize} text-red-500`} />
                   </div>
-                  <FileNameLabel name={displayFileName} title={item.name} textSize={fileManagerTextSize} />
+                  <FileNameLabel name={displayFileName} title={fileMetadataTitle} textSize={fileManagerTextSize} />
                   {renderVectorIcon()}
                 </div>
               </span> :
               <span
                 draggable={false}
-                title={path}
+                title={fileMetadataTitle}
                 className={`${!item.isLocale || isCut ? 'opacity-50' : ''} flex min-w-0 flex-1 select-none items-center justify-between gap-1 dark:hover:text-white`}>
-                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-center gap-1.5">
+                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-start gap-1.5">
                   <span className={item.parent ? 'size-0' : `${iconSize} ml-1`}></span>
                   <div className="file-manager-icon-anchor relative flex items-center">
                     {renderFavoriteButton()}
@@ -1222,7 +1304,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
                       <FileDown className={iconSize} />
                     )}
                   </div>
-                  <FileNameLabel name={displayFileName} title={item.name} textSize={fileManagerTextSize} />
+                  <FileNameLabel name={displayFileName} title={fileMetadataTitle} textSize={fileManagerTextSize} />
                   {renderVectorIcon()}
                 </div>
                 {isMobile && (

@@ -12,6 +12,7 @@ import {
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 import useArticleStore from '@/stores/article'
+import { recordFileActivity } from '@/lib/file-activity'
 
 interface ExportButtonProps {
   editor: Editor
@@ -19,6 +20,17 @@ interface ExportButtonProps {
 
 export function ExportButton({ editor }: ExportButtonProps) {
   const [isOpen, setIsOpen] = useState(false)
+
+  const recordExport = useCallback((format: string, outputName: string) => {
+    const activeFilePath = useArticleStore.getState().activeFilePath
+    if (!activeFilePath) return
+    void recordFileActivity({
+      path: activeFilePath,
+      type: 'export',
+      title: `导出 ${format}`,
+      description: outputName,
+    })
+  }, [])
 
   // Download file helper
   const downloadFile = useCallback((content: string, filename: string, mimeType: string) => {
@@ -93,37 +105,45 @@ export function ExportButton({ editor }: ExportButtonProps) {
         heightLeft -= pageHeight
       }
 
-      pdf.save(`${fileName}.pdf`)
+      const outputName = `${fileName}.pdf`
+      pdf.save(outputName)
+      recordExport('PDF', outputName)
     } catch (error) {
       console.error('PDF export failed:', error)
     }
 
     setIsOpen(false)
-  }, [])
+  }, [recordExport])
 
   const handleExportMarkdown = useCallback(() => {
     const content = editor.getMarkdown()
     const activeFilePath = useArticleStore.getState().activeFilePath
     const fileName = activeFilePath?.replace(/\.md$/, '') || 'document'
-    downloadFile(content, `${fileName}.md`, 'text/markdown')
+    const outputName = `${fileName}.md`
+    downloadFile(content, outputName, 'text/markdown')
+    recordExport('Markdown', outputName)
     setIsOpen(false)
-  }, [editor, downloadFile])
+  }, [editor, downloadFile, recordExport])
 
   const handleExportHtml = useCallback(() => {
     const content = editor.getHTML()
     const activeFilePath = useArticleStore.getState().activeFilePath
     const fileName = activeFilePath?.replace(/\.md$/, '') || 'document'
-    downloadFile(content, `${fileName}.html`, 'text/html')
+    const outputName = `${fileName}.html`
+    downloadFile(content, outputName, 'text/html')
+    recordExport('HTML', outputName)
     setIsOpen(false)
-  }, [editor, downloadFile])
+  }, [editor, downloadFile, recordExport])
 
   const handleExportJson = useCallback(() => {
     const content = JSON.stringify(editor.getJSON(), null, 2)
     const activeFilePath = useArticleStore.getState().activeFilePath
     const fileName = activeFilePath?.replace(/\.md$/, '') || 'document'
-    downloadFile(content, `${fileName}.json`, 'application/json')
+    const outputName = `${fileName}.json`
+    downloadFile(content, outputName, 'application/json')
+    recordExport('JSON', outputName)
     setIsOpen(false)
-  }, [editor, downloadFile])
+  }, [editor, downloadFile, recordExport])
 
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>

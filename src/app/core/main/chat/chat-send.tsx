@@ -25,6 +25,7 @@ import { ImageAttachment } from "./image-attachments"
 import type { RagSource } from "@/lib/rag"
 import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
 import { searchWeb } from "@/lib/tavily"
+import { requiresAgentModeForLocalAction } from "@/lib/chat-mode-guard"
 import {
   completeResearchClarification,
   generateResearchClarification,
@@ -63,7 +64,9 @@ interface ChatSendProps {
 }
 
 type ChatCitationSource = RagSource & {
-  sourceType?: 'rag' | 'current' | 'linked' | 'quote'
+  url?: string
+  title?: string
+  sourceType?: 'rag' | 'web' | 'current' | 'linked' | 'quote'
   startLine?: number
   endLine?: number
   from?: number
@@ -78,6 +81,7 @@ const AGENT_LINKED_FILE_CONTEXT_LIMIT = 16000
 const AGENT_RAG_CONTEXT_LIMIT = 24000
 const AGENT_QUOTE_CONTEXT_LIMIT = 10000
 const AGENT_PREVIEW_CONTEXT_LIMIT = 4000
+const AI_DOC_COMMAND_PREFIX = '你正在执行一个应用内命令：'
 
 type AgentContextBudget = {
   remaining: number
@@ -115,12 +119,6 @@ function buildAutoNoteTitle(userInput: string) {
 
   const fallback = `对话要点-${new Date().toISOString().slice(0, 10)}`
   return (normalized || fallback).slice(0, 28)
-}
-
-function hasActionableStructure(content: string) {
-  return /(^|\n)\s*[-*]\s+/.test(content)
-    || /(^|\n)\s*(#+\s+)/.test(content)
-    || /(^|\n)\s*(\d+\.\s+)/.test(content)
 }
 
 function isLikelyErrorContent(content: string) {
@@ -278,16 +276,31 @@ async function buildWebSearchContext(
   const sources = response.results
     .filter(result => result.url || result.title || result.content)
     .map((result, index): ChatCitationSource => ({
+      url: result.url,
+      title: result.title,
       filepath: result.url || `web-search:${query}:${index + 1}`,
       filename: result.title || result.url || `Web result ${index + 1}`,
       content: result.content || response.answer || '',
-      sourceType: 'rag',
+      sourceType: 'web',
     }))
 
   return {
     context: `${lines.join('\n')}\n\n`,
     sources,
   }
+}
+
+function buildWebSearchQuery(instruction: string): string | null {
+  const trimmed = instruction.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  if (trimmed.startsWith(AI_DOC_COMMAND_PREFIX)) {
+    return null
+  }
+
+  return trimmed
 }
 
 function formatResearchProgress(progress: DeepResearchProgress, query: string, startedAt: number) {
@@ -355,14 +368,6 @@ function parseResearchClarificationMeta(content?: string): ResearchClarification
   } catch {
     return null
   }
-}
-
-function stripResearchClarificationMeta(content: string) {
-  if (!content.startsWith(RESEARCH_CLARIFICATION_PREFIX)) {
-    return content
-  }
-  const endIndex = content.indexOf(RESEARCH_CLARIFICATION_SUFFIX)
-  return endIndex >= 0 ? content.slice(endIndex + RESEARCH_CLARIFICATION_SUFFIX.length).trimStart() : content
 }
 
 function formatResearchClarificationMessage(originalQuery: string, questions: string[]) {
@@ -621,18 +626,21 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
       const ragSourceDetails: ChatCitationSource[] = []
 
       if (webSearchEnabled) {
-        try {
-          const webSearchContext = await buildWebSearchContext(effectiveInstruction, abortController.signal)
-          context += webSearchContext.context
-          webSearchContext.sources.forEach(source => {
-            addCitationSource(ragSources, ragSourceDetails, source)
-          })
-        } catch (error) {
-          if (abortController.signal.aborted) {
-            throw error
+        const webSearchQuery = buildWebSearchQuery(effectiveInstruction)
+        if (webSearchQuery) {
+          try {
+            const webSearchContext = await buildWebSearchContext(webSearchQuery, abortController.signal)
+            context += webSearchContext.context
+            webSearchContext.sources.forEach(source => {
+              addCitationSource(ragSources, ragSourceDetails, source)
+            })
+          } catch (error) {
+            if (abortController.signal.aborted) {
+              throw error
+            }
+            console.error('Failed to get web search context in Chat mode:', error)
+            context += `## Web search results\n\nWeb search was enabled, but the search request failed: ${error instanceof Error ? error.message : String(error)}\n\n`
           }
-          console.error('Failed to get web search context in Chat mode:', error)
-          context += `## Web search results\n\nWeb search was enabled, but the search request failed: ${error instanceof Error ? error.message : String(error)}\n\n`
         }
       }
 
@@ -799,17 +807,26 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
       })
       researchFinished = true
 
-      const ragSourceDetails: ChatCitationSource[] = result.visitedUrls.map((url, index) => ({
-        filepath: url,
-        filename: url,
-        content: result.learnings[index] || '',
-        sourceType: 'rag',
+      const evidenceBySource = new Map<string, string[]>()
+      result.evidences.forEach((evidence) => {
+        const claims = evidenceBySource.get(evidence.sourceId) || []
+        claims.push(evidence.claim)
+        evidenceBySource.set(evidence.sourceId, claims)
+      })
+
+      const ragSourceDetails: ChatCitationSource[] = result.sources.map((source) => ({
+        url: source.url,
+        title: source.title,
+        filepath: source.url,
+        filename: source.title || source.url,
+        content: evidenceBySource.get(source.id)?.join('\n') || source.snippet || '',
+        sourceType: 'web',
       }))
 
       await saveChat({
         ...placeholderMessage,
         content: abortController.signal.aborted ? t('record.chat.input.stopped') : result.report,
-        ragSources: result.visitedUrls.length > 0 ? JSON.stringify(result.visitedUrls) : undefined,
+        ragSources: result.sources.length > 0 ? JSON.stringify(result.sources.map(source => source.title || source.url)) : undefined,
         ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
       }, true)
 
@@ -825,9 +842,11 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
           // 从 query 中提取简短标题（取前20个字符，去除特殊字符）
           const shortTitle = query.replace(/[\\/:*?"<>|\n\r]/g, '').trim().slice(0, 20).trim() || '研究报告'
           const fileName = `${dateStr}-${timeStr}-${shortTitle}.md`
+          const sessionFileName = `${dateStr}-${timeStr}-${shortTitle}.research.json`
           const researchDir = 'research'
           // 相对于工作区的文件路径（用于 setActiveFilePath）
           const relativeFilePath = `${researchDir}/${fileName}`
+          const relativeSessionFilePath = `${researchDir}/${sessionFileName}`
 
           // 确保 research 目录存在
           const dirOptions = await getFilePathOptions(researchDir)
@@ -847,9 +866,17 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
             await writeTextFile(fileOptions.path, result.report, { baseDir: fileOptions.baseDir })
           }
 
+          const sessionOptions = await getFilePathOptions(relativeSessionFilePath)
+          const sessionJson = JSON.stringify(result.session, null, 2)
+          if (workspace.isCustom) {
+            await writeTextFile(sessionOptions.path, sessionJson)
+          } else {
+            await writeTextFile(sessionOptions.path, sessionJson, { baseDir: sessionOptions.baseDir })
+          }
+
           // 在编辑器中打开
           const useArticleStore = (await import('@/stores/article')).default
-          const { default: useSidebarStore } = await import('@/stores/sidebar')
+          const { useSidebarStore } = await import('@/stores/sidebar')
           const articleStore = useArticleStore.getState()
           const sidebarStore = useSidebarStore.getState()
 
@@ -1024,7 +1051,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
   }
 
   useImperativeHandle(ref, () => ({
-    sendChat: (instructionOverride?: string, _options?: { maxTokens?: number; temperature?: number }) => {
+    sendChat: (instructionOverride?: string) => {
       void handleSubmit(instructionOverride)
     },
   }))
@@ -1617,10 +1644,21 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
   // 对话（Agent 模式）
   async function handleSubmit(instructionOverride?: unknown) {
     if (inputValue === '') return
-    onSent?.()
 
     const effectiveInstruction =
       typeof instructionOverride === 'string' ? instructionOverride : undefined
+    const requestText = effectiveInstruction ?? inputValue
+
+    if (chatMode === 'chat' && requiresAgentModeForLocalAction(requestText)) {
+      toast({
+        title: '请切换到 Agent 模式',
+        description: '对话模式只回答问题、联网搜索和读取上下文；创建、编辑、删除文件或执行工具需要使用 Agent 模式。',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    onSent?.()
 
     setLoading(true)
     const imageUrls = attachedImages.map(img => img.url)

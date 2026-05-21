@@ -136,14 +136,34 @@ export async function toWorkspaceRelativePath(path: string): Promise<string> {
  */
 export async function normalizeWorkspaceRelativePath(relativePath: string): Promise<string> {
   const workspace = await getWorkspacePath()
-  const normalized = relativePath
+  const rawPath = relativePath.trim().replace(/\\/g, '/')
+  const normalized = rawPath
     .trim()
-    .replace(/\\/g, '/')
     .replace(/^\.?\//, '')
     .replace(/\/+/g, '/')
 
   if (workspace.isCustom) {
+    const workspacePath = workspace.path.replace(/\\/g, '/').replace(/\/+$/, '')
+    if (rawPath === workspacePath) {
+      return ''
+    }
+
+    if (rawPath.startsWith(`${workspacePath}/`)) {
+      return rawPath.slice(workspacePath.length + 1).replace(/\/+/g, '/')
+    }
+
     return normalized
+  }
+
+  const appDataPath = (await appDataDir()).replace(/\\/g, '/').replace(/\/+$/, '')
+  const defaultArticlePath = `${appDataPath}/article`
+
+  if (rawPath === defaultArticlePath) {
+    return ''
+  }
+
+  if (rawPath.startsWith(`${defaultArticlePath}/`)) {
+    return rawPath.slice(defaultArticlePath.length + 1).replace(/\/+/g, '/')
   }
 
   if (normalized === 'article') {
@@ -166,6 +186,10 @@ export async function ensureSafeWorkspaceRelativePath(relativePath: string): Pro
 
   if (normalized.startsWith('/')) {
     throw new Error('不允许使用绝对路径')
+  }
+
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    throw new Error('不允许使用工作区之外的 Windows 绝对路径')
   }
 
   const segments = normalized.split('/').filter(Boolean)

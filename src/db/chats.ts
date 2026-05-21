@@ -1,5 +1,5 @@
 import { getDb, serializedWrite } from './index'
-import { insertActivityEvent } from './activity'
+import { insertActivityEventWithDb } from './activity'
 import { truncateActivityText } from '@/lib/activity/events'
 
 export type Role = 'system' | 'user'
@@ -96,9 +96,9 @@ export async function initChatsDb() {
 
 export async function insertChat(chat: Omit<Chat, 'id' | 'createdAt'>) {
   const createdAt = Date.now()
-  const result = await serializedWrite(async () => {
+  return await serializedWrite(async () => {
     const db = await getDb()
-    return await db.execute(
+    const result = await db.execute(
       'insert into chats (tagId, conversationId, content, role, type, image, images, inserted, createdAt, ragSources, ragSourceDetails, agentHistory, thinking, quoteData, condensedContent, condensedAt) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)',
       [
         chat.tagId,
@@ -119,20 +119,20 @@ export async function insertChat(chat: Omit<Chat, 'id' | 'createdAt'>) {
         chat.condensedAt,
       ],
     )
+
+    if (chat.role === 'user' && chat.content?.trim()) {
+      await insertActivityEventWithDb(db, {
+        source: 'chat',
+        title: truncateActivityText(chat.content, 64),
+        description: truncateActivityText(chat.content, 140),
+        tagId: chat.tagId ?? null,
+        dedupeKey: result.lastInsertId ? `chat:${result.lastInsertId}` : `chat:${createdAt}`,
+        createdAt,
+      })
+    }
+
+    return result
   })
-
-  if (chat.role === 'user' && chat.content?.trim()) {
-    await insertActivityEvent({
-      source: 'chat',
-      title: truncateActivityText(chat.content, 64),
-      description: truncateActivityText(chat.content, 140),
-      tagId: chat.tagId ?? null,
-      dedupeKey: result.lastInsertId ? `chat:${result.lastInsertId}` : `chat:${createdAt}`,
-      createdAt,
-    })
-  }
-
-  return result
 }
 
 export async function getChats(tagId: number) {

@@ -1,7 +1,7 @@
 'use client'
 
 import type * as React from "react"
-import { Minus, Plus } from "lucide-react"
+import { Minus, Plus, X } from "lucide-react"
 import { PhotoProvider } from "react-photo-view"
 import { Button } from "@/components/ui/button"
 
@@ -15,7 +15,7 @@ function clampScale(scale: number) {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number(scale.toFixed(2))))
 }
 
-function PhotoToolbar({ scale, onScale }: ToolbarProps) {
+function PhotoToolbar({ scale, onScale, onClose }: ToolbarProps) {
   const nextZoomOut = clampScale(scale - SCALE_STEP)
   const nextZoomIn = clampScale(scale + SCALE_STEP)
 
@@ -46,6 +46,17 @@ function PhotoToolbar({ scale, onScale }: ToolbarProps) {
       >
         <Plus className="h-4 w-4" />
       </Button>
+      <span className="mx-0.5 h-5 w-px bg-white/15" />
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 text-white hover:bg-white/10 hover:text-white"
+        onClick={(event) => onClose(event)}
+        aria-label="Close preview"
+      >
+        <X className="h-4 w-4" />
+      </Button>
     </div>
   )
 }
@@ -53,8 +64,12 @@ function PhotoToolbar({ scale, onScale }: ToolbarProps) {
 export function PhotoPreviewProvider({ children }: { children: React.ReactNode }) {
   return (
     <PhotoProvider
-      maskClosable
-      photoClosable
+      maskClosable={false}
+      photoClosable={false}
+      pullClosable={false}
+      maskOpacity={0.92}
+      photoClassName="app-photo-preview-image"
+      photoWrapClassName="app-photo-preview-wrap"
       toolbarRender={(props) => <PhotoToolbar {...props} />}
     >
       {children}

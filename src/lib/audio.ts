@@ -384,7 +384,10 @@ export async function transcribeRecording(audioBlob: Blob): Promise<string> {
 /**
  * 调用STT模型将音频转换为文本
  */
-export async function fetchAudioTranscription(audioBlob: Blob): Promise<string> {
+export async function fetchAudioTranscription(audioBlob: Blob, options?: {
+  fileName?: string
+  contentType?: string
+}): Promise<string> {
   const { aiModelList, sttModel } = useSettingStore.getState()
   
   if (!sttModel) {
@@ -441,13 +444,13 @@ export async function fetchAudioTranscription(audioBlob: Blob): Promise<string> 
       },
       file: {
         bytes: await blobToBytes(audioBlob),
-        fileName: 'audio.webm',
-        contentType: audioBlob.type || 'audio/webm',
+        fileName: options?.fileName || 'audio.webm',
+        contentType: options?.contentType || audioBlob.type || 'audio/webm',
       }
     })
     return result.text
   } catch (error) {
-    console.error('语音识别错误:', error)
+    console.warn('[Audio] transcription failed:', error)
     throw error
   }
 }

@@ -3,6 +3,7 @@
 import { Editor } from '@tiptap/react'
 import { FileText, Network } from 'lucide-react'
 import { WordCount } from './word-count'
+import { FileCreatedAt } from './file-created-at'
 import { CopyButton } from './copy-button'
 import { ExportButton } from './export-button'
 import { HeadingCollapseMenu } from './heading-collapse-menu'
@@ -54,8 +55,9 @@ export function FooterBar({
   return (
     <div className="h-6 flex items-center justify-between px-3 border-t border-border bg-background text-xs text-muted-foreground">
       {/* Left side: Word count, Copy, Export, Graph locate */}
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-0 items-center gap-0.5">
         <WordCount editor={editor} />
+        <FileCreatedAt />
         <HeadingCollapseMenu editor={editor} />
         <CopyButton editor={editor} />
         <ExportButton editor={editor} />

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Eye, EyeOff, Globe2, LoaderCircle } from 'lucide-react'
+import { Eye, EyeOff, Github, Globe2, LoaderCircle } from 'lucide-react'
 
 import { SettingType, FormItem } from '../components/setting-base'
 import useSettingStore from '@/stores/setting'
@@ -27,10 +27,13 @@ export default function WebSearchPage() {
     setTavilySearchDepth,
     webSearchEnabled,
     setWebSearchEnabled,
+    githubProjectApiToken,
+    setGithubProjectApiToken,
   } = useSettingStore()
 
   const normalizedSearchDepth = tavilySearchDepth === 'advanced' ? 'advanced' : 'basic'
   const [tavilyApiKeyVisible, setTavilyApiKeyVisible] = useState(false)
+  const [githubTokenVisible, setGithubTokenVisible] = useState(false)
   const [testingTavily, setTestingTavily] = useState(false)
   const [tavilyHealthStatus, setTavilyHealthStatus] = useState<{ ok: boolean; message: string } | null>(null)
 
@@ -109,6 +112,31 @@ export default function WebSearchPage() {
               {tavilyHealthStatus.message}
             </div>
           )}
+        </div>
+      </FormItem>
+      <FormItem title="GitHub 开源项目识别" desc="用于记录模块的链接收藏：粘贴 GitHub 仓库链接时，可通过 GitHub API 读取仓库元数据和 README，再由 AI 整理成开源项目卡片。未配置时保持原链接记录流程。">
+        <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3">
+          <div className="flex items-center gap-2">
+            <Github className="h-4 w-4 text-muted-foreground" />
+            <Input
+              className="flex-1"
+              value={githubProjectApiToken}
+              type={githubTokenVisible ? 'text' : 'password'}
+              placeholder="github_pat_... 或 ghp_..."
+              onChange={(e) => void setGithubProjectApiToken(e.target.value)}
+            />
+            <Button variant="outline" size="icon" onClick={() => setGithubTokenVisible((prev) => !prev)}>
+              {githubTokenVisible ? <Eye /> : <EyeOff />}
+            </Button>
+            <OpenBroswer
+              type="button"
+              url="https://github.com/settings/tokens"
+              title="创建 GitHub Token"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            建议使用只读 Token；公开仓库通常无需额外权限。未填写 Token 时，GitHub 链接会按普通网页链接保存。
+          </p>
         </div>
       </FormItem>
     </SettingType>

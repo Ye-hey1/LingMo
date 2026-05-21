@@ -4,7 +4,6 @@ import useMarkStore from "@/stores/mark"
 import useArticleStore from "@/stores/article"
 import useTagStore from "@/stores/tag"
 import { fetchAiStream } from "@/lib/ai/chat"
-import { convertImage } from "@/lib/utils"
 import {
   AlertDialog,
   AlertDialogContent,
@@ -17,8 +16,15 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { useCallback, useEffect, useMemo, useImperativeHandle, forwardRef, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { Button } from "@/components/ui/button"
+import { AlertTriangle, ChevronDown } from "lucide-react"
 import { Store } from "@tauri-apps/plugin-store"
 import { Label } from "@/components/ui/label"
 import { useSidebarStore } from "@/stores/sidebar"
@@ -32,9 +38,94 @@ import { getFilePathOptions, getWorkspacePath } from "@/lib/workspace"
 import { toast } from "@/hooks/use-toast"
 import emitter from "@/lib/emitter"
 import { shouldEmitOrganizeOnboardingComplete } from "./organize-onboarding"
+import type { Mark } from "@/db/marks"
+import { getTemplateRangeLabel, getTemplateRangeOptions } from "@/lib/template-range-utils"
 
 function shouldAutoSyncOnInitialRead(options?: { isNewFile?: boolean }) {
   return options?.isNewFile !== true
+}
+
+const MAX_RECORDS_PER_ORGANIZE = 80
+const MAX_FIELD_CHARS = 1600
+const MAX_TOTAL_CONTEXT_CHARS = 28000
+const STREAM_EDITOR_UPDATE_INTERVAL_MS = 500
+const STREAM_FILE_WRITE_INTERVAL_MS = 1200
+
+function compactRecordText(value?: string | null, maxLength = MAX_FIELD_CHARS) {
+  const text = (value || '').replace(/\s+/g, ' ').trim()
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
+}
+
+function stripThinkingContent(value: string) {
+  return value
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/```thinking[\s\S]*?```/gi, '')
+    .replace(/```思考[\s\S]*?```/gi, '')
+    .trim()
+}
+
+function formatRecordForPrompt(mark: Mark, index: number, options?: { removeThinking?: boolean }) {
+  const content = options?.removeThinking ? stripThinkingContent(mark.content || '') : mark.content || ''
+  const desc = options?.removeThinking ? stripThinkingContent(mark.desc || '') : mark.desc || ''
+  const lines = [
+    `Record ${index + 1}`,
+    `Type: ${mark.type}`,
+    `Created at: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}`,
+    mark.url ? `URL: ${mark.url}` : '',
+    desc ? `Title or description: ${compactRecordText(desc, 500)}` : '',
+    content ? `Content: ${compactRecordText(content)}` : '',
+  ].filter(Boolean)
+
+  return lines.join('\n')
+}
+
+function buildOrganizePrompt({
+  marks,
+  template,
+  locale,
+  inputValue,
+  removeThinking,
+}: {
+  marks: Mark[]
+  template?: GenTemplate
+  locale: string
+  inputValue?: string
+  removeThinking: boolean
+}) {
+  const selectedMarks = [...marks]
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(-MAX_RECORDS_PER_ORGANIZE)
+
+  const recordBlocks: string[] = []
+  let usedChars = 0
+
+  for (const [index, mark] of selectedMarks.entries()) {
+    const block = formatRecordForPrompt(mark, index, { removeThinking })
+    if (usedChars + block.length > MAX_TOTAL_CONTEXT_CHARS) {
+      recordBlocks.push(`Record context truncated. ${selectedMarks.length - index} newer/older records were not included because the prompt reached the safety limit.`)
+      break
+    }
+    recordBlocks.push(block)
+    usedChars += block.length
+  }
+
+  return [
+    'You are a note organization assistant. Convert the following collected records into one useful Markdown note.',
+    `Output language: ${locale}.`,
+    'Requirements:',
+    '- Use Markdown syntax.',
+    '- Include exactly one level 1 heading.',
+    '- Keep useful code, commands, tables, links, and project metadata intact when they appear in records.',
+    '- Do not invent facts not supported by the records.',
+    '- If records contain GitHub project cards, preserve project name, link, intro, tech stack, installation, architecture, and use cases.',
+    '- Put reference links at the end when link records are included.',
+    inputValue ? `User extra requirements: ${inputValue}` : '',
+    template?.content ? `Template instruction:\n${template.content}` : '',
+    '',
+    `Records included: ${recordBlocks.length}`,
+    '---',
+    recordBlocks.join('\n\n---\n\n'),
+  ].filter(Boolean).join('\n')
 }
 
 interface OrganizeNotesProps {
@@ -44,20 +135,20 @@ interface OrganizeNotesProps {
 export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNotesProps>(({ inputValue }, ref) => {
   const [open, setOpen] = useState(false)
   const { primaryModel } = useSettingStore()
-  const { fetchMarks, marks } = useMarkStore()
-  const { currentTag } = useTagStore()
+  const { fetchMarks, marks, isMultiSelectMode, selectedMarkIds } = useMarkStore()
+  const { currentTag, currentTagId, tags, setCurrentTagId, getCurrentTag } = useTagStore()
   const { setActiveFilePath, loadFileTree, readArticle, setCurrentArticle, setSkipSyncOnSave, setAiGeneratingFilePath, setAiTerminateFn } = useArticleStore()
   const { setLeftSidebarTab } = useSidebarStore()
   const router = useRouter()
   const [tab, setTab] = useState('0')
   const [genTemplate, setGenTemplate] = useState<GenTemplate[]>([])
+  const [overrideRange, setOverrideRange] = useState<GenTemplateRange | null>(null)
   const [loading, setLoading] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const organizingRef = useRef(false)
   const [isRemoveThinking, setIsRemoveThinking] = useState(true)
-  const t = useTranslations('record.chat.note')
+  const tRoot = useTranslations()
   const tMark = useTranslations('record.mark')
-  const tSetting = useTranslations('settings.template')
 
   async function initGenTemplates() {
     const store = await Store.load('store.json')
@@ -73,7 +164,7 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
 
   // 使用 useMemo 优化过滤的记录
   const marksByRange = useMemo(() => {
-    const range = genTemplate.find(item => item.id === tab)?.range
+    const range = overrideRange || genTemplate.find(item => item.id === tab)?.range
     let subtractDate: Dayjs
     switch (range) {
       case GenTemplateRange.All:
@@ -99,23 +190,30 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
         break
     }
     return marks.filter(item => dayjs(item.createdAt).isAfter(subtractDate))
-  }, [marks, genTemplate, tab])
-
-  // 使用 useMemo 优化分类记录
-  const categorizedMarks = useMemo(() => {
-    return {
-      scanMarks: marksByRange.filter(item => item.type === 'scan'),
-      textMarks: marksByRange.filter(item => item.type === 'text'),
-      imageMarks: marksByRange.filter(item => item.type === 'image'),
-      linkMarks: marksByRange.filter(item => item.type === 'link'),
-      fileMarks: marksByRange.filter(item => item.type === 'file')
-    }
-  }, [marksByRange])
+  }, [marks, genTemplate, tab, overrideRange])
 
   // 使用 useMemo 优化选中的模板
   const selectedTemplate = useMemo(() => {
     return genTemplate.find(item => item.id === tab) || genTemplate[0]
   }, [genTemplate, tab])
+
+  const selectedRange = overrideRange || selectedTemplate?.range || GenTemplateRange.All
+  const selectedRangeLabel = getTemplateRangeLabel(selectedRange, tRoot)
+  const selectedTagName = currentTag?.name || tags.find(tag => tag.id === currentTagId)?.name || '-'
+
+  const organizeSourceMarks = useMemo(() => {
+    if (isMultiSelectMode && selectedMarkIds.size > 0) {
+      return marksByRange.filter(item => selectedMarkIds.has(item.id))
+    }
+
+    return marksByRange
+  }, [isMultiSelectMode, marksByRange, selectedMarkIds])
+
+  const organizePreviewStats = useMemo(() => {
+    const included = Math.min(organizeSourceMarks.length, MAX_RECORDS_PER_ORGANIZE)
+    const excluded = Math.max(0, organizeSourceMarks.length - included)
+    return { included, excluded, total: organizeSourceMarks.length }
+  }, [organizeSourceMarks.length])
 
   const terminateGeneration = useCallback(() => {
     if (abortControllerRef.current) {
@@ -135,7 +233,25 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
       return
     }
 
-    if (!primaryModel) return
+    if (!primaryModel) {
+      toast({
+        title: '无法开始整理',
+        description: '请先在设置中配置主模型。',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (organizePreviewStats.included === 0) {
+      toast({
+        title: '没有可整理的记录',
+        description: isMultiSelectMode && selectedMarkIds.size > 0
+          ? '当前选中的记录为空，请先勾选要整理的记录。'
+          : '当前模板的时间范围内没有记录，请切换模板或调整记录范围。',
+        variant: 'destructive',
+      })
+      return
+    }
 
     organizingRef.current = true
     setOpen(false)
@@ -170,7 +286,7 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
       const latestMarks = useMarkStore.getState().marks
 
       // Calculate marksByRange with latest marks
-      const range = selectedTemplate?.range
+      const range = selectedRange
       let subtractDate: Dayjs
       switch (range) {
         case GenTemplateRange.All:
@@ -197,68 +313,18 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
       }
       const marksByRange = latestMarks.filter(item => dayjs(item.createdAt).isAfter(subtractDate))
 
-      // Calculate categorizedMarks with latest marks
-      const categorizedMarks = {
-        scanMarks: marksByRange.filter(item => item.type === 'scan'),
-        textMarks: marksByRange.filter(item => item.type === 'text'),
-        imageMarks: marksByRange.filter(item => item.type === 'image'),
-        linkMarks: marksByRange.filter(item => item.type === 'link'),
-        fileMarks: marksByRange.filter(item => item.type === 'file')
-      }
-
-      // Process image marks
-      const processedImageMarks = await Promise.all(
-        categorizedMarks.imageMarks.map(async (image) => {
-          if (!image.url.includes('http')) {
-            image.url = await convertImage(`/image/${image.url}`)
-          }
-          return image
-        })
-      )
+      const marksForPrompt = organizeSourceMarks.slice(-MAX_RECORDS_PER_ORGANIZE)
 
       const store = await Store.load('store.json')
       const locale = await store.get<string>('locale') || 'zh'
 
-      const request_content = `
-        Here are text fragments recognized by OCR after screenshots:
-        ${categorizedMarks.scanMarks.map((item, index) => `Record ${index + 1}: ${item.content}. Created at ${dayjs(item.createdAt).format('YYYY-MM-DD HH:mm:ss')}`).join(';\n\n')}.
-        Here are text fragments copied and recorded:
-        ${categorizedMarks.textMarks.map((item, index) => `Record ${index + 1}: ${item.content}. Created at ${dayjs(item.createdAt).format('YYYY-MM-DD HH:mm:ss')}`).join(';\n\n')}.
-        Here are image record descriptions:
-        ${processedImageMarks.map(item => `
-          Description: ${item.content},
-          Image URL: ${item.url}
-        `).join(';\n\n')}.
-        Here are link record contents:
-        ${categorizedMarks.linkMarks.map((item, index) => `Link record ${index + 1}:
-          Title: ${item.desc}
-          URL: ${item.url}
-          Content: ${item.content}
-          Created at: ${dayjs(item.createdAt).format('YYYY-MM-DD HH:mm:ss')}`).join(';\n\n')}.
-        Here are file record descriptions:
-        ${categorizedMarks.fileMarks.map(item => `
-          Content: ${item.content},
-        `).join(';\n\n')}.
-        ---
-        ${inputValue ? 'Requirements: '+inputValue : ''}
-        If the record content is empty, return that there is no record information in this organization.
-        Format requirements:
-        - Use ${locale} language for the output.
-        - Use Markdown syntax.
-        - Ensure there is a level 1 heading (H1).
-        - The note order may be incorrect, arrange them in the correct order.
-        - If there are link records, place them as reference links at the end of the article in the following format:
-          ## References
-          1. [Title1](Link1)
-          2. [Title2](Link2)
-
-        ${
-          processedImageMarks.length > 0 ?
-          '- If there are image records, place the image links in appropriate positions in the note based on the image descriptions. The image URLs contain uuid, please return them completely, and add a brief description for each image.'
-          : ''
-        }
-        ${selectedTemplate?.content}
-      `
+      const request_content = buildOrganizePrompt({
+        marks: marksForPrompt,
+        template: selectedTemplate,
+        locale,
+        inputValue,
+        removeThinking: isRemoveThinking,
+      })
 
       // Emit AI streaming start event with target file path
       emitter.emit('editor-ai-streaming', {
@@ -288,6 +354,8 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
 
       let fullContent = ''
       let streamFinished = false
+      let lastEditorUpdateAt = 0
+      let lastFileWriteAt = 0
       await fetchAiStream(request_content, async (content) => {
         // Check if user switched to a different file - stop writing if so
         const currentActivePath = useArticleStore.getState().activeFilePath
@@ -296,17 +364,26 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
         }
 
         fullContent = content
-        // Update editor content in real-time without reloading file
-        setCurrentArticle(content)
-        emitter.emit('external-content-update', content)
-        // Also write to file
-        if (workspace.isCustom) {
-          await writeTextFile(pathOptions.path, content)
-        } else {
-          await writeTextFile(pathOptions.path, content, { baseDir: pathOptions.baseDir })
+        const now = Date.now()
+
+        if (now - lastEditorUpdateAt >= STREAM_EDITOR_UPDATE_INTERVAL_MS) {
+          setCurrentArticle(content)
+          emitter.emit('external-content-update', content)
+          lastEditorUpdateAt = now
+        }
+
+        if (now - lastFileWriteAt >= STREAM_FILE_WRITE_INTERVAL_MS) {
+          if (workspace.isCustom) {
+            await writeTextFile(pathOptions.path, content)
+          } else {
+            await writeTextFile(pathOptions.path, content, { baseDir: pathOptions.baseDir })
+          }
+          lastFileWriteAt = now
         }
       }, signal)
       streamFinished = true
+      setCurrentArticle(fullContent)
+      emitter.emit('external-content-update', fullContent)
 
       // Re-enable sync after AI generation
       setSkipSyncOnSave(false)
@@ -413,7 +490,29 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
         targetFilePath: filePath
       })
     }
-  }, [primaryModel, categorizedMarks, selectedTemplate, inputValue, fetchMarks, loadFileTree, setActiveFilePath, setLeftSidebarTab, setCurrentArticle, readArticle, tMark, loading])
+  }, [
+    primaryModel,
+    selectedTemplate,
+    selectedRange,
+    inputValue,
+    fetchMarks,
+    loadFileTree,
+    setActiveFilePath,
+    setLeftSidebarTab,
+    setCurrentArticle,
+    readArticle,
+    tMark,
+    loading,
+    isRemoveThinking,
+    setSkipSyncOnSave,
+    setAiGeneratingFilePath,
+    setAiTerminateFn,
+    terminateGeneration,
+    organizePreviewStats.included,
+    organizeSourceMarks,
+    isMultiSelectMode,
+    selectedMarkIds.size,
+  ])
 
   useImperativeHandle(ref, () => ({
     openOrganize
@@ -446,14 +545,21 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
   }, [open, loading, terminateGeneration])
 
   const handleSetting = useCallback(() => {
+    setOpen(false)
     router.push('/core/setting/template')
   }, [router])
+
+  const handleSelectTag = useCallback(async (tagId: number) => {
+    await setCurrentTagId(tagId)
+    getCurrentTag()
+    await fetchMarks()
+  }, [fetchMarks, getCurrentTag, setCurrentTagId])
 
   return (
     <AlertDialog onOpenChange={setOpen} open={open}>
       <AlertDialogContent onKeyDown={handleDialogKeyDown}>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t('organizeAs')}</AlertDialogTitle>
+          <AlertDialogTitle>AI 整理成笔记</AlertDialogTitle>
           <ScrollArea className="h-auto max-h-28">
             <Tabs value={tab} onValueChange={setTab}>
               <TabsList>
@@ -465,13 +571,63 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
           </ScrollArea>
         </AlertDialogHeader>
         <div className="flex flex-col gap-4">
+          {!primaryModel ? (
+            <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+              <AlertTriangle className="size-3.5 shrink-0" />
+              请先在设置中配置主模型，否则无法调用 AI 整理。
+            </div>
+          ) : null}
           <div className="space-y-1">
-            <div className="flex items-center justify-between mb-2">
-              <Label htmlFor="name">{t('templateContent')}</Label>
-              <div className="flex items-center gap-2">
-                <Label className="text-muted-foreground">{tMark('toolbar.currentTag')}: {currentTag?.name || '-'}</Label>
-                  <Label>{t('recordRange')}: {selectedTemplate?.range || GenTemplateRange.All}</Label>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <Label htmlFor="name">模板内容</Label>
+              <div className="flex min-w-0 items-center gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-7 max-w-36 justify-between gap-1 px-2 text-xs">
+                      <span className="truncate">标签：{selectedTagName}</span>
+                      <ChevronDown className="size-3 shrink-0" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="max-h-64 min-w-40 overflow-y-auto">
+                    {tags.map(tag => (
+                      <DropdownMenuItem
+                        key={tag.id}
+                        onClick={() => void handleSelectTag(tag.id)}
+                        className={tag.id === currentTagId ? 'bg-accent text-accent-foreground' : undefined}
+                      >
+                        {tag.name}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-7 justify-between gap-1 px-2 text-xs">
+                      <span>范围：{selectedRangeLabel}</span>
+                      <ChevronDown className="size-3 shrink-0" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-32">
+                    {getTemplateRangeOptions(tRoot).map(option => (
+                      <DropdownMenuItem
+                        key={option.value}
+                        onClick={() => setOverrideRange(option.value)}
+                        className={option.value === selectedRange ? 'bg-accent text-accent-foreground' : undefined}
+                      >
+                        {option.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
+            </div>
+            <div className="mb-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+              <span className="rounded-md border border-border px-2 py-1">
+                数据来源：{isMultiSelectMode && selectedMarkIds.size > 0 ? '已选记录' : '当前范围'}
+              </span>
+              <span className="rounded-md border border-border px-2 py-1">
+                送入 AI：{organizePreviewStats.included} 条{organizePreviewStats.excluded > 0 ? `，已省略 ${organizePreviewStats.excluded} 条` : ''}
+              </span>
             </div>
             <ScrollArea className="h-32 w-full p-2 rounded-md border">
               {selectedTemplate?.content ? (
@@ -480,20 +636,20 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
                 </p>
               ) : (
                 <p className="text-xs text-muted-foreground italic">
-                  {tSetting('blankTemplateDesc')}
+                  暂无模板内容
                 </p>
               )}
             </ScrollArea>
           </div>
           <div className="flex items-center gap-2">
             <Checkbox id="remove-thinking" checked={isRemoveThinking} onCheckedChange={(checked) => setIsRemoveThinking(checked === true)} />
-            <Label htmlFor="remove-thinking">{t('filterThinkingContent')}</Label>
+            <Label htmlFor="remove-thinking">移除记录中的思考内容</Label>
           </div>
         </div>
         <AlertDialogFooter>
-          <Button variant={"ghost"} disabled={loading} onClick={handleSetting}>{t('manageTemplate')}</Button>
-          <Button variant={"outline"} onClick={() => setOpen(false)}>{t('cancel')}</Button>
-          <Button onClick={handleOrganize} disabled={!marks || marks.length === 0 || loading}>{t('startOrganize')}</Button>
+          <Button variant={"ghost"} disabled={loading} onClick={handleSetting}>管理模板</Button>
+          <Button variant={"outline"} onClick={() => setOpen(false)}>取消</Button>
+          <Button onClick={handleOrganize} disabled={organizePreviewStats.included === 0 || loading}>开始整理</Button>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

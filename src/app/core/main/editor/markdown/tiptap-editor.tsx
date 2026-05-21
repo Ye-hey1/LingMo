@@ -2855,6 +2855,7 @@ export function TipTapEditor({
       try {
         let { from, to } = editor.state.selection
         let replacementMode: 'range' | 'line' = 'range'
+        const hasExplicitRange = Boolean(range)
 
         // Mode 1: Position-based (use current selection if not specified)
         if (range) {
@@ -2915,15 +2916,34 @@ export function TipTapEditor({
         else if (startLine !== undefined && endLine !== undefined) {
           replacementMode = 'line'
         }
-        // Fallback: use current selection (only if content is provided)
+        // Fallback: use current selection only when it is a real selected range.
         else if (content) {
-          // Don't change from/to, use current selection
+          if (from === to) {
+            resolve({
+              success: false,
+              insertedLength: 0,
+              error: 'Empty editor selection',
+              message: '当前编辑器选区为空，无法替换。请使用 from/to、startLine/endLine 或 searchContent 明确替换范围',
+            })
+            return
+          }
         } else {
           resolve({ success: false, insertedLength: 0, error: '请提供 content、range、searchContent 或 startLine/endLine 参数' })
           return
         }
 
         const newContent = content || ''
+        if (replacementMode === 'range' && from === to) {
+          resolve({
+            success: false,
+            insertedLength: 0,
+            error: 'Empty replacement range',
+            message: hasExplicitRange
+              ? 'replace_editor_content 收到空的 from/to 范围。若要插入内容，请使用 insert_at_cursor'
+              : '当前编辑器选区为空，无法替换。请先获取有效选区或使用行号定位',
+          })
+          return
+        }
 
         // Delete old content and insert new content with markdown parsing
         // Wrap in setTimeout to avoid React lifecycle flushSync conflict
@@ -2949,10 +2969,14 @@ export function TipTapEditor({
           // Increment version after successful replacement
           contentVersionRef.current++
 
+          const replacedLength = replacementMode === 'line' ? 0 : to - from
+
           resolve({
             success: true,
             insertedLength: newContent.length,
-            message: `成功替换 ${to - from} 个字符为 ${newContent.length} 个字符`,
+            message: replacementMode === 'line' && startLine !== undefined && endLine !== undefined
+              ? `成功替换第 ${startLine}-${endLine} 行内容为 ${newContent.length} 个字符`
+              : `成功替换 ${replacedLength} 个字符为 ${newContent.length} 个字符`,
             newCursorPosition: from + newContent.length,
           })
         }, (error) => {

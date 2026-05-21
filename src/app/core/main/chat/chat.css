@@ -232,3 +232,51 @@ pre.hljs {
   border-left-color: hsl(var(--border)) !important;
   color: hsl(var(--muted-foreground)) !important;
 }
+
+.github-project-markdown .markdown-body {
+  max-width: none;
+  background-color: transparent !important;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.github-project-markdown .markdown-body h1:first-child {
+  display: none;
+}
+
+.github-project-markdown .markdown-body h2 {
+  margin-top: 24px !important;
+  padding-bottom: 8px !important;
+  border-bottom-color: hsl(var(--border)) !important;
+  font-size: 18px !important;
+}
+
+.github-project-markdown .markdown-body h2:first-of-type {
+  margin-top: 0 !important;
+}
+
+.github-project-markdown .markdown-body h3 {
+  margin-top: 18px !important;
+  font-size: 15px !important;
+}
+
+.github-project-markdown .markdown-body table {
+  display: table;
+  min-width: 100%;
+  overflow: auto;
+  font-size: 13px;
+}
+
+.github-project-markdown .markdown-body pre {
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.github-project-markdown .markdown-body code {
+  font-size: 13px;
+}
+
+.github-project-markdown .markdown-body ul {
+  padding-left: 1.25rem;
+}

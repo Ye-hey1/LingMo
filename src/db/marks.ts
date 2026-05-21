@@ -1,6 +1,6 @@
 import { getDb, serializedWrite } from './index'
 import { BaseDirectory, exists, mkdir, remove } from '@tauri-apps/plugin-fs'
-import { insertActivityEvent } from './activity'
+import { insertActivityEventWithDb } from './activity'
 import { truncateActivityText } from '@/lib/activity/events'
 
 export const TRASH_RETENTION_DAYS = 14
@@ -139,26 +139,26 @@ export async function getMarks(id: number) {
 
 export async function insertMark(mark: Partial<Mark>) {
   const createdAt = Date.now()
-  const result = await serializedWrite(async () => {
+  return await serializedWrite(async () => {
     const db = await getDb()
-    return await db.execute(
+    const result = await db.execute(
       'insert into marks (tagId, type, content, url, desc, createdAt, deleted, processed, processedAt) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
       [mark.tagId, mark.type, mark.content, mark.url, mark.desc, createdAt, 0, mark.processed ?? 0, mark.processedAt ?? null],
     )
+
+    const preview = truncateActivityText(mark.desc || mark.content || mark.url || '', 140)
+
+    await insertActivityEventWithDb(db, {
+      source: 'record',
+      title: preview || mark.type || 'record',
+      description: preview || mark.type || '',
+      tagId: mark.tagId ?? null,
+      dedupeKey: result.lastInsertId ? `record:${result.lastInsertId}` : `record:${createdAt}:${mark.type || 'record'}`,
+      createdAt,
+    })
+
+    return result
   })
-
-  const preview = truncateActivityText(mark.desc || mark.content || mark.url || '', 140)
-
-  await insertActivityEvent({
-    source: 'record',
-    title: preview || mark.type || 'record',
-    description: preview || mark.type || '',
-    tagId: mark.tagId ?? null,
-    dedupeKey: result.lastInsertId ? `record:${result.lastInsertId}` : `record:${createdAt}:${mark.type || 'record'}`,
-    createdAt,
-  })
-
-  return result
 }
 
 export async function getAllMarks() {

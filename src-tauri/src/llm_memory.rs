@@ -1766,6 +1766,22 @@ fn resolve_lingmo_db_path(
     Ok(app_data_dir.join("note.db"))
 }
 
+fn open_lingmo_db(db_path: &Path) -> Result<rusqlite::Connection, String> {
+    let conn = rusqlite::Connection::open(db_path)
+        .map_err(|error| format!("Failed to open LingMo database: {error}"))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|error| format!("Failed to set LingMo database busy timeout: {error}"))?;
+    let journal_mode: String = conn
+        .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
+        .map_err(|error| format!("Failed to enable LingMo WAL mode: {error}"))?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Err(format!("Failed to enable LingMo WAL mode: got {journal_mode}"));
+    }
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(|error| format!("Failed to set LingMo synchronous mode: {error}"))?;
+    Ok(conn)
+}
+
 fn list_lingmo_sessions(
     app: &AppHandle,
     query: &str,
@@ -1781,8 +1797,7 @@ fn list_lingmo_sessions(
         });
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|error| format!("Failed to open LingMo database: {error}"))?;
+    let conn = open_lingmo_db(&db_path)?;
 
     let needle = query.trim().to_lowercase();
     let mut items = Vec::new();
@@ -1853,8 +1868,7 @@ fn get_lingmo_session_detail(
         return Ok(cached);
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|error| format!("Failed to open LingMo database: {error}"))?;
+    let conn = open_lingmo_db(&db_path)?;
 
     let conversation_id: i64 = session_key
         .parse()
@@ -1949,8 +1963,7 @@ fn update_lingmo_message(
         ));
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|error| format!("Failed to open LingMo database: {error}"))?;
+    let conn = open_lingmo_db(&db_path)?;
 
     let chat_id: i64 = if let Some(pos) = edit_target.rfind("::") {
         edit_target[pos + 2..]
@@ -2004,8 +2017,7 @@ fn delete_lingmo_message(
         ));
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|error| format!("Failed to open LingMo database: {error}"))?;
+    let conn = open_lingmo_db(&db_path)?;
 
     let chat_id: i64 = if let Some(pos) = edit_target.rfind("::") {
         edit_target[pos + 2..]
@@ -2057,8 +2069,7 @@ fn delete_lingmo_session(
         ));
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|error| format!("Failed to open LingMo database: {error}"))?;
+    let conn = open_lingmo_db(&db_path)?;
 
     let conversation_id: i64 = session_key
         .parse()

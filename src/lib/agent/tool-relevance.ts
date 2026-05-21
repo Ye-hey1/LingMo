@@ -54,6 +54,7 @@ const TOOL_KEYWORD_MAP: Record<string, string[]> = {
 
   // 活动
   get_activity_summary: ['活动', '统计', '今天', 'activity', 'summary', 'today'],
+  list_agent_run_summaries: ['历史', '上次', '失败', '继续', 'agent', 'run', 'summary', 'history', 'previous'],
 
   // 知识图谱
   get_connected_notes: ['关联', '相关笔记', '链接', 'connected', 'related', 'linked'],

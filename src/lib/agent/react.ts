@@ -785,19 +785,21 @@ export class ReActAgent {
       ? '- Current request web access: ENABLED. Use `web_search` for current external facts, `web_extract` for readable page bodies, and `web_fetch` only when you need raw page contents from a specific URL.'
       : '- Current request web access: DISABLED. Do not call `web_search`, `web_extract`, `web_fetch`, or other web tools; if current web data is required, ask the user to enable the web-search button in the chat input.'
 
-    // Load user memories — only on first iteration, cache for subsequent iterations
+    // Load unified memory/graph context — only on first iteration, cache for subsequent iterations
     let memoryPrompt = ''
     if (this.currentIteration <= 1) {
       try {
-        const { contextLoader } = await import('@/lib/context/loader')
-        const memoryContext = await contextLoader.getContextForQuery(this.currentUserInput)
-        if (memoryContext.preferences.length > 0 || memoryContext.memory.length > 0) {
-          memoryPrompt = contextLoader.formatMemoriesForPrompt(memoryContext)
-          // 缓存记忆 prompt，后续迭代直接复用
+        const { unifiedContextLoader } = await import('@/lib/context/unified-loader')
+        const activeFilePath = useArticleStore.getState().activeFilePath || this.config.currentQuote?.fileName
+        const unifiedContext = await unifiedContextLoader.getContextForAgent(this.currentUserInput, {
+          activeFilePath,
+        })
+        if (unifiedContext.prompt.trim()) {
+          memoryPrompt = unifiedContext.prompt
           this._cachedMemoryPrompt = memoryPrompt
         }
       } catch (error) {
-        console.error('[Agent] Failed to load memories:', error)
+        console.error('[Agent] Failed to load unified context:', error)
       }
     } else {
       memoryPrompt = this._cachedMemoryPrompt || ''
@@ -865,22 +867,8 @@ Now start executing the task!`
     // Assemble: header + dynamic memory + static cached body + dynamic skills/plan/web
     let prompt = `You are an efficient AI agent that uses tools to help users complete tasks. Follow the ReAct framework: Thought → Action → Observation.
 
-${memoryPrompt ? `## User Memories\n\n${memoryPrompt}\n` : ''}
+${memoryPrompt ? `## Unified Context\n\n${memoryPrompt}\n` : ''}
 ${this.cachedStaticPrompt}`
-
-    // Dynamic: Agent working memory (cross-session context) — only first iteration
-    if (this.currentIteration <= 1) {
-      try {
-        const { loadWorkingMemory, formatWorkingMemoryForPrompt } = await import('./working-memory')
-        const workingMemory = await loadWorkingMemory()
-        const workingMemoryPrompt = formatWorkingMemoryForPrompt(workingMemory)
-        if (workingMemoryPrompt) {
-          prompt += `\n\n${workingMemoryPrompt}`
-        }
-      } catch {
-        // Working memory is non-critical
-      }
-    }
 
     // Dynamic: Skills instructions
     if (skillsInstructions) {
@@ -1610,6 +1598,9 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
       if (this.stopped) {
         throw new Error('USER_STOPPED')
       }
+
+      const { compressToolResult } = await import('./tool-result-compression')
+      result = compressToolResult(tool, result)
 
       toolCall.status = result.success ? 'success' : 'error'
       toolCall.result = result

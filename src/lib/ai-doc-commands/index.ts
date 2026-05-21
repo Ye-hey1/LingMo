@@ -6,6 +6,7 @@ import {
   Link2,
   WalletCards,
   AlignLeft,
+  BrainCircuit,
   GitBranch,
   type LucideIcon,
 } from 'lucide-react'
@@ -30,6 +31,7 @@ export type AiDocCommandId =
   | 'high-value-conversations'
   | 'discover-connections'
   | 'generate-flashcards'
+  | 'feynman-socratic'
   | 'note-summary'
   | 'note-to-mindmap'
   | 'auto-wikilink'
@@ -57,6 +59,8 @@ export interface AiDocCommand {
   description: string
   icon: LucideIcon
   searchTerms: string[]
+  /** 默认 chat；需要本地工具、文件写入或编辑器修改的命令必须在 agent 模式执行 */
+  executionMode?: 'chat' | 'agent'
   buildExecution: (data: ActivityCalendarData) => Promise<AiDocCommandExecution>
 }
 
@@ -203,6 +207,7 @@ export const AI_DOC_COMMANDS: AiDocCommand[] = [
     title: '沉淀对话',
     description: '将近 30 天的高价值对话整理成笔记（无需 AI）',
     icon: Brain,
+    executionMode: 'agent',
     searchTerms: ['high', 'conversation', '沉淀', '对话', '高价值', 'cd', 'chendian'],
     buildExecution: async (data) => {
       const scopeDays = getDefaultScopeDays(data)
@@ -237,6 +242,7 @@ export const AI_DOC_COMMANDS: AiDocCommand[] = [
     title: '关联发现',
     description: '发现当前笔记与其他笔记的潜在关联',
     icon: Link2,
+    executionMode: 'agent',
     searchTerms: ['关联', '发现', '链接', '相关', 'connection', 'link', 'related', 'discover', 'glfx', 'guanlian'],
     buildExecution: async () => {
       const { activeFilePath, currentArticle } = (await import('@/stores/article')).default.getState()
@@ -293,6 +299,7 @@ ${contentPreview}
     title: '生成闪卡',
     description: '从当前笔记内容自动生成复习闪卡',
     icon: WalletCards,
+    executionMode: 'agent',
     searchTerms: ['闪卡', '卡片', '复习', '记忆', 'flashcard', 'card', 'review', 'memory', 'sk', 'shankapianyuxi'],
     buildExecution: async () => {
       const { activeFilePath, currentArticle } = (await import('@/stores/article')).default.getState()
@@ -339,6 +346,74 @@ ${contentPreview}
         rangeLabel: '当前笔记',
         maxTokens: 1200,
         temperature: 0.4,
+      }
+    },
+  },
+  {
+    id: 'feynman-socratic',
+    title: '费曼追问',
+    description: '用费曼学习法和苏格拉底式追问检测理解',
+    icon: BrainCircuit,
+    searchTerms: ['费曼', '追问', '苏格拉底', '学习', '理解', 'feynman', 'socratic', 'tutor', 'study', 'fm', 'zhuimen'],
+    buildExecution: async () => {
+      const { activeFilePath, currentArticle } = (await import('@/stores/article')).default.getState()
+      const hasNoteContext = Boolean(activeFilePath && !activeFilePath.includes('://') && currentArticle?.trim())
+      const fileName = activeFilePath?.split('/').pop() || '当前主题'
+      const contextPreview = hasNoteContext ? currentArticle.slice(0, 6000) : ''
+
+      return {
+        prompt: `你现在进入“费曼追问”学习教练模式。
+
+角色：
+你是一个苏格拉底式 AI 学习教练，通过费曼学习法帮助用户检测理解。
+
+核心原则：
+- 用户必须先解释。
+- 你不直接讲完整答案。
+- 你通过追问让用户暴露知识漏洞。
+- 你只在用户连续卡住时给最小提示。
+- 每轮只问一个关键问题。
+- 你要识别用户回答中的含糊词、跳步推理、概念混淆、缺少例子、缺少边界条件和错误因果关系。
+
+学习模式：standard。
+如用户要求“快速/quick”，追问 1-3 轮后给结束判断；如用户要求“固执/stubborn”，更严格追问机制、边界、反例和迁移应用。
+
+评分维度：
+1. 概念准确性 25 分
+2. 机制解释 25 分
+3. 例子质量 20 分
+4. 边界与反例 15 分
+5. 表达清晰度 15 分
+
+评分限制：
+- 没有解释机制，最高不超过 70 分。
+- 没有举例，最高不超过 80 分。
+- 概念明显错误，最高不超过 60 分。
+- 只是背定义，最高不超过 65 分。
+- 能举例但解释不了为什么，最高不超过 75 分。
+- 能解释机制但不能说明边界，最高不超过 85 分。
+
+交互格式：
+- 不要输出 JSON。
+- 面向用户输出简洁 Markdown。
+- 每轮按以下结构输出：
+  1. 理解度：N/100（变化：+N/-N/0）
+  2. 当前薄弱点：一句话
+  3. 简短反馈：一句话
+  4. 下一追问：只问一个关键问题
+- 如果用户还没给出解释，你的第一条回复只能要求用户先用自己的话解释主题，不要讲答案。
+- 如果用户连续卡住，只给“最小提示”，不要给完整讲解。
+- 当用户已经能清楚解释概念、机制、例子、边界和反例时，给出“可结束”判断，并生成简短复盘：已掌握、剩余薄弱点、下次练习问题。
+
+${hasNoteContext ? `当前笔记：${fileName}
+以下笔记内容只用于校验用户解释，不要直接复述给用户：
+${contextPreview}` : '当前没有可用笔记上下文。请先询问用户想学习的主题，并要求用户用自己的话解释。'}
+
+现在开始。你的第一条回复必须让用户先解释：如果已有当前笔记，请让用户选择笔记中的一个概念并用自己的话解释；如果没有笔记，请让用户输入主题并解释。`,
+        title: `费曼追问-${fileName}`,
+        rangeLabel: hasNoteContext ? '当前笔记' : '手动主题',
+        maxTokens: 1600,
+        temperature: 0.35,
       }
     },
   },
@@ -401,6 +476,7 @@ ${contentPreview}
     title: '笔记转图',
     description: '将当前笔记内容转为思维导图',
     icon: GitBranch,
+    executionMode: 'agent',
     searchTerms: ['思维导图', '导图', '脑图', 'mindmap', 'mind', 'map', 'diagram', '转图', 'swdt', 'bjzt'],
     buildExecution: async () => {
       const { activeFilePath, currentArticle } = (await import('@/stores/article')).default.getState()
@@ -521,7 +597,7 @@ ${contentForAI}
           maxTokens: 0,
           temperature: 0,
         }
-      } catch (error) {
+      } catch {
         // 直接生成失败，降级到 Agent 模式
         const structureSkeleton = extractNoteSkeleton(currentArticle)
         const contentSection = currentArticle.length > 3000
@@ -553,6 +629,7 @@ ${contentSection}
     title: '双向链接',
     description: '自动发现并建立当前笔记与其他笔记的双向 [[wiki-link]]',
     icon: Link2,
+    executionMode: 'agent',
     searchTerms: ['双向链接', '链接', 'wikilink', 'wiki', 'link', '自动链接', '反向链接', 'backlink', 'sxlj', 'lianjie'],
     buildExecution: async () => {
       const { activeFilePath, currentArticle } = (await import('@/stores/article')).default.getState()
@@ -584,6 +661,9 @@ ${contentSection}
       return {
         prompt: `请为当前笔记"${fileName}"自动建立双向 wiki-link。
 
+这是一个明确的执行型任务，不要先解释“双向链接是什么”，不要做概念介绍，也不要只给建议。
+你必须直接执行工具，并按步骤完成修改。
+
 执行步骤：
 1. 先调用 suggest_links_for_note 工具获取链接建议：
    {"action": "suggest_links_for_note", "action_input": {"filePath": "${activeFilePath}", "maxSuggestions": 12}}
@@ -593,6 +673,7 @@ ${contentSection}
 3. 对于被链接的笔记，如果它们还没有链接回当前笔记，也在它们末尾添加 [[${fileName}]] 的反向链接。
 
 规则：
+- 如果工具返回建议，必须继续调用下一步工具，不要改成讲解模式
 - 只链接确实在笔记中出现的其他笔记名称
 - 不要链接已经是 [[xxx]] 格式的文本（避免重复链接）
 - 每个笔记名只链接第一次出现的位置

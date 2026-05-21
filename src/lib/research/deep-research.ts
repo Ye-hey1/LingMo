@@ -3,7 +3,7 @@ import { mcpServerManager } from '@/lib/mcp/server-manager'
 import type { MCPServerConfig, MCPTool } from '@/lib/mcp/types'
 import { useMcpStore } from '@/stores/mcp'
 import { createOpenAIClient, getAISettings, validateAIService } from '@/lib/ai/utils'
-import { searchWeb } from '@/lib/tavily'
+import { searchWeb, type TavilySearchDepth } from '@/lib/tavily'
 
 type SerpQuery = {
   query: string
@@ -12,6 +12,7 @@ type SerpQuery = {
 
 type ProcessedSerpResult = {
   learnings: string[]
+  evidences: ResearchEvidence[]
   followUpQuestions: string[]
 }
 
@@ -21,6 +22,9 @@ type FirecrawlSearchItem = {
   markdown?: string
   content?: string
   description?: string
+  score?: number
+  publishedDate?: string
+  provider?: string
 }
 
 type FirecrawlBinding = {
@@ -29,7 +33,7 @@ type FirecrawlBinding = {
 }
 
 export type DeepResearchProgress = {
-  stage: 'initializing' | 'planning' | 'searching' | 'analyzing' | 'writing' | 'done'
+  stage: 'initializing' | 'planning' | 'searching' | 'analyzing' | 'verifying' | 'writing' | 'done'
   currentDepth: number
   totalDepth: number
   currentBreadth: number
@@ -39,13 +43,55 @@ export type DeepResearchProgress = {
   totalQueries: number
   learningsCount: number
   visitedUrlsCount: number
+  evidenceCount?: number
+  providerStatus?: string
+  strategy?: ResearchStrategyId
   estimatedMinutes?: string
+}
+
+export type ResearchStrategyId = 'quick' | 'comprehensive' | 'academic' | 'technical' | 'news'
+
+export type ResearchSource = {
+  id: string
+  title: string
+  url: string
+  engine: string
+  snippet?: string
+  publishedAt?: string
+  retrievedAt: string
+  credibilityScore: number
+}
+
+export type ResearchEvidence = {
+  id: string
+  sourceId: string
+  sourceUrl: string
+  claim: string
+  quote?: string
+  relevanceScore: number
+  confidence: 'low' | 'medium' | 'high'
+}
+
+export type ResearchSession = {
+  id: string
+  query: string
+  strategy: ResearchStrategyId
+  startedAt: string
+  completedAt: string
+  searchProviders: string[]
+  sources: ResearchSource[]
+  evidences: ResearchEvidence[]
+  learnings: string[]
+  visitedUrls: string[]
 }
 
 export type DeepResearchResult = {
   report: string
   learnings: string[]
   visitedUrls: string[]
+  sources: ResearchSource[]
+  evidences: ResearchEvidence[]
+  session: ResearchSession
 }
 
 export type ResearchClarification = {
@@ -58,8 +104,89 @@ const DEFAULT_BREADTH = 3
 const DEFAULT_DEPTH = 2
 const MAX_CONTENT_CHARS_PER_ITEM = 10000
 const MAX_LEARNINGS_FOR_REPORT = 60
+const MAX_EVIDENCES_FOR_REPORT = 80
 const MAX_PARALLEL_SEARCHES = 3
 const ASK_JSON_MAX_RETRIES = 2
+
+type ResearchStrategyConfig = {
+  id: ResearchStrategyId
+  label: string
+  breadth: number
+  depth: number
+  maxResults: number
+  searchDepth: TavilySearchDepth
+  queryHint: string
+  reportFocus: string
+  includeDomains?: string[]
+}
+
+type ResearchSearchProvider = {
+  name: string
+  search: (query: string, options: {
+    maxResults: number
+    searchDepth: TavilySearchDepth
+    includeDomains?: string[]
+    abortSignal?: AbortSignal
+  }) => Promise<FirecrawlSearchItem[]>
+}
+
+type SearchHit = FirecrawlSearchItem & {
+  sourceId: string
+}
+
+const STRATEGY_CONFIGS: Record<ResearchStrategyId, ResearchStrategyConfig> = {
+  quick: {
+    id: 'quick',
+    label: '快速概览',
+    breadth: 2,
+    depth: 1,
+    maxResults: 4,
+    searchDepth: 'basic',
+    queryHint: 'Prioritize concise overview sources and direct answers.',
+    reportFocus: '给出简明结论、关键事实和必要来源。',
+  },
+  comprehensive: {
+    id: 'comprehensive',
+    label: '综合研究',
+    breadth: 4,
+    depth: 3,
+    maxResults: 6,
+    searchDepth: 'advanced',
+    queryHint: 'Cover definitions, current state, comparisons, risks, and practical implications.',
+    reportFocus: '覆盖背景、证据、分歧、结论、局限和下一步建议。',
+  },
+  academic: {
+    id: 'academic',
+    label: '学术研究',
+    breadth: 4,
+    depth: 3,
+    maxResults: 6,
+    searchDepth: 'advanced',
+    queryHint: 'Prefer papers, reviews, datasets, benchmarks, and reputable academic sources.',
+    reportFocus: '强调方法、证据等级、研究局限、可复现实验和文献来源。',
+    includeDomains: ['arxiv.org', 'pubmed.ncbi.nlm.nih.gov', 'nature.com', 'science.org', 'acm.org', 'ieee.org', 'semanticscholar.org'],
+  },
+  technical: {
+    id: 'technical',
+    label: '技术调研',
+    breadth: 4,
+    depth: 2,
+    maxResults: 6,
+    searchDepth: 'advanced',
+    queryHint: 'Prefer official documentation, source repositories, release notes, issues, and implementation examples.',
+    reportFocus: '强调架构、实现路径、依赖、兼容性、风险和可落地改造点。',
+  },
+  news: {
+    id: 'news',
+    label: '最新动态',
+    breadth: 4,
+    depth: 2,
+    maxResults: 6,
+    searchDepth: 'advanced',
+    queryHint: 'Prioritize recent sources, dates, primary announcements, and independent confirmation.',
+    reportFocus: '强调时间线、最新状态、来源发布时间和未确认信息。',
+  },
+}
 
 function clampInteger(value: number | undefined, fallback: number, min: number, max: number) {
   if (!Number.isFinite(value)) {
@@ -103,6 +230,140 @@ function extractJsonObject(text: string): Record<string, any> | null {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.map(value => value.trim()).filter(Boolean))]
+}
+
+function createResearchId() {
+  return `research-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function normalizeUrl(url: string) {
+  try {
+    const parsed = new URL(url.trim())
+    parsed.hash = ''
+    parsed.searchParams.delete('utm_source')
+    parsed.searchParams.delete('utm_medium')
+    parsed.searchParams.delete('utm_campaign')
+    parsed.searchParams.delete('utm_term')
+    parsed.searchParams.delete('utm_content')
+    return parsed.toString().replace(/\/$/, '')
+  } catch {
+    return url.trim()
+  }
+}
+
+function hostFromUrl(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function clampScore(value: unknown, fallback: number) {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed)) {
+    return fallback
+  }
+  return Math.min(1, Math.max(0, parsed))
+}
+
+function estimateSourceCredibility(item: FirecrawlSearchItem) {
+  const host = hostFromUrl(item.url || '')
+  let score = 0.55
+
+  if (/\.(gov|edu)$/i.test(host) || host.includes('arxiv.org') || host.includes('pubmed') || host.includes('github.com')) {
+    score += 0.22
+  }
+  if (/(docs|developer|learn|support|help|official)/i.test(host) || /(official|documentation|release notes)/i.test(item.title || '')) {
+    score += 0.12
+  }
+  if (item.publishedDate) {
+    score += 0.05
+  }
+  if (typeof item.score === 'number') {
+    score = (score + clampScore(item.score, score)) / 2
+  }
+
+  return clampScore(score, 0.55)
+}
+
+function buildSourceFromItem(item: FirecrawlSearchItem, engine: string, fallbackIndex: number): ResearchSource | null {
+  const url = normalizeUrl(item.url || '')
+  if (!url) {
+    return null
+  }
+
+  const title = item.title?.trim() || hostFromUrl(url) || `Source ${fallbackIndex}`
+  const snippet = (item.description || item.content || item.markdown || '').replace(/\r\n/g, '\n').trim()
+  return {
+    id: `S${fallbackIndex}`,
+    title,
+    url,
+    engine,
+    snippet: snippet ? trimText(snippet, 1200) : undefined,
+    publishedAt: item.publishedDate,
+    retrievedAt: new Date().toISOString(),
+    credibilityScore: estimateSourceCredibility(item),
+  }
+}
+
+function formatSourceForPrompt(source: ResearchSource, item: FirecrawlSearchItem, index: number) {
+  const body = item.markdown || item.content || item.description || ''
+  return [
+    `<source index="${index}" id="${source.id}">`,
+    `Title: ${source.title}`,
+    `URL: ${source.url}`,
+    `Engine: ${source.engine}`,
+    source.publishedAt ? `Published: ${source.publishedAt}` : '',
+    `Credibility: ${source.credibilityScore.toFixed(2)}`,
+    trimText(body, MAX_CONTENT_CHARS_PER_ITEM),
+    '</source>',
+  ].filter(Boolean).join('\n')
+}
+
+function mergeSources(existing: ResearchSource[], incoming: ResearchSource[]) {
+  const byUrl = new Map(existing.map(source => [normalizeUrl(source.url), source]))
+  for (const source of incoming) {
+    const key = normalizeUrl(source.url)
+    const previous = byUrl.get(key)
+    if (!previous) {
+      byUrl.set(key, source)
+      continue
+    }
+    previous.credibilityScore = Math.max(previous.credibilityScore, source.credibilityScore)
+    previous.snippet = previous.snippet || source.snippet
+    previous.publishedAt = previous.publishedAt || source.publishedAt
+    previous.engine = uniqueStrings(`${previous.engine},${source.engine}`.split(',')).join(',')
+  }
+
+  return [...byUrl.values()].map((source, index) => ({
+    ...source,
+    id: `S${index + 1}`,
+  }))
+}
+
+function remapEvidenceSources(evidences: ResearchEvidence[], sources: ResearchSource[]) {
+  const byUrl = new Map(sources.map(source => [normalizeUrl(source.url), source]))
+
+  return evidences
+    .filter(evidence => evidence.claim.trim())
+    .map((evidence) => {
+      const source = byUrl.get(normalizeUrl(evidence.sourceUrl))
+      if (!source) {
+        return null
+      }
+      return {
+        ...evidence,
+        sourceId: source.id,
+        sourceUrl: source.url,
+        relevanceScore: clampScore(evidence.relevanceScore, 0.6),
+      }
+    })
+    .filter((evidence): evidence is ResearchEvidence => !!evidence)
+    .map((evidence, index) => ({
+      ...evidence,
+      id: `E${index + 1}`,
+    }))
 }
 
 function trimText(text: string, limit: number) {
@@ -162,7 +423,88 @@ function tavilyResultToSearchItems(results: Awaited<ReturnType<typeof searchWeb>
     url: result.url,
     markdown: result.content,
     content: result.content,
+    score: result.score,
+    publishedDate: result.publishedDate,
+    provider: 'tavily',
   }))
+}
+
+function createTavilyProvider(): ResearchSearchProvider {
+  return {
+    name: 'tavily',
+    async search(query, options) {
+      const response = await searchWeb({
+        query,
+        maxResults: options.maxResults,
+        searchDepth: options.searchDepth,
+        includeAnswer: true,
+        includeDomains: options.includeDomains,
+        signal: options.abortSignal,
+      })
+
+      return tavilyResultToSearchItems(response.results).map(item => ({
+        ...item,
+        provider: response.provider,
+      }))
+    },
+  }
+}
+
+function createFirecrawlProvider(binding: FirecrawlBinding): ResearchSearchProvider {
+  return {
+    name: `firecrawl:${binding.server.name || binding.server.id}`,
+    async search(query) {
+      const searchTimeout = 20000
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Firecrawl search timeout (20s)')), searchTimeout)
+      })
+
+      const result = await Promise.race([
+        mcpServerManager.callTool(
+          binding.server.id,
+          binding.searchTool.name,
+          buildSearchArgs(binding.searchTool, query)
+        ),
+        timeoutPromise,
+      ]).finally(() => {
+        clearTimeout(timer)
+      })
+
+      if (!result) {
+        throw new Error('Firecrawl MCP returned an empty response.')
+      }
+      if (result.isError) {
+        throw new Error(getTextContent(result) || `Firecrawl search failed for ${query}`)
+      }
+
+      const items = parseSearchItems(getTextContent(result))
+      if (items.length === 0) {
+        throw new Error('Firecrawl MCP response did not contain parseable search results.')
+      }
+
+      return items.map(item => ({
+        ...item,
+        provider: 'firecrawl',
+      }))
+    },
+  }
+}
+
+async function buildSearchProviders(): Promise<ResearchSearchProvider[]> {
+  const providers: ResearchSearchProvider[] = []
+
+  try {
+    const binding = await findFirecrawlBinding({ optional: true })
+    if (binding) {
+      providers.push(createFirecrawlProvider(binding))
+    }
+  } catch (error) {
+    console.warn('[DeepResearch] Firecrawl provider unavailable:', error)
+  }
+
+  providers.push(createTavilyProvider())
+  return providers
 }
 
 function buildSearchArgs(tool: MCPTool, query: string) {
@@ -202,7 +544,7 @@ async function ensureMcpInitialized() {
   }
 }
 
-async function findFirecrawlBinding(): Promise<FirecrawlBinding> {
+async function findFirecrawlBinding(options: { optional?: boolean } = {}): Promise<FirecrawlBinding | null> {
   await ensureMcpInitialized()
   const store = useMcpStore.getState()
 
@@ -222,6 +564,10 @@ async function findFirecrawlBinding(): Promise<FirecrawlBinding> {
     if (searchTool) {
       return { server, searchTool }
     }
+  }
+
+  if (options.optional) {
+    return null
   }
 
   throw new Error('未找到可用的 Firecrawl MCP 搜索工具。请在 MCP 设置中启用 firecrawl-mcp，并确认它能正常连接。')
@@ -391,10 +737,32 @@ export async function completeResearchClarification(params: {
   }
 }
 
+async function classifyResearchIntent(params: {
+  query: string
+  abortSignal?: AbortSignal
+}): Promise<ResearchStrategyId> {
+  const parsed = await askJson([
+    'Classify this deep research task into exactly one strategy.',
+    'Return strict JSON: {"strategy":"quick|comprehensive|academic|technical|news"}',
+    'Guidance:',
+    '- academic: papers, experiments, methods, clinical/scientific literature, datasets, benchmarks.',
+    '- technical: programming, architecture, open-source projects, APIs, product implementation.',
+    '- news: latest/current events, policies, companies, prices, releases, market changes.',
+    '- quick: user asks for a short overview or simple comparison.',
+    '- comprehensive: broad analysis, market research, decision support, or unclear depth.',
+    '',
+    `<user_query>${params.query}</user_query>`,
+  ].join('\n'), params.abortSignal)
+
+  const strategy = typeof parsed?.strategy === 'string' ? parsed.strategy : ''
+  return strategy in STRATEGY_CONFIGS ? strategy as ResearchStrategyId : 'comprehensive'
+}
+
 async function generateSerpQueries(params: {
   query: string
   breadth: number
   learnings: string[]
+  strategy: ResearchStrategyConfig
   abortSignal?: AbortSignal
 }): Promise<SerpQuery[]> {
   const originalTopic = params.query.split('\n').find(line => line.trim())?.trim() || params.query.trim()
@@ -405,6 +773,7 @@ async function generateSerpQueries(params: {
     '- Every query must be directly about the user prompt or a specific subtopic from previous learnings.',
     '- Do not invent unrelated example topics.',
     '- Include the core nouns/entities from the user prompt whenever possible.',
+    `- Strategy: ${params.strategy.label}. ${params.strategy.queryHint}`,
     '- If the prompt is already clear, produce fewer focused queries.',
     'Each researchGoal should explain what this query should verify and what deeper direction it may open.',
     '',
@@ -433,108 +802,130 @@ async function generateSerpQueries(params: {
 
 async function processSerpResult(params: {
   query: string
-  items: FirecrawlSearchItem[]
+  items: SearchHit[]
+  sources: ResearchSource[]
   followUpCount: number
   abortSignal?: AbortSignal
 }): Promise<ProcessedSerpResult> {
   const contents = params.items
     .map((item, index) => {
-      const body = item.markdown || item.content || item.description || ''
-      return [
-        `<content index="${index + 1}">`,
-        item.title ? `Title: ${item.title}` : '',
-        item.url ? `URL: ${item.url}` : '',
-        trimText(body, MAX_CONTENT_CHARS_PER_ITEM),
-        '</content>',
-      ].filter(Boolean).join('\n')
+      const source = params.sources.find(source => source.id === item.sourceId)
+      return source ? formatSourceForPrompt(source, item, index + 1) : ''
     })
+    .filter(Boolean)
     .join('\n\n')
 
   if (!contents.trim()) {
-    return { learnings: [], followUpQuestions: [] }
+    return { learnings: [], evidences: [], followUpQuestions: [] }
   }
 
   const parsed = await askJson([
-    `Extract up to 4 unique learnings from SERP results for query: ${params.query}`,
+    `Extract up to 4 unique learnings and up to 6 evidence claims from SERP results for query: ${params.query}`,
     `Also generate up to ${params.followUpCount} follow-up research questions.`,
-    'Return JSON: {"learnings":["..."],"followUpQuestions":["..."]}',
+    'Return JSON: {"learnings":["..."],"evidences":[{"sourceId":"S1","claim":"...","quote":"...","relevanceScore":0.8,"confidence":"high"}],"followUpQuestions":["..."]}',
     'Learnings must be concise, information dense, and include exact names, numbers, dates, and URLs when present.',
+    'Evidence claims must stay grounded in one sourceId from the provided sources. Use confidence=low when the source is weak or only partially supports the claim.',
     '',
     contents,
   ].join('\n'), params.abortSignal)
+
+  const sourceById = new Map(params.sources.map(source => [source.id, source]))
+  const evidences = Array.isArray(parsed?.evidences)
+    ? parsed.evidences
+      .map((item: unknown) => {
+        const value = item as Partial<ResearchEvidence>
+        const sourceId = typeof value.sourceId === 'string' ? value.sourceId.trim() : ''
+        const source = sourceById.get(sourceId)
+        const confidence = value.confidence === 'high' || value.confidence === 'medium' || value.confidence === 'low'
+          ? value.confidence
+          : 'medium'
+
+        return {
+          id: '',
+          sourceId,
+          sourceUrl: source?.url || '',
+          claim: typeof value.claim === 'string' ? value.claim.trim() : '',
+          quote: typeof value.quote === 'string' ? trimText(value.quote, 600) : undefined,
+          relevanceScore: clampScore(value.relevanceScore, 0.65),
+          confidence,
+        } satisfies ResearchEvidence
+      })
+      .filter(item => item.claim && item.sourceUrl)
+    : []
 
   return {
     learnings: Array.isArray(parsed?.learnings)
       ? parsed.learnings.map(String).filter(Boolean)
       : [],
+    evidences,
     followUpQuestions: Array.isArray(parsed?.followUpQuestions)
       ? parsed.followUpQuestions.map(String).filter(Boolean)
       : [],
   }
 }
 
-async function runSearch(binding: FirecrawlBinding, query: string) {
-  const searchTimeout = 20000 // 20 秒超时
+async function runSearch(params: {
+  providers: ResearchSearchProvider[]
+  query: string
+  strategy: ResearchStrategyConfig
+  abortSignal?: AbortSignal
+}): Promise<FirecrawlSearchItem[]> {
+  const execute = (includeDomains?: string[]) => Promise.allSettled(
+    params.providers.map(provider =>
+      provider.search(params.query, {
+        maxResults: params.strategy.maxResults,
+        searchDepth: params.strategy.searchDepth,
+        includeDomains,
+        abortSignal: params.abortSignal,
+      })
+    )
+  )
 
-  try {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('Firecrawl search timeout (20s)')), searchTimeout)
-    })
-
-    const result = await Promise.race([
-      mcpServerManager.callTool(
-        binding.server.id,
-        binding.searchTool.name,
-        buildSearchArgs(binding.searchTool, query)
-      ),
-      timeoutPromise,
-    ]).finally(() => {
-      clearTimeout(timer)
-    })
-
-    if (!result) {
-      throw new Error('Firecrawl MCP returned an empty response.')
-    }
-
-    if (result.isError) {
-      throw new Error(getTextContent(result) || `Firecrawl search failed for ${query}`)
-    }
-
-    const items = parseSearchItems(getTextContent(result))
-    if (items.length > 0) {
-      return items
-    }
-
-    throw new Error('Firecrawl MCP response did not contain parseable search results.')
-  } catch (error) {
-    // 某些 MCP 底层错误可能 reject 非 Error 对象（如 Event）
-    const errorMsg = error instanceof Error
-      ? error.message
-      : typeof error === 'string'
-        ? error
-        : 'Unknown search error'
-    console.warn('[DeepResearch] Firecrawl search failed, falling back to web search:', errorMsg)
-    const fallback = await searchWeb({
-      query,
-      maxResults: 5,
-      includeAnswer: true,
-    })
-    return tavilyResultToSearchItems(fallback.results)
+  let settled = await execute(params.strategy.includeDomains)
+  const hasResults = settled.some(result => result.status === 'fulfilled' && result.value.length > 0)
+  if (!hasResults && params.strategy.includeDomains?.length) {
+    settled = await execute(undefined)
   }
+
+  const merged: FirecrawlSearchItem[] = []
+  const seen = new Set<string>()
+  settled.forEach((result, index) => {
+    const providerName = params.providers[index]?.name || 'unknown'
+    if (result.status === 'rejected') {
+      console.warn('[DeepResearch] Search provider failed:', providerName, result.reason)
+      return
+    }
+
+    result.value.forEach(item => {
+      const key = normalizeUrl(item.url || `${providerName}:${item.title || item.content || ''}`)
+      if (!key || seen.has(key)) {
+        return
+      }
+      seen.add(key)
+      merged.push({
+        ...item,
+        provider: item.provider || providerName,
+      })
+    })
+  })
+
+  return merged.slice(0, Math.max(params.strategy.maxResults, 8))
 }
 
 async function deepResearchRecursive(params: {
-  binding: FirecrawlBinding
+  providers: ResearchSearchProvider[]
   query: string
+  strategy: ResearchStrategyConfig
   breadth: number
   depth: number
   totalDepth: number
   learnings: string[]
+  sources: ResearchSource[]
+  evidences: ResearchEvidence[]
   visitedUrls: string[]
   abortSignal?: AbortSignal
   onProgress?: (progress: DeepResearchProgress) => void
-}): Promise<{ learnings: string[]; visitedUrls: string[] }> {
+}): Promise<{ learnings: string[]; visitedUrls: string[]; sources: ResearchSource[]; evidences: ResearchEvidence[] }> {
   params.abortSignal?.throwIfAborted()
   params.onProgress?.({
     stage: 'planning',
@@ -546,12 +937,15 @@ async function deepResearchRecursive(params: {
     totalQueries: 0,
     learningsCount: params.learnings.length,
     visitedUrlsCount: params.visitedUrls.length,
+    evidenceCount: params.evidences.length,
+    strategy: params.strategy.id,
   })
 
   const serpQueries = await generateSerpQueries({
     query: params.query,
     breadth: params.breadth,
     learnings: params.learnings,
+    strategy: params.strategy,
     abortSignal: params.abortSignal,
   })
 
@@ -559,6 +953,8 @@ async function deepResearchRecursive(params: {
   const nextDepth = params.depth - 1
   const allLearnings = [...params.learnings]
   const allUrls = [...params.visitedUrls]
+  let allSources = [...params.sources]
+  let allEvidences = [...params.evidences]
 
   // 并行执行搜索，按 MAX_PARALLEL_SEARCHES 分批
   for (let batchStart = 0; batchStart < serpQueries.length; batchStart += MAX_PARALLEL_SEARCHES) {
@@ -576,20 +972,43 @@ async function deepResearchRecursive(params: {
       totalQueries: serpQueries.length,
       learningsCount: allLearnings.length,
       visitedUrlsCount: allUrls.length,
+      evidenceCount: allEvidences.length,
+      providerStatus: params.providers.map(provider => provider.name).join(', '),
+      strategy: params.strategy.id,
     })
 
-    // 并行搜索
     const searchResults = await Promise.allSettled(
-      batch.map(serpQuery => runSearch(params.binding, serpQuery.query))
+      batch.map(serpQuery => runSearch({
+        providers: params.providers,
+        query: serpQuery.query,
+        strategy: params.strategy,
+        abortSignal: params.abortSignal,
+      }))
     )
 
     // 收集搜索结果
-    const batchItems: { serpQuery: SerpQuery; items: FirecrawlSearchItem[] }[] = []
+    const batchItems: { serpQuery: SerpQuery; items: SearchHit[]; sources: ResearchSource[] }[] = []
     for (let i = 0; i < batch.length; i++) {
       const result = searchResults[i]
       if (result.status === 'fulfilled' && result.value.length > 0) {
-        batchItems.push({ serpQuery: batch[i], items: result.value })
-        allUrls.push(...result.value.map(item => item.url || '').filter(Boolean))
+        const nextSources = result.value
+          .map((item, index) => buildSourceFromItem(item, item.provider || 'web', allSources.length + index + 1))
+          .filter((source): source is ResearchSource => !!source)
+        allSources = mergeSources(allSources, nextSources)
+        const sourceByUrl = new Map(allSources.map(source => [normalizeUrl(source.url), source.id]))
+        const items = result.value
+          .map(item => ({
+            ...item,
+            sourceId: sourceByUrl.get(normalizeUrl(item.url || '')) || '',
+          }))
+          .filter(item => item.sourceId)
+
+        batchItems.push({
+          serpQuery: batch[i],
+          items,
+          sources: allSources.filter(source => items.some(item => item.sourceId === source.id)),
+        })
+        allUrls.push(...items.map(item => item.url || '').filter(Boolean).map(normalizeUrl))
       } else if (result.status === 'rejected') {
         console.warn('[DeepResearch] Search failed:', batch[i].query, result.reason)
       }
@@ -608,14 +1027,16 @@ async function deepResearchRecursive(params: {
       totalQueries: serpQueries.length,
       learningsCount: allLearnings.length,
       visitedUrlsCount: allUrls.length,
+      evidenceCount: allEvidences.length,
+      strategy: params.strategy.id,
     })
 
-    // 并行分析搜索结果
     const analysisResults = await Promise.allSettled(
-      batchItems.map(({ serpQuery, items }) =>
+      batchItems.map(({ serpQuery, items, sources }) =>
         processSerpResult({
           query: serpQuery.query,
           items,
+          sources,
           followUpCount: nextBreadth,
           abortSignal: params.abortSignal,
         })
@@ -628,6 +1049,7 @@ async function deepResearchRecursive(params: {
       const result = analysisResults[i]
       if (result.status === 'fulfilled') {
         allLearnings.push(...result.value.learnings)
+        allEvidences.push(...result.value.evidences)
         if (nextDepth > 0 && result.value.followUpQuestions.length > 0) {
           followUpTasks.push({
             serpQuery: batchItems[i].serpQuery,
@@ -653,10 +1075,14 @@ async function deepResearchRecursive(params: {
           breadth: nextBreadth,
           depth: nextDepth,
           learnings: uniqueStrings(allLearnings),
+          sources: allSources,
+          evidences: remapEvidenceSources(allEvidences, allSources),
           visitedUrls: uniqueStrings(allUrls),
         })
         allLearnings.push(...deeper.learnings)
         allUrls.push(...deeper.visitedUrls)
+        allSources = mergeSources(allSources, deeper.sources)
+        allEvidences.push(...deeper.evidences)
       } catch (error) {
         console.warn('[DeepResearch] Recursive research failed:', error)
       }
@@ -673,13 +1099,66 @@ async function deepResearchRecursive(params: {
       totalQueries: serpQueries.length,
       learningsCount: allLearnings.length,
       visitedUrlsCount: allUrls.length,
+      evidenceCount: allEvidences.length,
+      strategy: params.strategy.id,
     })
   }
+
+  allSources = mergeSources(allSources, [])
+  allEvidences = remapEvidenceSources(allEvidences, allSources)
 
   return {
     learnings: uniqueStrings(allLearnings),
     visitedUrls: uniqueStrings(allUrls),
+    sources: allSources,
+    evidences: allEvidences,
   }
+}
+
+function buildEvidenceSupportSummary(sources: ResearchSource[], evidences: ResearchEvidence[]) {
+  const sourceById = new Map(sources.map(source => [source.id, source]))
+  const hostCounts = new Map<string, number>()
+  evidences.forEach(evidence => {
+    const source = sourceById.get(evidence.sourceId)
+    const host = source ? hostFromUrl(source.url) : ''
+    if (host) {
+      hostCounts.set(host, (hostCounts.get(host) || 0) + 1)
+    }
+  })
+
+  const independentHosts = hostCounts.size
+  const highConfidence = evidences.filter(evidence => evidence.confidence === 'high').length
+  const weakEvidence = evidences.filter(evidence => evidence.confidence === 'low').length
+
+  return [
+    `Independent source domains: ${independentHosts}`,
+    `High confidence evidence items: ${highConfidence}`,
+    `Low confidence evidence items: ${weakEvidence}`,
+    independentHosts < 2 ? 'Warning: fewer than two independent source domains were found; mark major conclusions as single-source or low-confidence.' : '',
+  ].filter(Boolean).join('\n')
+}
+
+function formatEvidenceForReport(sources: ResearchSource[], evidences: ResearchEvidence[]) {
+  const sourceById = new Map(sources.map(source => [source.id, source]))
+  return evidences.slice(0, MAX_EVIDENCES_FOR_REPORT).map(evidence => {
+    const source = sourceById.get(evidence.sourceId)
+    return [
+      `<evidence id="${evidence.id}" sourceId="${evidence.sourceId}" confidence="${evidence.confidence}" relevance="${evidence.relevanceScore.toFixed(2)}">`,
+      `Claim: ${evidence.claim}`,
+      evidence.quote ? `Quote: ${evidence.quote}` : '',
+      source ? `Source: ${source.title} (${source.url})` : '',
+      source?.publishedAt ? `Published: ${source.publishedAt}` : '',
+      '</evidence>',
+    ].filter(Boolean).join('\n')
+  }).join('\n\n')
+}
+
+function appendFallbackSourceSection(report: string, sources: ResearchSource[]) {
+  if (report.includes('## 来源') || sources.length === 0) {
+    return report.trim()
+  }
+
+  return `${report.trim()}\n\n## 来源\n\n${sources.map(source => `- [${source.id}] ${source.title}：${source.url}`).join('\n')}`
 }
 
 export async function runDeepResearch(params: {
@@ -689,8 +1168,15 @@ export async function runDeepResearch(params: {
   abortSignal?: AbortSignal
   onProgress?: (progress: DeepResearchProgress) => void
 }): Promise<DeepResearchResult> {
-  const breadth = clampInteger(params.breadth, DEFAULT_BREADTH, 1, 6)
-  const depth = clampInteger(params.depth, DEFAULT_DEPTH, 1, 4)
+  const startedAt = new Date().toISOString()
+  const strategyId = await classifyResearchIntent({
+    query: params.query,
+    abortSignal: params.abortSignal,
+  })
+  const strategy = STRATEGY_CONFIGS[strategyId]
+  const breadth = clampInteger(params.breadth, strategy.breadth || DEFAULT_BREADTH, 1, 6)
+  const depth = clampInteger(params.depth, strategy.depth || DEFAULT_DEPTH, 1, 4)
+  const providers = await buildSearchProviders()
 
   params.onProgress?.({
     stage: 'initializing',
@@ -702,20 +1188,44 @@ export async function runDeepResearch(params: {
     totalQueries: 0,
     learningsCount: 0,
     visitedUrlsCount: 0,
+    evidenceCount: 0,
+    providerStatus: providers.map(provider => provider.name).join(', '),
+    strategy: strategy.id,
     estimatedMinutes: `${Math.max(3, depth * breadth)}-${Math.max(5, depth * breadth * 2)} 分钟`,
   })
 
-  const binding = await findFirecrawlBinding()
   const result = await deepResearchRecursive({
-    binding,
+    providers,
     query: params.query,
+    strategy,
     breadth,
     depth,
     totalDepth: depth,
     learnings: [],
+    sources: [],
+    evidences: [],
     visitedUrls: [],
     abortSignal: params.abortSignal,
     onProgress: params.onProgress,
+  })
+
+  const sources = mergeSources(result.sources, [])
+  const evidences = remapEvidenceSources(result.evidences, sources)
+
+  params.onProgress?.({
+    stage: 'verifying',
+    currentDepth: 0,
+    totalDepth: depth,
+    currentBreadth: breadth,
+    totalBreadth: breadth,
+    completedQueries: 0,
+    totalQueries: 0,
+    learningsCount: result.learnings.length,
+    visitedUrlsCount: result.visitedUrls.length,
+    evidenceCount: evidences.length,
+    providerStatus: providers.map(provider => provider.name).join(', '),
+    strategy: strategy.id,
+    estimatedMinutes: `${Math.max(3, depth * breadth)}-${Math.max(5, depth * breadth * 2)} 分钟`,
   })
 
   params.onProgress?.({
@@ -728,6 +1238,9 @@ export async function runDeepResearch(params: {
     totalQueries: 0,
     learningsCount: result.learnings.length,
     visitedUrlsCount: result.visitedUrls.length,
+    evidenceCount: evidences.length,
+    providerStatus: providers.map(provider => provider.name).join(', '),
+    strategy: strategy.id,
     estimatedMinutes: `${Math.max(3, depth * breadth)}-${Math.max(5, depth * breadth * 2)} 分钟`,
   })
 
@@ -736,22 +1249,32 @@ export async function runDeepResearch(params: {
     'Write a detailed deep research report in Markdown for the user query.',
     'Requirements:',
     '- Use Simplified Chinese.',
-    '- Include an executive summary, key findings, detailed analysis, limitations, and source list.',
-    '- Ground every major claim in the provided learnings.',
+    `- Research strategy: ${strategy.label}. ${strategy.reportFocus}`,
+    '- Include an executive summary, key findings, detailed analysis, confidence/limitations, and source list.',
+    '- Ground every major claim in the provided evidences and cite source IDs inline like [S1].',
+    '- If a key conclusion has only one independent source or low confidence evidence, explicitly mark it as single-source or uncertain.',
     '- Preserve concrete names, numbers, dates, and URLs.',
     '',
     `<user_query>${params.query}</user_query>`,
+    '<verification_summary>',
+    buildEvidenceSupportSummary(sources, evidences),
+    '</verification_summary>',
+    '<sources>',
+    sources.map(source => [
+      `[${source.id}] ${source.title}`,
+      `URL: ${source.url}`,
+      `Engine: ${source.engine}`,
+      `Credibility: ${source.credibilityScore.toFixed(2)}`,
+      source.publishedAt ? `Published: ${source.publishedAt}` : '',
+    ].filter(Boolean).join('\n')).join('\n\n'),
+    '</sources>',
+    '<evidences>',
+    formatEvidenceForReport(sources, evidences),
+    '</evidences>',
     '<learnings>',
     learnings.map(learning => `<learning>${learning}</learning>`).join('\n'),
     '</learnings>',
-    '<visited_urls>',
-    result.visitedUrls.map(url => `- ${url}`).join('\n'),
-    '</visited_urls>',
   ].join('\n'), params.abortSignal)
-
-  const sourceSection = result.visitedUrls.length > 0
-    ? `\n\n## 来源\n\n${result.visitedUrls.map(url => `- ${url}`).join('\n')}`
-    : ''
 
   params.onProgress?.({
     stage: 'done',
@@ -763,12 +1286,32 @@ export async function runDeepResearch(params: {
     totalQueries: 0,
     learningsCount: result.learnings.length,
     visitedUrlsCount: result.visitedUrls.length,
+    evidenceCount: evidences.length,
+    providerStatus: providers.map(provider => provider.name).join(', '),
+    strategy: strategy.id,
     estimatedMinutes: `${Math.max(3, depth * breadth)}-${Math.max(5, depth * breadth * 2)} 分钟`,
   })
 
-  return {
-    report: `${report.trim()}${report.includes('## 来源') ? '' : sourceSection}`.trim(),
+  const visitedUrls = uniqueStrings(sources.map(source => source.url).concat(result.visitedUrls))
+  const session: ResearchSession = {
+    id: createResearchId(),
+    query: params.query,
+    strategy: strategy.id,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    searchProviders: providers.map(provider => provider.name),
+    sources,
+    evidences,
     learnings: result.learnings,
-    visitedUrls: result.visitedUrls,
+    visitedUrls,
+  }
+
+  return {
+    report: appendFallbackSourceSection(report, sources),
+    learnings: result.learnings,
+    visitedUrls,
+    sources,
+    evidences,
+    session,
   }
 }

@@ -20,6 +20,9 @@ export function markToMarkdown(mark: Mark): string {
       return `![${scanDesc}](${mark.url})`;
     
     case 'link':
+      if (/<!--\s*lingmo:github-project\b/.test(mark.content || '')) {
+        return mark.content || ''
+      }
       // Link: insert as markdown link with description
       const linkDesc = mark.desc || mark.url;
       return `[${linkDesc}](${mark.url})`;

@@ -3,6 +3,11 @@ import type { Mark } from '@/db/marks'
 import { markToMarkdown } from '@/lib/mark-to-markdown'
 import { sanitizeFileName } from '@/lib/sync/filename-utils'
 import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
+import {
+  buildGitHubProjectsCollectionMarkdown,
+  buildGitHubProjectsComparisonMarkdown,
+  isGitHubProjectMark,
+} from '@/lib/github-project'
 
 const MARK_TYPE_LABELS: Record<Mark['type'], string> = {
   scan: '截图',
@@ -56,6 +61,10 @@ function buildRecordSection(mark: Mark, index?: number) {
 
 export function buildRecordsMarkdown(marks: Mark[], options?: { tagName?: string }) {
   const sortedMarks = [...marks].sort((a, b) => a.createdAt - b.createdAt)
+  if (sortedMarks.length > 0 && sortedMarks.every(isGitHubProjectMark)) {
+    return buildGitHubProjectsCollectionMarkdown(sortedMarks, options)
+  }
+
   const isSingle = sortedMarks.length === 1
   const title = isSingle ? getRecordTitle(sortedMarks[0]) : `记录整理 ${formatDateTime(Date.now())}`
   const tagLine = options?.tagName ? `- 来源标签：${options.tagName}` : null
@@ -139,6 +148,28 @@ export async function createNoteFromRecords(marks: Mark[], options?: { tagName?:
   }
 
   const content = buildRecordsMarkdown(marks, options)
+  await writeWorkspaceText(filePath, content)
+
+  return { filePath, content }
+}
+
+export async function createGitHubProjectsComparisonNote(marks: Mark[], options?: { tagName?: string }) {
+  const githubMarks = marks.filter(isGitHubProjectMark)
+  if (githubMarks.length < 2) {
+    throw new Error('至少选择 2 个 GitHub 开源项目才能生成技术对比')
+  }
+
+  const title = `开源项目技术选型对比-${formatDateForFile(Date.now())}`
+  const baseName = sanitizeFileName(title).slice(0, 56) || '开源项目技术选型对比'
+  let filePath = `${baseName}.md`
+  let counter = 1
+
+  while (await fileExists(filePath)) {
+    filePath = `${baseName}(${counter}).md`
+    counter += 1
+  }
+
+  const content = buildGitHubProjectsComparisonMarkdown(githubMarks, options)
   await writeWorkspaceText(filePath, content)
 
   return { filePath, content }

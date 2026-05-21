@@ -43,9 +43,24 @@ const useTagStore = create<TagState>((set, get) => ({
   },
   initTags: async () => {
     const store = await Store.load('store.json');
-    const currentTagId = await store.get<number>('currentTagId')
-    if (currentTagId) set({ currentTagId })
-    get().getCurrentTag()
+    const tags = get().tags.length > 0 ? get().tags : await getTags()
+    if (tags.length === 0) {
+      set({ currentTag: undefined, tags: [] })
+      return
+    }
+
+    const savedCurrentTagId = await store.get<number>('currentTagId')
+    const currentTag = tags.find(tag => tag.id === savedCurrentTagId)
+      || tags.find(tag => tag.name === '中转站')
+      || tags[0]
+
+    set({
+      currentTagId: currentTag.id,
+      currentTag,
+      tags,
+    })
+    await store.set('currentTagId', currentTag.id)
+    await store.save()
   },
 
   currentTag: undefined,
@@ -55,6 +70,9 @@ const useTagStore = create<TagState>((set, get) => ({
     const currentTag = tags.find((tag) => tag.id === getcurrentTagId)
     if (currentTag) {
       set({ currentTag })
+    } else if (tags.length > 0) {
+      const fallbackTag = tags.find(tag => tag.name === '中转站') || tags[0]
+      set({ currentTagId: fallbackTag.id, currentTag: fallbackTag })
     }
   },
 

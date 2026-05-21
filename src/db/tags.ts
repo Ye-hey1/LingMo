@@ -31,6 +31,41 @@ interface MaxSortRow {
   maxSort: number | null
 }
 
+async function ensureInboxTag() {
+  const db = await getDb()
+  const inboxTags = await db.select<Tag[]>('select * from tags where name = $1 limit 1', ['中转站'])
+  if (inboxTags.length > 0) {
+    return inboxTags[0]
+  }
+
+  const legacyDefaultTags = await db.select<Tag[]>('select * from tags where name = $1 order by id asc limit 1', ['Idea'])
+  if (legacyDefaultTags.length > 0) {
+    const legacyTag = legacyDefaultTags[0]
+    await db.execute('update tags set name = $1, isLocked = $2 where id = $3', ['中转站', false, legacyTag.id])
+    return {
+      ...legacyTag,
+      name: '中转站',
+      isLocked: false,
+    }
+  }
+
+  const maxSortRows = await db.select<MaxSortRow[]>('select max(sortOrder) as maxSort from tags')
+  const nextSortOrder = (maxSortRows[0]?.maxSort ?? -1) + 1
+  const createResult = await db.execute(
+    'insert into tags (name, isLocked, isPin, sortOrder, parentId) values ($1, $2, $3, $4, $5)',
+    ['中转站', false, true, nextSortOrder, null],
+  )
+
+  return {
+    id: Number(createResult.lastInsertId),
+    name: '中转站',
+    isLocked: false,
+    isPin: true,
+    sortOrder: nextSortOrder,
+    parentId: null,
+  }
+}
+
 async function repairOrphanMarkTags() {
   const db = await getDb()
   const orphanRows = await db.select<OrphanTagRow[]>(
@@ -106,14 +141,12 @@ export async function initTagsDb() {
 
   const hasDefaultTag = (await db.select<Tag[]>('select * from tags')).length === 0
   if (hasDefaultTag) {
-    await db.execute(
-      'insert into tags (name, isLocked, isPin) values ($1, $2, $3)',
-      ['Idea', false, true],
-    )
-    const tag = (await db.select<Tag[]>('select * from tags where name = $1', ['Idea']))[0]
+    const tag = await ensureInboxTag()
     const store = await Store.load('store.json')
     await store.set('currentTagId', tag.id)
     await store.save()
+  } else {
+    await ensureInboxTag()
   }
 }
 
@@ -139,6 +172,43 @@ export async function insertTag(tag: Partial<Tag>) {
       'insert into tags (name, parentId) values ($1, $2)',
       [tag.name, tag.parentId ?? null],
     )
+  })
+}
+
+export async function ensureTagByName(name: string) {
+  const trimmedName = name.trim()
+  if (!trimmedName) {
+    throw new Error('标签名称不能为空')
+  }
+
+  const db = await getDb()
+  const existingTags = await db.select<Tag[]>('select * from tags where name = $1 order by id asc limit 1', [trimmedName])
+  if (existingTags.length > 0) {
+    return existingTags[0]
+  }
+
+  return await serializedWrite(async () => {
+    const lockedDb = await getDb()
+    const duplicatedTags = await lockedDb.select<Tag[]>('select * from tags where name = $1 order by id asc limit 1', [trimmedName])
+    if (duplicatedTags.length > 0) {
+      return duplicatedTags[0]
+    }
+
+    const maxSortRows = await lockedDb.select<MaxSortRow[]>('select max(sortOrder) as maxSort from tags')
+    const nextSortOrder = (maxSortRows[0]?.maxSort ?? -1) + 1
+    const result = await lockedDb.execute(
+      'insert into tags (name, isLocked, isPin, sortOrder, parentId) values ($1, $2, $3, $4, $5)',
+      [trimmedName, false, false, nextSortOrder, null],
+    )
+
+    return {
+      id: Number(result.lastInsertId),
+      name: trimmedName,
+      isLocked: false,
+      isPin: false,
+      sortOrder: nextSortOrder,
+      parentId: null,
+    }
   })
 }
 

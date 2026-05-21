@@ -106,15 +106,64 @@ function createLocalTreeNode(name: string, isDirectory: boolean, parent?: DirTre
   }
 }
 
+function sameTreeEntry(a: DirTree, b: DirTree) {
+  return a.name === b.name && a.isDirectory === b.isDirectory && a.isFile === b.isFile
+}
+
+function mergeLocalTreeNode(target: DirTree, source: DirTree) {
+  target.isLocale = target.isLocale || source.isLocale
+  target.sha = target.sha || source.sha
+  target.createdAt = target.createdAt || source.createdAt
+  target.modifiedAt = target.modifiedAt || source.modifiedAt
+  target.size = target.size ?? source.size
+  if (target.isDirectory && !target.children && source.children) {
+    target.children = source.children
+  }
+}
+
+function dedupeTreeEntries(items: DirTree[], parent?: DirTree): DirTree[] {
+  const map = new Map<string, DirTree>()
+
+  for (const item of items) {
+    item.parent = parent
+    if (item.children) {
+      item.children = dedupeTreeEntries(item.children, item)
+    }
+
+    const key = `${item.name}:${item.isDirectory ? 'dir' : 'file'}`
+    const existing = map.get(key)
+    if (!existing) {
+      map.set(key, item)
+      continue
+    }
+
+    if (item.isLocale && !existing.isLocale) {
+      mergeLocalTreeNode(item, existing)
+      map.set(key, item)
+    } else {
+      mergeLocalTreeNode(existing, item)
+    }
+  }
+
+  return Array.from(map.values())
+}
+
+function normalizeFileTree(tree: DirTree[]) {
+  return dedupeTreeEntries(tree)
+}
+
 function insertNodeIntoTree(tree: DirTree[], relativePath: string, isDirectory: boolean): boolean {
   const parentPath = relativePath.split('/').slice(0, -1).join('/')
   const name = relativePath.split('/').pop() || relativePath
+  const node = createLocalTreeNode(name, isDirectory)
 
   if (!parentPath) {
-    if (tree.some(item => item.name === name)) {
+    const existing = tree.find(item => sameTreeEntry(item, node))
+    if (existing) {
+      mergeLocalTreeNode(existing, node)
       return true
     }
-    tree.unshift(createLocalTreeNode(name, isDirectory))
+    tree.unshift(node)
     return true
   }
 
@@ -127,11 +176,14 @@ function insertNodeIntoTree(tree: DirTree[], relativePath: string, isDirectory: 
     parentFolder.children = []
   }
 
-  if (parentFolder.children.some(item => item.name === name)) {
+  node.parent = parentFolder
+  const existing = parentFolder.children.find(item => sameTreeEntry(item, node))
+  if (existing) {
+    mergeLocalTreeNode(existing, node)
     return true
   }
 
-  parentFolder.children.unshift(createLocalTreeNode(name, isDirectory, parentFolder))
+  parentFolder.children.unshift(node)
   return true
 }
 
@@ -167,7 +219,10 @@ function attachNodeToTree(tree: DirTree[], relativePath: string, node: DirTree):
 
   if (!parentPath) {
     node.parent = undefined
-    if (!tree.some(item => item.name === name)) {
+    const existing = tree.find(item => sameTreeEntry(item, node))
+    if (existing) {
+      mergeLocalTreeNode(existing, node)
+    } else {
       tree.unshift(node)
     }
     return true
@@ -183,7 +238,10 @@ function attachNodeToTree(tree: DirTree[], relativePath: string, node: DirTree):
   }
 
   node.parent = parentFolder
-  if (!parentFolder.children.some(item => item.name === name)) {
+  const existing = parentFolder.children.find(item => sameTreeEntry(item, node))
+  if (existing) {
+    mergeLocalTreeNode(existing, node)
+  } else {
     parentFolder.children.unshift(node)
   }
   return true
@@ -247,6 +305,7 @@ interface NoteState {
   setFileTree: (tree: DirTree[]) => void
   addFile: (file: DirTree) => void
   ensurePathExpanded: (path: string) => Promise<void>
+  upsertLocalEntry: (relativePath: string, isDirectory: boolean) => boolean
   insertLocalEntry: (relativePath: string, isDirectory: boolean) => boolean
   removeLocalEntry: (relativePath: string) => boolean
   moveLocalEntry: (oldPath: string, newPath: string) => boolean
@@ -670,11 +729,18 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
   fileTree: [],
   setFileTree: (tree: DirTree[]) => {
-    const sortedTree = get().sortFileTree(tree)
+    const sortedTree = get().sortFileTree(normalizeFileTree(tree))
     set({ fileTree: sortedTree })
   },
   addFile: (file: DirTree) => {
-    set({ fileTree: [file, ...get().fileTree] })
+    const currentTree = get().fileTree
+    // 检查是否已存在同名文件（避免重复添加）
+    const exists = currentTree.some(item =>
+      item.name === file.name && item.isFile === file.isFile && item.isDirectory === file.isDirectory
+    )
+    if (!exists) {
+      set({ fileTree: [file, ...currentTree] })
+    }
   },
   ensurePathExpanded: async (path: string) => {
     const folderPaths = getFolderPathsToExpand(path)
@@ -686,6 +752,17 @@ const useArticleStore = create<NoteState>((set, get) => ({
     const store = await getStore()
     await store.set('collapsibleList', collapsibleList)
     set({ collapsibleList })
+  },
+  upsertLocalEntry: (relativePath: string, isDirectory: boolean) => {
+    const cacheTree = cloneDeep(get().fileTree)
+    const inserted = insertNodeIntoTree(cacheTree, relativePath, isDirectory)
+
+    if (!inserted) {
+      return false
+    }
+
+    get().setFileTree(cacheTree)
+    return true
   },
   insertLocalEntry: (relativePath: string, isDirectory: boolean) => {
     const cacheTree = cloneDeep(get().fileTree)
@@ -1091,6 +1168,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
                   currentFolder.children[index].sha = file.etag
                   currentFolder.children[index].size = file.size
                   currentFolder.children[index].modifiedAt = file.lastModified
+                  currentFolder.children[index].isLocale = currentFolder.children[index].isLocale || false
                 } else {
                   currentFolder?.children?.push({
                     name: fileName,
@@ -1112,6 +1190,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
                   dirs[index].sha = file.etag
                   dirs[index].size = file.size
                   dirs[index].modifiedAt = file.lastModified
+                  dirs[index].isLocale = dirs[index].isLocale || false
                 } else {
                   (dirs as any).push({
                     name: fileName,
@@ -1158,6 +1237,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
                 if (index !== -1 && index !== undefined && currentFolder?.children) {
                   currentFolder.children[index].sha = file.sha
                   currentFolder.children[index].size = (file as any).size
+                  currentFolder.children[index].isLocale = currentFolder.children[index].isLocale || false
                 } else {
                   currentFolder?.children?.push({
                     name: file.name,
@@ -1177,6 +1257,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
                 if (index !== -1 && index !== undefined) {
                   dirs[index].sha = file.sha
                   dirs[index].size = (file as any).size
+                  dirs[index].isLocale = dirs[index].isLocale || false
                 } else {
                   (dirs as any).push({
                     name: file.name,
@@ -1194,7 +1275,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
               }
             });
           }
-          set({ fileTree: [...dirs] })
+          get().setFileTree([...dirs])
         }
       } catch {
       }
@@ -1313,6 +1394,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
     // 设置子节点（可能为空），并按当前文件树规则排序
     currentFolder.children = get().sortFileTree(children)
+    currentFolder.loading = false  // 重置加载状态
     set({ fileTree: [...cacheTree] })
     
     // 异步加载远程同步文件状态（不阻塞界面）
@@ -1810,7 +1892,11 @@ const useArticleStore = create<NoteState>((set, get) => ({
       // 检查是否是远程文件且本地内容为空
       const fileTree = get().fileTree
       const fileInfo = findFileInTree(fileTree, actualPath)
-      const isRemoteFile = fileInfo && !fileInfo.isLocale
+      const pathOptions = await getFilePathOptions(actualPath)
+      const localFileExists = pathOptions.baseDir
+        ? await exists(pathOptions.path, { baseDir: pathOptions.baseDir })
+        : await exists(pathOptions.path)
+      const isRemoteFile = fileInfo && !fileInfo.isLocale && !localFileExists
 
       // 如果是远程文件且本地内容为空，先显示编辑器（禁用），再异步拉取
       if (isRemoteFile && (!localContent || localContent.trim() === '')) {

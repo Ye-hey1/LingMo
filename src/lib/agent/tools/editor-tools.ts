@@ -425,16 +425,45 @@ When the user quotes content from the editor and exact selection positions are p
         resolve(result)
       }
 
-      // 确定使用哪种模式
-      const hasPositionParams = params.from !== undefined || params.to !== undefined;
-      const hasSearchParams = params.searchContent;
+      // 确定使用哪种模式。替换工具必须有明确定位，避免在编辑器失焦后退化为空选区插入。
+      const hasCompletePositionParams = params.from !== undefined && params.to !== undefined;
+      const hasPartialPositionParams = params.from !== undefined || params.to !== undefined;
+      const hasSearchParams = typeof params.searchContent === 'string' && params.searchContent.length > 0;
       const hasLineParams = params.startLine !== undefined && params.endLine !== undefined;
+      const hasReplacementContent = typeof params.content === 'string' || typeof params.replaceContent === 'string';
 
-      if (!hasPositionParams && !hasSearchParams && !hasLineParams && !params.content) {
+      if (hasPartialPositionParams && !hasCompletePositionParams) {
+        finalize({
+          success: false,
+          error: 'Incomplete position range',
+          message: '请同时提供 from 和 to，或改用 startLine/endLine、searchContent 定位',
+        });
+        return;
+      }
+
+      if (!hasReplacementContent) {
         finalize({
           success: false,
           error: 'Missing required parameters',
-          message: '请提供 content 或 searchContent 或 startLine/endLine 参数',
+          message: '请提供 content 或 replaceContent 参数',
+        });
+        return;
+      }
+
+      if (!hasCompletePositionParams && !hasSearchParams && !hasLineParams) {
+        finalize({
+          success: false,
+          error: 'Missing replacement target',
+          message: '请提供 from/to、searchContent 或 startLine/endLine 来明确替换范围',
+        });
+        return;
+      }
+
+      if (hasCompletePositionParams && params.from === params.to) {
+        finalize({
+          success: false,
+          error: 'Empty replacement range',
+          message: '替换范围为空。若要插入内容，请使用 insert_at_cursor；若要修改文本，请先获取有效选区或使用行号定位',
         });
         return;
       }
@@ -445,7 +474,7 @@ When the user quotes content from the editor and exact selection positions are p
 
       emitter.emit('editor-replace', {
         content: params.content || params.replaceContent,
-        range: (params.from !== undefined && params.to !== undefined)
+        range: hasCompletePositionParams
           ? { from: params.from, to: params.to }
           : undefined,
         searchContent: params.searchContent,

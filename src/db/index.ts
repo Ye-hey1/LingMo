@@ -1,7 +1,60 @@
 import Database from '@tauri-apps/plugin-sql'
 
 let dbPromise: Promise<Database> | null = null
-let dbReady = false
+const DB_LOCK_RETRY_DELAYS = [80, 160, 320, 640, 1200, 2000, 3000]
+
+type QueryArgs = Parameters<Database['select']>
+type ExecuteArgs = Parameters<Database['execute']>
+
+function isDatabaseLockedError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /database is locked|database table is locked|SQLITE_BUSY|code:\s*5/i.test(message)
+}
+
+function isTransactionControlSql(sql: unknown) {
+  if (typeof sql !== 'string') return false
+  return /^(BEGIN|COMMIT|ROLLBACK)(\s|;|$)/i.test(sql.trim())
+}
+
+function sleep(ms: number) {
+  return new Promise(resolve => window.setTimeout(resolve, ms))
+}
+
+async function runWithDatabaseLockRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: unknown
+
+  for (let attempt = 0; attempt <= DB_LOCK_RETRY_DELAYS.length; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error
+      if (!isDatabaseLockedError(error) || attempt >= DB_LOCK_RETRY_DELAYS.length) {
+        throw error
+      }
+      await sleep(DB_LOCK_RETRY_DELAYS[attempt])
+    }
+  }
+
+  throw lastError
+}
+
+function withDatabaseBusyRetry(db: Database): Database {
+  const originalSelect = db.select.bind(db)
+  const originalExecute = db.execute.bind(db)
+
+  db.select = ((...args: QueryArgs) => {
+    return runWithDatabaseLockRetry(() => originalSelect(...args))
+  }) as Database['select']
+
+  db.execute = ((...args: ExecuteArgs) => {
+    if (isTransactionControlSql(args[0])) {
+      return originalExecute(...args)
+    }
+    return runWithDatabaseLockRetry(() => originalExecute(...args))
+  }) as Database['execute']
+
+  return db
+}
 
 // 获取数据库实例(兼容旧代码)
 export async function getDb() {
@@ -11,7 +64,7 @@ export async function getDb() {
       const db = await Database.load('sqlite:note.db?mode=rwc')
       try {
         // 启用 WAL 模式：允许并发读取，减少 database locked 错误
-        await db.execute('PRAGMA journal_mode=WAL')
+        await db.select('PRAGMA journal_mode=WAL')
         // 设置繁忙超时：遇到锁时等待 5 秒而非立即报错
         await db.execute('PRAGMA busy_timeout=5000')
         // 同步模式设为 NORMAL（WAL 模式下安全且更快）
@@ -19,8 +72,7 @@ export async function getDb() {
       } catch (e) {
         console.warn('[DB] PRAGMA setup failed (non-critical):', e)
       }
-      dbReady = true
-      return db
+      return withDatabaseBusyRetry(db)
     })()
   }
 
@@ -33,7 +85,10 @@ export async function getDb() {
 let writeQueue: Promise<any> = Promise.resolve()
 
 export function serializedWrite<T>(fn: () => Promise<T>): Promise<T> {
-  const task = writeQueue.then(fn, fn) // 即使前一个失败也继续
+  const task = writeQueue.then(
+    () => runWithDatabaseLockRetry(fn),
+    () => runWithDatabaseLockRetry(fn),
+  ) // 即使前一个失败也继续
   writeQueue = task.catch(() => {}) // 防止未处理的 rejection
   return task
 }

@@ -79,56 +79,61 @@ export function FileManager({
     }
   }, [fileTree.length, loadFileTree])
 
+  // 支持的文本文件扩展名（与编辑器保持一致）
+  const TEXT_EXTENSIONS = /\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|html|htm|drawio)$/i
+  // 支持的二进制文件扩展名
+  const BINARY_EXTENSIONS = /\.(jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i
+
   // 处理外部文件拖入（通过 Tauri 的 onDragDropEvent）
   const handleExternalDrop = useCallback(async (paths: string[]) => {
     const { getFilePathOptions } = await import("@/lib/workspace")
+    const store = useArticleStore.getState()
 
     for (const filePath of paths) {
       const fileName = filePath.split(/[/\\]/).pop() || filePath
 
-      if (fileName.endsWith(".md")) {
+      if (TEXT_EXTENSIONS.test(fileName)) {
+        // 文本类文件：md, txt, html, js, ts, json, yaml, drawio 等
         const content = await readTextFile(filePath)
         const sanitizedFileName = await writeDroppedFileToRoot(
           { fileName, getFilePathOptions, writeTextFile },
           { kind: "text", content },
         )
-        useArticleStore.getState().addFile({
-          name: sanitizedFileName,
-          isEditing: false,
-          isLocale: true,
-          isDirectory: false,
-          isFile: true,
-          isSymlink: false,
-        })
-        useArticleStore.getState().setActiveFilePath(sanitizedFileName)
-      } else if (fileName.match(/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i)) {
+        // 检查文件是否已在文件树中
+        const existsInTree = store.fileTree.some(item => item.name === sanitizedFileName && item.isFile)
+        if (!existsInTree) {
+          store.addFile({
+            name: sanitizedFileName,
+            isEditing: false,
+            isLocale: true,
+            isDirectory: false,
+            isFile: true,
+            isSymlink: false,
+          })
+        }
+        // 自动在编辑器中打开
+        store.setActiveFilePath(sanitizedFileName)
+      } else if (BINARY_EXTENSIONS.test(fileName)) {
+        // 二进制文件：图片、PDF 等
         const content = await readFile(filePath)
         const sanitizedFileName = await writeDroppedFileToRoot(
           { fileName, getFilePathOptions, writeFile },
           { kind: "binary", content },
         )
-        useArticleStore.getState().addFile({
-          name: sanitizedFileName,
-          isEditing: false,
-          isLocale: true,
-          isDirectory: false,
-          isFile: true,
-          isSymlink: false,
-        })
-      } else if (fileName.match(/\.pdf$/i)) {
-        const content = await readFile(filePath)
-        const sanitizedFileName = await writeDroppedFileToRoot(
-          { fileName, getFilePathOptions, writeFile },
-          { kind: "binary", content },
-        )
-        useArticleStore.getState().addFile({
-          name: sanitizedFileName,
-          isEditing: false,
-          isLocale: true,
-          isDirectory: false,
-          isFile: true,
-          isSymlink: false,
-        })
+        // 检查文件是否已在文件树中
+        const existsInTree = store.fileTree.some(item => item.name === sanitizedFileName && item.isFile)
+        if (!existsInTree) {
+          store.addFile({
+            name: sanitizedFileName,
+            isEditing: false,
+            isLocale: true,
+            isDirectory: false,
+            isFile: true,
+            isSymlink: false,
+          })
+        }
+        // 自动在编辑器中打开
+        store.setActiveFilePath(sanitizedFileName)
       }
     }
   }, [])
@@ -145,14 +150,10 @@ export function FileManager({
 
       if (type === 'enter' || type === 'over') {
         // 检查鼠标是否在文件树容器内
-        if (type === 'over') {
-          const { x, y } = event.payload.position
-          const rect = el.getBoundingClientRect()
-          isOverContainer = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
-          if (isOverContainer) {
-            setIsDragging(true)
-          }
-        }
+        const { x, y } = event.payload.position
+        const rect = el.getBoundingClientRect()
+        isOverContainer = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+        setIsDragging(isOverContainer)
         return
       }
 
@@ -232,7 +233,36 @@ export function FileManager({
   const visibleTree = useMemo(() => tree ?? fileTree, [fileTree, tree])
 
   return (
-    <div ref={containerRef} className={`flex-1 overflow-y-auto ${isDragging && "outline-2 outline-black outline-dotted -outline-offset-4"}`}>
+    <div ref={containerRef} className="relative flex-1 overflow-y-auto">
+      {/* 拖拽提示遮罩层 */}
+      {isDragging && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center pointer-events-none bg-primary/5 border-2 border-dashed border-primary rounded-lg shadow-lg backdrop-blur-[1px] transition-all duration-200">
+          <div className="flex flex-col items-center gap-2 p-6 bg-background/90 rounded-xl shadow-xl border border-primary/20">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="48"
+              height="48"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="text-primary animate-bounce"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            <p className="text-sm font-medium text-foreground">
+              松开即可导入文件
+            </p>
+            <p className="text-xs text-muted-foreground">
+              支持 txt、html、md、图片、PDF 等格式
+            </p>
+          </div>
+        </div>
+      )}
       <div className="file-manager-list flex-1">
         <div className="flex-1">
           <ul className="h-full">

@@ -13,6 +13,7 @@ import { create } from 'zustand'
 import { S3Config } from '@/types/sync'
 import { normalizeRecordFilters } from '@/app/core/main/mark/mark-filters'
 import { normalizeRecordViewMode } from '@/app/core/main/mark/mark-view-mode.mjs'
+import { getTags } from '@/db/tags'
 
 export interface MarkQueue {
   queueId: string
@@ -26,7 +27,7 @@ export type RecordTimePreset = 'all' | 'today' | 'last7Days' | 'last30Days'
 export type RecordProcessState = 'all' | 'unprocessed' | 'processed'
 export type RecordViewMode = 'list' | 'compact' | 'cards'
 
-const DEFAULT_RECORD_PROCESS_STATE: RecordProcessState = 'unprocessed'
+const DEFAULT_RECORD_PROCESS_STATE: RecordProcessState = 'all'
 
 export interface RecordFilters {
   search: string
@@ -61,12 +62,22 @@ async function fetchVisibleMarks(trashState: boolean) {
   }
 
   const store = await Store.load('store.json')
-  const currentTagId = await store.get<number>('currentTagId')
-  if (!currentTagId) {
+  const tags = await getTags()
+  if (tags.length === 0) {
     return []
   }
 
-  const res = await getMarks(currentTagId)
+  const savedCurrentTagId = await store.get<number>('currentTagId')
+  const currentTag = tags.find(tag => tag.id === savedCurrentTagId)
+    || tags.find(tag => tag.name === '中转站')
+    || tags[0]
+
+  if (currentTag.id !== savedCurrentTagId) {
+    await store.set('currentTagId', currentTag.id)
+    await store.save()
+  }
+
+  const res = await getMarks(currentTag.id)
   return res.map(normalizeMark).filter((item) => item.deleted === 0)
 }
 
@@ -192,7 +203,11 @@ const useMarkStore = create<MarkState>((set, get) => ({
   },
   fetchMarks: async () => {
     const decodeRes = await fetchVisibleMarks(false)
-    set({ marks: decodeRes })
+    const allRes = await getAllMarks()
+    set({
+      marks: decodeRes,
+      allMarks: allRes.map(normalizeMark),
+    })
   },
   fetchAllTrashMarks: async () => {
     const decodeRes = await fetchVisibleMarks(true)
@@ -202,7 +217,7 @@ const useMarkStore = create<MarkState>((set, get) => ({
   allMarks: [],
   fetchAllMarks: async () => {
     const res = await getAllMarks()
-    const decodeRes = res.map(normalizeMark).filter((item) => item.deleted === 0)
+    const decodeRes = res.map(normalizeMark)
     set({ allMarks: decodeRes })
   },
 

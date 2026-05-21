@@ -22,11 +22,12 @@ type ChatPreviewProps = {
   text: string;
   streaming?: boolean; // 是否为流式内容
   highlightQuery?: string; // 搜索高亮关键词
+  className?: string;
 };
 
 const MIN_RENDER_INTERVAL_MS = 33;
 
-export default function ChatPreview({text, streaming = false, highlightQuery}: ChatPreviewProps) {
+export default function ChatPreview({text, streaming = false, highlightQuery, className}: ChatPreviewProps) {
   const previewRef = useRef<HTMLDivElement>(null);
   const { theme } = useTheme()
   const [mdTheme, setMdTheme] = useState<ThemeType>('light')
@@ -370,7 +371,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery}: C
   }
 
   return (
-    <div className="flex-1 max-w-[calc(100vw-30px)] md:max-w-[calc(100vw-440px)]">
+    <div className={className || "flex-1 max-w-[calc(100vw-30px)] md:max-w-[calc(100vw-440px)]"}>
       <div 
         ref={previewRef}
         className={getThemeClass()}

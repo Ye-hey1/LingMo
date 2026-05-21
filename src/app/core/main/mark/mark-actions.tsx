@@ -10,7 +10,11 @@ import { MarkFilterPopover } from "./mark-filter-popover"
 
 export function MarkActions() {
   const t = useTranslations('record.mark')
-  const { trashState, setTrashState, initRecordFilters } = useMarkStore()
+  const {
+    trashState,
+    setTrashState,
+    initRecordFilters,
+  } = useMarkStore()
   const organizeRef = useRef<{ openOrganize: () => void }>(null)
 
   useEffect(() => {
@@ -31,7 +35,7 @@ export function MarkActions() {
         <TooltipButton 
           buttonId="onboarding-target-organize-notes"
           icon={<Sparkles className="h-4 w-4" />} 
-          tooltipText={t('toolbar.organizeNotes')} 
+          tooltipText="AI 整理成笔记" 
           onClick={handleOrganize}
           variant="ghost"
           side="bottom"

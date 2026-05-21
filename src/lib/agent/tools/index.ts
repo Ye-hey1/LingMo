@@ -14,6 +14,7 @@ import { flashcardTools } from './flashcard-tools'
 import { activityTools } from './activity-tools'
 import { favoriteTools } from './favorite-tools'
 import { knowledgeGraphTools } from './knowledge-graph-tools'
+import { agentMemoryTools } from './agent-memory-tools'
 
 export const allTools: Tool[] = [
   ...noteTools,
@@ -29,6 +30,7 @@ export const allTools: Tool[] = [
   ...flashcardTools,
   ...favoriteTools,
   ...knowledgeGraphTools,
+  ...agentMemoryTools,
   ...safeTools,
 ]
 
@@ -237,3 +239,4 @@ export * from './diagram-tools'
 export * from './safe-tools'
 export * from './flashcard-tools'
 export * from './activity-tools'
+export * from './agent-memory-tools'

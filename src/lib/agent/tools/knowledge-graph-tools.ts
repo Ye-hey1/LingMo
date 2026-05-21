@@ -113,13 +113,36 @@ export const getGraphOverviewTool: Tool = {
 
     const allFiles = await getAllMarkdownFiles()
     const connectionCounts = new Map<string, number>()
+    const edgeKeys = new Set<string>()
+    const edgeTypeCounts = new Map<string, number>()
+
+    const addGraphEdge = (source: string, target: string, type: string) => {
+      if (!source || !target || source === target) return
+      const key = [source, target].sort().join('->')
+      if (edgeKeys.has(key)) return
+      edgeKeys.add(key)
+      connectionCounts.set(source, (connectionCounts.get(source) || 0) + 1)
+      connectionCounts.set(target, (connectionCounts.get(target) || 0) + 1)
+      edgeTypeCounts.set(type, (edgeTypeCounts.get(type) || 0) + 1)
+    }
 
     for (const file of allFiles) {
       const backlinks = noteIndexStore.getBacklinks(file.relativePath) || []
       for (const bl of backlinks) {
-        connectionCounts.set(bl.sourcePath, (connectionCounts.get(bl.sourcePath) || 0) + 1)
-        connectionCounts.set(file.relativePath, (connectionCounts.get(file.relativePath) || 0) + 1)
+        addGraphEdge(bl.sourcePath, file.relativePath, 'wikilink')
       }
+    }
+
+    try {
+      const { getAllRelations } = await import('@/db/note-relations')
+      const semanticRelations = await getAllRelations('cross_validated')
+      for (const rel of semanticRelations) {
+        if (rel.confidence >= 0.35) {
+          addGraphEdge(rel.source_note, rel.target_note, rel.relation_type === 'related' ? 'semantic' : `semantic:${rel.relation_type}`)
+        }
+      }
+    } catch {
+      // Semantic relation storage may not be initialized yet.
     }
 
     // Hub notes (4+ connections)
@@ -133,23 +156,28 @@ export const getGraphOverviewTool: Tool = {
     const isolated = allFiles
       .map(f => f.relativePath)
       .filter(p => !connectionCounts.has(p) || connectionCounts.get(p) === 0)
-      .slice(0, 20)
+    const isolatedSample = isolated.slice(0, 20)
 
-    const totalEdges = Math.floor(Array.from(connectionCounts.values()).reduce((sum, c) => sum + c, 0) / 2)
+    const totalEdges = edgeKeys.size
+    const edgeTypes = Array.from(edgeTypeCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([type, count]) => ({ type, count }))
 
     const overview = {
       totalNotes: allFiles.length,
       totalConnections: totalEdges,
+      edgeTypes,
       hubs,
       isolatedCount: isolated.length,
-      isolatedSample: isolated,
+      isolatedSample,
     }
 
     const hubList = hubs.map(h => `  - ${h.path}: ${h.connections} connections`).join('\n')
+    const edgeTypeList = edgeTypes.map(item => `  - ${item.type}: ${item.count}`).join('\n')
 
     return {
       success: true,
-      message: `Knowledge graph overview:\n- Total notes: ${overview.totalNotes}\n- Total connections: ${overview.totalConnections}\n- Hub notes (4+ connections):\n${hubList || '  (none)'}\n- Isolated notes: ${overview.isolatedCount}`,
+      message: `Knowledge graph overview:\n- Total notes: ${overview.totalNotes}\n- Total connections: ${overview.totalConnections}\n- Edge types:\n${edgeTypeList || '  (none)'}\n- Hub notes (4+ connections):\n${hubList || '  (none)'}\n- Isolated notes: ${overview.isolatedCount}`,
       data: overview,
     }
   },
