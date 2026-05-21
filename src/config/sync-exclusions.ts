@@ -20,15 +20,17 @@ export const DEFAULT_SYNC_EXCLUDE_PATTERNS: SyncExcludePattern[] = [
 
 // 检查路径是否应该排除在同步之外
 export function shouldExclude(path: string): boolean {
-  const excludePatterns = getExcludePatterns()
+  return Boolean(getSyncExcludeReason(path))
+}
 
-  for (const pattern of excludePatterns) {
-    if (matchPattern(pattern, path)) {
-      return true
+export function getSyncExcludeReason(path: string): SyncExcludePattern | null {
+  for (const item of DEFAULT_SYNC_EXCLUDE_PATTERNS) {
+    if (matchPattern(item.pattern, path)) {
+      return item
     }
   }
 
-  return false
+  return null
 }
 
 // 通配符匹配

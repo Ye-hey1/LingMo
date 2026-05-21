@@ -1,4 +1,4 @@
-import { getDb, serializedWrite } from './index'
+import { getDb, runDbTransaction, serializedWrite } from './index'
 
 export interface NoteRelation {
   id: number
@@ -96,8 +96,7 @@ export async function upsertNoteRelationsBatch(relations: RelationInput[]) {
     const db = await getDb()
     const now = Date.now()
 
-    await db.execute('BEGIN')
-    try {
+    await runDbTransaction(db, async () => {
       for (const relation of relations) {
         await db.execute(
           `insert into note_relations (source_note, target_note, relation_type, confidence, evidence, source_method, keyword_overlap_score, cosine_sim_score, llm_confirmed, updated_at)
@@ -120,11 +119,7 @@ export async function upsertNoteRelationsBatch(relations: RelationInput[]) {
           ],
         )
       }
-      await db.execute('COMMIT')
-    } catch (error) {
-      await db.execute('ROLLBACK')
-      throw error
-    }
+    })
   })
 }
 

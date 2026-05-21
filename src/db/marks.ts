@@ -1,4 +1,4 @@
-import { getDb, serializedWrite } from './index'
+import { getDb, runDbTransaction, serializedWrite } from './index'
 import { BaseDirectory, exists, mkdir, remove } from '@tauri-apps/plugin-fs'
 import { insertActivityEventWithDb } from './activity'
 import { truncateActivityText } from '@/lib/activity/events'
@@ -221,20 +221,14 @@ export async function deleteAllMarks() {
 export async function insertMarks(marks: Partial<Mark>[]) {
   await serializedWrite(async () => {
     const db = await getDb()
-    try {
-      await db.execute('BEGIN TRANSACTION')
+    await runDbTransaction(db, async () => {
       for (const mark of marks) {
         await db.execute(
           'insert into marks (tagId, type, content, url, desc, createdAt, deleted, processed, processedAt) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
           [mark.tagId, mark.type, mark.content, mark.url, mark.desc, mark.createdAt, mark.deleted, mark.processed ?? 0, mark.processedAt ?? null],
         )
       }
-      await db.execute('COMMIT')
-    } catch (error) {
-      await db.execute('ROLLBACK')
-      console.error('Error inserting marks:', error)
-      throw error
-    }
+    })
   })
 }
 

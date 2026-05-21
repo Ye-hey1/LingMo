@@ -1,4 +1,4 @@
-import { getDb, serializedWrite } from './index'
+import { getDb, runDbTransaction, serializedWrite } from './index'
 import { Store } from '@tauri-apps/plugin-store'
 
 export const TAG_COLORS = [
@@ -272,8 +272,7 @@ export async function deleteAllTags() {
 export async function insertTags(tags: Tag[]) {
   await serializedWrite(async () => {
     const db = await getDb()
-    await db.execute('BEGIN TRANSACTION')
-    try {
+    await runDbTransaction(db, async () => {
       for (const tag of tags) {
         if (tag.isLocked) continue
         const exists = await db.select<Tag[]>('select * from tags where id = $1', [tag.id])
@@ -289,11 +288,7 @@ export async function insertTags(tags: Tag[]) {
           )
         }
       }
-      await db.execute('COMMIT')
-    } catch (error) {
-      await db.execute('ROLLBACK')
-      throw error
-    }
+    })
   })
   return true
 }
@@ -301,19 +296,14 @@ export async function insertTags(tags: Tag[]) {
 export async function updateTagsOrder(tags: { id: number; sortOrder: number }[]) {
   await serializedWrite(async () => {
     const db = await getDb()
-    await db.execute('BEGIN TRANSACTION')
-    try {
+    await runDbTransaction(db, async () => {
       for (const tag of tags) {
         await db.execute(
           'update tags set sortOrder = $1 where id = $2',
           [tag.sortOrder, tag.id],
         )
       }
-      await db.execute('COMMIT')
-    } catch (error) {
-      await db.execute('ROLLBACK')
-      throw error
-    }
+    })
   })
   return true
 }

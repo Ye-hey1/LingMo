@@ -31,7 +31,6 @@ skills-lock.json
 
 # testing
 /coverage
-*.test.*
 
 # next.js
 /.next/
@@ -75,6 +74,9 @@ docs/.vitepress/cache
 # backup files
 *.backup
 .backup
+
+# temporary / recovered files
+tmp-*
 
 # worktrees
 .worktrees

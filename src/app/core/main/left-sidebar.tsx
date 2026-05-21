@@ -1,5 +1,6 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { useEffect, useRef, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
 import { ArrowLeft, Brain, Files, Highlighter, Network, Settings, Star, WalletCards } from 'lucide-react'
@@ -14,14 +15,16 @@ import { useSettingsDialogStore } from '@/stores/settings-dialog'
 import { useSidebarStore } from '@/stores/sidebar'
 import useUpdateStore from '@/stores/update'
 
-import { FavoritesSection } from './file/favorites-section'
 import { FileActions } from './file/file-actions'
-import { FileSidebar } from './file/index'
 import { FLASHCARD_TAB_PATH } from './flashcard/flashcard-constants'
 import { KNOWLEDGE_GRAPH_TAB_PATH } from './knowledge/knowledge-graph-constants'
 import { MarkActions } from './mark/mark-actions'
-import { NoteSidebar } from './mark/index'
 import { MEMORY_TAB_PATH } from './memory/memory-constants'
+
+// 动态导入：侧边栏各面板按需加载，减少首屏 bundle 大小
+const FileSidebar = dynamic(() => import('./file/index').then(m => ({ default: m.FileSidebar })), { ssr: false })
+const NoteSidebar = dynamic(() => import('./mark/index').then(m => ({ default: m.NoteSidebar })), { ssr: false })
+const FavoritesSection = dynamic(() => import('./file/favorites-section').then(m => ({ default: m.FavoritesSection })), { ssr: false })
 
 const SIDEBAR_TABS = [
   { title: 'files', icon: Files },

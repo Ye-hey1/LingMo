@@ -1,4 +1,4 @@
-import { getDb, serializedWrite } from './index'
+import { getDb, runDbTransaction, serializedWrite } from './index'
 import type {
   CreateFlashcardInput,
   Flashcard,
@@ -197,38 +197,37 @@ export async function createFlashcardsBatch(inputs: CreateFlashcardInput[]) {
 
   await serializedWrite(async () => {
     const db = await getDb()
-    await db.execute('BEGIN TRANSACTION')
     try {
-      for (let index = 0; index < inputs.length; index += 1) {
-        const input = inputs[index]
-        const ts = now()
-        await db.execute(
-          `insert into flashcards
-            (deckId, noteId, notePath, type, front, back, clozeText, tags, status, ease, interval, repetitions, dueAt, lastReviewAt, createdAt, updatedAt)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-          [
-            input.deckId,
-            input.noteId ?? null,
-            input.notePath ?? null,
-            input.type,
-            input.front ?? null,
-            input.back ?? null,
-            input.clozeText ?? null,
-            normalizeTags(input.tags),
-            'new',
-            DEFAULT_EASE,
-            DEFAULT_INTERVAL,
-            0,
-            ts,
-            null,
-            ts,
-            ts,
-          ],
-        )
-      }
-      await db.execute('COMMIT')
+      await runDbTransaction(db, async () => {
+        for (let index = 0; index < inputs.length; index += 1) {
+          const input = inputs[index]
+          const ts = now()
+          await db.execute(
+            `insert into flashcards
+              (deckId, noteId, notePath, type, front, back, clozeText, tags, status, ease, interval, repetitions, dueAt, lastReviewAt, createdAt, updatedAt)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+            [
+              input.deckId,
+              input.noteId ?? null,
+              input.notePath ?? null,
+              input.type,
+              input.front ?? null,
+              input.back ?? null,
+              input.clozeText ?? null,
+              normalizeTags(input.tags),
+              'new',
+              DEFAULT_EASE,
+              DEFAULT_INTERVAL,
+              0,
+              ts,
+              null,
+              ts,
+              ts,
+            ],
+          )
+        }
+      })
     } catch (error) {
-      await db.execute('ROLLBACK')
       const detail = error instanceof Error ? error.message : JSON.stringify(error)
       throw new Error(`批量保存闪卡失败：${detail}`)
     }

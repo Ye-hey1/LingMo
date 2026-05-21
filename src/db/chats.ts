@@ -1,4 +1,4 @@
-import { getDb, serializedWrite } from './index'
+import { getDb, runDbTransaction, serializedWrite } from './index'
 import { insertActivityEventWithDb } from './activity'
 import { truncateActivityText } from '@/lib/activity/events'
 
@@ -162,8 +162,7 @@ export async function getAllChats() {
 export async function insertChats(chats: Chat[]) {
   await serializedWrite(async () => {
     const db = await getDb()
-    await db.execute('BEGIN TRANSACTION')
-    try {
+    await runDbTransaction(db, async () => {
       for (const chat of chats) {
         await db.execute(
           'insert into chats (tagId, conversationId, content, role, type, image, images, inserted, createdAt, ragSources, ragSourceDetails, agentHistory, thinking, quoteData, condensedContent, condensedAt) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)',
@@ -187,11 +186,7 @@ export async function insertChats(chats: Chat[]) {
           ],
         )
       }
-      await db.execute('COMMIT')
-    } catch (error) {
-      await db.execute('ROLLBACK')
-      throw error
-    }
+    })
   })
 }
 

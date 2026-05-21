@@ -834,9 +834,9 @@
         "failed": "连接失败",
         "unconfigured": "未配置"
       },
-      "uploadRecords": "上载记录和配置",
-      "downloadConfig": "下载记录和配置",
-      "cloudSync": "记录与配置同步",
+      "uploadRecords": "上传全部到云端",
+      "downloadConfig": "从云端恢复全部",
+      "cloudSync": "云同步（全部数据）",
       "localBackupAll": "本地备份（全部）",
       "private": "私有",
       "public": "公开",

@@ -1,4 +1,4 @@
-﻿import { getDb, serializedWrite } from './index';
+import { getDb, runDbTransaction, serializedWrite } from './index';
 
 export interface VectorDocument {
   id: number;
@@ -115,28 +115,6 @@ class VectorCache {
 
 const vectorCache = new VectorCache();
 
-async function rollbackIfActive(db: Awaited<ReturnType<typeof getDb>>) {
-  try {
-    await db.execute('ROLLBACK');
-  } catch (rollbackError) {
-    const message = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
-    if (!/no transaction is active/i.test(message)) {
-      console.warn('[VectorDB] rollback failed:', rollbackError);
-    }
-  }
-}
-
-async function runVectorTransaction(db: Awaited<ReturnType<typeof getDb>>, fn: () => Promise<void>) {
-  await db.execute('BEGIN IMMEDIATE');
-  try {
-    await fn();
-    await db.execute('COMMIT');
-  } catch (error) {
-    await rollbackIfActive(db);
-    throw error;
-  }
-}
-
 export async function initVectorDb() {
   const db = await getDb();
   await db.execute(`
@@ -181,7 +159,7 @@ export async function upsertVectorDocument(doc: Omit<VectorDocument, 'id'>) {
 export async function upsertVectorDocumentsBatch(docs: Omit<VectorDocument, 'id'>[]) {
   return serializedWrite(async () => {
     const db = await getDb();
-    await runVectorTransaction(db, async () => {
+    await runDbTransaction(db, async () => {
       for (const doc of docs) {
         await db.execute(
           'insert into vector_documents (filename, chunk_id, content, embedding, updated_at) values ($1, $2, $3, $4, $5) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at',
@@ -204,7 +182,7 @@ export async function replaceVectorDocumentsForFile(
       new Set([filename, ...legacyFilenames].filter(Boolean)),
     );
 
-    await runVectorTransaction(db, async () => {
+    await runDbTransaction(db, async () => {
       for (const filenameToDelete of filenamesToDelete) {
         await db.execute(
           'delete from vector_documents where filename = $1',

@@ -1,8 +1,9 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { ThemeProvider } from "@/components/theme-provider"
 import useSettingStore from "@/stores/setting"
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { initAllDatabases } from "@/db"
 import dayjs from "dayjs"
 import zh from "dayjs/locale/zh-cn";
@@ -16,19 +17,21 @@ import initQuickRecordText from "@/lib/shortcut/quick-record-text"
 import { useRouter, usePathname } from "next/navigation"
 import initShowWindow from "@/lib/shortcut/show-window"
 import { initMcp } from "@/lib/mcp/init"
-import { SearchDialog } from "@/components/search-dialog"
-import { ActivityDrawer } from "@/components/activity/activity-drawer"
 import { reportAppStart } from "@/lib/event-report"
 import { TitleBar } from "@/components/title-bar"
 import { Store } from '@tauri-apps/plugin-store'
 import { TextSizeProvider } from "@/contexts/text-size-context"
-import { SyncConfirmDialog } from "@/components/sync-confirm-dialog"
 import { applyThemeColors } from "@/lib/theme-utils"
 import emitter from "@/lib/emitter"
 import { isEditableKeyboardTarget } from "@/lib/is-editable-keyboard-target"
 import { checkIsTauri } from "@/lib/check"
 import { WebRuntimeNotice } from "@/components/web-runtime-notice"
-import { SettingsDialog } from "@/components/settings-dialog"
+
+// 动态导入：非首屏必需的重型组件，减少首屏 bundle 大小
+const SearchDialog = dynamic(() => import('@/components/search-dialog').then(m => ({ default: m.SearchDialog })), { ssr: false })
+const ActivityDrawer = dynamic(() => import('@/components/activity/activity-drawer').then(m => ({ default: m.ActivityDrawer })), { ssr: false })
+const SyncConfirmDialog = dynamic(() => import('@/components/sync-confirm-dialog').then(m => ({ default: m.SyncConfirmDialog })), { ssr: false })
+const SettingsDialog = dynamic(() => import('@/components/settings-dialog').then(m => ({ default: m.SettingsDialog })), { ssr: false })
 
 export default function RootLayout({
   children,

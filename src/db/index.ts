@@ -16,6 +16,16 @@ function isTransactionControlSql(sql: unknown) {
   return /^(BEGIN|COMMIT|ROLLBACK)(\s|;|$)/i.test(sql.trim())
 }
 
+function isTransactionAlreadyActiveError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /cannot start a transaction within a transaction/i.test(message)
+}
+
+function isNoActiveTransactionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /no transaction is active/i.test(message)
+}
+
 function sleep(ms: number) {
   return new Promise(resolve => window.setTimeout(resolve, ms))
 }
@@ -91,6 +101,47 @@ export function serializedWrite<T>(fn: () => Promise<T>): Promise<T> {
   ) // 即使前一个失败也继续
   writeQueue = task.catch(() => {}) // 防止未处理的 rejection
   return task
+}
+
+async function rollbackActiveTransaction(db: Database) {
+  try {
+    await runWithDatabaseLockRetry(() => db.execute('ROLLBACK'))
+  } catch (rollbackError) {
+    if (!isNoActiveTransactionError(rollbackError)) {
+      console.warn('[DB] rollback failed:', rollbackError)
+    }
+  }
+}
+
+async function beginTransaction(db: Database, beginSql: string) {
+  try {
+    await runWithDatabaseLockRetry(() => db.execute(beginSql))
+  } catch (error) {
+    if (!isTransactionAlreadyActiveError(error)) {
+      throw error
+    }
+
+    console.warn('[DB] stale transaction detected; rolling back before retrying BEGIN')
+    await rollbackActiveTransaction(db)
+    await runWithDatabaseLockRetry(() => db.execute(beginSql))
+  }
+}
+
+export async function runDbTransaction<T>(
+  db: Database,
+  fn: () => Promise<T>,
+  beginSql = 'BEGIN IMMEDIATE',
+): Promise<T> {
+  await beginTransaction(db, beginSql)
+
+  try {
+    const result = await fn()
+    await runWithDatabaseLockRetry(() => db.execute('COMMIT'))
+    return result
+  } catch (error) {
+    await rollbackActiveTransaction(db)
+    throw error
+  }
 }
 
 // 初始化所有数据库

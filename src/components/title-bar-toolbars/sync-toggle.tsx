@@ -50,6 +50,7 @@ import { uint8ArrayToBase64, decodeBase64ToString } from "@/lib/sync/github"
 import { getRemoteFileContent } from "@/lib/sync/remote-file"
 import { getSyncRepoName } from "@/lib/sync/repo-utils"
 import { getGiteaApiBaseUrl } from "@/lib/sync/gitea"
+import { downloadWorkspaceFiles, uploadWorkspaceFiles } from "@/lib/sync/workspace-full-sync"
 import { fetch } from '@tauri-apps/plugin-http'
 
 // GitLab 实例类型
@@ -707,9 +708,18 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
         }
       }
 
-      if (tagRes && markRes && settingsRes) {
+      const workspaceRes = await uploadWorkspaceFiles()
+      await loadRemoteSyncFiles()
+
+      if (tagRes && markRes && settingsRes && workspaceRes.success) {
         toast({
-          description: t('record.mark.uploadSuccess'),
+          description: `已上传记录、配置和 ${workspaceRes.successCount} 个工作区文件`,
+        })
+      } else if (workspaceRes.failedCount > 0) {
+        toast({
+          title: '部分文件上传失败',
+          description: `成功 ${workspaceRes.successCount} 个，失败 ${workspaceRes.failedCount} 个`,
+          variant: 'destructive',
         })
       }
     } catch (error) {
@@ -818,8 +828,12 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
         await Promise.allSettled(keys.map(async key => await store.set(key, mergedSettings[key])))
         await store.save()
 
+        const workspaceRes = await downloadWorkspaceFiles()
+        await loadFileTree()
+        await loadRemoteSyncFiles()
+
         toast({
-          description: t('record.mark.downloadSuccess') + t('common.restartToApply'),
+          description: `已恢复记录、配置和 ${workspaceRes.successCount} 个工作区文件，${t('common.restartToApply')}`,
         })
       }
     } catch (error) {
@@ -1110,7 +1124,7 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
             <p>{t('common.sync')}</p>
           </TooltipContent>
         </Tooltip>
-        <PopoverContent align="end" className="w-72">
+        <PopoverContent align="end" className="w-80">
           {syncPanel}
         </PopoverContent>
       </Popover>

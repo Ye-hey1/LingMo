@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { Activity, BarChart3, Brain, CalendarDays, MessageSquare, RefreshCw, Sparkles } from 'lucide-react'
+import { Activity, BarChart3, Brain, CalendarDays, CloudSync, MessageSquare, RefreshCw, Sparkles } from 'lucide-react'
 
 import { MEMORY_TAB_PATH } from '@/app/core/main/memory/memory-constants'
 import { requestOpenMemorySession } from '@/app/core/main/memory/memory-navigation'
 import { ActivityDayDetail } from '@/components/activity/activity-day-detail'
 import { ActivityHeatmap, type ActivityHeatmapSelectionRange } from '@/components/activity/activity-heatmap'
+import { SyncHealthPanel } from '@/components/sync/sync-health-panel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,7 +28,7 @@ interface ActivityPanelProps {
   mode?: 'page' | 'drawer'
 }
 
-type ActivityTab = 'overview' | 'timeline' | 'ai' | 'memory'
+type ActivityTab = 'overview' | 'timeline' | 'ai' | 'memory' | 'sync'
 type TimelineRangePreset = '7d' | '30d' | 'all' | 'custom'
 type ActivityFocusRange = ActivityHeatmapSelectionRange
 
@@ -1246,7 +1247,7 @@ export function ActivityPanel({
             </span>
             <div>
               <h2 className="text-xl font-semibold tracking-tight">活跃度中心</h2>
-              <p className="text-xs text-muted-foreground">活动、AI 交互与记忆沉淀</p>
+              <p className="text-xs text-muted-foreground">活动、AI 交互、记忆沉淀与同步状态</p>
             </div>
           </div>
         </div>
@@ -1273,6 +1274,7 @@ export function ActivityPanel({
           <TabsTrigger value="timeline" className="gap-1.5"><Activity className="h-3.5 w-3.5" />时间线</TabsTrigger>
           <TabsTrigger value="ai" className="gap-1.5"><MessageSquare className="h-3.5 w-3.5" />AI交互</TabsTrigger>
           <TabsTrigger value="memory" className="gap-1.5"><Brain className="h-3.5 w-3.5" />记忆</TabsTrigger>
+          <TabsTrigger value="sync" className="gap-1.5"><CloudSync className="h-3.5 w-3.5" />同步</TabsTrigger>
           </TabsList>
           {onRefresh ? (
             <Button
@@ -1322,6 +1324,10 @@ export function ActivityPanel({
 
           <TabsContent value="memory" className="mt-4">
             <MemorySnapshot data={data} />
+          </TabsContent>
+
+          <TabsContent value="sync" className="mt-4">
+            <SyncHealthPanel />
           </TabsContent>
         </div>
       </Tabs>
