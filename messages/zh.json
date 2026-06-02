@@ -42,7 +42,9 @@
     "restartToApply": "，请重启应用使配置生效",
     "unsaved": "未保存",
     "saving": "保存中...",
-    "configureSync": "配置同步"
+    "configureSync": "配置同步",
+    "selectPrompt": "选择提示词",
+    "prompt": "提示词"
   },
   "settings": {
     "defaultModels": {
@@ -718,7 +720,8 @@
           "title": "摘要模型",
           "desc": "用于压缩历史对话内容，节省 token 使用量"
         }
-      }
+      },
+      "main": "主模型"
     },
     "audio": {
       "title": "语音设置",
@@ -1017,7 +1020,9 @@
         },
         "createNewRepo": "创建新仓库",
         "recheckRepo": "重新检测",
-        "recheckingRepo": "检测中..."
+        "recheckingRepo": "检测中...",
+        "createRepo": "创建仓库",
+        "creatingRepo": "创建中..."
       },
       "s3": {
         "title": "S3 对象存储",
@@ -1150,7 +1155,8 @@
       "appTheme": "应用配色",
       "previewTheme": "预览内容主题",
       "codeTheme": "代码块高亮主题",
-      "selectTheme": "选择主题"
+      "selectTheme": "选择主题",
+      "desc": "自定义应用主题颜色"
     },
     "dev": {
       "title": "开发者",
@@ -1442,8 +1448,14 @@
       }
     },
     "webSearch": {
-      "title": "\u8054\u7f51\u641c\u7d22",
-      "desc": "\u5728\u8fd9\u91cc\u914d\u7f6e Tavily \u8054\u7f51\u641c\u7d22\u80fd\u529b\uff0c\u5305\u62ec API Key\u3001\u641c\u7d22\u6df1\u5ea6\u548c\u5065\u5eb7\u68c0\u67e5\u3002"
+      "title": "联网搜索",
+      "desc": "在这里配置 Tavily 联网搜索能力，包括 API Key、搜索深度和健康检查。"
+    },
+    "ocr": {
+      "title": "OCR",
+      "languagePacks": "语言包",
+      "checkModels": "在此查看所有模型",
+      "modelInstruction": "用逗号分隔，例如：eng,chi_sim"
     }
   },
   "record": {
@@ -1510,7 +1522,9 @@
         "cacheScreenshot": "缓存截图",
         "textAnalysis": "文本分析",
         "save": "保存",
-        "saveImage": "保存图片"
+        "saveImage": "保存图片",
+        "newToken": "创建访问令牌",
+        "newTokenDesc": "新令牌必须配置仓库权限，配置后将自动创建文件仓库（私有）和图片仓库。"
       },
       "imageGallery": {
         "expand": "展开",
@@ -1655,7 +1669,24 @@
             "noModel": "未设置模型",
             "noPrompt": "未设置 Prompt",
             "modeHint": "点击输入框左侧的",
-            "modeHintSuffix": "按钮可切换对话模式"
+            "modeHintSuffix": "按钮可切换对话模式",
+            "currentMode": "对话模式",
+            "configureModel": "配置模型",
+            "recentConversations": "最近对话",
+            "deleteConversation": "删除对话",
+            "conversationHistory": "历史记录",
+            "viewMore": "查看更多",
+            "messages": "条消息",
+            "searchPlaceholder": "搜索对话...",
+            "noMatchingConversations": "未找到匹配的对话",
+            "noConversationHistory": "暂无对话历史",
+            "quickPrompts": {
+              "title": "快速开始",
+              "writeNote": "帮我写一篇笔记",
+              "summarize": "帮我总结这些内容",
+              "brainstorm": "帮我头脑风暴",
+              "explain": "帮我解释这个概念"
+            }
           },
           "content": {
             "organize": "将你的记录整理为文章："
@@ -1770,7 +1801,15 @@
         "image": "上传图片",
         "link": "记录链接",
         "file": "上传文件",
-        "todo": "待办记录"
+        "todo": "待办记录",
+        "sortByName": "按名称排序",
+        "sortByCreated": "按创建时间排序",
+        "sortByModified": "按修改时间排序",
+        "sortAsc": "升序排列",
+        "sortDesc": "降序排列",
+        "sort": "排序",
+        "processingVectors": "正在处理向量数据",
+        "calculateVectors": "计算文档向量"
       },
       "list": {
         "title": "记录",
@@ -1817,7 +1856,21 @@
           "summarize": "帮我总结这段内容",
           "brainstorm": "帮我头脑风暴一些想法",
           "explain": "帮我解释这个概念"
-        }
+        },
+        "features": [
+          {
+            "chat": "与 AI 机器人对话"
+          },
+          {
+            "linked": "关联你的记录或笔记"
+          },
+          {
+            "clipboard": "识别剪贴板记录或图片"
+          },
+          {
+            "organize": "将记录整理为笔记"
+          }
+        ]
       },
       "newChat": "使用新标签开始对话",
       "removeChat": "删除当前标签对话",
@@ -2102,6 +2155,10 @@
       "article": "文章",
       "matches": "{count}个匹配项",
       "scanType": "截图"
+    },
+    "mode": {
+      "fuzzy": "模糊搜索",
+      "exact": "精确搜索"
     }
   },
   "image": {
@@ -2210,7 +2267,8 @@
   "article": {
     "sync": {
       "syncingRemote": "正在拉取远程文件...",
-      "syncComplete": "同步完成"
+      "syncComplete": "同步完成",
+      "pullingRemote": "正在从远程服务器获取最新内容..."
     },
     "syncConfirm": {
       "title": "检测到远程文件更新",
@@ -2460,7 +2518,44 @@
         "pasteFailed": "粘贴操作失败",
         "empty": "剪贴板为空",
         "confirmOverwrite": "文件已存在，是否覆盖？",
-        "notSupported": "不支持此操作"
+        "notSupported": "不支持此操作",
+        "mark": {
+          "title": "记录",
+          "tooltip": "使用记录",
+          "description": "将记录转换为内容并插入到文章中。",
+          "noRecords": "暂无记录",
+          "ocrNoContent": "OCR 未识别到任何内容"
+        },
+        "question": {
+          "tooltip": "问答",
+          "selectContent": "请先选择内容",
+          "promptTemplate": "参考文本：\n{content}\n根据问题：\n{question}\n，直接提供回答内容。"
+        },
+        "continue": {
+          "tooltip": "续写",
+          "promptTemplate": "根据前文：\n{content}\n 续写，返回不超过 100 字的内容。\n可以参考以下文本：\n{endContent}\n，但避免重复其内容。"
+        },
+        "polish": {
+          "tooltip": "润色",
+          "selectContent": "请先选择内容",
+          "promptTemplate": "润色这段文本：\n{content}\n，保持语言不变，修正错别字和语法错误，直接返回润色结果。"
+        },
+        "eraser": {
+          "tooltip": "精简",
+          "selectContent": "请先选择内容",
+          "promptTemplate": "精简这段文本：\n{content}\n，这段文字过于冗长，减少至少一半字数，保持语言不变，直接返回优化结果。"
+        },
+        "expansion": {
+          "tooltip": "扩写",
+          "selectContent": "请先选择内容",
+          "promptTemplate": "扩写这段文本：\n{content}\n，这段文字过短，增加至少一半字数，保持语言不变，直接返回扩写结果。"
+        },
+        "translation": {
+          "tooltip": "翻译",
+          "description": "翻译选中的文本",
+          "selectContent": "请先选择内容",
+          "promptTemplate": "将这段文本：\n{content}\n 翻译为{language}，直接返回翻译结果。"
+        }
       },
       "mobile": {
         "cancel": "取消",
@@ -2592,6 +2687,9 @@
           "customLanguagePlaceholder": "输入目标语言，如：英语、日语等",
           "customLanguageEmpty": "请输入目标语言",
           "customLanguageExample": "例如：英语、日语、法语等"
+        },
+        "organize": {
+          "tooltip": "整理笔记"
         }
       }
     },
@@ -3110,6 +3208,34 @@
       "reviewDeck": "复习此牌组",
       "deleteDeck": "删除牌组",
       "deleteConfirm": "删除牌组将同时删除其中所有卡片，确定要删除吗？"
+    }
+  },
+  "footer": {
+    "wordCount": "字数",
+    "sync": {
+      "sync": "同步",
+      "synced": "已同步",
+      "syncing": "同步中",
+      "syncFailed": "同步失败",
+      "checkNetworkOrToken": "请检查网络连接或令牌",
+      "quickSync": "快速同步"
+    },
+    "history": {
+      "loadingHistory": "正在加载历史",
+      "historyRecords": "历史记录",
+      "noHistory": "暂无历史",
+      "loading": "加载中",
+      "recordsCount": "条记录",
+      "filterQuickSync": "过滤快速同步",
+      "committedAt": "提交于",
+      "pull": "拉取",
+      "quickSync": "快速同步"
+    },
+    "vectorCalc": {
+      "tooltip": "向量计算：编辑后 30 秒自动计算，或点击立即计算",
+      "calculating": "计算中",
+      "pending": "进度 {progress}%",
+      "synced": "已同步"
     }
   }
 }
