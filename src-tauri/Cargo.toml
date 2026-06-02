@@ -38,7 +38,7 @@ reqwest = { version = "0.12", features = ["json", "multipart", "stream", "rustls
 futures-util = "0.3"
 url = "2.5"
 reqwest_dav = "=0.2.1"
-tauri-plugin-opener = "2.4.0"
+tauri-plugin-opener = "2"
 uuid = { version = "1.10", features = ["v4"] }
 zip = { version = "4", default-features = false, features = ["deflate"] }
 rusqlite = { version = "0.31", features = ["bundled-full"] }
@@ -57,12 +57,12 @@ version = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-window-state = "2"
+tauri-plugin-updater = "=2.9.0"
+tauri-plugin-window-state = "=2.3.0"
 tauri-plugin-clipboard = "2"
 xcap = "=0.6.0"
 reqwest_dav = "=0.2.1"
-tauri-plugin-process = "=2.0.0"
+tauri-plugin-process = "2"
 jieba-rs = { version = "0.7", features = ["textrank"] }
 machine-uid = "0.5"
 regex = "1"

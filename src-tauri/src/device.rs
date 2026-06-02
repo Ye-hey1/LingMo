@@ -28,7 +28,7 @@ fn get_or_create_device_id() -> Result<String, String> {
     // 这样可以确保跨平台兼容性和权限访问
     let app_data_dir = std::env::temp_dir();
 
-    let device_id_file = app_data_dir.join("note-gen-device-id.txt");
+    let device_id_file = app_data_dir.join("lingmo-device-id.txt");
 
     // 如果文件存在，读取已有的 ID
     if device_id_file.exists() {

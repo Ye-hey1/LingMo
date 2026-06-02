@@ -117,7 +117,7 @@ pub async fn export_app_data(app_handle: AppHandle, output_path: String) -> Resu
             let file_name = PathBuf::from(&output_path)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "note-gen-backup.zip".to_string());
+                .unwrap_or_else(|| "lingmo-backup.zip".to_string());
 
             let new_dest_path = export_dir.join(&file_name);
 
