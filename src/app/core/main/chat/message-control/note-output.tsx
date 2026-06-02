@@ -93,7 +93,7 @@ export function NoteOutput({chat, compact = false}: {chat: Chat, compact?: boole
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <a className={actionButtonClass}>
-          <SquarePen className="size-4" />
+          <SquarePen className="size-3.5" />
         </a>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-80 p-3">

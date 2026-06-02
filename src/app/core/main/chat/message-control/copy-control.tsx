@@ -54,9 +54,9 @@ export function CopyControl({ chat, translatedContent, compact = false }: CopyCo
       <TooltipButton
         icon={
           isCopied ? (
-            <Check className="h-4 w-4" />
+            <Check className="size-3.5" />
           ) : (
-            <Copy className="h-4 w-4" />
+            <Copy className="size-3.5" />
           )
         }
         tooltipText={

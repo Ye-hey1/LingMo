@@ -72,7 +72,7 @@ export function TranslateControl({ chat, onTranslatedContent, compact = false }:
       <DropdownMenuTrigger asChild>
         <div>
           <TooltipButton
-            icon={isTranslating ? <Loader2 className="size-4 animate-spin" /> : <Languages className="size-4" />}
+            icon={isTranslating ? <Loader2 className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}
             tooltipText={translateT('tooltip')}
             disabled={isTranslating}
             variant="ghost"

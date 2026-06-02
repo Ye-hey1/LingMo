@@ -76,11 +76,11 @@ export function ReadAloudControl({ chat, translatedContent, compact = false }: R
       <TooltipButton
         icon={
           isLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Loader2 className="size-3.5 animate-spin" />
           ) : isPlaying ? (
-            <VolumeX className="h-4 w-4" />
+            <VolumeX className="size-3.5" />
           ) : (
-            <Volume2 className="h-4 w-4" />
+            <Volume2 className="size-3.5" />
           )
         }
         tooltipText={

@@ -58,7 +58,7 @@ ${chat.content}
 
   return (
     isRecorded ?
-      <TooltipButton icon={<CheckCircle className="size-4" />} tooltipText={t('recorded')} variant={"ghost"} size="sm" buttonClassName={actionButtonClass} disabled/> :
-      <TooltipButton icon={<Highlighter className="size-4" />} tooltipText={t('record')} variant={"ghost"} size="sm" buttonClassName={actionButtonClass} onClick={handleSuccess}/>
+      <TooltipButton icon={<CheckCircle className="size-3.5" />} tooltipText={t('recorded')} variant={"ghost"} size="sm" buttonClassName={actionButtonClass} disabled/> :
+      <TooltipButton icon={<Highlighter className="size-3.5" />} tooltipText={t('record')} variant={"ghost"} size="sm" buttonClassName={actionButtonClass} onClick={handleSuccess}/>
   )
 }

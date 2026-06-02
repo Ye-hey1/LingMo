@@ -123,7 +123,7 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
     <>
       <div
         ref={containerRef}
-        className='mt-2 flex min-w-0 items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2 py-1 transition-colors hover:border-border/90'
+        className='mt-1.5 flex min-w-0 items-center gap-2 px-1 py-0.5'
       >
         {/* 左侧：消息元信息 */}
         <div className="flex min-w-0 shrink-0 items-center gap-1.5">
@@ -170,7 +170,7 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
           <div className="flex shrink-0 items-center gap-0.5">
             {chat.role === 'system' && chat.type === 'chat' ? (
               <TooltipButton
-                icon={<RefreshCw className='size-4' />}
+                icon={<RefreshCw className='size-3.5' />}
                 tooltipText="重新生成"
                 variant={"ghost"}
                 size={"sm"}
@@ -182,7 +182,7 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
 
             {chat.role === 'user' && chat.type === 'chat' ? (
               <TooltipButton
-                icon={<CornerUpLeft className='size-4' />}
+                icon={<CornerUpLeft className='size-3.5' />}
                 tooltipText="从这里重新开始"
                 variant={"ghost"}
                 size={"sm"}
@@ -193,7 +193,7 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
             ) : null}
 
             <TooltipButton
-              icon={<XIcon className='size-4' />}
+              icon={<XIcon className='size-3.5' />}
               tooltipText={t('delete')}
               variant={"ghost"}
               size={"sm"}

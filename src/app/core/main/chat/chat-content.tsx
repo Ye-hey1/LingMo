@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Chat } from '@/db/chats'
 import ChatPreview from './chat-preview'
 import './chat.css'
-import { NoteOutput } from './message-control/note-output'
 import { MarkText } from './message-control/mark-text'
 import { ChatClipboard } from './chat-clipboard'
 import MessageControl from './message-control'
@@ -554,9 +553,8 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
               <ChatPreview text={displayContent || ''} streaming={isResponseStreaming} highlightQuery={searchQuery} />
             )}
 
-            {/* 6. 统一操作栏：笔记、复制、翻译、朗读、重试、删除 */}
+            {/* 6. 统一操作栏：标记、复制、翻译、朗读、重试、删除 */}
             <MessageControl chat={chat}>
-              <NoteOutput chat={chat} />
               <MarkText chat={chat} />
             </MessageControl>
           </motion.div>
