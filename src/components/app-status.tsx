@@ -82,6 +82,10 @@ export default function AppStatus() {
       }
     } catch (err) {
       console.error('Failed to get user info:', err)
+      if (primaryBackupMethod === 'github') {
+        setSyncRepoInfo(undefined)
+        setSyncRepoState(SyncStateEnum.fail)
+      }
     }
   }
 

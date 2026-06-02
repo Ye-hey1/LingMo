@@ -1124,7 +1124,7 @@ export function ActivityPanel({
   mode = 'page',
 }: ActivityPanelProps) {
   const t = useTranslations('activity')
-  const { loadFileTree, setActiveFilePath } = useArticleStore()
+  const { setActiveFilePath } = useArticleStore()
   const { centerPanelVisible, setLeftSidebarTab, toggleCenterPanel } = useSidebarStore()
   const [tab, setTab] = useState<ActivityTab>('overview')
   const [source, setSource] = useState<ActivityViewSource | 'all'>('all')
@@ -1212,13 +1212,6 @@ export function ActivityPanel({
     } catch (error) {
       console.error('Failed to open activity path:', error)
     }
-  }
-
-  async function handleOpenGeneratedFile(filePath: string) {
-    await loadFileTree({ skipRemoteSync: true })
-    await setLeftSidebarTab('files')
-    await setActiveFilePath(filePath)
-    onEntryPathOpen?.()
   }
 
   if (loading && !data) {

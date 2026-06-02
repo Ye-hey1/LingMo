@@ -1,0 +1,28 @@
+{
+  "name": "lingmo-docs",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3457",
+    "build": "next build",
+    "start": "next start -p 3457",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@next/mdx": "^15.1.0",
+    "@tailwindcss/postcss": "^4.1.18",
+    "autoprefixer": "^10.4.20",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.561.0",
+    "next": "^15.1.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "tailwindcss": "^4.1.18"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "typescript": "^5"
+  }
+}

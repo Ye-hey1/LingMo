@@ -5,7 +5,7 @@ const rootDir = process.cwd();
 const packagePath = path.join(rootDir, 'package.json');
 const tauriConfigPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
 const cargoTomlPath = path.join(rootDir, 'src-tauri', 'Cargo.toml');
-const iosPlistPath = path.join(rootDir, 'src-tauri', 'gen', 'apple', 'note-gen_iOS', 'Info.plist');
+const iosPlistPath = path.join(rootDir, 'src-tauri', 'gen', 'apple', 'lingmo_iOS', 'Info.plist');
 
 const readJson = (filePath) => JSON.parse(fs.readFileSync(filePath, 'utf8'));
 const writeJson = (filePath, data) => {

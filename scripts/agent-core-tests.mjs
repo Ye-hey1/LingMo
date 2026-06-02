@@ -46,6 +46,9 @@ try {
     buildAgentContextSnapshot,
     formatAgentContextSnapshot,
   } = await importTsModule('src/lib/agent/context-compression.ts')
+  const {
+    calculateSkillMatchScore,
+  } = await importTsModule('src/lib/skills/matcher.ts')
 
   assert.equal(deriveIntentPolicy('帮我完善当前图表').allowWrite, true)
   assert.equal(deriveIntentPolicy('AI 能进行操作吗？').allowWrite, false)
@@ -191,6 +194,48 @@ try {
   })
   assert.equal(snapshot.readFiles[0].path, 'a.md')
   assert.match(formatAgentContextSnapshot(snapshot), /User goal/)
+
+  const pptxSkill = {
+    metadata: {
+      id: 'pptx-exporter',
+      name: 'pptx-exporter',
+      description: 'Generate polished PowerPoint presentations from notes and outlines',
+      scope: 'project',
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    instructions: [
+      '# PPTX Exporter',
+      '',
+      '## When To Use',
+      'Use when the user wants to create slides, export a deck, or turn notes into a presentation.',
+      '',
+      '## Workflow',
+      'Build a concise slide outline before generating the file.',
+    ].join('\n'),
+    scripts: [{ name: 'build-presentation.js', path: 'scripts/build-presentation.js', type: 'javascript' }],
+    references: [{ name: 'pptxgenjs.md', path: 'pptxgenjs.md' }],
+    assets: [],
+  }
+  const writingSkill = {
+    metadata: {
+      id: 'fiction-style',
+      name: 'fiction-style',
+      description: 'Guide creative fiction prose and narrative style',
+      scope: 'project',
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    instructions: '# Fiction Style\n\n## When To Use\nUse for story drafts and narrative prose.',
+    scripts: [],
+    references: [],
+    assets: [],
+  }
+  const pptxMatch = calculateSkillMatchScore(pptxSkill, '帮我把这篇笔记导出成 PPT 演示文稿')
+  const writingMatch = calculateSkillMatchScore(writingSkill, '帮我把这篇笔记导出成 PPT 演示文稿')
+  assert.equal(pptxMatch.confidence, 'high')
+  assert.ok(pptxMatch.score > writingMatch.score)
+  assert.ok(pptxMatch.reasons.some(reason => reason.includes('描述') || reason.includes('使用场景') || reason.includes('参考文件')))
 
   console.log('agent core tests passed')
 } finally {

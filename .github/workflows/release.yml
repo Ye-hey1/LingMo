@@ -137,7 +137,7 @@ jobs:
           cd src-tauri
           APK_PATH="gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk"
           VERSION="${{ steps.get_version.outputs.version }}"
-          SIGNED_APK="gen/android/app/build/outputs/apk/universal/release/NoteGen_${VERSION}_android-universal.apk"
+          SIGNED_APK="gen/android/app/build/outputs/apk/universal/release/LingMo_${VERSION}_android-universal.apk"
           
           if [ ! -f "$APK_PATH" ]; then
             echo "❌ APK file not found at $APK_PATH"
@@ -148,7 +148,7 @@ jobs:
           echo "📝 Signing APK with apksigner (V1 + V2 signatures)..."
           $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | tail -n 1)/apksigner sign \
             --ks android-release.keystore \
-            --ks-key-alias note-gen \
+            --ks-key-alias lingmo \
             --ks-pass pass:"$ANDROID_KEYSTORE_PASSWORD" \
             --key-pass pass:"$ANDROID_KEY_PASSWORD" \
             --out "$SIGNED_APK" \
@@ -168,7 +168,7 @@ jobs:
           cd src-tauri
           VERSION="${{ steps.get_version.outputs.version }}"
           AAB_PATH="gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab"
-          RENAMED_AAB="gen/android/app/build/outputs/bundle/universalRelease/NoteGen_${VERSION}_android-universal.aab"
+          RENAMED_AAB="gen/android/app/build/outputs/bundle/universalRelease/LingMo_${VERSION}_android-universal.aab"
           
           if [ -f "$AAB_PATH" ]; then
             mv "$AAB_PATH" "$RENAMED_AAB"
@@ -180,23 +180,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/universal/release/NoteGen_*.apk
+          path: src-tauri/gen/android/app/build/outputs/apk/universal/release/LingMo_*.apk
           if-no-files-found: error
 
       - name: Upload AAB as artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-aab
-          path: src-tauri/gen/android/app/build/outputs/bundle/universalRelease/NoteGen_*.aab
+          path: src-tauri/gen/android/app/build/outputs/bundle/universalRelease/LingMo_*.aab
           if-no-files-found: warn
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: note-gen-v${{ steps.get_version.outputs.version }}
+          tag_name: lingmo-v${{ steps.get_version.outputs.version }}
           files: |
-            src-tauri/gen/android/app/build/outputs/apk/universal/release/NoteGen_*.apk
-            src-tauri/gen/android/app/build/outputs/bundle/universalRelease/NoteGen_*.aab
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/LingMo_*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/universalRelease/LingMo_*.aab
           draft: false
           prerelease: false
 
@@ -222,7 +222,7 @@ jobs:
               "request": {
                 "app_key": "${{ secrets.UPGRADE_LINK_ANDROID_APP_KEY }}",
                 "version": "${{ needs.build-android.outputs.appVersion }}",
-                "url": "https://github.com/${{ github.repository }}/releases/download/note-gen-v${{ needs.build-android.outputs.appVersion }}/NoteGen_${{ needs.build-android.outputs.appVersion }}_android-universal.apk",
+                "url": "https://github.com/${{ github.repository }}/releases/download/lingmo-v${{ needs.build-android.outputs.appVersion }}/LingMo_${{ needs.build-android.outputs.appVersion }}_android-universal.apk",
                 "prompt_upgrade_content": "新版本已发布，包含重要功能更新和 bug 修复"
               }
             }
@@ -239,24 +239,24 @@ jobs:
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
             name: 'macos-arm64'
-            bundlePath: 'src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/NoteGen_*.dmg'
+            bundlePath: 'src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/LingMo_*.dmg'
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
             name: 'macos-x64'
-            bundlePath: 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/NoteGen_*.dmg'
+            bundlePath: 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/LingMo_*.dmg'
           - platform: 'ubuntu-24.04'
             args: '--bundles deb,rpm'
             name: 'linux-deb-rpm'
-            bundlePath: 'src-tauri/target/release/bundle/(rpm|deb)/NoteGen_*.(rpm|deb)'
+            bundlePath: 'src-tauri/target/release/bundle/(rpm|deb)/LingMo_*.(rpm|deb)'
           - platform: 'ubuntu-22.04'
             args: '--bundles appimage'
             name: 'linux-appimage'
-            bundlePath: 'src-tauri/target/release/bundle/appimage/NoteGen_*.AppImage'
+            bundlePath: 'src-tauri/target/release/bundle/appimage/LingMo_*.AppImage'
             noSign: true
           - platform: 'windows-latest'
             args: ''
             name: 'windows'
-            bundlePath: 'src-tauri\target\release\bundle\(nsis|msi)\NoteGen_*.(exe|msi)'
+            bundlePath: 'src-tauri\target\release\bundle\(nsis|msi)\LingMo_*.(exe|msi)'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -324,8 +324,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         with:
-          tagName: note-gen-v__VERSION__
-          releaseName: 'NoteGen v__VERSION__'
+          tagName: lingmo-v__VERSION__
+          releaseName: 'LingMo v__VERSION__'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: false
           prerelease: false
@@ -378,6 +378,6 @@ jobs:
               "app_type": "tauri",
               "request": {
                 "app_key": "${{ secrets.UPGRADE_LINK_TAURI_KEY }}",
-                "latest_json_url": "https://github.com/${{ github.repository }}/releases/download/note-gen-v${{ needs.publish-tauri.outputs.appVersion }}/latest.json"
+                "latest_json_url": "https://github.com/${{ github.repository }}/releases/download/lingmo-v${{ needs.publish-tauri.outputs.appVersion }}/latest.json"
               }
             }

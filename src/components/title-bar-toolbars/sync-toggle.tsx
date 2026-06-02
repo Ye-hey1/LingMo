@@ -52,6 +52,7 @@ import { getSyncRepoName } from "@/lib/sync/repo-utils"
 import { getGiteaApiBaseUrl } from "@/lib/sync/gitea"
 import { downloadWorkspaceFiles, uploadWorkspaceFiles } from "@/lib/sync/workspace-full-sync"
 import { fetch } from '@tauri-apps/plugin-http'
+import { getProxyConfig } from "@/lib/network-proxy"
 
 // GitLab 实例类型
 enum GitlabInstanceType {
@@ -128,6 +129,17 @@ function encodeGitLabPath(path: string, filename?: string): string {
   return encodeURIComponent(fullPath)
 }
 
+/**
+ * 安全解析 HTTP Response 的 JSON，清除未转义的控制字符后再 parse
+ * 解决 GitHub/Gitee/GitLab/Gitea API 返回含换行/回车等控制字符的 JSON 时的 SyntaxError
+ */
+async function safeResponseJson<T = unknown>(response: Response): Promise<T> {
+  const text = await response.text()
+  if (!text.trim()) return {} as T
+  const cleaned = text.replace(/[\x00-\x1f]/g, '')
+  return JSON.parse(cleaned) as T
+}
+
 async function requestGitHub(method: string, url: string, body?: object) {
   const store = await Store.load('store.json')
   const accessToken = await store.get<string>('accessToken')
@@ -138,14 +150,15 @@ async function requestGitHub(method: string, url: string, body?: object) {
   headers.append('X-GitHub-Api-Version', '2022-11-28')
   headers.append('Content-Type', 'application/json')
 
-  const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
+  const proxy = await getProxyConfig()
+  const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined, proxy })
 
   if (response.status >= 200 && response.status < 300) {
-    return method === 'GET' ? await response.json() : await response.json()
+    return await safeResponseJson<any>(response)
   }
   if (method === 'GET') return null
 
-  const errorData = await response.json()
+  const errorData = await safeResponseJson<{ message?: string }>(response)
   throw { status: response.status, message: errorData.message || 'Request failed' }
 }
 
@@ -156,14 +169,15 @@ async function requestGitee(method: string, url: string, body?: object) {
   const headers = new Headers()
   headers.append('Content-Type', 'application/json')
 
-  const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
+  const proxy = await getProxyConfig()
+  const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined, proxy })
 
   if (response.status >= 200 && response.status < 300) {
-    return method === 'GET' ? await response.json() : await response.json()
+    return await safeResponseJson<any>(response)
   }
   if (method === 'GET') return null
 
-  const errorData = await response.json()
+  const errorData = await safeResponseJson<{ message?: string }>(response)
   throw { status: response.status, message: errorData.message || 'Request failed' }
 }
 
@@ -182,16 +196,17 @@ async function requestGitLab(method: string, url: string, body?: object) {
 
   // 使用 @tauri-apps/plugin-http 的 fetch 避免 CORS 问题
   const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http')
-  const response = await tauriFetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
+  const proxy = await getProxyConfig()
+  const response = await tauriFetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined, proxy })
 
   console.log('[requestGitLab] Status:', response.status)
 
   if (response.status >= 200 && response.status < 300) {
-    return method === 'GET' ? await response.json() : await response.json()
+    return await safeResponseJson<any>(response)
   }
   if (method === 'GET') return null
 
-  const errorData = await response.json()
+  const errorData = await safeResponseJson<{ message?: string }>(response)
   console.log('[requestGitLab] Error:', errorData)
   throw { status: response.status, message: errorData.message || 'Request failed' }
 }
@@ -204,14 +219,15 @@ async function requestGitea(method: string, url: string, body?: object) {
   headers.append('Authorization', `token ${giteaAccessToken}`)
   headers.append('Content-Type', 'application/json')
 
-  const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
+  const proxy = await getProxyConfig()
+  const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined, proxy })
 
   if (response.status >= 200 && response.status < 300) {
-    return method === 'GET' ? await response.json() : await response.json()
+    return await safeResponseJson<any>(response)
   }
   if (method === 'GET') return null
 
-  const errorData = await response.json()
+  const errorData = await safeResponseJson<{ message?: string }>(response)
   throw { status: response.status, message: errorData.message || 'Request failed' }
 }
 
@@ -855,11 +871,11 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
       let filePath: string;
 
       if (isMobile) {
-        filePath = `note-gen-backup-${dayjs().format('YYYY-MM-DD_HH-mm-ss')}.zip`;
+        filePath = `lingmo-backup-${dayjs().format('YYYY-MM-DD_HH-mm-ss')}.zip`;
       } else {
         const selectedPath = await save({
           title: t('settings.backupSync.localBackup.exportDialog.title'),
-          defaultPath: `note-gen-backup-${dayjs().format('YYYY-MM-DD_HH-mm-ss')}.zip`,
+          defaultPath: `lingmo-backup-${dayjs().format('YYYY-MM-DD_HH-mm-ss')}.zip`,
           filters: [{
             name: 'ZIP Files',
             extensions: ['zip']

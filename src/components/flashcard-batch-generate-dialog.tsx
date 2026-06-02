@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { Sparkles } from 'lucide-react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
+import { Sparkles, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -66,6 +66,126 @@ function getDraftTypeLabel(type: FlashcardType) {
   return '基础问答'
 }
 
+/** 单张草稿卡片，支持折叠编辑 */
+function DraftCard({
+  draft,
+  index,
+  onChange,
+  onRemove,
+}: {
+  draft: FlashcardBatchDraft
+  index: number
+  onChange: (updated: FlashcardBatchDraft) => void
+  onRemove: () => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="rounded-2xl border bg-neutral-50/60 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="flex size-6 items-center justify-center rounded-md hover:bg-neutral-200 transition-colors"
+            onClick={() => setExpanded(e => !e)}
+            title={expanded ? '收起' : '展开编辑'}
+          >
+            {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+          </button>
+          <span className="text-sm font-medium">第 {index + 1} 张 · {getDraftTypeLabel(draft.type)}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          {draft.tags && draft.tags.length > 0 && !expanded ? (
+            <span className="truncate text-xs text-muted-foreground">{draft.tags.join(', ')}</span>
+          ) : null}
+          <button
+            type="button"
+            className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-rose-50 hover:text-rose-600 transition-colors"
+            onClick={onRemove}
+            title="删除此草稿"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {expanded ? (
+        <div className="mt-3 space-y-2">
+          {draft.type !== 'cloze' && (
+            <>
+              <label className="block">
+                <span className="text-xs font-medium text-muted-foreground">题目</span>
+                <textarea
+                  className="mt-1 w-full resize-none rounded-lg border bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  rows={2}
+                  value={draft.front || ''}
+                  onChange={(e) => onChange({ ...draft, front: e.target.value })}
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-muted-foreground">答案</span>
+                <textarea
+                  className="mt-1 w-full resize-none rounded-lg border bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  rows={2}
+                  value={draft.back || ''}
+                  onChange={(e) => onChange({ ...draft, back: e.target.value })}
+                />
+              </label>
+            </>
+          )}
+          {draft.type === 'cloze' && (
+            <label className="block">
+              <span className="text-xs font-medium text-muted-foreground">填空内容</span>
+              <textarea
+                className="mt-1 w-full resize-none rounded-lg border bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                rows={3}
+                value={draft.clozeText || ''}
+                onChange={(e) => onChange({ ...draft, clozeText: e.target.value })}
+              />
+            </label>
+          )}
+          {draft.type === 'choice' && Array.isArray(draft.choices) && (
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">选项</span>
+              <div className="mt-1 space-y-1">
+                {draft.choices.map((choice, ci) => (
+                  <div key={ci} className="flex items-center gap-2">
+                    <span className="shrink-0 text-xs font-medium text-muted-foreground">{String.fromCharCode(65 + ci)}.</span>
+                    <input
+                      className="flex-1 rounded-md border bg-white px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                      value={choice}
+                      onChange={(e) => {
+                        const next = [...(draft.choices || [])]
+                        next[ci] = e.target.value
+                        onChange({ ...draft, choices: next })
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <label className="block">
+            <span className="text-xs font-medium text-muted-foreground">标签（逗号分隔）</span>
+            <input
+              className="mt-1 w-full rounded-lg border bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              value={(draft.tags || []).join(', ')}
+              onChange={(e) => {
+                const tags = e.target.value.split(',').map(t => t.trim()).filter(Boolean)
+                onChange({ ...draft, tags })
+              }}
+            />
+          </label>
+        </div>
+      ) : (
+        <div className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
+          {getDraftPreview(draft)}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function normalizeDrafts(parsed: unknown, count: number): FlashcardBatchDraft[] {
   if (!Array.isArray(parsed)) return []
 
@@ -108,6 +228,14 @@ export function FlashcardBatchGenerateDialog({
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [drafts, setDrafts] = useState<FlashcardBatchDraft[]>([])
+
+  const updateDraft = useCallback((index: number, updated: FlashcardBatchDraft) => {
+    setDrafts(prev => prev.map((d, i) => i === index ? updated : d))
+  }, [])
+
+  const removeDraft = useCallback((index: number) => {
+    setDrafts(prev => prev.filter((_, i) => i !== index))
+  }, [])
 
   const trimmedSource = sourceContent?.trim() || ''
   const sourcePreview = useMemo(() => trimmedSource.slice(0, 2400), [trimmedSource])
@@ -260,24 +388,22 @@ export function FlashcardBatchGenerateDialog({
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col rounded-2xl border p-3">
-            <div className="mb-3 text-sm font-medium">生成结果</div>
+            <div className="mb-3 text-sm font-medium">
+              生成结果{drafts.length > 0 ? ` (${drafts.length} 张)` : ''}
+            </div>
             {drafts.length === 0 ? (
               <div className="rounded-xl bg-neutral-50 p-4 text-sm text-muted-foreground">还没有生成草稿。</div>
             ) : (
               <ScrollArea className="min-h-0 flex-1">
-                <div className="space-y-3 pr-3">
+                <div className="space-y-2 pr-3">
                   {drafts.map((draft, index) => (
-                    <div key={`${draft.type}-${index}`} className="rounded-2xl border bg-neutral-50/60 p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-medium">第 {index + 1} 张 · {getDraftTypeLabel(draft.type)}</div>
-                        {draft.tags && draft.tags.length > 0 ? (
-                          <div className="truncate text-xs text-muted-foreground">{draft.tags.join(', ')}</div>
-                        ) : null}
-                      </div>
-                      <div className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
-                        {getDraftPreview(draft)}
-                      </div>
-                    </div>
+                    <DraftCard
+                      key={`${draft.type}-${index}`}
+                      draft={draft}
+                      index={index}
+                      onChange={(updated) => updateDraft(index, updated)}
+                      onRemove={() => removeDraft(index)}
+                    />
                   ))}
                 </div>
               </ScrollArea>

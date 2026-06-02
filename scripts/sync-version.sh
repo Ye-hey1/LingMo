@@ -9,7 +9,7 @@ VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
 echo "同步版本号: $VERSION"
 
 # 更新 iOS Info.plist
-PLIST_PATH="src-tauri/gen/apple/note-gen_iOS/Info.plist"
+PLIST_PATH="src-tauri/gen/apple/lingmo_iOS/Info.plist"
 
 if [ -f "$PLIST_PATH" ]; then
     # 更新版本号 - 使用更精确的匹配模式

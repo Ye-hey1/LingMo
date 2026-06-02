@@ -17,12 +17,17 @@ import {
   CheckCircle,
   ChevronDown,
   ChevronUp,
+  ListChecks,
+  MessageSquareText,
+  Send,
+  Sparkles,
+  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
 import { DiffViewer } from "@/components/ui/diff-viewer";
 import { formatConfirmationPreview } from "@/lib/agent/tool-confirmation-display";
-import type { AgentApprovalScope } from "@/lib/agent/types";
+import type { AgentApprovalScope, AgentEvent } from "@/lib/agent/types";
 
 // Type definitions from existing codebase
 interface ToolCall {
@@ -72,6 +77,7 @@ interface AgentPlanProps {
   completedSteps?: ReActStep[]; // 已完成的完整步骤
   currentAction?: string;
   currentObservation?: string;
+  agentEvents?: AgentEvent[];
   toolCalls?: ToolCall[];
   pendingConfirmation?: {
     toolName: string;
@@ -117,6 +123,57 @@ interface DisplayStep {
   duration?: number;  // 耗时（毫秒）
 }
 
+type TimelineStatus = "completed" | "running" | "waiting" | "failed" | "pending";
+type TimelineKind =
+  | "planning"
+  | "model"
+  | "thought"
+  | "action"
+  | "tool"
+  | "observation"
+  | "confirmation"
+  | "final"
+  | "error";
+
+interface TimelineItem {
+  id: string;
+  kind: TimelineKind;
+  title: string;
+  description?: string;
+  status: TimelineStatus;
+  timestamp: number;
+  duration?: number;
+  detail?: string;
+  toolName?: string;
+  iteration?: number;
+}
+
+const STATUS_LABELS: Record<TimelineStatus, string> = {
+  completed: "完成",
+  running: "进行中",
+  waiting: "等待确认",
+  failed: "失败",
+  pending: "排队中",
+};
+
+function getShortText(value: unknown, maxLength = 120): string {
+  let text: string;
+
+  if (typeof value === "string") {
+    text = value;
+  } else {
+    if (value === undefined || value === null) return "";
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = String(value);
+    }
+  }
+
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
 export function AgentPlan({
   mode,
   isRunning = false,
@@ -126,6 +183,7 @@ export function AgentPlan({
   completedSteps = [],
   currentAction = "",
   currentObservation = "",
+  agentEvents = [],
   toolCalls = [],
   pendingConfirmation,
   confirmationHistory = [],
@@ -234,8 +292,13 @@ export function AgentPlan({
       return [];
     }
 
+    const trimmedHistoryJson = historyJson?.trim();
+    if (!trimmedHistoryJson) {
+      return [];
+    }
+
     try {
-      const history = JSON.parse(historyJson || "");
+      const history = JSON.parse(trimmedHistoryJson);
 
       // Handle new format with steps
       if (history.steps && history.steps.length > 0) {
@@ -511,6 +574,292 @@ export function AgentPlan({
     return rootT.has(key) ? rootT(key) : fallback;
   }, [rootT]);
 
+  const eventTimeline = React.useMemo<TimelineItem[]>(() => {
+    if (!agentEvents || agentEvents.length === 0) {
+      return [];
+    }
+
+    const items: TimelineItem[] = [];
+    const modelRequests = new Map<number, TimelineItem>();
+    const toolItems = new Map<string, TimelineItem>();
+    const confirmationItems = new Map<string, TimelineItem>();
+
+    const pushItem = (item: TimelineItem) => {
+      items.push(item);
+      return item;
+    };
+
+    agentEvents.forEach((event) => {
+      const payload = event.payload || {};
+      const sequence = event.sequence ?? items.length + 1;
+      const iterationLabel = event.iteration ? `第 ${event.iteration} 轮` : undefined;
+
+      switch (event.type) {
+        case "agent.planning": {
+          const plan = payload.plan;
+          const stepCount = Array.isArray(plan?.steps) ? plan.steps.length : 0;
+          pushItem({
+            id: event.id || `planning-${sequence}`,
+            kind: "planning",
+            title: "拆解任务流程",
+            description: stepCount ? `已规划 ${stepCount} 个执行步骤` : "正在判断任务复杂度",
+            status: "completed",
+            timestamp: event.timestamp,
+            detail: plan ? JSON.stringify(plan, null, 2) : undefined,
+            iteration: event.iteration,
+          });
+          break;
+        }
+
+        case "model.request.started": {
+          const item = pushItem({
+            id: event.id || `model-${sequence}`,
+            kind: "model",
+            title: "请求大模型",
+            description: [
+              iterationLabel,
+              typeof payload.model === "string" ? payload.model : undefined,
+              payload.toolCount ? `${payload.toolCount} 个可用工具` : undefined,
+            ].filter(Boolean).join(" · ") || "等待模型生成下一步",
+            status: "running",
+            timestamp: event.timestamp,
+            detail: JSON.stringify(payload, null, 2),
+            iteration: event.iteration,
+          });
+          modelRequests.set(event.iteration || sequence, item);
+          break;
+        }
+
+        case "model.response.received": {
+          const key = event.iteration || sequence;
+          const item = modelRequests.get(key);
+          if (item) {
+            item.status = "completed";
+            item.duration = typeof payload.duration === "number"
+              ? payload.duration
+              : event.timestamp - item.timestamp;
+            item.description = `${item.description || "模型已响应"} · 已返回`;
+            item.detail = JSON.stringify(payload, null, 2);
+          } else {
+            pushItem({
+              id: event.id || `model-response-${sequence}`,
+              kind: "model",
+              title: "收到模型响应",
+              description: iterationLabel,
+              status: "completed",
+              timestamp: event.timestamp,
+              duration: typeof payload.duration === "number" ? payload.duration : undefined,
+              detail: JSON.stringify(payload, null, 2),
+              iteration: event.iteration,
+            });
+          }
+          break;
+        }
+
+        case "thought":
+        case "thought.updated": {
+          const content = typeof payload.content === "string" ? payload.content : "";
+          if (!content || event.type === "thought.updated") {
+            return;
+          }
+          pushItem({
+            id: event.id || `thought-${sequence}`,
+            kind: "thought",
+            title: "生成执行思路",
+            description: getShortText(content),
+            status: "completed",
+            timestamp: event.timestamp,
+            detail: content,
+            iteration: event.iteration,
+          });
+          break;
+        }
+
+        case "action":
+        case "action.parsed": {
+          const toolName = typeof payload.tool === "string" ? payload.tool : "工具";
+          if (event.type === "action" && items.some(item => item.kind === "action" && item.toolName === toolName && item.iteration === event.iteration)) {
+            return;
+          }
+          pushItem({
+            id: event.id || `action-${sequence}`,
+            kind: "action",
+            title: "确定下一步动作",
+            description: toolName,
+            status: "completed",
+            timestamp: event.timestamp,
+            detail: JSON.stringify(payload.params || {}, null, 2),
+            toolName,
+            iteration: event.iteration,
+          });
+          break;
+        }
+
+        case "tool.execution.started": {
+          const toolName = typeof payload.toolName === "string" ? payload.toolName : "工具";
+          const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : event.id || `tool-${sequence}`;
+          const item = pushItem({
+            id: event.id || `tool-start-${toolCallId}`,
+            kind: "tool",
+            title: "执行工具",
+            description: toolName,
+            status: "running",
+            timestamp: event.timestamp,
+            detail: JSON.stringify(payload.params || {}, null, 2),
+            toolName,
+            iteration: event.iteration,
+          });
+          toolItems.set(toolCallId, item);
+          break;
+        }
+
+        case "tool.execution.finished": {
+          const toolName = typeof payload.toolName === "string" ? payload.toolName : "工具";
+          const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : "";
+          const item = toolItems.get(toolCallId);
+          const success = payload.success !== false;
+          if (item) {
+            item.status = success ? "completed" : "failed";
+            item.duration = typeof payload.duration === "number"
+              ? payload.duration
+              : event.timestamp - item.timestamp;
+            item.description = `${toolName} · ${success ? "执行完成" : "执行失败"}`;
+            item.detail = JSON.stringify(payload, null, 2);
+          } else {
+            pushItem({
+              id: event.id || `tool-finish-${sequence}`,
+              kind: "tool",
+              title: "工具执行结果",
+              description: toolName,
+              status: success ? "completed" : "failed",
+              timestamp: event.timestamp,
+              duration: typeof payload.duration === "number" ? payload.duration : undefined,
+              detail: JSON.stringify(payload, null, 2),
+              toolName,
+              iteration: event.iteration,
+            });
+          }
+          break;
+        }
+
+        case "confirmation.waiting":
+        case "approval": {
+          if (event.type === "approval" && payload.status !== "requested") {
+            return;
+          }
+          const toolName = typeof payload.toolName === "string" ? payload.toolName : "工具";
+          const key = `${event.iteration || 0}:${toolName}:${JSON.stringify(payload.params || {})}`;
+          const item = pushItem({
+            id: event.id || `confirmation-${sequence}`,
+            kind: "confirmation",
+            title: "等待用户确认",
+            description: toolName,
+            status: "waiting",
+            timestamp: event.timestamp,
+            detail: JSON.stringify(payload.context || payload.params || {}, null, 2),
+            toolName,
+            iteration: event.iteration,
+          });
+          confirmationItems.set(key, item);
+          break;
+        }
+
+        case "confirmation.resolved": {
+          const toolName = typeof payload.toolName === "string" ? payload.toolName : "工具";
+          const key = `${event.iteration || 0}:${toolName}:${JSON.stringify(payload.params || {})}`;
+          const item = confirmationItems.get(key);
+          const confirmed = payload.status === "confirmed";
+          if (item) {
+            item.status = confirmed ? "completed" : "failed";
+            item.duration = event.timestamp - item.timestamp;
+            item.description = `${toolName} · ${confirmed ? "已确认" : "已取消"}`;
+          } else {
+            pushItem({
+              id: event.id || `confirmation-resolved-${sequence}`,
+              kind: "confirmation",
+              title: confirmed ? "操作已确认" : "操作已取消",
+              description: toolName,
+              status: confirmed ? "completed" : "failed",
+              timestamp: event.timestamp,
+              toolName,
+              iteration: event.iteration,
+            });
+          }
+          break;
+        }
+
+        case "observation":
+        case "observation.created": {
+          if (event.type === "observation") {
+            return;
+          }
+          const observation = typeof payload.observation === "string" ? payload.observation : "";
+          pushItem({
+            id: event.id || `observation-${sequence}`,
+            kind: "observation",
+            title: "读取执行结果",
+            description: getShortText(observation),
+            status: payload.success === false ? "failed" : "completed",
+            timestamp: event.timestamp,
+            detail: observation,
+            iteration: event.iteration,
+          });
+          break;
+        }
+
+        case "final":
+        case "final.answer.rendered":
+          if (event.type === "final.answer.rendered") {
+            return;
+          }
+          pushItem({
+            id: event.id || `final-${sequence}`,
+            kind: "final",
+            title: "整理最终回复",
+            description: getShortText(payload.content),
+            status: "completed",
+            timestamp: event.timestamp,
+            detail: typeof payload.content === "string" ? payload.content : undefined,
+            iteration: event.iteration,
+          });
+          break;
+
+        case "error":
+          pushItem({
+            id: event.id || `error-${sequence}`,
+            kind: "error",
+            title: "执行遇到问题",
+            description: getShortText(payload.error || payload.message || payload),
+            status: "failed",
+            timestamp: event.timestamp,
+            detail: JSON.stringify(payload, null, 2),
+            iteration: event.iteration,
+          });
+          break;
+
+        default:
+          break;
+      }
+    });
+
+    const last = items[items.length - 1];
+    if (mode === "live" && isRunning && last && last.status === "completed") {
+      const hasActiveWaiting = items.some(item => item.status === "waiting");
+      if (!hasActiveWaiting && isThinking) {
+        items.push({
+          id: "live-thinking-tail",
+          kind: "model",
+          title: "等待模型继续输出",
+          description: "正在生成下一步",
+          status: "running",
+          timestamp: Date.now(),
+        });
+      }
+    }
+
+    return items;
+  }, [agentEvents, isRunning, isThinking, mode]);
+
   const formatFieldValue = React.useCallback((value: unknown) => {
     if (typeof value === "string") {
       return value;
@@ -533,15 +882,40 @@ export function AgentPlan({
   }, []);
 
   // Don't render if no content in history mode
-  if (mode === "history" && displaySteps.length === 0) {
+  if (mode === "history" && displaySteps.length === 0 && eventTimeline.length === 0) {
     return null;
   }
 
   // Don't render if not running in live mode (unless there's content)
-  if (mode === "live" && !isRunning && displaySteps.length === 0) {
+  if (mode === "live" && !isRunning && displaySteps.length === 0 && eventTimeline.length === 0) {
     return null;
   }
 
+  // ---- 简单对话优化：如果没有工具调用，不显示执行流程 ----
+  // 检查是否有实际的工具调用（不只是模型请求和思考）
+  const hasToolCalls = eventTimeline.some(item =>
+    item.kind === "tool" || item.kind === "confirmation" || item.kind === "action"
+  );
+  const hasCompletedStepsWithActions = displaySteps.some(step =>
+    step.action && step.action.tool
+  );
+
+  // 在 live 模式下，如果只是简单对话（没有工具调用），不显示执行流程面板
+  // 只显示紧凑的状态指示器
+  if (mode === "live" && !hasToolCalls && !hasCompletedStepsWithActions && displaySteps.length <= 1) {
+    // 如果正在运行但没有工具调用，只显示简单的加载状态
+    if (isRunning) {
+      return (
+        <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+          <Loader2 className="size-3 animate-spin" />
+          <span>{isThinking ? t("thinking") : t("running")}</span>
+        </div>
+      );
+    }
+    return null;
+  }
+
+  // ---- CowAgent 风格的简化显示 ----
   // Toggle step expansion
   const toggleStepExpansion = (stepId: string) => {
     // In live mode, prevent collapsing the current (in-progress) step
@@ -703,6 +1077,40 @@ export function AgentPlan({
     }
   };
 
+  const getTimelineIcon = (item: TimelineItem) => {
+    const className = "size-3.5";
+    if (item.status === "running") {
+      return <Loader2 className={`${className} animate-spin text-blue-500`} />;
+    }
+    if (item.status === "waiting") {
+      return <Clock className={`${className} text-amber-500`} />;
+    }
+    if (item.status === "failed") {
+      return <CircleX className={`${className} text-red-500`} />;
+    }
+
+    switch (item.kind) {
+      case "planning":
+        return <ListChecks className={`${className} text-cyan-600`} />;
+      case "model":
+        return <Brain className={`${className} text-blue-600`} />;
+      case "thought":
+        return <MessageSquareText className={`${className} text-sky-600`} />;
+      case "action":
+        return <Send className={`${className} text-violet-600`} />;
+      case "tool":
+        return <Wrench className={`${className} text-orange-600`} />;
+      case "observation":
+        return <Eye className={`${className} text-emerald-600`} />;
+      case "confirmation":
+        return <CircleAlert className={`${className} text-amber-600`} />;
+      case "final":
+        return <Sparkles className={`${className} text-green-600`} />;
+      default:
+        return <CheckCircle2 className={`${className} text-green-600`} />;
+    }
+  };
+
   // 格式化耗时显示
   const formatDuration = (duration?: number): string => {
     if (duration === undefined || duration === null) return "";
@@ -711,6 +1119,129 @@ export function AgentPlan({
     const minutes = Math.floor(duration / 60000);
     const seconds = ((duration % 60000) / 1000).toFixed(0);
     return `${minutes}m ${seconds}s`;
+  };
+
+  const renderTimeline = () => {
+    if (eventTimeline.length === 0) {
+      return null;
+    }
+
+    // 计算总体状态
+    const hasRunning = eventTimeline.some(item => item.status === "running");
+    const hasFailed = eventTimeline.some(item => item.status === "failed");
+    const completedCount = eventTimeline.filter(item => item.status === "completed").length;
+    const totalDuration = eventTimeline.reduce((sum, item) => sum + (item.duration || 0), 0);
+
+    // 默认折叠状态 - 用户需要点击展开查看详情
+    const isTimelineExpanded = expandedTasks.includes("timeline-root");
+
+    return (
+      <div className="mb-2 rounded-lg border border-border/40 bg-muted/20 px-3 py-1.5 shadow-sm">
+        {/* 紧凑的折叠头部 - 灰度显示 */}
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-2 text-left"
+          onClick={() => toggleStepExpansion("timeline-root")}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            {hasRunning ? (
+              <Loader2 className="size-3.5 animate-spin text-blue-500 shrink-0" />
+            ) : hasFailed ? (
+              <CircleX className="size-3.5 text-red-500 shrink-0" />
+            ) : (
+              <CheckCircle2 className="size-3.5 text-green-500 shrink-0" />
+            )}
+            <span className="text-xs text-muted-foreground truncate">
+              {isRunning ? "Agent 执行中..." : `已完成 ${completedCount}/${eventTimeline.length} 步`}
+            </span>
+            {totalDuration > 0 && (
+              <span className="text-xs text-muted-foreground/60 tabular-nums">
+                {formatDuration(totalDuration)}
+              </span>
+            )}
+          </div>
+          <ChevronRight
+            className={`size-3.5 text-muted-foreground/40 shrink-0 transition-transform ${
+              isTimelineExpanded ? "rotate-90" : ""
+            }`}
+          />
+        </button>
+
+        {/* 展开的详细时间线 */}
+        {isTimelineExpanded && (
+          <ol className="mt-2 space-y-1 border-t border-border/30 pt-2">
+            {eventTimeline.map((item, index) => {
+              const isItemExpanded = expandedTasks.includes(item.id);
+              const hasDetail = Boolean(item.detail && item.detail.trim());
+              const isLast = index === eventTimeline.length - 1;
+
+              return (
+                <li key={item.id} className="relative pl-6">
+                  {!isLast && (
+                    <span className="absolute left-[9px] top-5 h-[calc(100%+2px)] w-px bg-border/30" />
+                  )}
+                  <div className="absolute left-0 top-1 flex size-[18px] items-center justify-center rounded-full border border-border/40 bg-background">
+                    {getTimelineIcon(item)}
+                  </div>
+
+                  <button
+                    type="button"
+                    className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors ${
+                      hasDetail ? "hover:bg-muted/30" : "cursor-default"
+                    }`}
+                    onClick={() => {
+                      if (!hasDetail) return;
+                      toggleStepExpansion(item.id);
+                    }}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-xs text-muted-foreground">{item.title}</span>
+                        <span
+                          className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
+                            item.status === "failed"
+                              ? "bg-red-50 text-red-600"
+                              : item.status === "waiting"
+                                ? "bg-amber-50 text-amber-700"
+                                : item.status === "running"
+                                  ? "bg-blue-50 text-blue-700"
+                                  : "bg-emerald-50 text-emerald-700"
+                          }`}
+                        >
+                          {STATUS_LABELS[item.status]}
+                        </span>
+                      </div>
+                      {item.description && (
+                        <div className="mt-0.5 truncate text-[11px] text-muted-foreground/60">
+                          {item.description}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/60">
+                      {item.duration !== undefined && (
+                        <span className="tabular-nums">{formatDuration(item.duration)}</span>
+                      )}
+                      {hasDetail && (
+                        <ChevronRight
+                          className={`size-3.5 transition-transform ${isItemExpanded ? "rotate-90" : ""}`}
+                        />
+                      )}
+                    </div>
+                  </button>
+
+                  {hasDetail && isItemExpanded && (
+                    <pre className="ml-2 mt-1 max-h-32 overflow-auto rounded-md border border-border/30 bg-muted/20 px-2 py-1 text-[11px] leading-relaxed text-muted-foreground/60 whitespace-pre-wrap break-words">
+                      {item.detail}
+                    </pre>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+    );
   };
 
   // 渲染步骤列表内容（用于 embedded 和非 embedded 模式）
@@ -1023,34 +1554,30 @@ export function AgentPlan({
     </>
   );
 
-  // Show loading state in live mode
-  if (mode === "live" && isRunning && displaySteps.length === 0) {
+  // Show loading state in live mode - compact design inspired by Codex TUI
+  if (mode === "live" && isRunning && displaySteps.length === 0 && eventTimeline.length === 0) {
     return (
-      <div className="w-full mb-4">
-        {/* Loading 状态 */}
-        <div className="flex flex-col items-center justify-center py-8 space-y-4">
-          {/* 旋转的 loading 图标 */}
-          <div className="relative">
-            <div className="absolute inset-0 rounded-full border-2 border-border/30" />
-            <Loader2 className="size-8 animate-spin text-blue-500" />
-          </div>
+      <div className="w-full mb-2">
+        <div className="flex items-center gap-2 py-2 px-1">
+          {/* Animated spinner */}
+          <Loader2 className="size-4 animate-spin text-blue-500 shrink-0" />
 
-          {/* 状态文字 */}
-          <div className="text-center space-y-1">
-            <p className="text-sm font-medium text-foreground">
-              {isThinking ? t("thinking") : t("running")}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {t("analyzingRequest")}
-            </p>
-          </div>
+          {/* Status text with shimmer effect */}
+          <span className="text-sm font-medium animate-shimmer bg-[length:200%_100%] bg-clip-text text-transparent bg-gradient-to-r from-foreground via-foreground/70 to-foreground">
+            {isThinking ? t("thinking") : t("running")}
+          </span>
 
-          {/* 脉冲动画点 */}
-          <div className="flex items-center gap-1.5">
-            <div className="size-2 rounded-full bg-blue-500/60 animate-pulse [animation-delay:0ms]" />
-            <div className="size-2 rounded-full bg-blue-500/60 animate-pulse [animation-delay:150ms]" />
-            <div className="size-2 rounded-full bg-blue-500/60 animate-pulse [animation-delay:300ms]" />
-          </div>
+          {/* Elapsed time */}
+          {currentStepDuration > 0 && (
+            <span className="text-xs text-muted-foreground tabular-nums">
+              ({formatDuration(currentStepDuration)})
+            </span>
+          )}
+
+          {/* Inline detail */}
+          <span className="text-xs text-muted-foreground">
+            · {t("analyzingRequest")}
+          </span>
         </div>
       </div>
     );
@@ -1058,12 +1585,18 @@ export function AgentPlan({
 
   // Embedded 模式：只返回 <li> 元素
   if (embedded) {
-    return <>{renderSteps()}</>
+    return (
+      <>
+        <li>{renderTimeline()}</li>
+        {renderSteps()}
+      </>
+    )
   }
 
   // 标准模式：返回完整的容器
   return (
     <div className="w-full mb-4">
+      {renderTimeline()}
       {/* 步骤列表 */}
       <div className="overflow-hidden" ref={contentRef} onScroll={handleScroll}>
         <ul className="space-y-1">

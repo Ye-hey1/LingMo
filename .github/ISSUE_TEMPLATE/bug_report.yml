@@ -8,8 +8,8 @@ body:
     attributes:
       value: |
         ## 首先请阅读
-        1. 请先搜索 [note-gen/issues](https://github.com/codexu/note-gen/issues) 中是否已存在此问题。
-        2. 尝试下载最新版本的 NoteGen 并测试是否还存在此问题。
+        1. 请先搜索 [LingMo/issues](https://github.com/Ye-hey1/LingMo/issues) 中是否已存在此问题。
+        2. 尝试下载最新版本的 LingMo 并测试是否还存在此问题。
         3. 请确保这是 App 的问题，而不是 AI 或代理等问题。
         4. 请按照提交要求详细的描述 Bug，提供全面的信息。
         5. 请在社区内友善发言。
@@ -26,8 +26,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: NoteGen 版本
-      placeholder: 请填写你当前使用的 NoteGen 版本。
+      label: LingMo 版本
+      placeholder: 请填写你当前使用的 LingMo 版本。
     validations:
       required: true
 
