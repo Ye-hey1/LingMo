@@ -1,0 +1,16 @@
+packages:
+  - .
+  - docs
+
+allowBuilds:
+  core-js: true
+  esbuild: true
+  ffmpeg-static: true
+  sharp: true
+  tesseract.js: true
+  unrs-resolver: true
+
+peerDependencyRules:
+  allowedVersions:
+    react: "19"
+    react-dom: "19"
