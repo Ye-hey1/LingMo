@@ -116,21 +116,14 @@ export function RepoCard({
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <a
-            href={repo.htmlUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="block truncate text-sm font-semibold text-foreground hover:text-primary cursor-pointer"
+          <button
+            type="button"
+            className="block w-full appearance-none truncate border-0 bg-transparent p-0 text-left text-sm font-semibold text-foreground hover:text-primary cursor-pointer"
             title={repo.fullName}
-            onClick={(event) => {
-              if (onTitleClick) {
-                event.preventDefault()
-                onTitleClick(repo)
-              }
-            }}
+            onClick={() => onTitleClick?.(repo)}
           >
             {repo.name}
-          </a>
+          </button>
           <div className="flex items-center gap-1.5">
             <a
               href={ownerProfileUrl}

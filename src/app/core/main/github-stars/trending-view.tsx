@@ -203,20 +203,14 @@ function DiscoveryCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <a
-              href={repo.htmlUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="truncate text-sm font-semibold hover:text-primary cursor-pointer"
-              onClick={(event) => {
-                if (onTitleClick) {
-                  event.preventDefault()
-                  onTitleClick(repo)
-                }
-              }}
+            <button
+              type="button"
+              className="min-w-0 appearance-none truncate border-0 bg-transparent p-0 text-left text-sm font-semibold hover:text-primary cursor-pointer"
+              title={repo.fullName}
+              onClick={() => onTitleClick?.(repo)}
             >
               {repo.fullName}
-            </a>
+            </button>
             {repo.trendingRange && (
               <Badge variant="secondary" className="h-5 rounded px-1.5 font-normal">
                 {RANGE_LABELS[repo.trendingRange]}
@@ -351,10 +345,10 @@ export function TrendingView() {
     discoverySortOrder,
     discoverySearchQuery,
     discoverySelectedTopic,
-    discoveryRepos,
-    discoveryIsLoading,
-    discoveryIsLoadingMore,
-    discoveryHasMore,
+  discoveryRepos,
+  discoveryIsLoading,
+  discoveryIsLoadingMore,
+  discoveryHasMore,
     discoveryNextPage,
     discoveryTotalCount,
     discoveryLoadMoreError,
@@ -364,41 +358,21 @@ export function TrendingView() {
     setDiscoveryPlatform,
     setDiscoveryLanguage,
     setDiscoverySortBy,
-    setDiscoverySortOrder,
-    setDiscoverySearchQuery,
-    setDiscoverySelectedTopic,
-    refreshDiscoveryChannel,
-    translateDiscoveryRepos,
-  } = useGithubStarsStore()
+  setDiscoverySortOrder,
+  setDiscoverySearchQuery,
+  setDiscoverySelectedTopic,
+  refreshDiscoveryChannel,
+} = useGithubStarsStore()
 
   const [query, setQuery] = useState(discoverySearchQuery)
   const [platformOpen, setPlatformOpen] = useState(false)
-  const [isTranslating, setIsTranslating] = useState(false)
   const platformRef = useRef<HTMLDivElement>(null)
   const autoFetchRef = useRef<GithubStarDiscoveryChannelId | null>(null)
-  const { toast } = useToast()
 
   const [activeReadmeRepo, setActiveReadmeRepo] = useState<GithubStarDiscoveryRepository | null>(null)
   const [isReadmeOpen, setIsReadmeOpen] = useState(false)
 
   const currentRepos = discoveryRepos[discoveryChannel] || []
-
-  const hasUntranslated = useMemo(() => {
-    return currentRepos.some(r => r.description && !r.aiSummary)
-  }, [currentRepos])
-
-  const handleBatchTranslate = useCallback(async () => {
-    setIsTranslating(true)
-    try {
-      await translateDiscoveryRepos()
-      toast({ title: '批量翻译完成' })
-    } catch (err) {
-      console.error('[TrendingView] Batch translate failed:', err)
-      toast({ title: '批量翻译失败', description: '请检查网络代理设置', variant: 'destructive' })
-    } finally {
-      setIsTranslating(false)
-    }
-  }, [translateDiscoveryRepos, toast])
 
   const isLoading = discoveryIsLoading[discoveryChannel] || false
   const isLoadingMore = discoveryIsLoadingMore[discoveryChannel] || false
@@ -410,11 +384,6 @@ export function TrendingView() {
   const enabledChannels = useMemo(
     () => DEFAULT_DISCOVERY_CHANNELS.filter(ch => ch.enabled),
     [],
-  )
-
-  const currentChannelConfig = useMemo(
-    () => enabledChannels.find(ch => ch.id === discoveryChannel),
-    [enabledChannels, discoveryChannel],
   )
 
   const filteredRepositories = useMemo(() => {
@@ -473,48 +442,8 @@ export function TrendingView() {
     <div className="flex h-full min-w-0 flex-1 flex-col bg-muted/20">
       {/* ─── 顶部工具栏 ─── */}
       <div className="shrink-0 border-b bg-background p-3">
-        {/* 第一行：频道 Tab + 刷新 */}
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              {CHANNEL_ICON_MAP[currentChannelConfig?.icon || 'trending']}
-              发现频道
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              浏览 GitHub 趋势、热门发布、最受欢迎项目和更多
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {hasUntranslated && (
-              <Button
-                variant="outline"
-                className="h-8 gap-1.5 border-primary/30 text-primary hover:bg-primary/5 shadow-none"
-                size="sm"
-                onClick={handleBatchTranslate}
-                disabled={isLoading || isTranslating}
-              >
-                {isTranslating ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Globe className="size-4" />
-                )}
-                批量汉化
-              </Button>
-            )}
-            <Button
-              className="h-8 gap-1.5"
-              size="sm"
-              onClick={() => void refreshDiscoveryChannel()}
-              disabled={isLoading}
-            >
-              {isLoading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
-              刷新
-            </Button>
-          </div>
-        </div>
-
         {/* 频道 Tab */}
-        <div className="mt-3 flex flex-col gap-1.5 sm:gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-col gap-1.5 sm:gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1" style={{ scrollbarWidth: 'none' }}>
             {enabledChannels.map(ch => (
               <button

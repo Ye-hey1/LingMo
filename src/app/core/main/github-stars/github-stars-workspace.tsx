@@ -115,7 +115,7 @@ export function GithubStarsWorkspace() {
     unstarRepository,
   } = useGithubStarsStore()
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(200)
   const [filtersExpanded, setFiltersExpanded] = useState(false)
   const [showAiContent, setShowAiContent] = useState(true)
@@ -242,11 +242,6 @@ export function GithubStarsWorkspace() {
     filters.analysis !== 'all' ? 1 : 0,
   ].reduce((sum, item) => sum + item, 0)
   const syncedCount = syncProgress?.fetched || 0
-  const analysisActionLabel = isAnalyzing && analysisProgress
-    ? `分析 ${analysisProgress.completed}/${analysisProgress.total}`
-    : selectedRepositories.length > 0
-      ? `分析已选 ${selectedRepositories.length}`
-      : '分析前5'
 
   const toggleSelection = (repoId: number) => {
     setSelectedRepoIds((previous) => {
@@ -258,18 +253,6 @@ export function GithubStarsWorkspace() {
       }
       return next
     })
-  }
-
-  const handleAnalyzeAction = () => {
-    const targetIds = selectedRepositories.length > 0
-      ? selectedRepositories.map(repo => repo.id)
-      : filteredRepositories
-        .filter(repo => !repo.aiSummary && !repo.analysisFailed)
-        .slice(0, 5)
-        .map(repo => repo.id)
-
-    if (targetIds.length === 0) return
-    void analyzeRepositories(targetIds)
   }
 
   const handleAiSearch = () => {
@@ -618,8 +601,8 @@ export function GithubStarsWorkspace() {
 
         {/* Status bar */}
         {view === 'repositories' ? (
-        <div className="flex h-7 shrink-0 items-center border-t bg-muted/30 px-2 text-[11px] text-muted-foreground">
-          {/* Content toggle */}
+        <div className="flex h-7 shrink-0 items-center gap-1 border-t bg-muted/30 px-2 text-[11px] text-muted-foreground">
+          {/* Left group: view controls */}
           <div className="flex shrink-0 items-center rounded bg-background/80 p-px">
             <button
               type="button"
@@ -647,9 +630,8 @@ export function GithubStarsWorkspace() {
             </button>
           </div>
 
-          <span className="mx-1.5 h-3 w-px bg-border/70" />
+          <span className="h-3 w-px bg-border/70" />
 
-          {/* Filters toggle */}
           <button
             type="button"
             className={cn(
@@ -680,67 +662,45 @@ export function GithubStarsWorkspace() {
             </button>
           ) : null}
 
-          <span className="mx-1.5 h-3 w-px bg-border/70" />
+          <span className="h-3 w-px bg-border/70" />
 
-          {/* Sort */}
           <Select value={filters.sortBy} onValueChange={(value) => setFilters({ sortBy: value as typeof filters.sortBy })}>
-            <SelectTrigger className="h-5 w-[100px] rounded border-none bg-transparent px-1.5 text-[11px] shadow-none hover:bg-background/60">
+            <SelectTrigger className="h-5 w-[90px] rounded border-none bg-transparent px-1 text-[11px] shadow-none hover:bg-background/60">
               <SelectValue placeholder="排序" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="starred">按加星时间</SelectItem>
-              <SelectItem value="stars">按星标排序</SelectItem>
-              <SelectItem value="updated">按更新排序</SelectItem>
-              <SelectItem value="name">按名称排序</SelectItem>
+              <SelectItem value="starred">加星时间</SelectItem>
+              <SelectItem value="stars">星标数</SelectItem>
+              <SelectItem value="updated">更新时间</SelectItem>
+              <SelectItem value="name">名称</SelectItem>
             </SelectContent>
           </Select>
 
-          <span className="mx-1.5 h-3 w-px bg-border/70" />
+          {/* Spacer */}
+          <div className="flex-1" />
 
-          {/* Analyze */}
-          <button
-            type="button"
-            className={cn(
-              'inline-flex h-5 items-center gap-1 rounded px-1.5 text-[11px] transition-colors',
-              selectedRepositories.length > 0
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
-            )}
-            onClick={handleAnalyzeAction}
-            disabled={isAnalyzing || isSyncing || (selectedRepositories.length === 0 && pendingVisibleCount === 0)}
-            title={selectedRepositories.length > 0 ? `AI 分析已选 ${selectedRepositories.length} 个仓库` : 'AI 分析当前筛选结果前 5 个未分析仓库'}
-          >
-            {isAnalyzing ? <Loader2 className="size-3 animate-spin" /> : <Bot className="size-3" />}
-            {analysisActionLabel}
-          </button>
-
-          {selectedRepositories.length > 0 ? (
-            <button
-              type="button"
-              className="inline-flex h-5 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-background/60 hover:text-foreground"
-              onClick={() => setSelectedRepoIds(new Set())}
-              title="清除当前选择"
-            >
-              <X className="size-3" />
-              取消选择
-            </button>
-          ) : null}
-
-          {/* Right side: stats */}
-          <div className="ml-auto flex min-w-0 items-center gap-2 overflow-hidden">
+          {/* Right group: stats */}
+          <div className="flex shrink-0 items-center gap-2 overflow-hidden">
             {isSyncing ? (
-              <span className="shrink-0 text-primary">同步 {syncedCount}</span>
-            ) : null}
-            {isAnalyzing && analysisProgress ? (
-              <span className="shrink-0 text-primary">
-                {analysisProgress.running}并发{analysisProgress.failed > 0 ? ` · ${analysisProgress.failed}失败` : ''}
+              <span className="whitespace-nowrap text-primary">
+                <Loader2 className="mr-0.5 inline size-3 animate-spin" />同步 {syncedCount}
               </span>
             ) : null}
-            <span className="hidden whitespace-nowrap sm:inline">
-              <span className="text-foreground/70">{analyzedVisibleCount}</span>已分析
-            </span>
-            <span className="hidden whitespace-nowrap sm:inline">
-              <span className="text-foreground/70">{pendingVisibleCount}</span>待分析
+            {isAnalyzing && analysisProgress ? (
+              <span className="whitespace-nowrap text-primary">
+                <Loader2 className="mr-0.5 inline size-3 animate-spin" />
+                {analysisProgress.completed}/{analysisProgress.total}
+                {analysisProgress.failed > 0 ? ` · ${analysisProgress.failed}失败` : ''}
+              </span>
+            ) : null}
+            <span className="whitespace-nowrap">
+              {analyzedVisibleCount + pendingVisibleCount > 0 ? (
+                <>
+                  <span className="text-foreground/70">{analyzedVisibleCount}</span>分析
+                  <span className="mx-1 text-border">·</span>
+                  <span className="text-foreground/70">{pendingVisibleCount}</span>待分析
+                </>
+              ) : null}
             </span>
             {failedVisibleCount > 0 ? (
               <span className="whitespace-nowrap text-destructive/80">
