@@ -183,7 +183,7 @@ export function LeftSidebarRail() {
           <SidebarRailButton
             active={activeFilePath === GITHUB_STARS_TAB_PATH}
             icon={<Github className="size-4" />}
-            label="GitHub 星标"
+            label="GitHub 管理"
             onClick={() => {
               void openGithubStars()
             }}

@@ -9,7 +9,6 @@ import {
   ChevronUp,
   Loader2,
   Package,
-  RefreshCcw,
   Search,
   CalendarDays,
   LayoutGrid,
@@ -34,7 +33,6 @@ export function ReleasesView() {
     includePrerelease,
     isRefreshingReleases,
     releaseProgress,
-    refreshReleases,
     markReleaseRead,
     setIncludePrerelease,
     // 资产过滤与双模视图相关的全局状态
@@ -193,15 +191,6 @@ export function ReleasesView() {
               />
               包含预发布
             </label>
-            <Button
-              className="h-8 gap-1.5"
-              size="sm"
-              onClick={() => void refreshReleases()}
-              disabled={isRefreshingReleases || subscribedRepositories.length === 0}
-            >
-              {isRefreshingReleases ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
-              刷新发布
-            </Button>
           </div>
         </div>
 
@@ -297,7 +286,7 @@ export function ReleasesView() {
               <Package className="mb-3 size-10 text-muted-foreground" />
               <div className="text-sm font-medium">没有匹配的发布记录</div>
               <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                可以尝试清除资产过滤器，或点击“刷新发布”拉取订阅仓库的最新 Release。
+                可以尝试清除资产过滤器，或点击标题栏右上角刷新按钮拉取订阅仓库的最新 Release。
               </p>
             </div>
           ) : releaseViewMode === 'timeline' ? (
