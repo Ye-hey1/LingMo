@@ -131,8 +131,8 @@ export class MCPServerManager {
 
       try {
         await this.connectServer(server)
-      } catch (error) {
-        console.error(`Failed to connect MCP server ${server.name}:`, error)
+      } catch {
+        // connectServer already stores the error on the server state for the UI.
       }
     }
   }

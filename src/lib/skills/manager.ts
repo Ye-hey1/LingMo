@@ -10,6 +10,7 @@ import {
   SkillScope,
   SkillFileInfo,
   SkillMatchScore,
+  SkillMatchSummary,
   SkillScript,
   SkillReference,
   SkillAsset,
@@ -26,6 +27,7 @@ import {
 } from './types'
 import { parseSkillFile, generateSkillId, detectScriptType } from './parser'
 import { validateSkillYamlMetadata } from './validator'
+import { calculateSkillMatchScore } from './matcher'
 import { readTextFile, readDir, BaseDirectory, DirEntry } from '@tauri-apps/plugin-fs'
 import { getFilePathOptions } from '@/lib/workspace'
 import { exists } from '@tauri-apps/plugin-fs'
@@ -657,11 +659,22 @@ class SkillManager {
     userInput: string,
     maxResults: number = 3
   ): Promise<SkillContent[]> {
+    const scores = await this.matchRelevantSkillScores(userInput, maxResults)
+    return scores.map((score) => score.skill)
+  }
+
+  /**
+   * 根据用户输入匹配相关 Skills，并返回可解释的评分结果
+   */
+  async matchRelevantSkillScores(
+    userInput: string,
+    maxResults: number = 3
+  ): Promise<SkillMatchScore[]> {
     const enabledSkills = await this.getEnabledSkills()
     const scores: SkillMatchScore[] = []
 
     for (const skill of enabledSkills) {
-      const score = this.calculateMatchScore(skill, userInput)
+      const score = calculateSkillMatchScore(skill, userInput)
       if (score.score > 0) {
         scores.push(score)
       }
@@ -670,108 +683,19 @@ class SkillManager {
     // 按分数降序排序
     scores.sort((a, b) => b.score - a.score)
 
-    const result = scores
-      .slice(0, maxResults)
-      .map((score) => score.skill)
-
-    return result
+    return scores.slice(0, maxResults)
   }
 
-  /**
-   * 计算 Skill 与用户输入的匹配分数
-   */
-  private calculateMatchScore(
-    skill: SkillContent,
-    userInput: string
-  ): SkillMatchScore {
-    const description = skill.metadata.description.toLowerCase()
-    const input = userInput.toLowerCase()
-    const reasons: string[] = []
-    let score = 0
-
-    // 完全匹配
-    if (description.includes(input)) {
-      score += 1
-      reasons.push('描述包含用户输入')
-    }
-
-    // 关键词匹配
-    const keywords = this.extractKeywords(description)
-    const matchedKeywords = keywords.filter((keyword) =>
-      input.includes(keyword)
-    )
-    if (matchedKeywords.length > 0) {
-      score += matchedKeywords.length * 0.5
-      reasons.push(`匹配关键词: ${matchedKeywords.join(', ')}`)
-    }
-
-    // 语义相似度（简化版）
-    if (this.hasSemanticOverlap(description, input)) {
-      score += 0.3
-      reasons.push('语义相关')
-    }
-
+  toMatchSummary(score: SkillMatchScore): SkillMatchSummary {
     return {
-      skill,
-      score: Math.min(score, 1), // 限制在 0-1 之间
-      reasons,
+      id: score.skill.metadata.id,
+      name: score.skill.metadata.name,
+      description: score.skill.metadata.description,
+      score: score.score,
+      confidence: score.confidence,
+      reasons: score.reasons,
+      matchedSignals: score.matchedSignals,
     }
-  }
-
-  /**
-   * 从描述中提取关键词
-   */
-  private extractKeywords(description: string): string[] {
-    const keywords: string[] = []
-
-    // 提取各种引号中的内容作为关键词（支持中文引号）
-    const quoteRegex = /[""""「」『』\[\]（）()](.+?)[""""「」『』\[\]（）()]/g
-    let match
-    while ((match = quoteRegex.exec(description)) !== null) {
-      keywords.push(match[1].toLowerCase())
-    }
-
-    // 提取"当...时使用"或"当...时调用"中的内容
-    const triggerRegex = /当(?:.*?)?(.+?)(?:时使用|时调用|时)/gi
-    let triggerMatch
-    while ((triggerMatch = triggerRegex.exec(description)) !== null) {
-      keywords.push(triggerMatch[1].toLowerCase())
-    }
-
-    // 提取"关于...的内容"中的关键词
-    const aboutRegex = /关于[""""「」『』\[\]（）()]?([^""""「」『』\[\]（）()\s]+)[""""「」『』\[\]】()]?的内容/g
-    let aboutMatch
-    while ((aboutMatch = aboutRegex.exec(description)) !== null) {
-      keywords.push(aboutMatch[1].toLowerCase())
-    }
-
-    // 提取描述中的所有中文词汇（2-4个字的词）
-    const chineseWords = description.match(/[\u4e00-\u9fa5]{2,4}/g) || []
-    keywords.push(...chineseWords)
-
-    // 提取描述中的所有英文单词
-    const englishWords = description.match(/[a-zA-Z]{2,}/g) || []
-    keywords.push(...englishWords.map(w => w.toLowerCase()))
-
-    return keywords
-  }
-
-  /**
-   * 检查语义重叠
-   */
-  private hasSemanticOverlap(text1: string, text2: string): boolean {
-    const words1 = new Set(text1.split(/\s+/))
-    const words2 = new Set(text2.split(/\s+/))
-
-    let overlap = 0
-    for (const word of words2) {
-      if (words1.has(word)) {
-        overlap++
-      }
-    }
-
-    // 至少 20% 的词重叠
-    return overlap / words2.size >= 0.2
   }
 
   // ========================================================================

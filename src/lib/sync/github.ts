@@ -2,9 +2,148 @@ import { toast } from '@/hooks/use-toast';
 import { Store } from '@tauri-apps/plugin-store';
 import { v4 as uuid } from 'uuid';
 import { GithubError, GithubRepoInfo, OctokitResponse } from './github.types';
-import { fetch, Proxy } from '@tauri-apps/plugin-http'
+import { fetch } from '@tauri-apps/plugin-http'
 import { buildRepoContentPath, buildRepoContentsEndpoint } from './remote-file'
+import { getProxyConfig } from '@/lib/network-proxy';
 export { decodeBase64ToString } from './remote-file';
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isJsonParseError(error: unknown) {
+  if (error instanceof SyntaxError) return true
+  return /json|unterminated string|unexpected end/i.test(getErrorMessage(error))
+}
+
+function isBadControlCharacterError(error: unknown) {
+  return /bad control character/i.test(getErrorMessage(error))
+}
+
+function isTruncatedJsonError(error: unknown) {
+  return /unterminated string|unexpected end/i.test(getErrorMessage(error))
+}
+
+function escapeJsonStringControlCharacters(text: string) {
+  let result = ''
+  let inString = false
+  let escaped = false
+
+  for (const char of text) {
+    if (!inString) {
+      result += char
+      if (char === '"') {
+        inString = true
+      }
+      continue
+    }
+
+    if (escaped) {
+      result += char
+      escaped = false
+      continue
+    }
+
+    if (char === '\\') {
+      result += char
+      escaped = true
+      continue
+    }
+
+    if (char === '"') {
+      result += char
+      inString = false
+      continue
+    }
+
+    const code = char.charCodeAt(0)
+    if (code < 0x20) {
+      if (char === '\b') result += '\\b'
+      else if (char === '\f') result += '\\f'
+      else if (char === '\n') result += '\\n'
+      else if (char === '\r') result += '\\r'
+      else if (char === '\t') result += '\\t'
+      else result += `\\u${code.toString(16).padStart(4, '0')}`
+      continue
+    }
+
+    result += char
+  }
+
+  return result
+}
+
+function safeGetHeader(headers: Headers | null | undefined, name: string): string | null {
+  if (!headers || typeof headers.get !== 'function') return null
+  try {
+    return headers.get(name)
+  } catch {
+    return null
+  }
+}
+
+async function safeResponseJson<T = any>(response: Response, context = 'GitHub API'): Promise<T> {
+  if (response.status === 204) return {} as T
+
+  const text = await response.text()
+  if (!text.trim()) return {} as T
+
+  try {
+    return JSON.parse(text) as T
+  } catch (error) {
+    if (isBadControlCharacterError(error)) {
+      try {
+        return JSON.parse(escapeJsonStringControlCharacters(text)) as T
+      } catch (normalizedError) {
+        throw new Error(`${context} JSON 响应包含未转义控制字符，自动修正后仍解析失败：${getErrorMessage(normalizedError)}`)
+      }
+    }
+
+    if (isTruncatedJsonError(error)) {
+      throw new Error(`${context} JSON 响应不完整，可能是代理或网络中断导致响应被截断：${getErrorMessage(error)}`)
+    }
+
+    if (isJsonParseError(error)) {
+      throw new Error(`${context} JSON 响应解析失败：${getErrorMessage(error)}`)
+    }
+
+    throw error
+  }
+}
+
+async function getGitHubErrorMessage(response: Response, context: string) {
+  try {
+    const data = await safeResponseJson<{ message?: string }>(response, context)
+    return data?.message ? ` - ${data.message}` : ''
+  } catch (error) {
+    return ` - ${getErrorMessage(error)}`
+  }
+}
+
+async function throwGitHubResponseError(response: Response, context: string): Promise<never> {
+  const message = await getGitHubErrorMessage(response, context)
+
+  if (response.status === 401) {
+    throw new Error('GitHub Token 无效或已过期，请检查同步设置中的 Token')
+  }
+
+  if (response.status === 403) {
+    const remaining = safeGetHeader(response.headers, 'x-ratelimit-remaining')
+    const reset = safeGetHeader(response.headers, 'x-ratelimit-reset')
+    if (remaining === '0' && reset) {
+      const resetTime = new Date(Number(reset) * 1000).toLocaleString()
+      throw new Error(`GitHub API 请求已达限额，请在 ${resetTime} 后重试`)
+    }
+
+    throw new Error(`GitHub Token 权限不足或访问被 GitHub 拒绝，请确认 Token 至少具备 repo 权限${message}`)
+  }
+
+  if (response.status === 404) {
+    throw new Error(`${context}：仓库不存在，或当前 Token 没有访问权限`)
+  }
+
+  throw new Error(`${context}：${response.status} ${response.statusText}${message}`)
+}
 
 export function uint8ArrayToBase64(data: Uint8Array) {
   return Buffer.from(data).toString('base64');
@@ -20,7 +159,9 @@ export async function fileToBase64(file: File) {
       const base64 = reader.result?.toString().replace(/^data:image\/\w+;base64,/, '');
       resolve(base64 || '');
     }
-    reader.onerror = error => reject(error);
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('读取文件失败'))
+    }
   });
 }
 
@@ -54,10 +195,7 @@ export async function uploadFile(
   const id = uuid()
   
   // 获取代理设置
-  const proxyUrl = await store.get<string>('proxy')
-  const proxy: Proxy | undefined = proxyUrl ? {
-    all: proxyUrl
-  } : undefined
+  const proxy = await getProxyConfig()
   
   try {
     // 构建路径，将空格转换成下划线
@@ -91,7 +229,7 @@ export async function uploadFile(
     const response = await fetch(url, requestOptions);
 
     if (response.status >= 200 && response.status < 300) {
-      const data = await response.json();
+      const data = await safeResponseJson(response, '上传文件');
       return { data } as OctokitResponse<any>;
     }
 
@@ -99,7 +237,7 @@ export async function uploadFile(
       return null;
     }
 
-    const errorData = await response.json();
+    const errorData = await safeResponseJson<{ message?: string }>(response, '上传文件');
     throw {
       status: response.status,
       message: errorData.message || '同步失败'
@@ -127,10 +265,7 @@ export async function getFiles({ path, repo, ref }: { path: string, repo: string
   const encodedPath = safePath.split('/').map(segment => encodeURIComponent(segment)).join('/')
 
   // 获取代理设置
-  const proxyUrl = await store.get<string>('proxy')
-  const proxy: Proxy | undefined = proxyUrl ? {
-    all: proxyUrl
-  } : undefined
+  const proxy = await getProxyConfig()
 
   try {
     // 设置请求头
@@ -153,7 +288,7 @@ export async function getFiles({ path, repo, ref }: { path: string, repo: string
     try {
       const response = await fetch(url, requestOptions);
       if (response.status >= 200 && response.status < 300) {
-        const data = await response.json();
+        const data = await safeResponseJson(response, '查询文件');
         return data;
       }
       return null;
@@ -182,10 +317,7 @@ export async function deleteFile(
   const githubUsername = username || await store.get('githubUsername')
   
   // 获取代理设置
-  const proxyUrl = await store.get<string>('proxy')
-  const proxy: Proxy | undefined = proxyUrl ? {
-    all: proxyUrl
-  } : undefined
+  const proxy = await getProxyConfig()
   
   try {
     // 设置请求头
@@ -210,7 +342,7 @@ export async function deleteFile(
     const response = await fetch(url, requestOptions);
     
     if (response.status >= 200 && response.status < 300) {
-      const data = await response.json();
+      const data = await safeResponseJson(response, '删除文件');
       return data;
     }
 
@@ -233,10 +365,7 @@ export async function getFileCommits({ path, repo }: { path: string, repo: strin
   const safePath = path.replace(/\s/g, '_')
 
   // 获取代理设置
-  const proxyUrl = await store.get<string>('proxy')
-  const proxy: Proxy | undefined = proxyUrl ? {
-    all: proxyUrl
-  } : undefined
+  const proxy = await getProxyConfig()
 
   try {
     // 设置请求头
@@ -256,7 +385,7 @@ export async function getFileCommits({ path, repo }: { path: string, repo: strin
     const response = await fetch(url, requestOptions);
 
     if (response.status >= 200 && response.status < 300) {
-      const data = await response.json();
+      const data = await safeResponseJson(response, '查询文件提交历史');
       return data;
     }
 
@@ -276,52 +405,46 @@ export async function getUserInfo(token?: string) {
   if (!accessToken) return;
   
   // 获取代理设置
-  const proxyUrl = await store.get<string>('proxy')
-  const proxy: Proxy | undefined = proxyUrl ? {
-    all: proxyUrl
-  } : undefined
+  const proxy = await getProxyConfig()
   
-  try {
-    // 设置请求头
-    const headers = new Headers();
-    headers.append('Authorization', `Bearer ${accessToken}`);
-    headers.append('Accept', 'application/vnd.github+json');
-    headers.append('X-GitHub-Api-Version', '2022-11-28');
-    
-    const requestOptions = {
-      method: 'GET',
-      headers,
-      proxy
-    };
-    
-    const url = 'https://api.github.com/user';
-    const response = await fetch(url, requestOptions);
-    
-    if (response.status >= 200 && response.status < 300) {
-      const data = await response.json();
-      await store.set('githubUsername', data.login);
-      return { data } as OctokitResponse<any>;
-    }
-    
-    throw new Error('获取用户信息失败');
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } catch (error) {
-    return false;
+  // 设置请求头
+  const headers = new Headers();
+  headers.append('Authorization', `Bearer ${accessToken}`);
+  headers.append('Accept', 'application/vnd.github+json');
+  headers.append('X-GitHub-Api-Version', '2022-11-28');
+
+  const requestOptions = {
+    method: 'GET',
+    headers,
+    proxy,
+    connectTimeout: 8000,
+  };
+
+  const url = 'https://api.github.com/user';
+  const response = await fetch(url, requestOptions);
+
+  if (response.status >= 200 && response.status < 300) {
+    const data = await safeResponseJson<{ login: string }>(response, '获取 GitHub 用户信息');
+    await store.set('githubUsername', data.login);
+    await store.save();
+    return { data } as OctokitResponse<any>;
   }
+
+  await throwGitHubResponseError(response, '获取 GitHub 用户信息失败');
 }
 
 // 检查 Github 仓库
-export async function checkSyncRepoState(name: string) {
+export async function checkSyncRepoState(name: string): Promise<GithubRepoInfo | false | undefined> {
   const store = await Store.load('store.json');
-  const githubUsername = await store.get('githubUsername')
-  const accessToken = await store.get('accessToken')
+  const githubUsername = await store.get<string>('githubUsername')
+  const accessToken = await store.get<string>('accessToken')
   if (!accessToken) return;
+  if (!githubUsername) {
+    throw new Error('GitHub 用户名未获取到，请先检查 GitHub Token 是否有效')
+  }
   
   // 获取代理设置
-  const proxyUrl = await store.get<string>('proxy')
-  const proxy: Proxy | undefined = proxyUrl ? {
-    all: proxyUrl
-  } : undefined
+  const proxy = await getProxyConfig()
   
   // 设置请求头
   const headers = new Headers();
@@ -332,62 +455,63 @@ export async function checkSyncRepoState(name: string) {
   const requestOptions = {
     method: 'GET',
     headers,
-    proxy
+    proxy,
+    connectTimeout: 8000,
   };
   
   const url = `https://api.github.com/repos/${githubUsername}/${name}`;
   const response = await fetch(url, requestOptions);
   
   if (response.status >= 200 && response.status < 300) {
-    const data = await response.json();
-    return data;
+    return await safeResponseJson<GithubRepoInfo>(response, `检查 GitHub 仓库 ${githubUsername}/${name}`);
+  }
+
+  if (response.status === 404) {
+    return false
   }
   
-  return false
+  await throwGitHubResponseError(response, `检查 GitHub 仓库 ${githubUsername}/${name} 失败`);
 }
 
 // 创建 Github 仓库
 export async function createSyncRepo(name: string, isPrivate?: boolean) {
   const store = await Store.load('store.json');
   const accessToken = await store.get('accessToken')
-  if (!accessToken) return;
+  if (!accessToken) {
+    throw new Error('请先在同步设置中配置 GitHub Token')
+  }
   
   // 获取代理设置
-  const proxyUrl = await store.get<string>('proxy')
-  const proxy: Proxy | undefined = proxyUrl ? {
-    all: proxyUrl
-  } : undefined
+  const proxy = await getProxyConfig()
   
-  try {
-    // 设置请求头
-    const headers = new Headers();
-    headers.append('Authorization', `Bearer ${accessToken}`);
-    headers.append('Accept', 'application/vnd.github+json');
-    headers.append('X-GitHub-Api-Version', '2022-11-28');
-    headers.append('Content-Type', 'application/json');
-    
-    const requestOptions = {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        name,
-        description: 'This is a LingMo sync repository.',
-        private: isPrivate
-      }),
-      proxy
-    };
-    
-    const url = 'https://api.github.com/user/repos';
-    const response = await fetch(url, requestOptions);
-    
-    if (response.status >= 200 && response.status < 300) {
-      const data = await response.json() as GithubRepoInfo;
-      return data;
-    }
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } catch (error) {
-    return undefined;
+  // 设置请求头
+  const headers = new Headers();
+  headers.append('Authorization', `Bearer ${accessToken}`);
+  headers.append('Accept', 'application/vnd.github+json');
+  headers.append('X-GitHub-Api-Version', '2022-11-28');
+  headers.append('Content-Type', 'application/json');
+
+  const requestOptions = {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      name,
+      description: 'This is a LingMo sync repository.',
+      private: isPrivate
+    }),
+    proxy,
+    connectTimeout: 8000,
+  };
+
+  const url = 'https://api.github.com/user/repos';
+  const response = await fetch(url, requestOptions);
+
+  if (response.status >= 200 && response.status < 300) {
+    const data = await safeResponseJson<GithubRepoInfo>(response, `创建 GitHub 仓库 ${name}`);
+    return data;
   }
+
+  await throwGitHubResponseError(response, `创建 GitHub 仓库 ${name} 失败`);
 }
 
 // 读取 release
@@ -397,10 +521,7 @@ export async function getRelease() {
   if (!accessToken) return;
   
   // 获取代理设置
-  const proxyUrl = await store.get<string>('proxy')
-  const proxy: Proxy | undefined = proxyUrl ? {
-    all: proxyUrl
-  } : undefined
+  const proxy = await getProxyConfig()
   
   try {
     // 设置请求头
@@ -416,11 +537,11 @@ export async function getRelease() {
       proxy
     };
     
-    const url = `https://api.github.com/repos/Ye-hey1/note-gen/releases/latest`;
+    const url = `https://api.github.com/repos/Ye-hey1/LingMo/releases/latest`;
     const response = await fetch(url, requestOptions);
     
     if (response.status >= 200 && response.status < 300) {
-      const data = await response.json();
+      const data = await safeResponseJson(response, '获取 release');
       return data;
     }
     

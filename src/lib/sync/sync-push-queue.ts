@@ -3,7 +3,7 @@
 import { Store } from '@tauri-apps/plugin-store'
 import { getSyncRepoName } from '@/lib/sync/repo-utils'
 import { getWorkspacePath, getFilePathOptions } from '@/lib/workspace'
-import { readTextFile } from '@tauri-apps/plugin-fs'
+import { exists, readTextFile } from '@tauri-apps/plugin-fs'
 import emitter from '@/lib/emitter'
 import { pullRemoteFile, setLocalRecordedSha, getLocalRecordedSha } from './auto-sync'
 import { getRemoteFileInfo } from './auto-sync'
@@ -80,6 +80,22 @@ class SyncPushQueue {
   }
 
   private readonly CHECK_INTERVAL = 100 // 每 100ms 检查一次
+
+  private async readLocalContentIfExists(path: string): Promise<string | null> {
+    const workspace = await getWorkspacePath()
+    const pathOptions = await getFilePathOptions(path)
+    const fileExists = workspace.isCustom
+      ? await exists(pathOptions.path)
+      : await exists(pathOptions.path, { baseDir: pathOptions.baseDir })
+
+    if (!fileExists) {
+      return null
+    }
+
+    return workspace.isCustom
+      ? await readTextFile(pathOptions.path)
+      : await readTextFile(pathOptions.path, { baseDir: pathOptions.baseDir })
+  }
 
   /**
    * 初始化监听器 - 只执行一次
@@ -255,12 +271,12 @@ class SyncPushQueue {
         const provider = (await store.get<string>('primaryBackupMethod') || 'github') as 'gitee' | 'github' | 'gitlab' | 'gitea' | 's3' | 'webdav'
         const repo = (provider !== 's3' && provider !== 'webdav') ? await getSyncRepoName(provider) : undefined
 
-        // 从磁盘读取最新内容，确保上传的是本地最新内容
-        const workspace = await getWorkspacePath()
-        const pathOptions = await getFilePathOptions(path)
-        const content = workspace.isCustom
-          ? await readTextFile(pathOptions.path)
-          : await readTextFile(pathOptions.path, { baseDir: pathOptions.baseDir })
+        // 从磁盘读取最新内容。文件可能已被删除/移动，陈旧任务无需再推送。
+        const content = await this.readLocalContentIfExists(path)
+        if (content === null) {
+          emitter.emit('sync-push-completed', { path, success: true })
+          return { success: true }
+        }
 
         // 检查本地内容是否与远程相同，如果相同则跳过推送
         try {
@@ -540,12 +556,12 @@ class SyncPushQueue {
       const provider = (await store.get<string>('primaryBackupMethod') || 'github') as 'gitee' | 'github' | 'gitlab' | 'gitea' | 's3' | 'webdav'
       const repo = (provider !== 's3' && provider !== 'webdav') ? await getSyncRepoName(provider) : undefined
 
-      // 从磁盘读取最新内容
-      const workspace = await getWorkspacePath()
-      const pathOptions = await getFilePathOptions(path)
-      const content = workspace.isCustom
-        ? await readTextFile(pathOptions.path)
-        : await readTextFile(pathOptions.path, { baseDir: pathOptions.baseDir })
+      // 从磁盘读取最新内容。若文件已不存在，直接结束，避免底层 ENOENT 报错。
+      const content = await this.readLocalContentIfExists(path)
+      if (content === null) {
+        emitter.emit('sync-push-completed', { path, success: false })
+        return { success: false }
+      }
 
       // 生成提交信息
       const commitMessage = await this.generateCommitMessage(path, content)

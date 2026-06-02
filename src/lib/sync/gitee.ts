@@ -23,7 +23,9 @@ export async function fileToBase64(file: File) {
       const base64 = reader.result?.toString().replace(/^data:image\/\w+;base64,/, '');
       resolve(base64 || '');
     }
-    reader.onerror = error => reject(error);
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('读取文件失败'))
+    }
   });
 }
 

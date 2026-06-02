@@ -1,4 +1,3 @@
-import { join } from '@tauri-apps/api/path'
 import { exists, mkdir, readDir, readFile, stat, writeFile } from '@tauri-apps/plugin-fs'
 import { fetch, type Proxy } from '@tauri-apps/plugin-http'
 import { Store } from '@tauri-apps/plugin-store'
@@ -54,18 +53,6 @@ function normalizePath(path: string) {
 
 function packagePath(relativePath: string) {
   return `${WORKSPACE_FILE_ROOT}/${normalizePath(relativePath)}.json`
-}
-
-function splitRemotePath(path: string) {
-  const normalized = normalizePath(path)
-  const index = normalized.lastIndexOf('/')
-  if (index === -1) {
-    return { dir: '', filename: normalized }
-  }
-  return {
-    dir: normalized.slice(0, index),
-    filename: normalized.slice(index + 1),
-  }
 }
 
 function bytesToBase64(bytes: Uint8Array) {

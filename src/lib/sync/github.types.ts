@@ -1,6 +1,6 @@
 export enum RepoNames {
-  image = 'note-gen-image-sync',
-  sync = 'note-gen-sync'
+  image = 'lingmo-image-sync',
+  sync = 'lingmo-sync'
 }
 
 export interface GithubError {

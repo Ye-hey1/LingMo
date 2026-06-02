@@ -265,7 +265,18 @@ export class MCPClient {
       }
       
       // 标准 JSON 响应
-      const jsonResponse: JSONRPCResponse = await response.json()
+      const responseText = await response.text()
+      if (!responseText.trim()) {
+        throw new Error('Empty response from MCP server')
+      }
+
+      let jsonResponse: JSONRPCResponse
+      try {
+        jsonResponse = JSON.parse(responseText)
+      } catch {
+        const preview = responseText.slice(0, 120).replace(/\s+/g, ' ').trim()
+        throw new Error(`Invalid JSON response from MCP server: ${preview || 'empty body'}`)
+      }
       
       if (jsonResponse.error) {
         throw new Error(jsonResponse.error.message)

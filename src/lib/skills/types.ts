@@ -254,10 +254,42 @@ export interface SkillFileInfo {
 /**
  * Skill 匹配分数
  */
+export type SkillMatchConfidence = 'high' | 'medium' | 'low'
+
+export type SkillMatchSignalSource =
+  | 'skill-id'
+  | 'skill-name'
+  | 'description'
+  | 'use-case'
+  | 'heading'
+  | 'reference'
+  | 'script'
+  | 'asset'
+  | 'instruction'
+
+export interface SkillMatchSignal {
+  source: SkillMatchSignalSource
+  text: string
+  matchedTerms: string[]
+  weight: number
+}
+
 export interface SkillMatchScore {
   skill: SkillContent
   score: number                 // 匹配分数 (0-1)
+  confidence: SkillMatchConfidence
   reasons: string[]             // 匹配原因
+  matchedSignals: SkillMatchSignal[]
+}
+
+export interface SkillMatchSummary {
+  id: string
+  name: string
+  description?: string
+  score: number
+  confidence: SkillMatchConfidence
+  reasons: string[]
+  matchedSignals: SkillMatchSignal[]
 }
 
 // ============================================================================

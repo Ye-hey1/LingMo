@@ -3,7 +3,66 @@ import { mcpServerManager } from '@/lib/mcp/server-manager'
 import type { MCPServerConfig, MCPTool } from '@/lib/mcp/types'
 import { useMcpStore } from '@/stores/mcp'
 import { createOpenAIClient, getAISettings, validateAIService } from '@/lib/ai/utils'
-import { searchWeb, type TavilySearchDepth } from '@/lib/tavily'
+import { tavilyExtract, requestDuckDuckGoFallback, searchWeb, type TavilySearchDepth } from '@/lib/tavily'
+import { exists, mkdir, writeTextFile } from '@tauri-apps/plugin-fs'
+import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
+import type { AgentEventBus } from '@/lib/agent/event-bus'
+import { saveSessionState, loadSessionState } from './session-store'
+
+interface ProviderState {
+  name: string
+  failureCount: number
+  lastFailureTime: number
+  isBroken: boolean
+  responseTime: number
+}
+
+class SearchProviderRegistry {
+  private states = new Map<string, ProviderState>()
+  private cooldownMs = 5 * 60 * 1000 // 5分钟
+
+  recordSuccess(name: string, responseTime: number) {
+    const state = this.getOrCreateState(name)
+    state.failureCount = 0
+    state.isBroken = false
+    state.responseTime = responseTime
+  }
+
+  recordFailure(name: string, responseTime: number) {
+    const state = this.getOrCreateState(name)
+    state.failureCount++
+    state.lastFailureTime = Date.now()
+    state.responseTime = responseTime
+    if (state.failureCount >= 3) {
+      state.isBroken = true
+      console.warn(`[DeepResearch] Provider ${name} has been tripped due to 3 consecutive failures.`)
+    }
+  }
+
+  isBroken(name: string): boolean {
+    const state = this.getOrCreateState(name)
+    if (state.isBroken) {
+      if (Date.now() - state.lastFailureTime > this.cooldownMs) {
+        state.isBroken = false
+        state.failureCount = 0
+        return false
+      }
+      return true
+    }
+    return false
+  }
+
+  getOrCreateState(name: string): ProviderState {
+    let state = this.states.get(name)
+    if (!state) {
+      state = { name, failureCount: 0, lastFailureTime: 0, isBroken: false, responseTime: 0 }
+      this.states.set(name, state)
+    }
+    return state
+  }
+}
+
+export const searchProviderRegistry = new SearchProviderRegistry()
 
 type SerpQuery = {
   query: string
@@ -429,23 +488,64 @@ function tavilyResultToSearchItems(results: Awaited<ReturnType<typeof searchWeb>
   }))
 }
 
+function createDuckDuckGoProvider(): ResearchSearchProvider {
+  return {
+    name: 'duckduckgo',
+    async search(query, options) {
+      const response = await requestDuckDuckGoFallback(
+        query,
+        options.maxResults,
+        options.includeDomains,
+        undefined,
+        options.abortSignal
+      )
+      return response.results.map(result => ({
+        title: result.title,
+        url: result.url,
+        markdown: result.content,
+        content: result.content,
+        score: result.score || 0.5,
+        publishedDate: result.publishedDate,
+        provider: 'duckduckgo',
+      }))
+    }
+  }
+}
+
 function createTavilyProvider(): ResearchSearchProvider {
+  const ddg = createDuckDuckGoProvider()
   return {
     name: 'tavily',
     async search(query, options) {
-      const response = await searchWeb({
-        query,
-        maxResults: options.maxResults,
-        searchDepth: options.searchDepth,
-        includeAnswer: true,
-        includeDomains: options.includeDomains,
-        signal: options.abortSignal,
-      })
+      // 检查 Tavily 熔断器状态
+      const isTripped = searchProviderRegistry.isBroken('tavily')
+      if (isTripped) {
+        console.warn('[DeepResearch] Tavily 处于熔断中，自动降级为 DuckDuckGo 搜索')
+        return ddg.search(query, options)
+      }
 
-      return tavilyResultToSearchItems(response.results).map(item => ({
-        ...item,
-        provider: response.provider,
-      }))
+      const startTime = Date.now()
+      try {
+        const response = await searchWeb({
+          query,
+          maxResults: options.maxResults,
+          searchDepth: options.searchDepth,
+          includeAnswer: true,
+          includeDomains: options.includeDomains,
+          signal: options.abortSignal,
+        })
+        const duration = Date.now() - startTime
+        searchProviderRegistry.recordSuccess('tavily', duration)
+        return tavilyResultToSearchItems(response.results).map(item => ({
+          ...item,
+          provider: response.provider,
+        }))
+      } catch (err) {
+        const duration = Date.now() - startTime
+        searchProviderRegistry.recordFailure('tavily', duration)
+        console.warn('[DeepResearch] Tavily 搜索失败，自动降级为 DuckDuckGo. 错误:', err)
+        return ddg.search(query, options)
+      }
     },
   }
 }
@@ -504,6 +604,7 @@ async function buildSearchProviders(): Promise<ResearchSearchProvider[]> {
   }
 
   providers.push(createTavilyProvider())
+  providers.push(createDuckDuckGoProvider())
   return providers
 }
 
@@ -912,230 +1013,246 @@ async function runSearch(params: {
   return merged.slice(0, Math.max(params.strategy.maxResults, 8))
 }
 
-async function deepResearchRecursive(params: {
-  providers: ResearchSearchProvider[]
-  query: string
-  strategy: ResearchStrategyConfig
-  breadth: number
-  depth: number
-  totalDepth: number
-  learnings: string[]
-  sources: ResearchSource[]
-  evidences: ResearchEvidence[]
-  visitedUrls: string[]
+async function selectCrawlerUrls(
+  query: string,
+  allExtractedUrls: string[],
   abortSignal?: AbortSignal
-  onProgress?: (progress: DeepResearchProgress) => void
-}): Promise<{ learnings: string[]; visitedUrls: string[]; sources: ResearchSource[]; evidences: ResearchEvidence[] }> {
-  params.abortSignal?.throwIfAborted()
-  params.onProgress?.({
-    stage: 'planning',
-    currentDepth: params.depth,
-    totalDepth: params.totalDepth,
-    currentBreadth: params.breadth,
-    totalBreadth: params.breadth,
-    completedQueries: 0,
-    totalQueries: 0,
-    learningsCount: params.learnings.length,
-    visitedUrlsCount: params.visitedUrls.length,
-    evidenceCount: params.evidences.length,
-    strategy: params.strategy.id,
-  })
+): Promise<string[]> {
+  if (allExtractedUrls.length === 0) return []
+  const prompt = [
+    '你是一个深入研究的爬虫筛选助手。根据以下的研究主题/查询，从提取出的一组外链中，筛选出最相关、置信度最高、最值得进一步爬取的网页 URL。',
+    '筛选规则：',
+    '1. 优先选择官方文档、官方博客、规范标准、权威学术、著名技术社区、或高置信度的媒体链接。',
+    '2. 排除垃圾链接、社交媒体（如 twitter, facebook, youtube, linkedin）、登录/注册页面、分享按钮链接、以及与主题明显无关的链接。',
+    '3. 最多选择 3 个链接。',
+    '请以 JSON 对象格式返回所选的链接，例如：{"urls":["https://example.com/page1","https://example.com/page2"]}',
+    '',
+    `<research_query>${query}</research_query>`,
+    '<extracted_urls>',
+    allExtractedUrls.slice(0, 50).join('\n'),
+    '</extracted_urls>'
+  ].join('\n')
 
-  const serpQueries = await generateSerpQueries({
-    query: params.query,
-    breadth: params.breadth,
-    learnings: params.learnings,
-    strategy: params.strategy,
-    abortSignal: params.abortSignal,
-  })
-
-  const nextBreadth = Math.max(1, Math.ceil(params.breadth / 2))
-  const nextDepth = params.depth - 1
-  const allLearnings = [...params.learnings]
-  const allUrls = [...params.visitedUrls]
-  let allSources = [...params.sources]
-  let allEvidences = [...params.evidences]
-
-  // 并行执行搜索，按 MAX_PARALLEL_SEARCHES 分批
-  for (let batchStart = 0; batchStart < serpQueries.length; batchStart += MAX_PARALLEL_SEARCHES) {
-    params.abortSignal?.throwIfAborted()
-    const batch = serpQueries.slice(batchStart, batchStart + MAX_PARALLEL_SEARCHES)
-
-    params.onProgress?.({
-      stage: 'searching',
-      currentDepth: params.depth,
-      totalDepth: params.totalDepth,
-      currentBreadth: params.breadth,
-      totalBreadth: params.breadth,
-      currentQuery: batch.map(q => q.query).join(' | '),
-      completedQueries: batchStart,
-      totalQueries: serpQueries.length,
-      learningsCount: allLearnings.length,
-      visitedUrlsCount: allUrls.length,
-      evidenceCount: allEvidences.length,
-      providerStatus: params.providers.map(provider => provider.name).join(', '),
-      strategy: params.strategy.id,
-    })
-
-    const searchResults = await Promise.allSettled(
-      batch.map(serpQuery => runSearch({
-        providers: params.providers,
-        query: serpQuery.query,
-        strategy: params.strategy,
-        abortSignal: params.abortSignal,
-      }))
-    )
-
-    // 收集搜索结果
-    const batchItems: { serpQuery: SerpQuery; items: SearchHit[]; sources: ResearchSource[] }[] = []
-    for (let i = 0; i < batch.length; i++) {
-      const result = searchResults[i]
-      if (result.status === 'fulfilled' && result.value.length > 0) {
-        const nextSources = result.value
-          .map((item, index) => buildSourceFromItem(item, item.provider || 'web', allSources.length + index + 1))
-          .filter((source): source is ResearchSource => !!source)
-        allSources = mergeSources(allSources, nextSources)
-        const sourceByUrl = new Map(allSources.map(source => [normalizeUrl(source.url), source.id]))
-        const items = result.value
-          .map(item => ({
-            ...item,
-            sourceId: sourceByUrl.get(normalizeUrl(item.url || '')) || '',
-          }))
-          .filter(item => item.sourceId)
-
-        batchItems.push({
-          serpQuery: batch[i],
-          items,
-          sources: allSources.filter(source => items.some(item => item.sourceId === source.id)),
-        })
-        allUrls.push(...items.map(item => item.url || '').filter(Boolean).map(normalizeUrl))
-      } else if (result.status === 'rejected') {
-        console.warn('[DeepResearch] Search failed:', batch[i].query, result.reason)
-      }
-    }
-
-    if (batchItems.length === 0) continue
-
-    params.onProgress?.({
-      stage: 'analyzing',
-      currentDepth: params.depth,
-      totalDepth: params.totalDepth,
-      currentBreadth: params.breadth,
-      totalBreadth: params.breadth,
-      currentQuery: batchItems.map(b => b.serpQuery.query).join(' | '),
-      completedQueries: batchStart + batch.length,
-      totalQueries: serpQueries.length,
-      learningsCount: allLearnings.length,
-      visitedUrlsCount: allUrls.length,
-      evidenceCount: allEvidences.length,
-      strategy: params.strategy.id,
-    })
-
-    const analysisResults = await Promise.allSettled(
-      batchItems.map(({ serpQuery, items, sources }) =>
-        processSerpResult({
-          query: serpQuery.query,
-          items,
-          sources,
-          followUpCount: nextBreadth,
-          abortSignal: params.abortSignal,
-        })
-      )
-    )
-
-    // 收集分析结果和追问方向
-    const followUpTasks: { serpQuery: SerpQuery; questions: string[] }[] = []
-    for (let i = 0; i < analysisResults.length; i++) {
-      const result = analysisResults[i]
-      if (result.status === 'fulfilled') {
-        allLearnings.push(...result.value.learnings)
-        allEvidences.push(...result.value.evidences)
-        if (nextDepth > 0 && result.value.followUpQuestions.length > 0) {
-          followUpTasks.push({
-            serpQuery: batchItems[i].serpQuery,
-            questions: result.value.followUpQuestions,
-          })
-        }
-      }
-    }
-
-    // 递归深入（串行，避免过多并发 API 调用）
-    for (const task of followUpTasks) {
-      params.abortSignal?.throwIfAborted()
-      const nextQuery = [
-        `Previous research goal: ${task.serpQuery.researchGoal}`,
-        'Follow-up research directions:',
-        ...task.questions.map(question => `- ${question}`),
-      ].join('\n')
-
-      try {
-        const deeper = await deepResearchRecursive({
-          ...params,
-          query: nextQuery,
-          breadth: nextBreadth,
-          depth: nextDepth,
-          learnings: uniqueStrings(allLearnings),
-          sources: allSources,
-          evidences: remapEvidenceSources(allEvidences, allSources),
-          visitedUrls: uniqueStrings(allUrls),
-        })
-        allLearnings.push(...deeper.learnings)
-        allUrls.push(...deeper.visitedUrls)
-        allSources = mergeSources(allSources, deeper.sources)
-        allEvidences.push(...deeper.evidences)
-      } catch (error) {
-        console.warn('[DeepResearch] Recursive research failed:', error)
-      }
-    }
-
-    params.onProgress?.({
-      stage: 'searching',
-      currentDepth: params.depth,
-      totalDepth: params.totalDepth,
-      currentBreadth: params.breadth,
-      totalBreadth: params.breadth,
-      currentQuery: batch[batch.length - 1]?.query,
-      completedQueries: batchStart + batch.length,
-      totalQueries: serpQueries.length,
-      learningsCount: allLearnings.length,
-      visitedUrlsCount: allUrls.length,
-      evidenceCount: allEvidences.length,
-      strategy: params.strategy.id,
-    })
+  const parsed = await askJson(prompt, abortSignal)
+  if (Array.isArray(parsed?.urls)) {
+    return parsed.urls.map(String).map(url => url.trim()).filter(Boolean)
   }
-
-  allSources = mergeSources(allSources, [])
-  allEvidences = remapEvidenceSources(allEvidences, allSources)
-
-  return {
-    learnings: uniqueStrings(allLearnings),
-    visitedUrls: uniqueStrings(allUrls),
-    sources: allSources,
-    evidences: allEvidences,
-  }
+  return []
 }
 
-function buildEvidenceSupportSummary(sources: ResearchSource[], evidences: ResearchEvidence[]) {
-  const sourceById = new Map(sources.map(source => [source.id, source]))
-  const hostCounts = new Map<string, number>()
-  evidences.forEach(evidence => {
-    const source = sourceById.get(evidence.sourceId)
-    const host = source ? hostFromUrl(source.url) : ''
-    if (host) {
-      hostCounts.set(host, (hostCounts.get(host) || 0) + 1)
+async function runDeepCrawler(params: {
+  query: string
+  seedItems: FirecrawlSearchItem[]
+  existingSources: ResearchSource[]
+  abortSignal?: AbortSignal
+}): Promise<ResearchSource[]> {
+  const crawlerSources: ResearchSource[] = []
+  const topItems = params.seedItems.slice(0, 2)
+  const urlsToExtract = topItems.map(item => item.url).filter((url): url is string => !!url)
+  if (urlsToExtract.length === 0) return []
+
+  let mainContents = ''
+  try {
+    const extractResponse = await tavilyExtract({
+      urls: urlsToExtract,
+      format: 'markdown',
+      signal: params.abortSignal,
+    })
+
+    for (const res of extractResponse.results) {
+      if (res.rawContent) {
+        mainContents += `\n${res.rawContent}`
+      }
+    }
+  } catch (err) {
+    console.warn('[DeepResearch] tavilyExtract failed during crawler seed phase:', err)
+    mainContents = topItems.map(item => item.content || item.markdown || item.description || '').join('\n')
+  }
+
+  if (!mainContents.trim()) return []
+
+  const urlRegex = /https?:\/\/[^\s'"\)\>\]]+/g
+  const allExtractedUrls = [...new Set(mainContents.match(urlRegex) || [])]
+    .map(url => normalizeUrl(url))
+    .filter(url => {
+      const host = hostFromUrl(url)
+      if (!host) return false
+      const ignoreList = [
+        'twitter.com', 'x.com', 'facebook.com', 'linkedin.com', 'youtube.com',
+        'instagram.com', 'reddit.com', 'pinterest.com', 'github.com/login',
+        'github.com/join', 't.me', 'medium.com/p', 'accounts.google.com'
+      ]
+      return !ignoreList.some(domain => host.includes(domain))
+    })
+
+  if (allExtractedUrls.length === 0) return []
+
+  const selectedUrls = await selectCrawlerUrls(params.query, allExtractedUrls, params.abortSignal)
+  if (selectedUrls.length === 0) return []
+
+  try {
+    console.log('[DeepResearch] Crawling deep links:', selectedUrls)
+    const crawlResponse = await tavilyExtract({
+      urls: selectedUrls,
+      format: 'markdown',
+      signal: params.abortSignal,
+    })
+
+    crawlResponse.results.forEach((res, index) => {
+      if (!res.rawContent) return
+      const url = normalizeUrl(res.url)
+      const host = hostFromUrl(url)
+      const sourceId = `C${params.existingSources.length + crawlerSources.length + 1}`
+      crawlerSources.push({
+        id: sourceId,
+        title: host || `Deep Link ${index + 1}`,
+        url,
+        engine: 'crawler',
+        snippet: trimText(res.rawContent, 1500),
+        retrievedAt: new Date().toISOString(),
+        credibilityScore: 0.65,
+      })
+    })
+  } catch (err) {
+    console.warn('[DeepResearch] tavilyExtract failed for deep links:', err)
+  }
+
+  return crawlerSources
+}
+
+export async function performCrossVerification(
+  sources: ResearchSource[],
+  evidences: ResearchEvidence[],
+  abortSignal?: AbortSignal
+): Promise<{
+  evidences: ResearchEvidence[]
+  verificationSummary: string
+}> {
+  if (evidences.length === 0) {
+    return { evidences, verificationSummary: '未收集到足够证据以进行交叉印证。' }
+  }
+
+  const prompt = [
+    '你是一个深度研究的交叉印证与证据链审查专家。你需要阅读以下收集到的证据列表，将表达相同事实或主张的证据进行聚类（Fact Cluster），检测它们是否由多个独立域名支持，并特别注意它们是否存在逻辑矛盾或相反的主张。',
+    '请以 JSON 对象格式返回，格式如下：',
+    '{',
+    '  "clusters": [',
+    '    {',
+    '      "factClaim": "这一事实集群的核心主张（中文描述）",',
+    '      "supportingEvidenceIds": ["E1", "E2"],',
+    '      "contradictingEvidenceIds": [] // 如有反面证据，列出其 ID；如无则为空',
+    '    }',
+    '  ]',
+    '}',
+    '',
+    '<evidences>',
+    evidences.map(e => `[${e.id}] Claim: ${e.claim} (Source URL: ${e.sourceUrl})`).join('\n\n'),
+    '</evidences>'
+  ].join('\n')
+
+  const parsed = await askJson(prompt, abortSignal)
+  const clusters = Array.isArray(parsed?.clusters) ? parsed.clusters : []
+
+  const updatedEvidences = [...evidences]
+  const hasConflictMap = new Set<string>()
+  const hostSupportCountMap = new Map<string, Set<string>>()
+
+  clusters.forEach((cluster: any, cIndex: number) => {
+    const cId = `cluster-${cIndex}`
+    const hosts = new Set<string>()
+    const suppIds: string[] = Array.isArray(cluster.supportingEvidenceIds) ? cluster.supportingEvidenceIds.map(String) : []
+    const contraIds: string[] = Array.isArray(cluster.contradictingEvidenceIds) ? cluster.contradictingEvidenceIds.map(String) : []
+
+    suppIds.forEach((id: string) => {
+      const ev = updatedEvidences.find(e => e.id === id)
+      if (ev) {
+        const host = hostFromUrl(ev.sourceUrl)
+        if (host) hosts.add(host)
+      }
+    })
+
+    if (contraIds.length > 0) {
+      suppIds.forEach((id: string) => hasConflictMap.add(id))
+      contraIds.forEach((id: string) => hasConflictMap.add(id))
+    }
+
+    hostSupportCountMap.set(cId, hosts)
+
+    suppIds.forEach((id: string) => {
+      const evIndex = updatedEvidences.findIndex(e => e.id === id)
+      if (evIndex !== -1) {
+        const ev = updatedEvidences[evIndex]
+        let confidence = ev.confidence
+
+        if (hosts.size >= 3) {
+          confidence = 'high'
+        } else if (hosts.size === 1) {
+          if (confidence === 'high') {
+            confidence = 'medium'
+          }
+        }
+
+        if (hasConflictMap.has(id)) {
+          confidence = 'low'
+        }
+
+        updatedEvidences[evIndex] = {
+          ...ev,
+          confidence
+        }
+      }
+    })
+
+    contraIds.forEach((id: string) => {
+      const evIndex = updatedEvidences.findIndex(e => e.id === id)
+      if (evIndex !== -1) {
+        updatedEvidences[evIndex] = {
+          ...updatedEvidences[evIndex],
+          confidence: 'low'
+        }
+      }
+    })
+  })
+
+  const summaryLines: string[] = ['### 证据链交叉印证分析评估报告：']
+  let conflictCount = 0
+  let highConfCount = 0
+
+  clusters.forEach((cluster: any, index: number) => {
+    const cId = `cluster-${index}`
+    const hosts = hostSupportCountMap.get(cId)
+    const hostList = hosts ? [...hosts].join(', ') : ''
+    const suppIds = Array.isArray(cluster.supportingEvidenceIds) ? cluster.supportingEvidenceIds.map(String) : []
+    const contraIds = Array.isArray(cluster.contradictingEvidenceIds) ? cluster.contradictingEvidenceIds.map(String) : []
+
+    summaryLines.push(`${index + 1}. **事实主张**：${cluster.factClaim}`)
+    summaryLines.push(`   - 支持域名 (数量: ${hosts?.size || 0})：[${hostList}]`)
+
+    if (hosts && hosts.size >= 3) {
+      highConfCount++
+      summaryLines.push(`   - 状态：**多源印证（置信度高）**，支持证据：[${suppIds.join(', ')}]`)
+    } else if (hosts && hosts.size === 1) {
+      summaryLines.push(`   - 状态：**孤证引用**（置信度受限，仅来源于单个域），支持证据：[${suppIds.join(', ')}]`)
+    } else {
+      summaryLines.push(`   - 状态：**多方提及**，支持证据：[${suppIds.join(', ')}]`)
+    }
+
+    if (contraIds.length > 0) {
+      conflictCount++
+      summaryLines.push(`   - ⚠️ **冲突警告**：存在冲突或相反的主张！冲突证据：[${contraIds.join(', ')}]`)
     }
   })
 
-  const independentHosts = hostCounts.size
-  const highConfidence = evidences.filter(evidence => evidence.confidence === 'high').length
-  const weakEvidence = evidences.filter(evidence => evidence.confidence === 'low').length
+  if (conflictCount > 0) {
+    summaryLines.unshift(`> ⚠️ 【交叉验证预警】：在本次研究中共检测到 ${conflictCount} 处逻辑矛盾的事实，已对相关证据的置信度执行降级，并在生成最终报告时特别标出。`)
+  } else {
+    summaryLines.unshift(`> 【交叉验证结果】：证据一致性高。共提取并分析了 ${clusters.length} 个核心事实集群，其中 ${highConfCount} 个事实得到了 3 个及以上独立域名的交叉印证。`)
+  }
 
-  return [
-    `Independent source domains: ${independentHosts}`,
-    `High confidence evidence items: ${highConfidence}`,
-    `Low confidence evidence items: ${weakEvidence}`,
-    independentHosts < 2 ? 'Warning: fewer than two independent source domains were found; mark major conclusions as single-source or low-confidence.' : '',
-  ].filter(Boolean).join('\n')
+  return {
+    evidences: updatedEvidences,
+    verificationSummary: summaryLines.join('\n')
+  }
 }
 
 function formatEvidenceForReport(sources: ResearchSource[], evidences: ResearchEvidence[]) {
@@ -1167,6 +1284,8 @@ export async function runDeepResearch(params: {
   depth?: number
   abortSignal?: AbortSignal
   onProgress?: (progress: DeepResearchProgress) => void
+  sessionId?: string
+  eventBus?: AgentEventBus
 }): Promise<DeepResearchResult> {
   const startedAt = new Date().toISOString()
   const strategyId = await classifyResearchIntent({
@@ -1174,77 +1293,369 @@ export async function runDeepResearch(params: {
     abortSignal: params.abortSignal,
   })
   const strategy = STRATEGY_CONFIGS[strategyId]
-  const breadth = clampInteger(params.breadth, strategy.breadth || DEFAULT_BREADTH, 1, 6)
-  const depth = clampInteger(params.depth, strategy.depth || DEFAULT_DEPTH, 1, 4)
+  const defaultBreadth = clampInteger(params.breadth, strategy.breadth || DEFAULT_BREADTH, 1, 6)
+  const defaultDepth = clampInteger(params.depth, strategy.depth || DEFAULT_DEPTH, 1, 4)
   const providers = await buildSearchProviders()
 
-  params.onProgress?.({
-    stage: 'initializing',
-    currentDepth: depth,
-    totalDepth: depth,
-    currentBreadth: breadth,
-    totalBreadth: breadth,
-    completedQueries: 0,
-    totalQueries: 0,
-    learningsCount: 0,
-    visitedUrlsCount: 0,
-    evidenceCount: 0,
-    providerStatus: providers.map(provider => provider.name).join(', '),
-    strategy: strategy.id,
-    estimatedMinutes: `${Math.max(3, depth * breadth)}-${Math.max(5, depth * breadth * 2)} 分钟`,
-  })
+  let sessionId = params.sessionId || createResearchId()
+  let allLearnings: string[] = []
+  let allUrls: string[] = []
+  let allSources: ResearchSource[] = []
+  let allEvidences: ResearchEvidence[] = []
+  let pendingQueries: Array<{ query: string; researchGoal: string; depth: number; breadth: number }> = []
 
-  const result = await deepResearchRecursive({
-    providers,
-    query: params.query,
-    strategy,
-    breadth,
-    depth,
-    totalDepth: depth,
-    learnings: [],
-    sources: [],
-    evidences: [],
-    visitedUrls: [],
-    abortSignal: params.abortSignal,
-    onProgress: params.onProgress,
-  })
+  // 尝试加载 Session 状态
+  if (params.sessionId) {
+    const savedState = await loadSessionState(params.sessionId)
+    if (savedState) {
+      sessionId = savedState.id
+      allLearnings = savedState.learnings || []
+      allUrls = savedState.visitedUrls || []
+      allSources = savedState.sources || []
+      allEvidences = savedState.evidences || []
+      pendingQueries = savedState.pendingQueries || []
+      console.log(`[DeepResearch] Resumed from session ${sessionId}. Pending queries count: ${pendingQueries.length}`)
+    }
+  }
 
-  const sources = mergeSources(result.sources, [])
-  const evidences = remapEvidenceSources(result.evidences, sources)
+  // 若无可用 Session 则初始化任务队列
+  if (pendingQueries.length === 0) {
+    params.onProgress?.({
+      stage: 'initializing',
+      currentDepth: defaultDepth,
+      totalDepth: defaultDepth,
+      currentBreadth: defaultBreadth,
+      totalBreadth: defaultBreadth,
+      completedQueries: 0,
+      totalQueries: 0,
+      learningsCount: 0,
+      visitedUrlsCount: 0,
+      evidenceCount: 0,
+      providerStatus: providers.map(provider => provider.name).join(', '),
+      strategy: strategy.id,
+      estimatedMinutes: `${Math.max(3, defaultDepth * defaultBreadth)}-${Math.max(5, defaultDepth * defaultBreadth * 2)} 分钟`,
+    })
 
+    params.eventBus?.emit('research.started', {
+      query: params.query,
+      sessionId,
+      strategy: strategy.id,
+      breadth: defaultBreadth,
+      depth: defaultDepth,
+    })
+
+    const serpQueries = await generateSerpQueries({
+      query: params.query,
+      breadth: defaultBreadth,
+      learnings: [],
+      strategy,
+      abortSignal: params.abortSignal,
+    })
+
+    pendingQueries = serpQueries.map(q => ({
+      query: q.query,
+      researchGoal: q.researchGoal,
+      depth: defaultDepth,
+      breadth: defaultBreadth,
+    }))
+
+    await saveSessionState({
+      id: sessionId,
+      query: params.query,
+      strategy: strategy.id,
+      startedAt,
+      visitedUrls: allUrls,
+      sources: allSources,
+      evidences: allEvidences,
+      learnings: allLearnings,
+      pendingQueries,
+      currentDepth: defaultDepth,
+      totalDepth: defaultDepth,
+      currentBreadth: defaultBreadth,
+      totalBreadth: defaultBreadth,
+    })
+  } else {
+    params.eventBus?.emit('research.started', {
+      query: params.query,
+      sessionId,
+      strategy: strategy.id,
+      isResumed: true,
+    })
+  }
+
+  let completedQueriesCount = 0
+
+  // 扁平任务循环，支持断点续传
+  while (pendingQueries.length > 0) {
+    params.abortSignal?.throwIfAborted()
+
+    const currentBatch = pendingQueries.slice(0, MAX_PARALLEL_SEARCHES)
+    pendingQueries = pendingQueries.slice(MAX_PARALLEL_SEARCHES)
+
+    const providerNames = providers.map(p => {
+      if (searchProviderRegistry.isBroken(p.name)) {
+        return `${p.name} (熔断降级)`
+      }
+      return p.name
+    }).join(', ')
+
+    params.onProgress?.({
+      stage: 'searching',
+      currentDepth: currentBatch[0]?.depth || 1,
+      totalDepth: defaultDepth,
+      currentBreadth: currentBatch[0]?.breadth || 1,
+      totalBreadth: defaultBreadth,
+      currentQuery: currentBatch.map(q => q.query).join(' | '),
+      completedQueries: completedQueriesCount,
+      totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+      learningsCount: allLearnings.length,
+      visitedUrlsCount: allUrls.length,
+      evidenceCount: allEvidences.length,
+      providerStatus: providerNames,
+      strategy: strategy.id,
+    })
+
+    params.eventBus?.emit('research.progress', {
+      stage: 'searching',
+      currentQuery: currentBatch.map(q => q.query).join(' | '),
+      completedQueries: completedQueriesCount,
+      totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+      learningsCount: allLearnings.length,
+      evidenceCount: allEvidences.length,
+      sessionId,
+    })
+
+    const searchResults = await Promise.allSettled(
+      currentBatch.map(task => runSearch({
+        providers,
+        query: task.query,
+        strategy,
+        abortSignal: params.abortSignal,
+      }))
+    )
+
+    const batchItems: { task: typeof currentBatch[0]; items: SearchHit[]; sources: ResearchSource[] }[] = []
+
+    for (let i = 0; i < currentBatch.length; i++) {
+      const task = currentBatch[i]
+      const result = searchResults[i]
+      if (result.status === 'fulfilled' && result.value.length > 0) {
+        const nextSources = result.value
+          .map((item, index) => buildSourceFromItem(item, item.provider || 'web', allSources.length + index + 1))
+          .filter((source): source is ResearchSource => !!source)
+
+        allSources = mergeSources(allSources, nextSources)
+        const sourceByUrl = new Map(allSources.map(source => [normalizeUrl(source.url), source.id]))
+        const items = result.value
+          .map(item => ({
+            ...item,
+            sourceId: sourceByUrl.get(normalizeUrl(item.url || '')) || '',
+          }))
+          .filter(item => item.sourceId)
+
+        nextSources.forEach(source => {
+          params.eventBus?.emit('research.source_added', { source, sessionId })
+        })
+
+        // 定向爬取二级链接 (Deep Crawler)
+        params.onProgress?.({
+          stage: 'searching',
+          currentDepth: task.depth,
+          totalDepth: defaultDepth,
+          currentBreadth: task.breadth,
+          totalBreadth: defaultBreadth,
+          currentQuery: `定向爬取二级链接: ${task.query}`,
+          completedQueries: completedQueriesCount,
+          totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+          learningsCount: allLearnings.length,
+          visitedUrlsCount: allUrls.length,
+          evidenceCount: allEvidences.length,
+          providerStatus: `${providerNames} | crawler`,
+          strategy: strategy.id,
+        })
+
+        const crawledSources = await runDeepCrawler({
+          query: task.query,
+          seedItems: items,
+          existingSources: allSources,
+          abortSignal: params.abortSignal,
+        })
+
+        if (crawledSources.length > 0) {
+          allSources = mergeSources(allSources, crawledSources)
+          crawledSources.forEach(source => {
+            params.eventBus?.emit('research.source_added', { source, sessionId })
+          })
+
+          items.push(...crawledSources.map(cs => ({
+            title: cs.title,
+            url: cs.url,
+            content: cs.snippet || '',
+            markdown: cs.snippet || '',
+            provider: 'crawler',
+            sourceId: cs.id,
+          })))
+        }
+
+        batchItems.push({
+          task,
+          items,
+          sources: allSources.filter(source => items.some(item => item.sourceId === source.id)),
+        })
+
+        allUrls.push(...items.map(item => item.url || '').filter(Boolean).map(normalizeUrl))
+      } else if (result.status === 'rejected') {
+        console.warn('[DeepResearch] Batch search failed:', task.query, result.reason)
+      }
+    }
+
+    if (batchItems.length > 0) {
+      params.onProgress?.({
+        stage: 'analyzing',
+        currentDepth: currentBatch[0]?.depth || 1,
+        totalDepth: defaultDepth,
+        currentBreadth: currentBatch[0]?.breadth || 1,
+        totalBreadth: defaultBreadth,
+        currentQuery: batchItems.map(b => b.task.query).join(' | '),
+        completedQueries: completedQueriesCount,
+        totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+        learningsCount: allLearnings.length,
+        visitedUrlsCount: allUrls.length,
+        evidenceCount: allEvidences.length,
+        strategy: strategy.id,
+      })
+
+      params.eventBus?.emit('research.progress', {
+        stage: 'analyzing',
+        currentQuery: batchItems.map(b => b.task.query).join(' | '),
+        completedQueries: completedQueriesCount + currentBatch.length,
+        totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+        learningsCount: allLearnings.length,
+        evidenceCount: allEvidences.length,
+        sessionId,
+      })
+
+      const nextBreadth = Math.max(1, Math.ceil((currentBatch[0]?.breadth || defaultBreadth) / 2))
+      const nextDepth = (currentBatch[0]?.depth || defaultDepth) - 1
+
+      const analysisResults = await Promise.allSettled(
+        batchItems.map(({ task, items, sources }) =>
+          processSerpResult({
+            query: task.query,
+            items,
+            sources,
+            followUpCount: nextBreadth,
+            abortSignal: params.abortSignal,
+          })
+        )
+      )
+
+      const followUpTasks: Array<{ query: string; researchGoal: string; depth: number; breadth: number }> = []
+
+      for (let i = 0; i < analysisResults.length; i++) {
+        const result = analysisResults[i]
+        const task = batchItems[i].task
+        if (result.status === 'fulfilled') {
+          allLearnings.push(...result.value.learnings)
+          allEvidences.push(...result.value.evidences)
+
+          result.value.evidences.forEach(evidence => {
+            params.eventBus?.emit('research.evidence_added', { evidence, sessionId })
+          })
+
+          if (nextDepth > 0 && result.value.followUpQuestions.length > 0) {
+            const nextQueryText = [
+              `Previous research goal: ${task.researchGoal}`,
+              'Follow-up research directions:',
+              ...result.value.followUpQuestions.map(question => `- ${question}`),
+            ].join('\n')
+
+            followUpTasks.push({
+              query: nextQueryText,
+              researchGoal: `Follow-up research from topic: ${task.query}`,
+              depth: nextDepth,
+              breadth: nextBreadth,
+            })
+          }
+        }
+      }
+
+      if (followUpTasks.length > 0) {
+        pendingQueries.push(...followUpTasks)
+      }
+    }
+
+    completedQueriesCount += currentBatch.length
+
+    allLearnings = uniqueStrings(allLearnings)
+    allUrls = uniqueStrings(allUrls)
+    allSources = mergeSources(allSources, [])
+    allEvidences = remapEvidenceSources(allEvidences, allSources)
+
+    await saveSessionState({
+      id: sessionId,
+      query: params.query,
+      strategy: strategy.id,
+      startedAt,
+      visitedUrls: allUrls,
+      sources: allSources,
+      evidences: allEvidences,
+      learnings: allLearnings,
+      pendingQueries,
+      currentDepth: currentBatch[0]?.depth || 1,
+      totalDepth: defaultDepth,
+      currentBreadth: currentBatch[0]?.breadth || 1,
+      totalBreadth: defaultBreadth,
+    })
+  }
+
+  // 1. 证据交叉验证置信度重算 (Cross-Verification)
   params.onProgress?.({
     stage: 'verifying',
     currentDepth: 0,
-    totalDepth: depth,
-    currentBreadth: breadth,
-    totalBreadth: breadth,
-    completedQueries: 0,
-    totalQueries: 0,
-    learningsCount: result.learnings.length,
-    visitedUrlsCount: result.visitedUrls.length,
-    evidenceCount: evidences.length,
+    totalDepth: defaultDepth,
+    currentBreadth: 0,
+    totalBreadth: defaultBreadth,
+    completedQueries: completedQueriesCount,
+    totalQueries: completedQueriesCount,
+    learningsCount: allLearnings.length,
+    visitedUrlsCount: allUrls.length,
+    evidenceCount: allEvidences.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
     strategy: strategy.id,
-    estimatedMinutes: `${Math.max(3, depth * breadth)}-${Math.max(5, depth * breadth * 2)} 分钟`,
   })
 
+  params.eventBus?.emit('research.progress', {
+    stage: 'verifying',
+    detail: '正在进行多源交叉验证与冲突检测中...',
+    sessionId,
+  })
+
+  const verificationResult = await performCrossVerification(allSources, allEvidences, params.abortSignal)
+  allEvidences = verificationResult.evidences
+
+  // 2. 生成最终报告
   params.onProgress?.({
     stage: 'writing',
     currentDepth: 0,
-    totalDepth: depth,
-    currentBreadth: breadth,
-    totalBreadth: breadth,
-    completedQueries: 0,
-    totalQueries: 0,
-    learningsCount: result.learnings.length,
-    visitedUrlsCount: result.visitedUrls.length,
-    evidenceCount: evidences.length,
+    totalDepth: defaultDepth,
+    currentBreadth: 0,
+    totalBreadth: defaultBreadth,
+    completedQueries: completedQueriesCount,
+    totalQueries: completedQueriesCount,
+    learningsCount: allLearnings.length,
+    visitedUrlsCount: allUrls.length,
+    evidenceCount: allEvidences.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
     strategy: strategy.id,
-    estimatedMinutes: `${Math.max(3, depth * breadth)}-${Math.max(5, depth * breadth * 2)} 分钟`,
   })
 
-  const learnings = result.learnings.slice(0, MAX_LEARNINGS_FOR_REPORT)
+  params.eventBus?.emit('research.progress', {
+    stage: 'writing',
+    sessionId,
+  })
+
+  const learnings = allLearnings.slice(0, MAX_LEARNINGS_FOR_REPORT)
   const report = await askText([
     'Write a detailed deep research report in Markdown for the user query.',
     'Requirements:',
@@ -1254,13 +1665,14 @@ export async function runDeepResearch(params: {
     '- Ground every major claim in the provided evidences and cite source IDs inline like [S1].',
     '- If a key conclusion has only one independent source or low confidence evidence, explicitly mark it as single-source or uncertain.',
     '- Preserve concrete names, numbers, dates, and URLs.',
+    '- When the report contains a process, architecture, relationship map, decision tree, timeline, or comparison that would benefit from visual structure, include a valid Mermaid fenced code block. Keep labels concise and syntax renderable.',
     '',
     `<user_query>${params.query}</user_query>`,
     '<verification_summary>',
-    buildEvidenceSupportSummary(sources, evidences),
+    verificationResult.verificationSummary,
     '</verification_summary>',
     '<sources>',
-    sources.map(source => [
+    allSources.map(source => [
       `[${source.id}] ${source.title}`,
       `URL: ${source.url}`,
       `Engine: ${source.engine}`,
@@ -1269,49 +1681,147 @@ export async function runDeepResearch(params: {
     ].filter(Boolean).join('\n')).join('\n\n'),
     '</sources>',
     '<evidences>',
-    formatEvidenceForReport(sources, evidences),
+    formatEvidenceForReport(allSources, allEvidences),
     '</evidences>',
     '<learnings>',
     learnings.map(learning => `<learning>${learning}</learning>`).join('\n'),
     '</learnings>',
   ].join('\n'), params.abortSignal)
 
+  const finalReport = appendFallbackSourceSection(report, allSources)
+
+  // 3. 沉淀至 docs/research-reports/ (优化 10)
   params.onProgress?.({
-    stage: 'done',
+    stage: 'writing',
     currentDepth: 0,
-    totalDepth: depth,
-    currentBreadth: breadth,
-    totalBreadth: breadth,
-    completedQueries: 0,
-    totalQueries: 0,
-    learningsCount: result.learnings.length,
-    visitedUrlsCount: result.visitedUrls.length,
-    evidenceCount: evidences.length,
-    providerStatus: providers.map(provider => provider.name).join(', '),
+    totalDepth: defaultDepth,
+    currentBreadth: 0,
+    totalBreadth: defaultBreadth,
+    completedQueries: completedQueriesCount,
+    totalQueries: completedQueriesCount,
+    learningsCount: allLearnings.length,
+    visitedUrlsCount: allUrls.length,
+    evidenceCount: allEvidences.length,
+    providerStatus: '正在沉淀研究结果至本地知识库...',
     strategy: strategy.id,
-    estimatedMinutes: `${Math.max(3, depth * breadth)}-${Math.max(5, depth * breadth * 2)} 分钟`,
   })
 
-  const visitedUrls = uniqueStrings(sources.map(source => source.url).concat(result.visitedUrls))
+  // 整理并附加“附录：多源证据交叉验证印证表”
+  let appendedReport = finalReport.trim()
+  if (allEvidences.length > 0) {
+    appendedReport += `\n\n## 附录：多源证据交叉验证印证表\n\n`
+    appendedReport += `| 证据 ID | 来源置信度 | 事实主张 | 引用来源 URL |\n`
+    appendedReport += `|---|---|---|---|\n`
+    allEvidences.forEach(ev => {
+      const source = allSources.find(s => s.id === ev.sourceId)
+      const sourceTitle = source ? source.title : '未知来源'
+      appendedReport += `| ${ev.id} | **${ev.confidence.toUpperCase()}** | ${ev.claim} | [${sourceTitle}](${ev.sourceUrl}) |\n`
+    })
+  }
+
+  // 写入文件
+  const currentTime = new Date().toISOString()
+  const cleanSlug = params.query
+    .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .slice(0, 15) || 'report'
+
+  const fileName = `research-${cleanSlug}-${Date.now()}.md`
+  const relativeFilePath = `docs/research-reports/${fileName}`
+  const fileOptions = await getFilePathOptions(relativeFilePath)
+  const workspace = await getWorkspacePath()
+
+  const frontmatter = [
+    '---',
+    `title: "深度研究报告：${params.query.split('\n')[0].slice(0, 30)}..."`,
+    `date: ${currentTime}`,
+    'type: research_report',
+    `sources_count: ${allSources.length}`,
+    `evidence_count: ${allEvidences.length}`,
+    `visited_urls: ${allUrls.length}`,
+    '---',
+    '',
+    appendedReport,
+  ].join('\n')
+
+  try {
+    const dirPath = 'docs/research-reports'
+    const dirOptions = await getFilePathOptions(dirPath)
+    if (workspace.isCustom) {
+      const dirExists = await exists(dirOptions.path)
+      if (!dirExists) {
+        await mkdir(dirOptions.path, { recursive: true })
+      }
+      await writeTextFile(fileOptions.path, frontmatter)
+    } else {
+      const dirExists = await exists(dirOptions.path, { baseDir: dirOptions.baseDir })
+      if (!dirExists) {
+        await mkdir(dirOptions.path, { baseDir: dirOptions.baseDir, recursive: true })
+      }
+      await writeTextFile(fileOptions.path, frontmatter, { baseDir: fileOptions.baseDir })
+    }
+    console.log(`[DeepResearch] Saved research report to ${relativeFilePath}`)
+  } catch (err) {
+    console.error('[DeepResearch] Failed to write research report to file:', err)
+  }
+
+  // 4. 触发知识库热重载
+  try {
+    const articleModule = await import('@/stores/article')
+    const useArticleStore = articleModule.default
+    if (useArticleStore) {
+      await useArticleStore.getState().loadFileTree()
+      console.log('[DeepResearch] Article tree reloaded successfully.')
+    }
+  } catch (err) {
+    console.warn('[DeepResearch] Failed to reload article file tree:', err)
+  }
+
+  // 5. 广播研究结束
+  const visitedUrls = uniqueStrings(allSources.map(source => source.url).concat(allUrls))
   const session: ResearchSession = {
-    id: createResearchId(),
+    id: sessionId,
     query: params.query,
     strategy: strategy.id,
     startedAt,
     completedAt: new Date().toISOString(),
     searchProviders: providers.map(provider => provider.name),
-    sources,
-    evidences,
-    learnings: result.learnings,
+    sources: allSources,
+    evidences: allEvidences,
+    learnings: allLearnings,
     visitedUrls,
   }
 
-  return {
-    report: appendFallbackSourceSection(report, sources),
-    learnings: result.learnings,
+  const finalResult: DeepResearchResult = {
+    report: appendedReport,
+    learnings: allLearnings,
     visitedUrls,
-    sources,
-    evidences,
+    sources: allSources,
+    evidences: allEvidences,
     session,
   }
+
+  params.onProgress?.({
+    stage: 'done',
+    currentDepth: 0,
+    totalDepth: defaultDepth,
+    currentBreadth: 0,
+    totalBreadth: defaultBreadth,
+    completedQueries: completedQueriesCount,
+    totalQueries: completedQueriesCount,
+    learningsCount: allLearnings.length,
+    visitedUrlsCount: visitedUrls.length,
+    evidenceCount: allEvidences.length,
+    providerStatus: providers.map(provider => provider.name).join(', '),
+    strategy: strategy.id,
+    estimatedMinutes: `0 分钟`,
+  })
+
+  params.eventBus?.emit('research.completed', {
+    report: appendedReport,
+    sessionId,
+  })
+
+  return finalResult
 }

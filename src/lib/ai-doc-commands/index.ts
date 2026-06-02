@@ -7,6 +7,9 @@ import {
   WalletCards,
   AlignLeft,
   BrainCircuit,
+  PanelsTopLeft,
+  Presentation,
+  Image,
   GitBranch,
   type LucideIcon,
 } from 'lucide-react'
@@ -34,6 +37,9 @@ export type AiDocCommandId =
   | 'feynman-socratic'
   | 'note-summary'
   | 'note-to-mindmap'
+  | 'note-to-visual-report'
+  | 'note-to-deck-brief'
+  | 'note-to-poster-card'
   | 'auto-wikilink'
 
 export interface AiDocCommandExecution {
@@ -621,6 +627,153 @@ ${contentSection}
           maxTokens: 2000,
           temperature: 0.2,
         }
+      }
+    },
+  },
+  {
+    id: 'note-to-visual-report',
+    title: '可视化解释',
+    description: '将当前笔记生成自包含 HTML 视觉报告',
+    icon: PanelsTopLeft,
+    executionMode: 'agent',
+    searchTerms: ['可视化', '解释页', '视觉报告', 'visual', 'explainer', 'report', 'html', 'ksh', 'jieshi'],
+    buildExecution: async () => {
+      const { activeFilePath, currentArticle } = (await import('@/stores/article')).default.getState()
+
+      if (!activeFilePath || !activeFilePath.endsWith('.md')) {
+        return {
+          prompt: null,
+          title: '可视化解释',
+          rangeLabel: '当前笔记',
+          maxTokens: 0,
+          temperature: 0,
+          skipReason: '请先打开一篇 Markdown 笔记再生成可视化解释页。',
+        }
+      }
+
+      if (!currentArticle || currentArticle.trim().length < 80) {
+        return {
+          prompt: null,
+          title: '可视化解释',
+          rangeLabel: '当前笔记',
+          maxTokens: 0,
+          temperature: 0,
+          skipReason: '当前笔记内容太少，无法生成有信息密度的可视化解释页。',
+        }
+      }
+
+      const fileName = activeFilePath.split('/').pop()?.replace(/\.md$/i, '') || '可视化解释'
+      const { buildArtifactGenerationPrompt } = await import('@/lib/artifacts')
+
+      return {
+        prompt: buildArtifactGenerationPrompt({
+          title: `${fileName} 可视化解释`,
+          sourceContent: currentArticle,
+          sourceLabel: activeFilePath,
+          templateId: 'article-report',
+        }),
+        title: `可视化解释-${fileName}`,
+        rangeLabel: '当前笔记',
+        maxTokens: 2200,
+        temperature: 0.25,
+      }
+    },
+  },
+  {
+    id: 'note-to-deck-brief',
+    title: '生成简报',
+    description: '将当前笔记生成演示型 HTML 简报',
+    icon: Presentation,
+    executionMode: 'agent',
+    searchTerms: ['简报', '演示', '幻灯片', 'deck', 'slides', 'presentation', 'ppt', 'jb', 'yanjiang'],
+    buildExecution: async () => {
+      const { activeFilePath, currentArticle } = (await import('@/stores/article')).default.getState()
+
+      if (!activeFilePath || !activeFilePath.endsWith('.md')) {
+        return {
+          prompt: null,
+          title: '生成简报',
+          rangeLabel: '当前笔记',
+          maxTokens: 0,
+          temperature: 0,
+          skipReason: '请先打开一篇 Markdown 笔记再生成简报。',
+        }
+      }
+
+      if (!currentArticle || currentArticle.trim().length < 80) {
+        return {
+          prompt: null,
+          title: '生成简报',
+          rangeLabel: '当前笔记',
+          maxTokens: 0,
+          temperature: 0,
+          skipReason: '当前笔记内容太少，无法生成有结构的演示简报。',
+        }
+      }
+
+      const fileName = activeFilePath.split('/').pop()?.replace(/\.md$/i, '') || '演示简报'
+      const { buildArtifactGenerationPrompt } = await import('@/lib/artifacts')
+
+      return {
+        prompt: buildArtifactGenerationPrompt({
+          title: `${fileName} 演示简报`,
+          sourceContent: currentArticle,
+          sourceLabel: activeFilePath,
+          templateId: 'deck-brief',
+        }),
+        title: `演示简报-${fileName}`,
+        rangeLabel: '当前笔记',
+        maxTokens: 2400,
+        temperature: 0.25,
+      }
+    },
+  },
+  {
+    id: 'note-to-poster-card',
+    title: '生成海报',
+    description: '将当前笔记生成分享型 HTML 海报卡片',
+    icon: Image,
+    executionMode: 'agent',
+    searchTerms: ['海报', '卡片', '长图', '分享图', 'poster', 'card', 'share', 'haibao', 'hb'],
+    buildExecution: async () => {
+      const { activeFilePath, currentArticle } = (await import('@/stores/article')).default.getState()
+
+      if (!activeFilePath || !activeFilePath.endsWith('.md')) {
+        return {
+          prompt: null,
+          title: '生成海报',
+          rangeLabel: '当前笔记',
+          maxTokens: 0,
+          temperature: 0,
+          skipReason: '请先打开一篇 Markdown 笔记再生成海报。',
+        }
+      }
+
+      if (!currentArticle || currentArticle.trim().length < 50) {
+        return {
+          prompt: null,
+          title: '生成海报',
+          rangeLabel: '当前笔记',
+          maxTokens: 0,
+          temperature: 0,
+          skipReason: '当前笔记内容太少，无法生成有信息密度的海报。',
+        }
+      }
+
+      const fileName = activeFilePath.split('/').pop()?.replace(/\.md$/i, '') || '海报'
+      const { buildArtifactGenerationPrompt } = await import('@/lib/artifacts')
+
+      return {
+        prompt: buildArtifactGenerationPrompt({
+          title: `${fileName} 海报卡片`,
+          sourceContent: currentArticle,
+          sourceLabel: activeFilePath,
+          templateId: 'poster-card',
+        }),
+        title: `海报-${fileName}`,
+        rangeLabel: '当前笔记',
+        maxTokens: 1800,
+        temperature: 0.3,
       }
     },
   },

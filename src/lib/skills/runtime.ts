@@ -425,7 +425,7 @@ export async function executeSkillRuntime(
     `SKILL_OUTPUT_DIR="${context.outputDir}"`,
     `SKILL_RUNTIME_DIR="${context.runtimeDir}"`,
     `SKILL_ROOT_DIR="${context.skillDir}"`,
-    `NOTEGEN_OUTPUT_DIR="${context.outputDir}"`,
+`LINGMO_OUTPUT_DIR="${context.outputDir}"`,
   ].join(' ')
   const workingDirectory = determineWorkingDirectory(context, normalizedCommand, processedArgs)
 
