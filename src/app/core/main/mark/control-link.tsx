@@ -54,7 +54,7 @@ import {
 import { ensureTagByName } from "@/db/tags"
 import { fetchWechatArticleAsMarkdown, isWechatArticleUrl, parseWechatArticleHtml, WECHAT_ARTICLE_TAG_NAME } from "@/lib/wechat-article"
 import { fetchVideoTranscript, getVideoPlatform, isVideoTranscriptUrl, VIDEO_TRANSCRIPT_TAG_NAME } from "@/lib/video-transcript"
-import { isXhsUrl } from "@/lib/xhs-extractor"
+import { buildXhsNoteRecord, fetchXhsNoteData, isXhsUrl, XHS_NOTE_TAG_NAME } from "@/lib/xhs-extractor"
 import { extractAudioTrack, segmentAudio } from "@/lib/ffmpeg-wasm"
 import { transcribeRecording } from "@/lib/audio"
 import { readFile, writeFile, BaseDirectory, exists, mkdir } from "@tauri-apps/plugin-fs"
@@ -353,6 +353,10 @@ export function ControlLink() {
   const wechatHint = wechatArticlePreview
     ? `已识别微信公众号文章，将提取正文并保存到「${WECHAT_ARTICLE_TAG_NAME}」。`
     : ''
+  const xhsPreview = isXhsUrl(url)
+  const xhsHint = xhsPreview
+    ? `已识别小红书笔记，将提取正文、图片和视频直链并保存到「${XHS_NOTE_TAG_NAME}」。`
+    : ''
   const videoPlatformPreview = isXhsUrl(url) ? null : getVideoPlatform(url)
   const videoHint = videoPlatformPreview
     ? `已识别${videoPlatformPreview === 'youtube' ? ' YouTube' : ' B站'}视频，将优先提取公开字幕并保存到「${VIDEO_TRANSCRIPT_TAG_NAME}」。`
@@ -445,7 +449,13 @@ export function ControlLink() {
           ) : null}
         </div>
       ) : null}
-      {!githubHint && !wechatHint && videoHint ? (
+      {!githubHint && !wechatHint && xhsHint ? (
+        <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700">
+          <Sparkles className="mt-0.5 size-3.5 shrink-0" />
+          <span>{xhsHint}</span>
+        </div>
+      ) : null}
+      {!githubHint && !wechatHint && !xhsHint && videoHint ? (
         <div className="flex items-start gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-700">
           <Sparkles className="mt-0.5 size-3.5 shrink-0" />
           <span>{videoHint}</span>
@@ -744,7 +754,8 @@ export function ControlLink() {
     const shouldOrganizeAfterSave = organizeAfterSave
     const isGitHubRepo = Boolean(parseGitHubRepoUrl(targetUrl))
     const isWechatArticle = isWechatArticleUrl(targetUrl)
-    const isVideoLink = isVideoTranscriptUrl(targetUrl)
+    const isXhsLink = isXhsUrl(targetUrl)
+    const isVideoLink = !isXhsLink && isVideoTranscriptUrl(targetUrl)
 
     setErrorMessage('')
     setLoading(true)
@@ -771,9 +782,11 @@ export function ControlLink() {
         ? `状态：识别中。正在识别 GitHub 项目：${getUrlDisplayName(targetUrl)}`
         : isWechatArticle
           ? `状态：提取中。正在转换微信公众号文章：${getUrlDisplayName(targetUrl)}`
-          : isVideoLink
-            ? `状态：提取中。正在提取视频字幕：${getUrlDisplayName(targetUrl)}`
-        : `状态：解析中。正在抓取并整理：${getUrlDisplayName(targetUrl)}`,
+          : isXhsLink
+            ? `状态：提取中。正在提取小红书笔记：${getUrlDisplayName(targetUrl)}`
+            : isVideoLink
+              ? `状态：提取中。正在提取视频字幕：${getUrlDisplayName(targetUrl)}`
+              : `状态：解析中。正在抓取并整理：${getUrlDisplayName(targetUrl)}`,
     })
 
     void processLinkInBackground({
@@ -892,6 +905,34 @@ export function ControlLink() {
         toast({
           title: '公众号文章已保存',
           description: `状态：完成。${wechatArticle.title} 已归入「${WECHAT_ARTICLE_TAG_NAME}」。`,
+        })
+        return
+      }
+
+      if (isXhsUrl(targetUrl)) {
+        setQueue(queueId, { progress: '55% 正在读取小红书笔记...' })
+        const xhsNote = await fetchXhsNoteData(targetUrl)
+        setQueue(queueId, { progress: '80% 正在生成笔记卡片...' })
+        const noteRecord = buildXhsNoteRecord(xhsNote)
+        const xhsTag = await ensureTagByName(XHS_NOTE_TAG_NAME)
+
+        await insertMark({
+          tagId: xhsTag.id,
+          type: 'link',
+          desc: noteRecord.desc,
+          content: noteRecord.content,
+          url: noteRecord.url,
+        })
+
+        setQueue(queueId, { progress: '100%', tagId: xhsTag.id })
+        const { fetchAllMarks } = useMarkStore.getState()
+        await fetchMarks()
+        await fetchAllMarks()
+        await fetchTags()
+        getCurrentTag()
+        toast({
+          title: '小红书笔记已保存',
+          description: `状态：完成。${noteRecord.title} 已归入「${XHS_NOTE_TAG_NAME}」。`,
         })
         return
       }
