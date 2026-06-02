@@ -13,8 +13,7 @@
 import type { AgentEvent, ReActStep, ToolCall, ToolResult } from './types'
 import type { SkillMatchSummary } from '@/lib/skills/types'
 import { createAgentEventBus, type AgentEventBus } from './event-bus'
-import { executeWithTimeout } from './tool-executor'
-import { compressToolResult } from './tool-result-compression'
+import { executeWithTimeout, compressToolResult } from './tool-utils'
 import { ToolResultCache } from './tool-cache'
 import { IntentPolicy, deriveIntentPolicy } from './tool-policy'
 

@@ -1494,7 +1494,7 @@ ${exec.prompt}`
       <div className="relative">
         <div
           ref={inputDropZoneRef}
-          className={`group relative z-10 flex w-full flex-col gap-1 overflow-hidden rounded-xl border border-border/80 bg-background p-1 transition-colors focus-within:border-primary ${isFilePointerOverInput ? 'border-primary bg-primary/5 shadow-[0_0_0_1px_hsl(var(--primary)/0.25)]' : ''}`}
+          className={`group relative z-10 flex w-full flex-col gap-1 overflow-hidden rounded-xl bg-background p-1 transition-colors focus-within:border-primary ${isFilePointerOverInput ? 'border-primary bg-primary/5 shadow-[0_0_0_1px_hsl(var(--primary)/0.25)]' : ''}`}
         >
         {isFilePointerDragging ? (
           <div

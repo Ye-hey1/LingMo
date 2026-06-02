@@ -26,8 +26,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
 import { DiffViewer } from "@/components/ui/diff-viewer";
-import { formatConfirmationPreview } from "@/lib/agent/tool-confirmation-display";
-import type { AgentApprovalScope, AgentEvent } from "@/lib/agent/types";
+import { formatConfirmationPreview } from "@/lib/agent";
+import type { AgentApprovalScope, AgentEvent } from "@/lib/agent";
 
 // Type definitions from existing codebase
 interface ToolCall {

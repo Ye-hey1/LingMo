@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo } from 'react'
-import { MessageSquarePlus, ChevronDown, Search, Trash2 } from "lucide-react"
+import { MessageSquarePlus, ChevronDown, Search, Trash2, BotMessageSquare, BotOff } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
 import useChatStore from "@/stores/chat"
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,7 @@ import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
 import 'dayjs/locale/en'
 import useSettingStore from '@/stores/setting'
+import { ModelSelect } from './model-select'
 
 dayjs.extend(relativeTime)
 
@@ -29,7 +30,7 @@ function formatRelativeTime(timestamp: number, locale: string): string {
 
 export function ChatHeader() {
   const { startNewConversation, conversations, currentConversationId, switchConversation, deleteConversation, loading } = useChatStore()
-  const { language } = useSettingStore()
+  const { language, primaryModel, aiModelList } = useSettingStore()
   const t = useTranslations()
   const tEmpty = useTranslations('record.chat.empty')
 
@@ -60,8 +61,8 @@ export function ChatHeader() {
 
   return (
     <header className="h-12 w-full flex items-center justify-between border-b px-4 gap-2">
-      {/* 左侧：历史对话下拉 */}
-      <div className="flex items-center gap-2">
+      {/* 左侧：历史对话下拉 + 模型选择 */}
+      <div className="flex items-center gap-1">
         <DropdownMenu open={showHistoryDropdown} onOpenChange={setShowHistoryDropdown}>
           <DropdownMenuTrigger asChild>
             <Button
@@ -135,6 +136,45 @@ export function ChatHeader() {
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        <ModelSelect
+          triggerClassName="flex min-w-0 items-center gap-1 truncate rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          trigger={(() => {
+            if (!primaryModel || !aiModelList) return (
+              <>
+                <BotOff className="size-3 shrink-0" />
+                <span>{t('record.chat.header.noModel')}</span>
+              </>
+            )
+            for (const config of aiModelList) {
+              if (config.models && config.models.length > 0) {
+                const targetModel = config.models.find(model => model.id === primaryModel)
+                if (targetModel) {
+                  return (
+                    <>
+                      <BotMessageSquare className="size-3 shrink-0" />
+                      <span className="truncate max-w-28">{targetModel.model}</span>
+                    </>
+                  )
+                }
+              } else {
+                if (config.key === primaryModel) {
+                  return (
+                    <>
+                      <BotMessageSquare className="size-3 shrink-0" />
+                      <span className="truncate max-w-28">{config.model}</span>
+                    </>
+                  )
+                }
+              }
+            }
+            return (
+              <>
+                <BotOff className="size-3 shrink-0" />
+                <span>{t('record.chat.header.noModel')}</span>
+              </>
+            )
+          })()}
+        />
       </div>
 
       {/* 右侧：新建对话 */}

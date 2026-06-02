@@ -9,7 +9,7 @@ import { isLinkedFolder, type LinkedResource } from '@/lib/files'
 import {
   getAutoFinalAnswerDescriptor,
   shouldRecoverWithAutoFinalAnswer,
-} from './auto-final-answer'
+} from './final-answer'
 import {
   isIncompleteStructuredAgentJson,
   isStructuredThoughtOnlyJson,
@@ -1455,7 +1455,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
             }
 
             // 导入工具函数来计算修改后的内容
-            const { searchReplaceContent, insertLinesAtPosition, deleteLinesInRange, replaceLinesInRange } = await import('./react-diff-helpers')
+            const { searchReplaceContent, insertLinesAtPosition, deleteLinesInRange, replaceLinesInRange } = await import('./tools/react-diff-helpers')
 
             // 计算修改后的内容（用于 diff 显示）
             let modifiedContent = originalContent
@@ -1554,7 +1554,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
       let result!: ToolResult
       let lastError: string | null = null
 
-      const { executeWithTimeout } = await import('./tool-executor')
+      const { executeWithTimeout } = await import('./tool-utils')
 
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         if (attempt > 0) {
@@ -1584,7 +1584,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         throw new Error('USER_STOPPED')
       }
 
-      const { compressToolResult } = await import('./tool-result-compression')
+      const { compressToolResult } = await import('./tool-utils')
       result = compressToolResult(tool, result)
 
       toolCall.status = result.success ? 'success' : 'error'

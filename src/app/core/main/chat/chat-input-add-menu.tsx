@@ -8,6 +8,7 @@ import {
   ClipboardX,
   Database,
   DatabaseZap,
+  Drama,
   ImageIcon,
   Loader2,
   Plus,
@@ -31,6 +32,7 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useMcpStore } from "@/stores/mcp"
+import usePromptStore from "@/stores/prompt"
 import { useSkillsStore } from "@/stores/skills"
 import { useSkillsV2Store } from "@/stores/skills-v2"
 import useVectorStore from "@/stores/vector"
@@ -101,6 +103,7 @@ export function ChatInputAddMenu({
   const [clipboardEnabled, setClipboardEnabled] = React.useState(true)
 
   const { isRagEnabled, setRagEnabled } = useVectorStore()
+  const { promptList, currentPrompt, initPromptData, setCurrentPrompt } = usePromptStore()
   const {
     servers,
     selectedServerIds,
@@ -124,6 +127,7 @@ export function ChatInputAddMenu({
     void initMcpData()
     void fetchSkills()
     void initSkills()
+    void initPromptData()
 
     void (async () => {
       try {
@@ -257,6 +261,53 @@ export function ChatInputAddMenu({
               disabled={disabled}
             />
           </button>
+
+          {/* 提示词 — 侧边弹窗 */}
+          <Popover modal={false}>
+            <PopoverTrigger asChild>
+              <button type="button" className="w-full">
+                <ToolMenuTrigger
+                  icon={<Drama className="size-4" />}
+                  title="提示词"
+                  active={!!currentPrompt}
+                  hasSubmenu
+                />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              side="left"
+              align="start"
+              sideOffset={4}
+              className="w-44 p-1"
+            >
+              <div className="max-h-52 overflow-y-auto rounded-md py-0.5">
+                {promptList.length === 0 ? (
+                  <div className="px-2.5 py-3 text-xs text-muted-foreground">
+                    当前没有可用的提示词
+                  </div>
+                ) : (
+                  promptList.map(item => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={cn(
+                        "flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-xs text-left transition-colors",
+                        currentPrompt?.id === item.id ? "text-primary bg-primary/10" : "hover:bg-muted/60"
+                      )}
+                      onClick={async () => {
+                        await setCurrentPrompt(item)
+                      }}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                      {currentPrompt?.id === item.id && (
+                        <Check className="size-3.5 shrink-0" />
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
 
           {/* Skills — 侧边弹窗 */}
           <Popover modal={false}>

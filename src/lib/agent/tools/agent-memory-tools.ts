@@ -17,7 +17,7 @@ export const listAgentRunSummariesTool: Tool = {
   execute: async (params) => {
     const limit = Math.min(30, Math.max(1, Number(params.limit) || 10))
     const hasFilter = Boolean(params.query || params.filePath || params.toolName || params.onlyFailures)
-    const { listAgentRunSummaries, searchAgentRunSummaries } = await import('../run-summary')
+    const { listAgentRunSummaries, searchAgentRunSummaries } = await import('../resume')
     const summaries = hasFilter
       ? await searchAgentRunSummaries({
           query: typeof params.query === 'string' ? params.query : undefined,

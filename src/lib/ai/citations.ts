@@ -1,4 +1,4 @@
-import type { ToolCall } from '@/lib/agent/types'
+import type { ToolCall } from '@/lib/agent'
 
 export interface MessageCitationDetail {
   url?: string

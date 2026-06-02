@@ -6,7 +6,7 @@ import { createOpenAIClient, getAISettings, validateAIService } from '@/lib/ai/u
 import { tavilyExtract, requestDuckDuckGoFallback, searchWeb, type TavilySearchDepth } from '@/lib/tavily'
 import { exists, mkdir, writeTextFile } from '@tauri-apps/plugin-fs'
 import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
-import type { AgentEventBus } from '@/lib/agent/event-bus'
+import type { AgentEventBus } from '@/lib/agent'
 import { saveSessionState, loadSessionState } from './session-store'
 
 interface ProviderState {

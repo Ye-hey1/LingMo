@@ -89,7 +89,9 @@ export default function ChatThinking({
     return items
   }, [citationDetails, ragSources])
   const hasCitations = sourceLinks.length > 0
-  const isThinking = isStreaming
+  // 仅在流式传输且正式内容尚未开始输出时视为"思考中"
+  // 一旦 chat.content 出现，说明模型已完成思考进入输出阶段
+  const isThinking = isStreaming && !chat.content?.trim()
   const showCitationLinks = !isThinking && hasCitations
 
   const [isExpanded, setIsExpanded] = useState(false)

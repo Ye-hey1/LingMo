@@ -1,11 +1,11 @@
 import * as React from "react"
 import useChatStore from "@/stores/chat"
 import { AgentPanelWithRag } from "./agent-panel-with-rag"
-import type { AgentApprovalScope } from "@/lib/agent/types"
+import type { AgentApprovalScope } from "@/lib/agent"
 import {
   recordPersistentApprovalHistory,
   rememberPersistentAgentApproval,
-} from "@/lib/agent/persistent-approval"
+} from "@/lib/agent"
 
 /**
  * Agent execution status component - displays real-time agent execution state

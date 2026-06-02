@@ -1,7 +1,7 @@
 import { Tool, ToolResult } from '../types'
 import emitter from '@/lib/emitter'
 import useArticleStore from '@/stores/article'
-import { replaceLinesInRange } from '@/lib/agent/react-diff-helpers'
+import { replaceLinesInRange } from '@/lib/agent/tools/react-diff-helpers'
 
 const EDITOR_TOOL_RESPONSE_TIMEOUT_MS = 200
 let storeBackedContentVersion = 0

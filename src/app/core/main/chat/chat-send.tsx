@@ -10,14 +10,15 @@ import useVectorStore from "@/stores/vector"
 import { fetchAiStream } from "@/lib/ai/chat"
 import { type LinkedResource } from "@/lib/files"
 import { getWorkspacePath, getFilePathOptions } from "@/lib/workspace"
-import { AgentHandler } from "@/lib/agent/agent-handler"
-import { getToolByName } from "@/lib/agent/tools"
-import { getSessionApprovalScope, matchesSessionApproval } from "@/lib/agent/session-approval"
 import {
+  AgentHandler,
+  getToolByName,
+  getSessionApprovalScope,
+  matchesSessionApproval,
   findMatchingPersistentAgentApproval,
   getPersistentApprovalOptions,
   recordPersistentApprovalHistory,
-} from "@/lib/agent/persistent-approval"
+} from "@/lib/agent"
 import { ImageAttachment } from "./image-attachments"
 import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
 import { requiresAgentModeForLocalAction } from "@/lib/chat-mode-guard"

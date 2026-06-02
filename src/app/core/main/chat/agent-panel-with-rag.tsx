@@ -5,7 +5,7 @@ import { FileText, ChevronRight, Database, ExternalLink } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useState } from "react"
 import useArticleStore from "@/stores/article"
-import type { AgentApprovalScope, AgentEvent } from "@/lib/agent/types"
+import type { AgentApprovalScope, AgentEvent } from "@/lib/agent"
 
 interface RagSourceDetail {
   filepath: string

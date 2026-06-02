@@ -1,5 +1,5 @@
 import { contextLoader } from './loader'
-import { loadWorkingMemory, formatWorkingMemoryForPrompt } from '@/lib/agent/working-memory'
+import { loadWorkingMemory, formatWorkingMemoryForPrompt } from '@/lib/agent'
 
 export interface UnifiedContextOptions {
   activeFilePath?: string

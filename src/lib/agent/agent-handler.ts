@@ -386,7 +386,7 @@ export class AgentHandler {
   ) {
     try {
       const store = useChatStore.getState()
-      const { buildAgentRunSummary, saveAgentRunSummary } = await import('./run-summary')
+      const { buildAgentRunSummary, saveAgentRunSummary } = await import('./resume')
       const summary = buildAgentRunSummary({
         userGoal: userInput,
         result,

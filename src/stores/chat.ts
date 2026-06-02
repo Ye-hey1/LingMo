@@ -10,7 +10,7 @@ import { getSyncRepoName } from '@/lib/sync/repo-utils';
 import { getRemoteFileContent } from '@/lib/sync/remote-file';
 import { Store } from '@tauri-apps/plugin-store';
 import { locales } from '@/lib/locales';
-import { AgentState, ToolCall } from '@/lib/agent/types'
+import { type AgentState, type ToolCall } from '@/lib/agent'
 import type { LinkedResource } from '@/lib/files'
 import type { Conversation } from '@/db/conversations'
 import { S3Config, WebDAVConfig } from '@/types/sync'
