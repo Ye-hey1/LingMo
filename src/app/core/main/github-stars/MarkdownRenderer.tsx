@@ -762,7 +762,9 @@ function isImageLikeMarkdownNode(node: MarkdownAstNode): boolean {
   if (node.type !== 'element') return false;
   if (node.tagName === 'img') return true;
   if (node.tagName === 'a') {
-    return Boolean(node.children?.length) && node.children.every(child => (
+    const nodeChildren = node.children;
+    if (!nodeChildren?.length) return false;
+    return nodeChildren.every(child => (
       isWhitespaceMarkdownNode(child) || isImageLikeMarkdownNode(child)
     ));
   }
@@ -792,8 +794,9 @@ function isImageLikeReactChild(child: React.ReactNode): boolean {
 }
 
 function isImageOnlyParagraph(node: MarkdownAstNode | undefined, children: React.ReactNode) {
-  if (Array.isArray(node?.children) && node.children.length > 0) {
-    return node.children.every(child => (
+  const nodeChildren = node?.children;
+  if (Array.isArray(nodeChildren) && nodeChildren.length > 0) {
+    return nodeChildren.every(child => (
       isWhitespaceMarkdownNode(child) || isImageLikeMarkdownNode(child)
     ));
   }

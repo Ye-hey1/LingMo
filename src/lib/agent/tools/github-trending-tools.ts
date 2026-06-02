@@ -285,8 +285,227 @@ export const githubTopicTool: Tool = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// Repository Analysis Tool
+// ---------------------------------------------------------------------------
+
+const REPO_ANALYSIS_SYSTEM_PROMPT = `You are a professional open-source repository analyst. You must respond in the same language as the user's query (Chinese for Chinese queries, English for English queries).
+
+Analyze the given GitHub repository based on its metadata and README content. Provide a structured analysis in the following format (use plain text, not JSON):
+
+## 📦 仓库名称 (owner/repo)
+**一句话简介**: 用简洁的一句话概括这个项目是做什么的
+
+### 🎯 核心功能
+- 列出 3-6 个核心功能点，每个功能用一句话说明
+
+### 💡 适用场景
+- 这个项目适合谁用？在什么场景下使用？
+
+### 🚀 快速上手
+1. 安装/引入方式（给出关键命令）
+2. 最基础的使用示例（2-5 行代码）
+
+### ⚖️ 优缺点
+**优点**:
+- ...
+**注意**:
+- ...
+
+### 📊 关键指标
+- Stars / Forks / 主要语言
+- 最后更新时间 / 活跃度评价
+
+Rules:
+- Be specific, not generic. Mention actual function names, CLI commands, API patterns from the README.
+- If README is unavailable, base analysis on repo name, description, topics, and language.
+- Keep the quick-start section practical with real commands/code.
+- Don't hallucinate features not mentioned in the README or metadata.`
+
+async function fetchRepoMeta(fullName: string): Promise<Record<string, any> | null> {
+  // Try GitHub search API first (public, no token needed)
+  try {
+    const { searchGithubRepositories } = await import('@/lib/github-stars/api')
+    const result = await searchGithubRepositories(`repo:${fullName}`, { perPage: 1 })
+    if (result.repos && result.repos.length > 0) {
+      const repo = result.repos[0]
+      return {
+        full_name: repo.fullName,
+        description: repo.description,
+        stargazers_count: repo.stargazersCount,
+        forks_count: repo.forksCount,
+        language: repo.language,
+        topics: repo.topics,
+        html_url: repo.htmlUrl,
+        updated_at: repo.updatedAt,
+        created_at: repo.createdAt,
+        owner: { login: repo.ownerLogin, avatar_url: repo.ownerAvatarUrl },
+      }
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: direct GitHub REST API via Tauri
+  try {
+    const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http')
+    const { Store } = await import('@tauri-apps/plugin-store')
+    const store = await Store.load('store.json')
+    const token = (await store.get<string>('accessToken') || '').trim()
+    const headers = new Headers()
+    if (token) headers.append('Authorization', `Bearer ${token}`)
+    headers.append('Accept', 'application/vnd.github+json')
+    headers.append('X-GitHub-Api-Version', '2022-11-28')
+
+    const resp = await tauriFetch(`https://api.github.com/repos/${encodeURIComponent(fullName)}`, {
+      headers,
+      connectTimeout: 10000,
+    })
+    if (!resp.ok) return null
+    return await resp.json()
+  } catch {
+    return null
+  }
+}
+
+async function analyzeRepository(fullName: string): Promise<ToolResult> {
+  try {
+    // 1. Fetch repo metadata
+    const repoMeta = await fetchRepoMeta(fullName)
+    if (!repoMeta) {
+      return { success: false, error: `找不到仓库 "${fullName}"，请确认仓库名称格式为 owner/repo` }
+    }
+
+    // 2. Fetch README
+    let readme = ''
+    try {
+      const { fetchRepositoryReadme } = await import('@/lib/github-stars/api')
+      readme = await fetchRepositoryReadme(fullName)
+    } catch {
+      // README unavailable, continue with metadata only
+    }
+
+    // 3. Build prompt
+    const truncatedReadme = readme.length > 8000 ? readme.slice(0, 8000) + '\n... (README truncated)' : readme
+    const userPrompt = buildAnalysisUserPrompt(repoMeta, truncatedReadme)
+
+    // 4. Call AI model
+    const { getAISettings, createOpenAIClient } = await import('@/lib/ai/utils')
+    const aiConfig = await getAISettings('primaryModel')
+    if (!aiConfig?.model) {
+      return { success: true, message: buildFallbackAnalysis(repoMeta), data: repoMeta }
+    }
+
+    const client = await createOpenAIClient(aiConfig)
+    const completion = await client.chat.completions.create({
+      model: aiConfig.model,
+      messages: [
+        { role: 'system', content: REPO_ANALYSIS_SYSTEM_PROMPT },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 1500,
+      stream: false,
+    })
+
+    const analysis = completion.choices?.[0]?.message?.content || ''
+    if (!analysis) {
+      return { success: true, message: buildFallbackAnalysis(repoMeta), data: repoMeta }
+    }
+
+    return {
+      success: true,
+      message: analysis,
+      data: {
+        fullName: repoMeta.full_name,
+        stars: repoMeta.stargazers_count,
+        forks: repoMeta.forks_count,
+        language: repoMeta.language,
+        description: repoMeta.description,
+        topics: repoMeta.topics,
+        license: repoMeta.license?.spdx_id,
+        updatedAt: repoMeta.updated_at,
+        openIssues: repoMeta.open_issues_count,
+      },
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: `分析仓库失败: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+}
+
+function buildAnalysisUserPrompt(meta: Record<string, any>, readme: string): string {
+  const parts: string[] = []
+  parts.push(`## Repository Metadata`)
+  parts.push(`- Full Name: ${meta.full_name || 'unknown'}`)
+  parts.push(`- Description: ${meta.description || '(no description)'}`)
+  parts.push(`- Stars: ${meta.stargazers_count ?? 0}`)
+  parts.push(`- Forks: ${meta.forks_count ?? 0}`)
+  parts.push(`- Language: ${meta.language || 'N/A'}`)
+  parts.push(`- License: ${meta.license?.spdx_id || 'N/A'}`)
+  parts.push(`- Topics: ${(meta.topics || []).join(', ') || 'N/A'}`)
+  parts.push(`- Created: ${meta.created_at || 'N/A'}`)
+  parts.push(`- Last Updated: ${meta.updated_at || 'N/A'}`)
+  parts.push(`- Open Issues: ${meta.open_issues_count ?? 0}`)
+  parts.push(`- Default Branch: ${meta.default_branch || 'main'}`)
+  parts.push(`- Homepage: ${meta.homepage || 'N/A'}`)
+  parts.push('')
+  if (readme) {
+    parts.push(`## README Content`)
+    parts.push(readme)
+  } else {
+    parts.push(`(README not available)`)
+  }
+  return parts.join('\n')
+}
+
+function buildFallbackAnalysis(meta: Record<string, any>): string {
+  const name = meta.full_name || 'Unknown'
+  const desc = meta.description || '暂无描述'
+  const stars = meta.stargazers_count ?? 0
+  const forks = meta.forks_count ?? 0
+  const lang = meta.language || 'N/A'
+  const topics = (meta.topics || []).join(', ') || 'N/A'
+  const url = meta.html_url || ''
+  return `## 📦 ${name}
+**简介**: ${desc}
+
+### 📊 关键指标
+- ⭐ Stars: ${formatStars(stars)} · 🍴 Forks: ${formatStars(forks)} · 💻 Language: ${lang}
+- 🏷️ Topics: ${topics}
+- 🔗 ${url}
+
+_(AI 模型未配置，以上为基础元数据摘要。配置 AI 模型后可获得更详细的分析。)_`
+}
+
+export const githubAnalyzeTool: Tool = {
+  name: 'github_analyze_repo',
+  description:
+    'Analyze a GitHub repository in depth. Fetches the README, metadata (stars, language, license, topics) and uses AI to generate a structured analysis including: what the project does, core features, use cases, quick-start guide, pros/cons, and key metrics. Use this when the user asks about a specific repository, wants to understand what a project does, how to use it, or asks for a detailed introduction. The fullName parameter should be in "owner/repo" format (e.g. "facebook/react").',
+  category: 'web',
+  requiresConfirmation: false,
+  risk: 'low',
+  capabilities: ['read', 'network'],
+  parameters: [
+    {
+      name: 'full_name',
+      type: 'string',
+      description: 'Repository full name in "owner/repo" format, e.g. "facebook/react", "openai/codex", "vercel/next.js".',
+      required: true,
+    },
+  ],
+  execute: async (params: Record<string, any>): Promise<ToolResult> => {
+    const fullName = String(params.full_name || '').trim()
+    if (!fullName || !fullName.includes('/')) {
+      return { success: false, error: '请提供有效的仓库全称，格式为 "owner/repo"，例如 "facebook/react"' }
+    }
+    return analyzeRepository(fullName)
+  },
+}
+
 export const githubTrendingTools: Tool[] = [
   githubTrendingTool,
   githubSearchTool,
   githubTopicTool,
+  githubAnalyzeTool,
 ]

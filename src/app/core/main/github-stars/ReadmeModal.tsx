@@ -2,6 +2,7 @@
 
 import NextImage from 'next/image';
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Loader2, AlertCircle, FileText, ExternalLink, List, Type, ArrowUp, Languages, Eye } from 'lucide-react';
 import BilingualMarkdownRenderer, { DisplayMode, BilingualMarkdownRendererHandle, TranslationStatus } from './BilingualMarkdownRenderer';
 import { stripMarkdownFormatting } from '@/lib/github-stars/markdownUtils';
@@ -49,6 +50,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
   const [errorExpanded, setErrorExpanded] = useState(false);
   const [tocWidth, setTocWidth] = useState(224);
   const [translatedHeadingMap, setTranslatedHeadingMap] = useState<Map<string, string>>(new Map());
+  const [portalElement, setPortalElement] = useState<HTMLElement | null>(null);
 
   const modalRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -65,6 +67,10 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
 
   const displayContent = readmeContent;
   const currentFontSize = FONT_SIZES[fontSizeIndex].value;
+
+  useEffect(() => {
+    setPortalElement(document.body);
+  }, []);
 
   const getFontSizeType = useCallback((): 'small' | 'medium' | 'large' => {
     switch (fontSizeIndex) {
@@ -395,7 +401,7 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
     };
   }, [isOpen, onClose]);
 
-  if (!isOpen || !repoName) return null;
+  if (!isOpen || !repoName || !portalElement) return null;
 
   const handleBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) {
@@ -425,8 +431,8 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
   const isTranslated = translateStatus === 'translated';
   const isTranslateError = translateStatus === 'error';
 
-  return (
-    <div className="fixed inset-0 z-[1000] overflow-y-auto">
+  const modal = (
+    <div className="fixed inset-0 z-[5000] overflow-y-auto">
       <div
         className="flex min-h-full items-center justify-center p-4 bg-black/60 transition-opacity"
         onClick={handleBackdropClick}
@@ -705,4 +711,6 @@ export const ReadmeModal: React.FC<ReadmeModalProps> = ({
       </div>
     </div>
   );
+
+  return createPortal(modal, portalElement);
 };

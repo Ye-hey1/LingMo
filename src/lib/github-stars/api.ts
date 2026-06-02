@@ -159,7 +159,7 @@ function delay(ms: number) {
   return new Promise(resolve => globalThis.setTimeout(resolve, ms))
 }
 
-async function requestGitHub<T>(endpoint: string, options: GithubRequestOptions = {}): Promise<T> {
+export async function requestGitHub<T>(endpoint: string, options: GithubRequestOptions = {}): Promise<T> {
   const result = await requestGitHubDetailed<T>(endpoint, options)
   return result.data
 }
