@@ -201,7 +201,17 @@ export async function reportEvent(
       body: bodyString,
     })
     
-    const result = await response.json()
+    const responseText = await response.text()
+    if (!responseText.trim()) {
+      return response.ok
+    }
+
+    let result: any
+    try {
+      result = JSON.parse(responseText)
+    } catch {
+      return false
+    }
 
     if (response.ok && result.code === 0) {
       return true

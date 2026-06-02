@@ -1,4 +1,3 @@
-import useArticleStore from '@/stores/article'
 import { useNoteIndexStore } from '@/stores/note-index'
 import { getAllMarkdownFiles } from '@/lib/files'
 import { extractWikiLinks } from '@/lib/wikilink-extension'
@@ -31,7 +30,6 @@ export async function findBacklinkSuggestions(
 
   const allFiles = await getAllMarkdownFiles()
   const otherNotes = allFiles.filter(f => f.relativePath !== filePath)
-  const contentLower = content.toLowerCase()
   const lines = content.split('\n')
 
   // Build regex-safe set of note names (exclude very short names to avoid false positives)
@@ -110,7 +108,7 @@ export function applyBacklinks(
   content: string,
   suggestions: BacklinkSuggestion[],
 ): string {
-  let result = content
+  const result = content
   const lines = result.split('\n')
 
   for (const suggestion of suggestions) {

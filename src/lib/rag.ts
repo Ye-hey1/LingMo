@@ -48,6 +48,13 @@ const embeddingMemoryCache = new Map<string, number[]>();
 const EMBEDDING_RETRY_COUNT = 2;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 600;
 
+/**
+ * 清除嵌入内存缓存（切换嵌入模型后必须调用）
+ */
+export function clearEmbeddingCache(): void {
+  embeddingMemoryCache.clear();
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -514,19 +521,10 @@ export async function processMarkdownFile(
     const vectorDocumentKey = getVectorDocumentKey(filePath);
     const legacyFilename = filePath.split('/').pop() || filePath;
 
-    // 先删除该文件的旧记录
-    const existingDocs = [
-      ...(await getVectorDocumentsByFilename(vectorDocumentKey)),
-      ...(legacyFilename !== vectorDocumentKey ? await getVectorDocumentsByFilename(legacyFilename) : []),
-    ];
+    // 注意：不再加载旧的 embedding 到缓存
+    // 重新计算向量时应使用当前模型生成新向量，而不是复用旧模型的向量
+    // 旧向量的维度可能与当前模型不匹配
     const persistedEmbeddingCache = new Map<string, number[]>();
-    for (const doc of existingDocs) {
-      try {
-        persistedEmbeddingCache.set(generateContentHash(doc.content), JSON.parse(doc.embedding) as number[]);
-      } catch (error) {
-        handleRAGError(error, `Failed to parse cached embedding: ${doc.filename}#${doc.chunk_id}`, false);
-      }
-    }
 
     const indexedAt = Date.now();
     const vectorDocs = (
@@ -637,6 +635,9 @@ export async function processAllMarkdownFiles(onProgress?: (current: number, tot
   failedFiles: Array<{fileName: string, error: string}>;
 }> {
   try {
+    // 清除嵌入内存缓存，确保使用当前模型重新生成所有向量
+    clearEmbeddingCache();
+
     // 获取工作区中的所有文件
     const fileTree = await getWorkspaceFiles();
 

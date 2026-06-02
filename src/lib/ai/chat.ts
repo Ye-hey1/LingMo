@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { getAISettings, validateAIService, prepareMessages, createOpenAIClient, handleAIError, convertImageToBase64 } from './utils';
 import type { AiConfig } from '@/app/core/setting/config'
 import { estimateTokens } from './token-counter'
+import { getModelCapabilityProfile } from './model-capabilities'
 
 function inferProvider(config?: AiConfig) {
   const source = `${config?.templateKey || ''} ${config?.key || ''} ${config?.title || ''} ${config?.baseURL || ''}`.toLowerCase()
@@ -200,7 +201,8 @@ export async function fetchAiStream(
   chatId?: number,
   imageUrls?: string[],
   onThinkingUpdate?: (thinking: string) => void,
-  messages?: OpenAI.Chat.ChatCompletionMessageParam[]
+  messages?: OpenAI.Chat.ChatCompletionMessageParam[],
+  maxTokens?: number,
 ): Promise<string> {
   const startedAt = Date.now()
   let aiConfig: AiConfig | undefined
@@ -276,6 +278,7 @@ export async function fetchAiStream(
     }
 
     const openai = await createOpenAIClient(aiConfig)
+    const capabilities = getModelCapabilityProfile(aiConfig)
 
     // 构建请求参数
     const requestParams: any = {
@@ -283,14 +286,20 @@ export async function fetchAiStream(
       messages: preparedMessages,
       temperature: aiConfig?.temperature ?? 0.7,
       top_p: aiConfig?.topP ?? 1,
-      max_tokens: 4096,
       stream: true,
+    }
+
+    // 仅在调用方明确指定时设置 max_tokens，否则由模型自身决定上限
+    if (maxTokens && maxTokens > 0) {
+      requestParams.max_tokens = maxTokens
     }
 
     // 如果有 MCP 工具，添加到请求中
     if (mcpTools && mcpTools.length > 0) {
       requestParams.tools = mcpTools
-      requestParams.tool_choice = 'auto'
+      if (capabilities.supportsToolChoice) {
+        requestParams.tool_choice = 'auto'
+      }
     }
 
     const stream = await openai.chat.completions.create(requestParams, {
@@ -486,7 +495,7 @@ export async function fetchAiStream(
           ...toolResults
         ]
         
-        const nextStream = await openai.chat.completions.create({
+        const nextRequestParams: any = {
           model: aiConfig?.model || '',
           messages: conversationMessages,
           temperature: aiConfig?.temperature ?? 0.7,
@@ -494,8 +503,13 @@ export async function fetchAiStream(
           max_tokens: 4096,
           stream: true,
           tools: mcpTools,
-          tool_choice: 'auto'
-        }, {
+        }
+
+        if (capabilities.supportsToolChoice) {
+          nextRequestParams.tool_choice = 'auto'
+        }
+
+        const nextStream = await openai.chat.completions.create(nextRequestParams, {
           signal: abortSignal
         }) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
         

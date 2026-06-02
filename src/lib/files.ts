@@ -1,6 +1,5 @@
 import { readDir, BaseDirectory, DirEntry } from "@tauri-apps/plugin-fs";
 import { getFilePathOptions, getWorkspacePath } from "./workspace";
-import { join } from "@tauri-apps/api/path";
 
 export interface MarkdownFile {
   name: string;
@@ -125,12 +124,12 @@ export async function getAllMarkdownFiles(includeMetadata: boolean = false): Pro
 
         if (entry.isDirectory) {
           // 递归处理子目录
-          const childPath = await join(dirPath, entry.name);
+          const childPath = `${dirPath}/${entry.name}`;
           await processDirectory(childPath, useCustomPath, currentRelativePath, depth + 1);
         } else if (entry.name.endsWith('.md')) {
           // 添加Markdown文件
           const fullPath = useCustomPath
-            ? await join(dirPath, entry.name)
+            ? `${dirPath}/${entry.name}`
             : currentRelativePath;
 
           const fileInfo: MarkdownFile = {

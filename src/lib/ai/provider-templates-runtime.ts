@@ -51,8 +51,20 @@ function isBlockedProvider(item: Record<string, unknown>) {
   const title = String(item.title || '').trim()
   const baseURL = String(item.baseURL || '').trim().toLowerCase()
   const key = String(item.key || '').trim().toLowerCase()
+  const normalizedTitle = title.toLowerCase()
 
   if (title === '优云智算') {
+    return true
+  }
+
+  if (
+    title === '灵墨' ||
+    title === '灵墨高级' ||
+    title === '灵墨 高级' ||
+    normalizedTitle === 'lingmo' ||
+    normalizedTitle === 'lingmo advanced' ||
+    normalizedTitle === 'lingmo pro'
+  ) {
     return true
   }
 
@@ -60,7 +72,15 @@ function isBlockedProvider(item: Record<string, unknown>) {
     return true
   }
 
+  if (key === 'lingmo' || key === 'lingmo-advanced' || key === 'lingmo-pro') {
+    return true
+  }
+
   if (baseURL.includes('modelverse.cn')) {
+    return true
+  }
+
+  if (baseURL.includes('notegen.top')) {
     return true
   }
 
@@ -169,6 +189,12 @@ function mapRemoteTemplates(content: ProviderTemplateCache['content'] | undefine
   }))
 }
 
+function mergeTemplateLists(primaryTemplates: AiConfig[], fallbackTemplates: AiConfig[]) {
+  const seen = new Set(primaryTemplates.map((template) => template.key))
+  const missingFallbackTemplates = fallbackTemplates.filter((template) => !seen.has(template.key))
+  return [...primaryTemplates, ...missingFallbackTemplates]
+}
+
 export async function getCachedProviderTemplates(): Promise<AiConfig[]> {
   const store = await Store.load('store.json')
   const cached = await store.get<ProviderTemplateCache>(PROVIDER_TEMPLATE_CACHE_KEY)
@@ -248,14 +274,14 @@ export async function loadProviderTemplates(builtinTemplates: AiConfig[]): Promi
     const latest = await fetchRemoteProviderTemplates(cached?.versionCode)
     if (latest) {
       await store.set(PROVIDER_TEMPLATE_CACHE_KEY, latest)
-      return mapRemoteTemplates(latest.content)
+      return mergeTemplateLists(mapRemoteTemplates(latest.content), mapBuiltinTemplates(builtinTemplates))
     }
   } catch (error) {
     console.error('[provider-templates] failed to fetch remote templates', error)
   }
 
   if (cached?.content?.providers?.length) {
-    return mapRemoteTemplates(cached.content)
+    return mergeTemplateLists(mapRemoteTemplates(cached.content), mapBuiltinTemplates(builtinTemplates))
   }
 
   return mapBuiltinTemplates(builtinTemplates)

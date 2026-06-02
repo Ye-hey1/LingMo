@@ -103,6 +103,30 @@ interface Events {
     } | null;
     restartConversation?: boolean;
   };
+  'github-stars-send-to-chat': {
+    prompt: string;
+    quoteData: {
+      quote: string;
+      fullContent: string;
+      fileName: string;
+      startLine: number;
+      endLine: number;
+      from: number;
+      to: number;
+      articlePath: string;
+    };
+  };
+  'chat-attach-image': {
+    id?: string;
+    url: string;
+    name?: string;
+    source?: 'paste' | 'file' | 'record';
+    prompt?: string;
+  };
+  'editor-insert-markdown-image': {
+    imagePath: string;
+    markdownPath?: string;
+  };
   'ai-placeholder-generated': string;
   'ai-prompts-generated': QuickPrompt[];
   'start-ai-streaming': {

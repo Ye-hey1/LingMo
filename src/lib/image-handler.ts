@@ -220,8 +220,8 @@ export function fileToBase64(file: File): Promise<string> {
     reader.onload = () => {
       resolve(reader.result as string)
     }
-    reader.onerror = (error) => {
-      reject(error)
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('读取图片失败'))
     }
   })
 }

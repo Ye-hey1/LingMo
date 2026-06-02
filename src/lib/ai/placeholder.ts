@@ -1,5 +1,6 @@
 import type OpenAI from 'openai';
 import useSettingStore from '@/stores/setting';
+import type { AiConfig, ModelConfig } from '@/app/core/setting/config';
 import { createOpenAIClient } from './utils';
 
 export interface QuickPrompt {
@@ -7,33 +8,84 @@ export interface QuickPrompt {
   text: string
 }
 
+interface ResolvedInspirationModel {
+  config: AiConfig
+  model: ModelConfig
+}
+
 /**
  * 获取灵感模型配置
  * @returns 灵感模型配置，如果未配置则返回 null
  */
-async function getInspirationModelConfig() {
+function createModelScopedConfig(config: AiConfig, model: ModelConfig): AiConfig {
+  return {
+    ...config,
+    model: model.model,
+    modelType: model.modelType,
+    temperature: model.temperature,
+    topP: model.topP,
+    contextWindow: model.contextWindow,
+    voice: model.voice,
+    enableStream: model.enableStream,
+  }
+}
+
+async function getInspirationModelConfig(): Promise<ResolvedInspirationModel | null> {
   const settingStore = useSettingStore.getState()
   const inspirationModelId = settingStore.inspirationModel
+  const primaryModelId = settingStore.primaryModel
+  const bundledDefaultIds = new Set(['note-gen-chat', 'note-gen-free-note-gen-chat'])
+  const preferPrimaryModel =
+    !!primaryModelId &&
+    (!inspirationModelId || (bundledDefaultIds.has(inspirationModelId) && primaryModelId !== inspirationModelId))
+  const candidateModelIds = Array.from(new Set(
+    (preferPrimaryModel ? [primaryModelId, inspirationModelId] : [inspirationModelId])
+      .filter((modelId): modelId is string => !!modelId)
+  ))
+
+  if (candidateModelIds.length === 0) {
+    return null
+  }
 
   // 从 AI 模型列表中查找配置的灵感模型
   const aiModelList = settingStore.aiModelList
-  for (const config of aiModelList) {
-    if (config.models) {
-      const model = config.models.find(m => m.id === inspirationModelId || `${config.key}-${m.id}` === inspirationModelId)
-      if (model) {
-        return config
+  for (const modelId of candidateModelIds) {
+    for (const config of aiModelList) {
+      if (config.models?.length) {
+        const model = config.models.find(m => m.id === modelId || `${config.key}-${m.id}` === modelId)
+        if (model?.modelType === 'chat' && model.model) {
+          return {
+            config: createModelScopedConfig(config, model),
+            model,
+          }
+        }
+      } else if (config.key === modelId && config.model && (!config.modelType || config.modelType === 'chat')) {
+        return {
+          config,
+          model: {
+            id: config.key,
+            model: config.model,
+            modelType: 'chat',
+            temperature: config.temperature,
+            topP: config.topP,
+            contextWindow: config.contextWindow,
+            voice: config.voice,
+            enableStream: config.enableStream,
+          },
+        }
       }
     }
   }
 
-  // 如果没找到配置的灵感模型，使用默认的灵墨聊天模型作为 fallback
-  const { noteGenDefaultModels } = await import('@/app/model-config')
-  const noteGenChat = noteGenDefaultModels[0]?.models?.find(m => m.modelType === 'chat')
-  if (noteGenChat) {
-    return noteGenDefaultModels[0]
-  }
-
   return null
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isAiServiceConfigError(message: string) {
+  return /AI_HTTP_ERROR status=(401|402|403)|unauthorized|invalid api key|insufficient.*balance|balance.*insufficient|quota|billing|bad_response_status_code/i.test(message)
 }
 
 /**
@@ -43,15 +95,10 @@ async function getInspirationModelConfig() {
  */
 export async function fetchAiPlaceholder(text: string): Promise<string | false> {
   try {
-    // 动态导入 model-config 以获取默认模型配置
-    const { noteGenDefaultModels } = await import('@/app/model-config')
+    const resolved = await getInspirationModelConfig()
 
-    // 使用第一个默认模型配置（灵墨 Free）
-    const defaultConfig = noteGenDefaultModels[0]
-    const chatModel = defaultConfig.models?.find(m => m.modelType === 'chat')
-
-    if (!defaultConfig || !chatModel) {
-      console.error('No default chat model found in noteGenDefaultModels')
+    if (!resolved) {
+      console.warn('[Placeholder] No inspiration model configured; placeholder generation skipped.')
       return false
     }
 
@@ -71,13 +118,13 @@ export async function fetchAiPlaceholder(text: string): Promise<string | false> 
       { role: 'user', content: placeholderPrompt }
     ]
 
-    const openai = await createOpenAIClient(defaultConfig)
+    const openai = await createOpenAIClient(resolved.config)
 
     const completion = await openai.chat.completions.create({
-      model: chatModel.model || '',
+      model: resolved.model.model,
       messages: messages,
-      temperature: chatModel.temperature || 1,
-      top_p: chatModel.topP || 1,
+      temperature: resolved.model.temperature ?? 1,
+      top_p: resolved.model.topP ?? 1,
     })
 
     const result = completion.choices[0]?.message?.content || ''
@@ -85,6 +132,11 @@ export async function fetchAiPlaceholder(text: string): Promise<string | false> 
     // 去掉所有换行符和各种特殊符号，不包括空格
     return result.trim()
   } catch (error) {
+    const errorMsg = getErrorMessage(error)
+    if (isAiServiceConfigError(errorMsg)) {
+      console.warn(`[Placeholder] AI service unavailable for placeholder generation: ${errorMsg}`)
+      return false
+    }
     console.error('Error in fetchAiPlaceholder:', error)
     return false
   }
@@ -99,25 +151,33 @@ export async function fetchAiPlaceholder(text: string): Promise<string | false> 
 // 速率限制：防止 429 错误
 let lastQuickPromptCall = 0
 let rateLimitBackoff = 0  // 退避时间（毫秒），遇到 429 后递增
+let transportBackoff = 0  // 退避时间（毫秒），遇到网络传输失败后递增
+let serviceConfigBackoff = 0  // 退避时间（毫秒），遇到账号/鉴权/额度错误后递增
 const MIN_CALL_INTERVAL = 30000  // 最少 30 秒间隔
+const TRANSPORT_BACKOFF_STEP = 5 * 60 * 1000  // 网络失败后至少冷却 5 分钟
+const MAX_TRANSPORT_BACKOFF = 30 * 60 * 1000  // 最多冷却 30 分钟
+const SERVICE_CONFIG_BACKOFF = 30 * 60 * 1000  // 账号/鉴权/额度错误后冷却 30 分钟
+
+function isAiTransportError(message: string) {
+  return /AI_TRANSPORT_ERROR|error sending request|Failed to fetch|NetworkError|Load failed|plugin-http fallback failed|connect/i.test(message)
+}
 
 export async function fetchAiQuickPrompts(text: string): Promise<QuickPrompt[]> {
   // 速率限制检查
   const now = Date.now()
-  const effectiveInterval = MIN_CALL_INTERVAL + rateLimitBackoff
-  if (now - lastQuickPromptCall < effectiveInterval) {
+  const effectiveInterval = MIN_CALL_INTERVAL + rateLimitBackoff + transportBackoff + serviceConfigBackoff
+  if (lastQuickPromptCall > 0 && now - lastQuickPromptCall < effectiveInterval) {
     return []
   }
-  lastQuickPromptCall = now
 
   try {
-    const config = await getInspirationModelConfig()
-    const chatModel = config?.models?.find(m => m.modelType === 'chat')
+    const resolved = await getInspirationModelConfig()
 
-    if (!config || !chatModel) {
-      console.error('No valid chat model found for inspiration')
+    if (!resolved) {
+      console.warn('[Placeholder] No valid inspiration model configured; quick prompts skipped.')
       return []
     }
+    lastQuickPromptCall = now
 
     // 构建生成4条提示词的 prompt
     const prompt = `
@@ -140,16 +200,18 @@ Content: ${text || 'General note-taking'}`
       { role: 'user', content: prompt }
     ]
 
-    const openai = await createOpenAIClient(config)
+    const openai = await createOpenAIClient(resolved.config)
 
     const completion = await openai.chat.completions.create({
-      model: chatModel.model || '',
+      model: resolved.model.model,
       messages: messages,
       temperature: 0.8, // 使用较高的温度以获得更多样化的结果
-      top_p: chatModel.topP || 1,
+      top_p: resolved.model.topP ?? 1,
     })
 
     const result = completion.choices[0]?.message?.content || ''
+    transportBackoff = 0
+    serviceConfigBackoff = 0
 
     // 尝试解析 JSON 结果
     try {
@@ -202,13 +264,27 @@ Content: ${text || 'General note-taking'}`
     return []
   } catch (error) {
     // 429 限流错误：增加退避时间
-    const errorMsg = error instanceof Error ? error.message : String(error)
+    const errorMsg = getErrorMessage(error)
     if (errorMsg.includes('429') || errorMsg.includes('rate limit') || errorMsg.includes('TPM')) {
       rateLimitBackoff = Math.min(rateLimitBackoff + 60000, 300000) // 每次加 60s，最多 5 分钟
       console.warn(`[Placeholder] Rate limited, backing off ${rateLimitBackoff / 1000}s`)
+    } else if (isAiServiceConfigError(errorMsg)) {
+      serviceConfigBackoff = SERVICE_CONFIG_BACKOFF
+      console.warn(`[Placeholder] AI service rejected quick prompts, backing off ${serviceConfigBackoff / 1000}s: ${errorMsg}`)
+      return []
+    } else if (isAiTransportError(errorMsg)) {
+      transportBackoff = Math.min(
+        transportBackoff ? transportBackoff * 2 : TRANSPORT_BACKOFF_STEP,
+        MAX_TRANSPORT_BACKOFF
+      )
+      // Quick prompts are optional background hints. Keep transport failures quiet so typing/chat is not interrupted.
+      console.warn(`[Placeholder] AI transport unavailable, backing off ${transportBackoff / 1000}s`)
+      return []
     } else {
       // 非限流错误，重置退避
       rateLimitBackoff = Math.max(0, rateLimitBackoff - 30000)
+      transportBackoff = Math.max(0, transportBackoff - TRANSPORT_BACKOFF_STEP)
+      serviceConfigBackoff = 0
     }
     console.error('Error in fetchAiQuickPrompts:', error)
     return []
@@ -222,11 +298,10 @@ Content: ${text || 'General note-taking'}`
  */
 export async function fetchAiSinglePrompt(text: string): Promise<string> {
   try {
-    const config = await getInspirationModelConfig()
-    const chatModel = config?.models?.find(m => m.modelType === 'chat')
+    const resolved = await getInspirationModelConfig()
 
-    if (!config || !chatModel) {
-      console.error('No valid chat model found for inspiration')
+    if (!resolved) {
+      console.warn('[Placeholder] No valid inspiration model configured; single prompt skipped.')
       return ''
     }
 
@@ -242,18 +317,23 @@ Content: ${text || 'No content provided'}`
       { role: 'user', content: prompt }
     ]
 
-    const openai = await createOpenAIClient(config)
+    const openai = await createOpenAIClient(resolved.config)
 
     const completion = await openai.chat.completions.create({
-      model: chatModel.model || '',
+      model: resolved.model.model,
       messages: messages,
       temperature: 0.8,
-      top_p: chatModel.topP || 1,
+      top_p: resolved.model.topP ?? 1,
     })
 
     const result = completion.choices[0]?.message?.content || ''
     return result.trim()
   } catch (error) {
+    const errorMsg = getErrorMessage(error)
+    if (isAiServiceConfigError(errorMsg)) {
+      console.warn(`[Placeholder] AI service unavailable for single prompt: ${errorMsg}`)
+      return ''
+    }
     console.error('Error in fetchAiSinglePrompt:', error)
     return ''
   }

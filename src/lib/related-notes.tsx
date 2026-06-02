@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { FileText, Sparkles, RefreshCw, Hash, Brain, Link2 } from 'lucide-react'
 import useArticleStore from '@/stores/article'
 import { getSimilarDocuments } from '@/db/vector'
 import { fetchEmbedding } from '@/lib/ai/embedding'
 import { readWorkspaceTextFile } from '@/lib/file-binary'
-import { getCrossValidatedRelations, type CrossValidatedRelation } from '@/lib/relation-engine'
+import { getCrossValidatedRelations } from '@/lib/relation-engine'
 import { useTranslations } from 'next-intl'
 
 interface RelatedNote {

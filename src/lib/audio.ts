@@ -371,6 +371,112 @@ export interface AudioTranscriptionResponse {
 
 export { NO_TRANSCRIPTION_MESSAGE }
 
+function getAudioFileExtension(contentType: string) {
+  const normalizedType = contentType.toLowerCase().split(';')[0].trim()
+  switch (normalizedType) {
+    case 'audio/wav':
+    case 'audio/wave':
+    case 'audio/x-wav':
+      return 'wav'
+    case 'audio/mp4':
+    case 'audio/m4a':
+      return 'm4a'
+    case 'audio/mpeg':
+    case 'audio/mp3':
+      return 'mp3'
+    case 'audio/ogg':
+      return 'ogg'
+    case 'audio/webm':
+    default:
+      return 'webm'
+  }
+}
+
+function normalizeAudioTranscriptionPath(baseURL?: string) {
+  const rawBaseUrl = (baseURL || '').trim()
+
+  if (!rawBaseUrl) {
+    return {
+      baseURL: rawBaseUrl,
+      path: '/audio/transcriptions',
+    }
+  }
+
+  try {
+    const url = new URL(rawBaseUrl)
+    const path = url.pathname.replace(/\/+$/, '')
+
+    if (path.endsWith('/audio/transcriptions')) {
+      const prefix = path.slice(0, -'/audio/transcriptions'.length) || '/'
+      url.pathname = prefix
+      return {
+        baseURL: url.toString().replace(/\/+$/, ''),
+        path: '/audio/transcriptions',
+      }
+    }
+
+    if (path.endsWith('/audio')) {
+      const prefix = path.slice(0, -'/audio'.length) || '/'
+      url.pathname = prefix
+      return {
+        baseURL: url.toString().replace(/\/+$/, ''),
+        path: '/audio/transcriptions',
+      }
+    }
+
+    if (path.endsWith('/chat/completions')) {
+      const prefix = path.slice(0, -'/chat/completions'.length) || '/'
+      url.pathname = prefix
+      return {
+        baseURL: url.toString().replace(/\/+$/, ''),
+        path: '/audio/transcriptions',
+      }
+    }
+  } catch {
+    return {
+      baseURL: rawBaseUrl,
+      path: '/audio/transcriptions',
+    }
+  }
+
+  return {
+    baseURL: rawBaseUrl.replace(/\/+$/, ''),
+    path: '/audio/transcriptions',
+  }
+}
+
+function findSpeechModelConfig(
+  aiModelList: ReturnType<typeof useSettingStore.getState>['aiModelList'],
+  selectedModelId: string
+) {
+  const normalizedSelectedId = selectedModelId.trim()
+
+  for (const config of aiModelList) {
+    if (config.models && config.models.length > 0) {
+      const targetModel = config.models.find((model) => {
+        if (model.modelType !== 'stt') {
+          return false
+        }
+
+        const compositeId = `${config.key}-${model.id}`
+        return model.id === normalizedSelectedId || compositeId === normalizedSelectedId
+      })
+
+      if (targetModel) {
+        return {
+          ...config,
+          model: targetModel.model,
+          modelType: targetModel.modelType,
+        }
+      }
+    } else if (config.key === normalizedSelectedId && config.modelType === 'stt') {
+      return config
+    }
+  }
+
+  return null
+}
+
 export async function transcribeRecording(audioBlob: Blob): Promise<string> {
   const { sttModel } = useSettingStore.getState()
 
@@ -394,33 +500,7 @@ export async function fetchAudioTranscription(audioBlob: Blob, options?: {
     throw new Error('未配置语音识别模型')
   }
 
-  // 查找STT模型配置
-  let sttConfig = null
-  
-  // 在新的数据结构中，需要找到包含指定模型ID的配置
-  for (const config of aiModelList) {
-    // 检查新的 models 数组结构
-    if (config.models && config.models.length > 0) {
-      const targetModel = config.models.find(model => 
-        model.id === sttModel && model.modelType === 'stt'
-      )
-      if (targetModel) {
-        // 返回合并了模型配置的 AiConfig
-        sttConfig = {
-          ...config,
-          model: targetModel.model,
-          modelType: targetModel.modelType
-        }
-        break
-      }
-    } else {
-      // 向后兼容：处理旧的单模型结构
-      if (config.key === sttModel && config.modelType === 'stt') {
-        sttConfig = config
-        break
-      }
-    }
-  }
+  const sttConfig = findSpeechModelConfig(aiModelList, sttModel)
   
   if (!sttConfig) {
     throw new Error('未找到语音识别模型配置')
@@ -431,21 +511,24 @@ export async function fetchAudioTranscription(audioBlob: Blob, options?: {
   }
 
   try {
+    const contentType = options?.contentType || audioBlob.type || 'audio/webm'
+    const fileName = options?.fileName || `audio.${getAudioFileExtension(contentType)}`
+    const endpoint = normalizeAudioTranscriptionPath(sttConfig.baseURL)
     const result = await invokeAiMultipart<AudioTranscriptionResponse>({
       config: {
-        baseUrl: sttConfig.baseURL,
+        baseUrl: endpoint.baseURL,
         apiKey: sttConfig.apiKey,
         customHeaders: sttConfig.customHeaders,
       },
-      path: '/audio/transcriptions',
+      path: endpoint.path,
       fileFieldName: 'file',
       fields: {
         model: sttConfig.model || 'FunAudioLLM/SenseVoiceSmall'
       },
       file: {
         bytes: await blobToBytes(audioBlob),
-        fileName: options?.fileName || 'audio.webm',
-        contentType: options?.contentType || audioBlob.type || 'audio/webm',
+        fileName,
+        contentType,
       }
     })
     return result.text

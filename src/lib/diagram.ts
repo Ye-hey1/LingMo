@@ -1,11 +1,14 @@
+import { MERMAID_FILE_SUFFIXES, createDefaultMermaidContent } from '@/lib/mermaid'
+
 export const DIAGRAM_FILE_SUFFIXES = [
   '.drawio',
   '.drawio.xml',
   '.excalidraw.json',
   '.diagram.json',
+  ...MERMAID_FILE_SUFFIXES,
 ] as const
 
-export type DiagramKind = 'drawio' | 'mindmap' | 'excalidraw'
+export type DiagramKind = 'drawio' | 'mindmap' | 'excalidraw' | 'mermaid'
 export type DiagramOutlineLayout = 'mindmap' | 'flowchart'
 
 interface DiagramOutlineNode {
@@ -60,7 +63,7 @@ export function isExcalidrawPath(path: string): boolean {
 }
 
 export function normalizeDiagramKind(kind: unknown): DiagramKind {
-  if (kind === 'mindmap' || kind === 'excalidraw' || kind === 'drawio') {
+  if (kind === 'mindmap' || kind === 'excalidraw' || kind === 'drawio' || kind === 'mermaid') {
     return kind
   }
 
@@ -128,6 +131,10 @@ export function createMindMapDrawioContent(): string {
 }
 
 export function createDiagramContent(kind: DiagramKind): string {
+  if (kind === 'mermaid') {
+    return createDefaultMermaidContent()
+  }
+
   if (kind === 'excalidraw') {
     return createEmptyExcalidrawContent()
   }
@@ -797,7 +804,15 @@ export function ensureDiagramFileName(name: string, kind: DiagramKind = 'drawio'
     return normalized
   }
 
-  return kind === 'excalidraw' ? `${normalized}.excalidraw.json` : `${normalized}.drawio`
+  if (kind === 'excalidraw') {
+    return `${normalized}.excalidraw.json`
+  }
+
+  if (kind === 'mermaid') {
+    return `${normalized}.mmd`
+  }
+
+  return `${normalized}.drawio`
 }
 
 export function getDefaultDiagramBaseName(kind: DiagramKind): string {
@@ -807,6 +822,10 @@ export function getDefaultDiagramBaseName(kind: DiagramKind): string {
 
   if (kind === 'excalidraw') {
     return 'Untitled_Whiteboard.excalidraw.json'
+  }
+
+  if (kind === 'mermaid') {
+    return 'Untitled_Mermaid_Diagram.mmd'
   }
 
   return 'Untitled_Diagram.drawio'

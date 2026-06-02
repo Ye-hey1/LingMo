@@ -6,7 +6,6 @@ import {
   getRelationsForNote,
   deleteRelationsByMethod,
   getAllRelations,
-  type NoteRelation,
   type RelationInput,
 } from '@/db/note-relations'
 import { getFileEmbeddings } from '@/db/vector'
@@ -160,7 +159,7 @@ export async function buildAllRelations(
 
   // Phase 4: 交叉验证
   onProgress?.({ phase: '交叉验证', current: 3, total: 3 })
-  const crossValidatedCount = await crossValidateAll()
+  await crossValidateAll()
 
   // Phase 5: LLM 分析（可选）
   let llmCount = 0
@@ -443,7 +442,7 @@ async function crossValidateAll(): Promise<number> {
 // 构建 LLM 候选对（带笔记内容）
 async function buildLLMCandidates(
   filename: string,
-  topicKeywords: string[],
+  _topicKeywords: string[],
 ): Promise<CandidatePair[]> {
   const relations = await getRelationsForNote(filename)
   const candidates: CandidatePair[] = []

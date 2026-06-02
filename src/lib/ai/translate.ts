@@ -100,9 +100,6 @@ export async function fetchAiTranslateStream(
       onChunk(remaining.content, isFirst)
     }
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      return
-    }
     throw error
   }
 }

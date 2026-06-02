@@ -1,7 +1,6 @@
-import { Extension, type Editor } from '@tiptap/core'
+import { Extension } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
-import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 
 export interface WikiLinkOptions {
   // eslint-disable-next-line no-unused-vars
@@ -21,7 +20,6 @@ export const WikiLinkExtension = Extension.create<WikiLinkOptions>({
   },
 
   addProseMirrorPlugins() {
-    const editor = this.editor
     const onClick = this.options.onClick
 
     return [
@@ -44,11 +42,17 @@ export const WikiLinkExtension = Extension.create<WikiLinkOptions>({
                 const from = pos + match.index
                 const to = from + match[0].length
 
+                const lowercaseTarget = target.toLowerCase()
+                const isDiagram = lowercaseTarget.endsWith('.drawio') ||
+                                  lowercaseTarget.endsWith('.excalidraw.json') ||
+                                  lowercaseTarget.endsWith('.excalidraw')
+
                 decorations.push(
                   Decoration.inline(from, to, {
-                    class: 'wikilink',
+                    class: isDiagram ? 'wikilink wikilink-diagram' : 'wikilink',
                     'data-wikilink': target,
                     'data-display': display,
+                    ...(isDiagram ? { 'data-is-diagram': 'true' } : {}),
                   })
                 )
               }
@@ -63,6 +67,9 @@ export const WikiLinkExtension = Extension.create<WikiLinkOptions>({
             if (wikilinkEl) {
               const linkTarget = wikilinkEl.getAttribute('data-wikilink')
               if (linkTarget) {
+                if (wikilinkEl.classList.contains('wikilink-diagram')) {
+                  return true // 拦截默认点击，交由气泡浮层处理
+                }
                 onClick(linkTarget)
                 return true
               }

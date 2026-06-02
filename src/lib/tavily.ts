@@ -487,7 +487,7 @@ async function requestTavilyExtractViaRustFallback(
   }
 }
 
-async function requestDuckDuckGoFallback(
+export async function requestDuckDuckGoFallback(
   query: string,
   maxResults: number,
   includeDomains?: string[],

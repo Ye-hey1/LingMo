@@ -77,3 +77,15 @@ export async function listStoredFileActivities(filePath: string, limit = 50): Pr
     return []
   }
 }
+
+export async function listAllFileActivities(limit = 50): Promise<FileActivityEvent[]> {
+  try {
+    const store = await Store.load(STORE_FILE)
+    const existing = await store.get<FileActivityEvent[]>(STORE_KEY) || []
+    return existing
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, limit)
+  } catch {
+    return []
+  }
+}

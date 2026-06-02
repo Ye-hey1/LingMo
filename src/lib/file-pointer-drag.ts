@@ -1,10 +1,10 @@
-export const NOTE_GEN_FILE_POINTER_DRAG_EVENT = 'lingmo:file-pointer-drag'
-export const NOTE_GEN_FILE_POINTER_DRAG_THRESHOLD = 5
+export const LINGMO_FILE_POINTER_DRAG_EVENT = 'lingmo:file-pointer-drag'
+export const LINGMO_FILE_POINTER_DRAG_THRESHOLD = 5
 
-export type NoteGenFilePointerDragPhase = 'start' | 'move' | 'end' | 'cancel'
+export type LingMoFilePointerDragPhase = 'start' | 'move' | 'end' | 'cancel'
 
-export interface NoteGenFilePointerDragDetail {
-  phase: NoteGenFilePointerDragPhase
+export interface LingMoFilePointerDragDetail {
+  phase: LingMoFilePointerDragPhase
   path: string
   name: string
   displayName: string
@@ -14,13 +14,13 @@ export interface NoteGenFilePointerDragDetail {
   y: number
 }
 
-export function emitNoteGenFilePointerDrag(detail: NoteGenFilePointerDragDetail) {
+export function emitLingMoFilePointerDrag(detail: LingMoFilePointerDragDetail) {
   if (typeof window === 'undefined') return
-  window.dispatchEvent(new CustomEvent(NOTE_GEN_FILE_POINTER_DRAG_EVENT, { detail }))
+  window.dispatchEvent(new CustomEvent(LINGMO_FILE_POINTER_DRAG_EVENT, { detail }))
 }
 
-export function getNoteGenFilePointerDragDetail(event: Event) {
-  return (event as CustomEvent<NoteGenFilePointerDragDetail>).detail
+export function getLingMoFilePointerDragDetail(event: Event) {
+  return (event as CustomEvent<LingMoFilePointerDragDetail>).detail
 }
 
 export function isPointInsideElement(element: HTMLElement | null, x: number, y: number) {

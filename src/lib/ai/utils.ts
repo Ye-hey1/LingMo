@@ -6,6 +6,21 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import { platform } from "@tauri-apps/plugin-os";
 import { createTauriOpenAIClient, type OpenAICompatibleClient } from "./tauri-client";
 
+const MERMAID_OUTPUT_GUIDE = `When a process, architecture, relationship, decision tree, timeline, or comparison is better expressed visually, include a valid Mermaid fenced code block in the answer:
+\`\`\`mermaid
+flowchart TD
+  A["开始"] --> B["下一步"]
+\`\`\`
+Keep the Mermaid syntax valid and keep node labels concise.
+All visible Mermaid node labels and edge labels must be Simplified Chinese by default, unless the user explicitly asks for another language.
+Do not use English labels such as "Input Tokens", "Layer Norm", "Transformer Layer", or "Softmax"; translate them into concise Simplified Chinese.
+For Mermaid flowcharts:
+- Put every node or edge statement on its own line.
+- Do not use horizontal divider lines such as ----- inside the code block.
+- Quote node labels that contain punctuation, parentheses, slashes, commas, colons, or HTML, for example A["Input (tokens)"].
+- Do not use raw HTML tags in labels except <br/> when absolutely necessary.
+- Do not use ellipsis-only or ellipsis-prefixed labels such as "...more layers"; name the real step explicitly.`
+
 /**
  * 获取当前的prompt内容
  */
@@ -41,6 +56,10 @@ export async function getAISettings(modelType?: string): Promise<AiConfig | unde
 
   // 在新的数据结构中，需要找到包含指定模型ID的配置
   for (const config of aiConfigs) {
+    if (config.enabled === false) {
+      continue
+    }
+
     // 检查新的 models 数组结构
     if (config.models && config.models.length > 0) {
       // 首先尝试直接匹配模型ID
@@ -62,6 +81,7 @@ export async function getAISettings(modelType?: string): Promise<AiConfig | unde
           modelType: targetModel.modelType,
           temperature: targetModel.temperature,
           topP: targetModel.topP,
+          contextWindow: targetModel.contextWindow,
           voice: targetModel.voice,
           enableStream: targetModel.enableStream
         }
@@ -201,6 +221,8 @@ export async function prepareMessages(
     // 如果记忆加载失败，不影响正常对话
     console.error('Failed to load memory context:', error)
   }
+
+  promptContent = [promptContent, MERMAID_OUTPUT_GUIDE].filter(Boolean).join('\n\n')
 
   // 如果提供了基础消息数组，直接使用它
   if (baseMessages && baseMessages.length > 0) {

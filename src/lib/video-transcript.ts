@@ -1,13 +1,13 @@
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { Command } from '@tauri-apps/plugin-shell'
 import { readFile, readTextFile } from '@tauri-apps/plugin-fs'
 import { appCacheDir } from '@tauri-apps/api/path'
 import { fetchAudioTranscription } from '@/lib/audio'
+import { fetchWithProxy, getProxyUrl } from '@/lib/network-proxy'
 import ffmpegStatic from 'ffmpeg-static'
 
 export const VIDEO_TRANSCRIPT_TAG_NAME = '视频转写'
 
-type VideoPlatform = 'youtube' | 'bilibili'
+type VideoPlatform = 'youtube' | 'bilibili' | 'xiaohongshu'
 type VideoTranscriptStage = 'metadata' | 'subtitle' | 'audio' | 'transcribe' | 'summary' | 'save'
 
 const AUDIO_CHUNK_SECONDS = 180
@@ -45,6 +45,12 @@ interface YouTubeCaptionTrack {
   vssId?: string
 }
 
+interface SubtitleEntry {
+  start?: number
+  end?: number
+  text: string
+}
+
 interface YouTubePlayerResponse {
   videoDetails?: {
     title?: string
@@ -57,6 +63,14 @@ interface YouTubePlayerResponse {
   }
 }
 
+interface BilibiliSubtitleItem {
+  lan?: string
+  lan_doc?: string
+  subtitle_url?: string
+  ai_type?: number
+  ai_status?: number
+}
+
 interface BilibiliViewResponse {
   code?: number
   message?: string
@@ -65,19 +79,26 @@ interface BilibiliViewResponse {
     title?: string
     owner?: { name?: string }
     cid?: number
-    pages?: Array<{ cid?: number }>
+    pages?: Array<{ cid?: number; page?: number; part?: string }>
     subtitle?: {
-      list?: Array<{
-        lan?: string
-        lan_doc?: string
-        subtitle_url?: string
-      }>
+      list?: BilibiliSubtitleItem[]
     }
   }
 }
 
 interface BilibiliInitialState {
   videoData?: BilibiliViewResponse['data']
+}
+
+interface BilibiliPlayerResponse {
+  code?: number
+  message?: string
+  data?: {
+    subtitle?: {
+      list?: BilibiliSubtitleItem[]
+      subtitles?: BilibiliSubtitleItem[]
+    }
+  }
 }
 
 interface YtDlpMetadata {
@@ -106,6 +127,103 @@ const BILIBILI_WEB_HEADERS = {
 
 function cleanText(value?: string | null) {
   return value?.replace(/\s+/g, ' ').trim() || ''
+}
+
+function normalizeSubtitleText(value?: string | null) {
+  const decoded = decodeHtmlEntities(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\{\\[^}]+\}/g, ' ')
+    .replace(/\{[^}]*\}/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/[\u200b-\u200d\ufeff]/g, '')
+    .replace(/[♪♫♬]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return decoded
+}
+
+function isNoiseSubtitleText(value: string) {
+  if (!value) return true
+  return /^(?:[\[(（【<]?\s*(?:音乐|字幕|掌声|笑声|欢呼|沉默|片头|片尾|music|applause|laughter|cheering|silence)\s*[\])）】>]?)$/i.test(value)
+}
+
+function hasSentenceEnding(value: string) {
+  return /[。！？!?…]$/.test(value) || /[.!?]$/.test(value)
+}
+
+function normalizeForDedup(value: string) {
+  return value
+    .replace(/[，。！？、,.!?;；:：'"“”‘’()\[\]（）【】\s]/g, '')
+    .toLowerCase()
+}
+
+function parseSubtitleTimeToSeconds(value: string) {
+  const normalized = value.replace(',', '.').trim()
+  const parts = normalized.split(':')
+  if (parts.length < 2) return 0
+  const seconds = Number(parts.pop() || 0)
+  const minutes = Number(parts.pop() || 0)
+  const hours = Number(parts.pop() || 0)
+  return Math.max(0, Math.floor(hours * 3600 + minutes * 60 + seconds))
+}
+
+function normalizeSubtitleEntries(entries: SubtitleEntry[]) {
+  const normalizedEntries = entries
+    .map(entry => ({
+      ...entry,
+      text: normalizeSubtitleText(entry.text),
+    }))
+    .filter(entry => entry.text && !isNoiseSubtitleText(entry.text))
+    .sort((a, b) => (a.start ?? 0) - (b.start ?? 0))
+
+  const output: string[] = []
+  let buffer: string[] = []
+  let bufferStart: number | undefined
+  let bufferEnd: number | undefined
+  let previousDedupKey = ''
+  let previousStart = -999
+
+  function flush() {
+    const content = cleanText(buffer.join(' '))
+    if (content) {
+      output.push(bufferStart !== undefined ? `- ${formatSeconds(bufferStart)} ${content}` : `- ${content}`)
+    }
+    buffer = []
+    bufferStart = undefined
+    bufferEnd = undefined
+  }
+
+  for (const entry of normalizedEntries) {
+    const dedupKey = normalizeForDedup(entry.text)
+    if (dedupKey && dedupKey === previousDedupKey && Math.abs((entry.start ?? previousStart) - previousStart) <= 2) {
+      continue
+    }
+
+    const gap = bufferEnd !== undefined && entry.start !== undefined ? entry.start - bufferEnd : 0
+    const currentText = cleanText(buffer.join(' '))
+    const shouldFlush = buffer.length > 0 && (
+      gap > 2.2 ||
+      hasSentenceEnding(currentText) ||
+      currentText.length >= 160 ||
+      buffer.length >= 5
+    )
+
+    if (shouldFlush) {
+      flush()
+    }
+
+    if (buffer.length === 0) {
+      bufferStart = entry.start
+    }
+    buffer.push(entry.text)
+    bufferEnd = entry.end ?? entry.start ?? bufferEnd
+    previousDedupKey = dedupKey
+    previousStart = entry.start ?? previousStart
+  }
+
+  flush()
+  return output.join('\n')
 }
 
 function notifyVideoProgress(options: VideoTranscriptOptions | undefined, progress: VideoTranscriptProgress) {
@@ -179,8 +297,14 @@ export function getVideoPlatform(value: string): VideoPlatform | null {
     if (host === 'bilibili.com' || host.endsWith('.bilibili.com') || host === 'b23.tv') {
       return 'bilibili'
     }
+    if (host === 'xiaohongshu.com' || host.endsWith('.xiaohongshu.com') || host === 'xhslink.com') {
+      return 'xiaohongshu'
+    }
     return null
   } catch {
+    if (value.includes('xiaohongshu.com') || value.includes('xhslink.com')) {
+      return 'xiaohongshu'
+    }
     return null
   }
 }
@@ -209,8 +333,61 @@ function getYouTubeVideoId(value: string) {
 
 function getBilibiliBvid(value: string) {
   const url = new URL(normalizeUrl(value))
-  const match = url.pathname.match(/\/video\/(BV[a-zA-Z0-9]+)/)
+  const match = url.pathname.match(/\/video\/(BV[a-zA-Z0-9]+)/) || normalizeUrl(value).match(/(BV[a-zA-Z0-9]+)/)
   return match?.[1] || ''
+}
+
+function getBilibiliPageNumber(value: string) {
+  try {
+    const url = new URL(normalizeUrl(value))
+    const page = Number(url.searchParams.get('p') || url.searchParams.get('page') || 1)
+    return Number.isFinite(page) && page > 0 ? Math.floor(page) : 1
+  } catch {
+    return 1
+  }
+}
+
+async function resolveBilibiliUrl(value: string) {
+  const normalized = normalizeUrl(value)
+  try {
+    const url = new URL(normalized)
+    if (url.hostname.replace(/^www\./, '') !== 'b23.tv') {
+      return normalized
+    }
+
+    const response = await fetchWithProxy(normalized, {
+      method: 'GET',
+      connectTimeout: 15000,
+      maxRedirections: 5,
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.1',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'identity',
+        ...BILIBILI_WEB_HEADERS,
+      },
+    })
+    if (response.url && response.url !== normalized) {
+      return response.url
+    }
+
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    const html = decodeBytes(bytes, response.headers.get('content-type'))
+    const match = html.match(/https?:\/\/(?:www\.)?bilibili\.com\/video\/BV[a-zA-Z0-9]+[^"'<>\\\s]*/i)
+    return match?.[0] || normalized
+  } catch {
+    return normalized
+  }
+}
+
+async function resolveBilibiliInput(value: string) {
+  const resolvedUrl = await resolveBilibiliUrl(value)
+  const bvid = getBilibiliBvid(resolvedUrl)
+  const pageNumber = getBilibiliPageNumber(resolvedUrl)
+  return {
+    bvid,
+    pageNumber,
+    sourceUrl: pageNumber > 1 ? `https://www.bilibili.com/video/${bvid}?p=${pageNumber}` : `https://www.bilibili.com/video/${bvid}`,
+  }
 }
 
 function getFallbackVideoTitle(platform: VideoPlatform, sourceUrl: string) {
@@ -221,6 +398,9 @@ function getFallbackVideoTitle(platform: VideoPlatform, sourceUrl: string) {
   if (platform === 'youtube') {
     const videoId = getYouTubeVideoId(sourceUrl)
     return videoId ? `YouTube 视频 ${videoId}` : 'YouTube 视频'
+  }
+  if (platform === 'xiaohongshu') {
+    return '小红书视频转写'
   }
   return '视频转写'
 }
@@ -266,15 +446,65 @@ function extractJsonAfterMarker(html: string, marker: string) {
   return null
 }
 
+function getCaptionTrackName(track: YouTubeCaptionTrack) {
+  return cleanText(track.name?.simpleText || track.name?.runs?.map(item => item.text || '').join(' ') || '')
+}
+
+function scoreYouTubeCaptionTrack(track: YouTubeCaptionTrack) {
+  const language = (track.languageCode || '').toLowerCase()
+  const vssId = (track.vssId || '').toLowerCase()
+  const name = getCaptionTrackName(track).toLowerCase()
+  const haystack = `${language} ${vssId} ${name}`
+  const isAuto = track.kind === 'asr' || vssId.startsWith('a.')
+  let score = 0
+
+  if (/zh|zho|chi|中文|chinese|汉语|漢語/.test(haystack)) score += 120
+  if (/zh-hans|zh-cn|简体|simplified/.test(haystack)) score += 35
+  if (/zh-hant|zh-tw|繁體|繁体|traditional/.test(haystack)) score += 25
+  if (/en|english/.test(haystack)) score += 30
+  if (!isAuto) score += 40
+  if (isAuto) score -= 8
+  if (track.baseUrl) score += 10
+
+  return score
+}
+
 function selectCaptionTrack(tracks: YouTubeCaptionTrack[]) {
-  return tracks.find(track => track.languageCode?.toLowerCase().startsWith('zh'))
-    || tracks.find(track => track.vssId?.toLowerCase().includes('zh'))
-    || tracks.find(track => !track.kind || track.kind !== 'asr')
-    || tracks[0]
+  return [...tracks]
+    .filter(track => Boolean(track.baseUrl))
+    .sort((a, b) => scoreYouTubeCaptionTrack(b) - scoreYouTubeCaptionTrack(a))[0]
+}
+
+function getYouTubeCaptionSource(track: YouTubeCaptionTrack) {
+  const label = getCaptionTrackName(track) || track.languageCode || ''
+  const source = track.kind === 'asr' ? 'YouTube 自动字幕' : 'YouTube 人工字幕'
+  return label ? `${source}：${label}` : source
+}
+
+function scoreBilibiliSubtitle(item: BilibiliSubtitleItem) {
+  const language = (item.lan || '').toLowerCase()
+  const label = (item.lan_doc || '').toLowerCase()
+  const haystack = `${language} ${label}`
+  let score = 0
+
+  if (/zh|zho|chi|中文|chinese/.test(haystack)) score += 120
+  if (/zh-cn|zh-hans|简体|簡體/.test(haystack)) score += 35
+  if (/zh-tw|zh-hant|繁体|繁體/.test(haystack)) score += 25
+  if (/en|english/.test(haystack)) score += 20
+  if (item.subtitle_url) score += 10
+  if (item.ai_type && item.ai_type > 0) score -= 8
+
+  return score
+}
+
+function selectBilibiliSubtitle(items: BilibiliSubtitleItem[]) {
+  return [...items]
+    .filter(item => Boolean(item.subtitle_url))
+    .sort((a, b) => scoreBilibiliSubtitle(b) - scoreBilibiliSubtitle(a))[0]
 }
 
 async function fetchText(url: string, headers?: Record<string, string>) {
-  const response = await tauriFetch(url, {
+  const response = await fetchWithProxy(url, {
     method: 'GET',
     connectTimeout: 15000,
     maxRedirections: 5,
@@ -293,7 +523,7 @@ async function fetchText(url: string, headers?: Record<string, string>) {
 }
 
 async function fetchJson<T>(url: string, headers?: Record<string, string>) {
-  const response = await tauriFetch(url, {
+  const response = await fetchWithProxy(url, {
     method: 'GET',
     connectTimeout: 15000,
     maxRedirections: 5,
@@ -359,6 +589,26 @@ async function fetchBilibiliVideoData(bvid: string) {
   return data
 }
 
+async function fetchBilibiliPlayerSubtitles(bvid: string, cid?: number) {
+  if (!cid) {
+    return []
+  }
+
+  try {
+    const response = await fetchJson<BilibiliPlayerResponse>(
+      `https://api.bilibili.com/x/player/v2?bvid=${encodeURIComponent(bvid)}&cid=${encodeURIComponent(String(cid))}`,
+      BILIBILI_WEB_HEADERS
+    )
+    if (response.code === 0 && response.data?.subtitle) {
+      return response.data.subtitle.subtitles || response.data.subtitle.list || []
+    }
+  } catch {
+    // fall back to subtitles from the view API
+  }
+
+  return []
+}
+
 async function fetchBilibiliSubtitleJson(url: string, videoUrl: string) {
   const headers = {
     ...BILIBILI_WEB_HEADERS,
@@ -370,7 +620,7 @@ async function fetchBilibiliSubtitleJson(url: string, videoUrl: string) {
     return await fetchJson<BilibiliSubtitleResponse>(url, headers)
   } catch (error) {
     try {
-      const response = await tauriFetch(url, {
+      const response = await fetchWithProxy(url, {
         method: 'GET',
         connectTimeout: 15000,
         maxRedirections: 5,
@@ -439,9 +689,11 @@ print(json.dumps({
 
 async function fetchVideoMetadataByYtDlp(url: string): Promise<YtDlpMetadata | null> {
   try {
+    const proxyUrl = await getProxyUrl()
     const process = Command.create('python', ['-c', buildVideoMetadataScript(), url], {
       encoding: 'utf-8',
       env: {
+        ...(proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, ALL_PROXY: proxyUrl } : {}),
         PYTHONIOENCODING: 'utf-8',
         PYTHONUTF8: '1',
       },
@@ -459,29 +711,38 @@ async function fetchVideoMetadataByYtDlp(url: string): Promise<YtDlpMetadata | n
 function youtubeCaptionXmlToMarkdown(xml: string) {
   const doc = new DOMParser().parseFromString(xml, 'text/xml')
   const nodes = Array.from(doc.querySelectorAll('text'))
-  return nodes
-    .map((node) => {
+  const entries = nodes
+    .map<SubtitleEntry>((node) => {
       const start = Number(node.getAttribute('start') || 0)
-      const text = cleanText(decodeHtmlEntities(node.textContent || ''))
-      return text ? `- ${formatSeconds(start)} ${text}` : ''
+      const duration = Number(node.getAttribute('dur') || 0)
+      return {
+        start,
+        end: duration > 0 ? start + duration : undefined,
+        text: node.textContent || '',
+      }
     })
-    .filter(Boolean)
-    .join('\n')
+  return normalizeSubtitleEntries(entries)
 }
 
 function subtitleTextToTimeline(text: string) {
   const normalized = text.replace(/\r/g, '')
   const lines = normalized.split('\n')
-  const entries: string[] = []
-  let pendingTime = ''
+  const entries: SubtitleEntry[] = []
+  let pendingStart: number | undefined
+  let pendingEnd: number | undefined
   let pendingText: string[] = []
 
   function flush() {
-    const content = cleanText(pendingText.join(' '))
+    const content = normalizeSubtitleText(pendingText.join(' '))
     if (content) {
-      entries.push(pendingTime ? `- ${pendingTime} ${content}` : `- ${content}`)
+      entries.push({
+        start: pendingStart,
+        end: pendingEnd,
+        text: content,
+      })
     }
-    pendingTime = ''
+    pendingStart = undefined
+    pendingEnd = undefined
     pendingText = []
   }
 
@@ -491,24 +752,25 @@ function subtitleTextToTimeline(text: string) {
       flush()
       continue
     }
-    if (/^\d+$/.test(line)) {
+    if (/^\d+$/.test(line) || /^NOTE\b|^STYLE\b|^REGION\b/i.test(line)) {
       continue
     }
-    const timeMatch = line.match(/(?:(\d{2}:)?\d{2}:\d{2}(?:[.,]\d{1,3})?)\s*-->/)
+    const timeMatch = line.match(/((?:\d{2}:)?\d{2}:\d{2}(?:[.,]\d{1,3})?)\s*-->\s*((?:\d{2}:)?\d{2}:\d{2}(?:[.,]\d{1,3})?)/)
     if (timeMatch) {
       flush()
-      pendingTime = (timeMatch[0].split('-->')[0] || '').replace(',', '.').trim()
+      pendingStart = parseSubtitleTimeToSeconds(timeMatch[1])
+      pendingEnd = parseSubtitleTimeToSeconds(timeMatch[2])
       continue
     }
-    pendingText.push(line.replace(/<[^>]+>/g, ''))
+    pendingText.push(line)
   }
   flush()
-  return entries.join('\n')
+  return normalizeSubtitleEntries(entries)
 }
 
 async function buildVideoTranscriptRecord(
   result: Omit<VideoTranscriptResult, 'desc' | 'content'>,
-  options?: VideoTranscriptOptions
+  _options?: VideoTranscriptOptions
 ): Promise<VideoTranscriptResult> {
   const extractedAt = formatDateTime(Date.now())
   const platformLabel = result.platform === 'youtube' ? 'YouTube' : 'B站'
@@ -569,13 +831,31 @@ function getAudioMimeType(filePath: string) {
 }
 
 function plainTranscriptToTimeline(text: string) {
-  return cleanText(text)
-    ? text
-      .split(/\r?\n/)
-      .map(line => cleanText(line))
-      .filter(Boolean)
-      .join('\n\n')
-    : ''
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => cleanText(line))
+    .filter(Boolean)
+
+  if (lines.length === 0) {
+    return ''
+  }
+
+  const timestampedEntries = lines
+    .map<SubtitleEntry | null>((line) => {
+      const match = line.match(/^[-*]?\s*((?:\d{1,2}:)?\d{2}:\d{2})\s+(.+)$/)
+      if (!match) return null
+      return {
+        start: parseSubtitleTimeToSeconds(match[1]),
+        text: match[2],
+      }
+    })
+    .filter((entry): entry is SubtitleEntry => Boolean(entry))
+
+  if (timestampedEntries.length > 0) {
+    return normalizeSubtitleEntries(timestampedEntries)
+  }
+
+  return lines.join('\n\n')
 }
 
 function buildAudioDownloadScript() {
@@ -749,18 +1029,35 @@ if process.returncode != 0:
     print("ERROR: YT_DLP_SUBTITLE_FAILED", file=sys.stderr)
     sys.exit(process.returncode)
 
-files = sorted(
-    glob.glob(os.path.join(work_dir, "*")),
-    key=lambda item: (0 if any(lang in os.path.basename(item).lower() for lang in ["zh", "chinese"]) else 1, os.path.getmtime(item)),
-)
-files = [item for item in files if os.path.isfile(item) and os.path.getsize(item) > 0 and Path(item).suffix.lower() in [".vtt", ".srt"]]
+files = [
+    item for item in glob.glob(os.path.join(work_dir, "*"))
+    if os.path.isfile(item) and os.path.getsize(item) > 0 and Path(item).suffix.lower() in [".vtt", ".srt"]
+]
+def subtitle_score(path):
+    name = os.path.basename(path).lower()
+    score = 0
+    if any(key in name for key in ["zh-hans", "zh_cn", "zh-cn", "chs", "simplified"]):
+        score += 140
+    elif any(key in name for key in ["zh-hant", "zh_tw", "zh-tw", "cht", "traditional"]):
+        score += 130
+    elif any(key in name for key in ["zh", "zho", "chi", "chinese"]):
+        score += 120
+    elif any(key in name for key in ["en", "english"]):
+        score += 40
+    if ".auto." not in name and "automatic" not in name:
+        score += 20
+    if name.endswith(".vtt"):
+        score += 5
+    return (-score, -os.path.getmtime(path))
+
+files = sorted(files, key=subtitle_score)
 if not files:
     print("ERROR: SUBTITLE_FILE_NOT_CREATED", file=sys.stderr)
     sys.exit(4)
 
 if result_path:
     with open(result_path, "w", encoding="utf-8") as handle:
-        handle.write(json.dumps(files[0], ensure_ascii=False))
+        handle.write(json.dumps({"path": files[0], "name": os.path.basename(files[0])}, ensure_ascii=False))
 `
 }
 
@@ -768,10 +1065,12 @@ async function downloadVideoSubtitle(url: string, options?: VideoTranscriptOptio
   notifyVideoProgress(options, { progress: 68, stage: 'subtitle', message: '正在尝试快速抓取平台字幕' })
   const cacheDir = await appCacheDir()
   const outputDir = `${cacheDir.replace(/[\\/]+$/, '')}/video-transcript`
-  const resultPath = `${outputDir}/subtitle-path.json`
+  const resultPath = `${outputDir}/subtitle-path-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`
+  const proxyUrl = await getProxyUrl()
   const process = Command.create('python', ['-c', buildSubtitleDownloadScript(), url, outputDir, resultPath], {
     encoding: 'utf-8',
     env: {
+      ...(proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, ALL_PROXY: proxyUrl } : {}),
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1',
     },
@@ -782,7 +1081,8 @@ async function downloadVideoSubtitle(url: string, options?: VideoTranscriptOptio
   }
   try {
     const rawResult = (await readTextFile(resultPath)).trim()
-    const subtitlePath = JSON.parse(rawResult)
+    const parsed = JSON.parse(rawResult)
+    const subtitlePath = typeof parsed === 'string' ? parsed : parsed?.path
     if (typeof subtitlePath !== 'string' || !subtitlePath) {
       return null
     }
@@ -816,11 +1116,13 @@ async function downloadVideoAudioChunks(url: string, options?: VideoTranscriptOp
   notifyVideoProgress(options, { progress: 64, stage: 'audio', message: '未找到可用字幕，正在下载音频' })
   const cacheDir = await appCacheDir()
   const outputDir = `${cacheDir.replace(/[\\/]+$/, '')}/video-transcript`
-  const resultPath = `${outputDir}/audio-chunks.json`
+  const resultPath = `${outputDir}/audio-chunks-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`
   const normalizedFfmpegPath = (ffmpegStatic || 'node_modules/ffmpeg-static/ffmpeg.exe').replace(/\\/g, '/')
+  const proxyUrl = await getProxyUrl()
   const process = Command.create('python', ['-c', buildAudioDownloadScript(), url, outputDir, normalizedFfmpegPath, resultPath], {
     encoding: 'utf-8',
     env: {
+      ...(proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, ALL_PROXY: proxyUrl } : {}),
       LINGMO_FFMPEG_PATH: normalizedFfmpegPath,
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1',
@@ -976,23 +1278,25 @@ export async function fetchYouTubeTranscript(url: string, options?: VideoTranscr
     author: cleanText(playerResponse.videoDetails?.author),
     sourceUrl: pageUrl,
     transcript,
-    transcriptSource: selectedTrack.kind === 'asr' ? 'YouTube 自动字幕' : 'YouTube 字幕',
+    transcriptSource: getYouTubeCaptionSource(selectedTrack),
   }, options)
 }
 
 export async function fetchBilibiliTranscript(url: string, options?: VideoTranscriptOptions): Promise<VideoTranscriptResult> {
-  const bvid = getBilibiliBvid(url)
+  const { bvid, pageNumber, sourceUrl } = await resolveBilibiliInput(url)
   if (!bvid) {
     throw new Error('无法识别 B站 BV 号。')
   }
 
   notifyVideoProgress(options, { progress: 56, stage: 'metadata', message: '正在读取 B站视频信息' })
   const videoData = await fetchBilibiliVideoData(bvid)
-  const sourceUrl = `https://www.bilibili.com/video/${bvid}`
+  const selectedPage = videoData.pages?.find(page => page.page === pageNumber)
+    || videoData.pages?.[Math.max(0, pageNumber - 1)]
+    || videoData.pages?.[0]
+  const playerSubtitles = await fetchBilibiliPlayerSubtitles(bvid, selectedPage?.cid || videoData.cid)
 
-  const subtitleList = videoData.subtitle?.list || []
-  const selectedSubtitle = subtitleList.find(item => item.lan?.toLowerCase().startsWith('zh'))
-    || subtitleList[0]
+  const subtitleList = playerSubtitles.length > 0 ? playerSubtitles : videoData.subtitle?.list || []
+  const selectedSubtitle = selectBilibiliSubtitle(subtitleList)
   if (!selectedSubtitle?.subtitle_url) {
     throw new Error('该 B站视频未找到公开字幕。')
   }
@@ -1002,20 +1306,19 @@ export async function fetchBilibiliTranscript(url: string, options?: VideoTransc
     ? `https:${selectedSubtitle.subtitle_url}`
     : selectedSubtitle.subtitle_url
   const subtitle = await fetchBilibiliSubtitleJson(subtitleUrl, sourceUrl)
-  const transcript = (subtitle.body || [])
-    .map(item => {
-      const text = cleanText(item.content)
-      return text ? `- ${formatSeconds(item.from)} ${text}` : ''
-    })
-    .filter(Boolean)
-    .join('\n')
+  const transcript = normalizeSubtitleEntries((subtitle.body || []).map(item => ({
+    start: item.from,
+    end: item.to,
+    text: item.content || '',
+  })))
   if (!transcript) {
     throw new Error('B站字幕为空。')
   }
 
+  const pageLabel = selectedPage?.part ? `P${selectedPage.page || pageNumber} ${cleanText(selectedPage.part)}` : ''
   return await buildVideoTranscriptRecord({
     platform: 'bilibili',
-    title: cleanText(videoData.title) || `B站视频转写 ${bvid}`,
+    title: [cleanText(videoData.title) || `B站视频转写 ${bvid}`, pageLabel].filter(Boolean).join(' - '),
     author: cleanText(videoData.owner?.name),
     sourceUrl,
     transcript,
