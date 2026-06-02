@@ -7,8 +7,9 @@ import type {
   FlashcardLearningStats,
   FlashcardReview,
   FlashcardReviewRating,
+  FlashcardStatus,
 } from '@/types/flashcard'
-import { scheduleFlashcardReview } from '@/lib/flashcard-scheduler'
+import { scheduleFlashcardReviewLegacy } from '@/lib/flashcard-scheduler'
 
 const DEFAULT_EASE = 2.5
 const DEFAULT_INTERVAL = 0
@@ -381,7 +382,7 @@ export async function updateFlashcardReview(flashcardId: number, rating: Flashca
     const prevEase = current.ease
     const prevInterval = current.interval
     const ts = now()
-    const scheduled = scheduleFlashcardReview({
+    const scheduled = scheduleFlashcardReviewLegacy({
       ease: prevEase,
       interval: prevInterval,
       repetitions: current.repetitions,
@@ -417,4 +418,87 @@ export async function getFlashcardReviews(flashcardId: number) {
     'select * from flashcard_reviews where flashcardId = $1 order by reviewedAt desc',
     [flashcardId],
   )
+}
+
+export interface DailyReviewStat {
+  date: string
+  reviewed: number
+  mastered: number
+  accuracy: number
+}
+
+export async function getDailyReviewStats(days: number = 14): Promise<DailyReviewStat[]> {
+  const db = await getDb()
+  const startDate = Date.now() - days * 24 * 60 * 60 * 1000
+
+  const rows = await db.select<{ day: string; total: number; mastered: number }[]>(
+    `select
+       date(reviewedAt / 1000, 'unixepoch', 'localtime') as day,
+       count(*) as total,
+       coalesce(sum(case when rating >= 2 then 1 else 0 end), 0) as mastered
+     from flashcard_reviews
+     where reviewedAt >= $1
+     group by day
+     order by day`,
+    [startDate],
+  )
+
+  return rows.map(row => ({
+    date: row.day,
+    reviewed: Number(row.total),
+    mastered: Number(row.mastered),
+    accuracy: Number(row.total) > 0
+      ? Math.round((Number(row.mastered) / Number(row.total)) * 100)
+      : 0,
+  }))
+}
+
+export async function getStreakDays(): Promise<number> {
+  const db = await getDb()
+  const rows = await db.select<{ day: string }[]>(
+    `select distinct date(reviewedAt / 1000, 'unixepoch', 'localtime') as day
+     from flashcard_reviews
+     order by day desc
+     limit 365`,
+  )
+
+  if (rows.length === 0) return 0
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const todayStr = today.toISOString().slice(0, 10)
+
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const yesterdayStr = yesterday.toISOString().slice(0, 10)
+
+  // 连续天数必须从今天或昨天开始算
+  const firstDay = rows[0].day
+  if (firstDay !== todayStr && firstDay !== yesterdayStr) return 0
+
+  let streak = 1
+  for (let i = 1; i < rows.length; i++) {
+    const prev = new Date(rows[i - 1].day + 'T00:00:00')
+    const curr = new Date(rows[i].day + 'T00:00:00')
+    const diff = Math.round((prev.getTime() - curr.getTime()) / (24 * 60 * 60 * 1000))
+    if (diff === 1) {
+      streak++
+    } else {
+      break
+    }
+  }
+
+  return streak
+}
+
+export async function getTotalCardStatusCounts(): Promise<Record<FlashcardStatus, number>> {
+  const db = await getDb()
+  const rows = await db.select<{ status: FlashcardStatus; total: number }[]>(
+    'select status, count(*) as total from flashcards group by status',
+  )
+  const result: Record<FlashcardStatus, number> = { new: 0, learning: 0, review: 0, suspended: 0 }
+  for (const row of rows) {
+    result[row.status] = Number(row.total)
+  }
+  return result
 }

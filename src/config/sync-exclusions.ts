@@ -9,7 +9,7 @@ export interface SyncExcludePattern {
 
 // 默认排除规则
 export const DEFAULT_SYNC_EXCLUDE_PATTERNS: SyncExcludePattern[] = [
-  { pattern: '.notegen/', description: '应用配置目录' },
+{ pattern: '.lingmo/', description: '应用配置目录' },
   { pattern: '*.tmp', description: '临时文件' },
   { pattern: '*.bak', description: '备份文件' },
   { pattern: '*.swp', description: '编辑器临时文件' },

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 interface RecordingState {
   // 录音状态
+  isStarting: boolean
   isRecording: boolean
   isPaused: boolean
   recordingDuration: number // 录音时长（秒）
@@ -9,32 +10,61 @@ interface RecordingState {
   // 录音数据
   audioChunks: Blob[]
   mediaRecorder: MediaRecorder | null
+  mediaStream: MediaStream | null
+  mimeType: string
+  recordingOwnerId: string | null
+  startRequestId: number
 
   // 计时器
   timerId?: NodeJS.Timeout
 
   // 控制方法
-  startRecording: () => Promise<void>
+  startRecording: (ownerId?: string) => Promise<void>
   pauseRecording: () => void
   resumeRecording: () => void
-  stopRecording: () => Promise<Blob | null>
-  cancelRecording: () => void
+  stopRecording: (ownerId?: string) => Promise<Blob | null>
+  cancelRecording: (ownerId?: string) => void
   
   // 内部方法
   setRecordingDuration: (duration: number) => void
   resetState: () => void
 }
 
+function stopMediaStream(stream: MediaStream | null) {
+  stream?.getTracks().forEach(track => track.stop())
+}
+
+function isOwnerMismatch(currentOwnerId: string | null, requestedOwnerId?: string) {
+  return Boolean(requestedOwnerId && currentOwnerId !== requestedOwnerId)
+}
+
 const useRecordingStore = create<RecordingState>((set, get) => ({
+  isStarting: false,
   isRecording: false,
   isPaused: false,
   recordingDuration: 0,
   audioChunks: [],
   mediaRecorder: null,
+  mediaStream: null,
+  mimeType: '',
+  recordingOwnerId: null,
+  startRequestId: 0,
 
   setRecordingDuration: (duration) => set({ recordingDuration: duration }),
 
-  startRecording: async () => {
+  startRecording: async (ownerId) => {
+    const initialState = get()
+    if (initialState.isStarting || initialState.isRecording) {
+      throw new Error('已有录音任务正在进行，请先停止当前录音')
+    }
+
+    const startRequestId = initialState.startRequestId + 1
+    set({
+      isStarting: true,
+      recordingOwnerId: ownerId || null,
+      startRequestId,
+    })
+
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error('当前环境不支持麦克风录音，请检查 Android WebView 或应用权限配置')
@@ -42,6 +72,15 @@ const useRecordingStore = create<RecordingState>((set, get) => ({
 
       // 请求麦克风权限
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const currentStartState = get()
+      if (
+        !currentStartState.isStarting ||
+        currentStartState.startRequestId !== startRequestId ||
+        isOwnerMismatch(currentStartState.recordingOwnerId, ownerId)
+      ) {
+        stopMediaStream(stream)
+        throw new Error('录音已取消')
+      }
       
       // 优先尝试更兼容的格式
       let mimeType = 'audio/webm'
@@ -71,10 +110,7 @@ const useRecordingStore = create<RecordingState>((set, get) => ({
         }
       }
       
-      mediaRecorder.onstop = () => {
-        // 停止所有音频轨道
-        stream.getTracks().forEach(track => track.stop())
-      }
+      mediaRecorder.onstop = () => stopMediaStream(stream)
       
       mediaRecorder.start()
       
@@ -91,16 +127,28 @@ const useRecordingStore = create<RecordingState>((set, get) => ({
       }, 1000)
 
       set({
+        isStarting: false,
         isRecording: true,
         isPaused: false,
         audioChunks: chunks,
         mediaRecorder,
+        mediaStream: stream,
+        mimeType,
+        recordingOwnerId: ownerId || null,
         recordingDuration: 0,
         timerId
       })
       
     } catch (error) {
       console.error('启动录音失败:', error)
+      const currentState = get()
+      if (
+        currentState.isStarting &&
+        currentState.startRequestId === startRequestId &&
+        !isOwnerMismatch(currentState.recordingOwnerId, ownerId)
+      ) {
+        get().resetState()
+      }
       
       // 根据错误类型提供更具体的错误信息
       if (error instanceof DOMException) {
@@ -137,8 +185,12 @@ const useRecordingStore = create<RecordingState>((set, get) => ({
     }
   },
 
-  stopRecording: async (): Promise<Blob | null> => {
-    const { mediaRecorder, audioChunks, timerId } = get()
+  stopRecording: async (ownerId): Promise<Blob | null> => {
+    const { mediaRecorder, mediaStream, audioChunks, mimeType, recordingOwnerId, timerId } = get()
+
+    if (isOwnerMismatch(recordingOwnerId, ownerId)) {
+      return null
+    }
 
     // 停止时清除计时器
     if (timerId) {
@@ -150,18 +202,29 @@ const useRecordingStore = create<RecordingState>((set, get) => ({
     }
     
     return new Promise((resolve) => {
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' })
+      const finish = () => {
+        stopMediaStream(mediaStream)
+        const audioBlob = new Blob(audioChunks, { type: mimeType || mediaRecorder.mimeType || 'audio/webm' })
         get().resetState()
         resolve(audioBlob)
       }
+
+      mediaRecorder.onstop = finish
       
-      mediaRecorder.stop()
+      if (mediaRecorder.state === 'inactive') {
+        finish()
+      } else {
+        mediaRecorder.stop()
+      }
     })
   },
 
-  cancelRecording: () => {
-    const { mediaRecorder } = get()
+  cancelRecording: (ownerId) => {
+    const { mediaRecorder, recordingOwnerId } = get()
+
+    if (isOwnerMismatch(recordingOwnerId, ownerId)) {
+      return
+    }
     
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop()
@@ -171,17 +234,23 @@ const useRecordingStore = create<RecordingState>((set, get) => ({
   },
 
   resetState: () => {
-    const { timerId } = get()
+    const { timerId, mediaStream, startRequestId } = get()
     // 重置时清除计时器
     if (timerId) {
       clearInterval(timerId)
     }
+    stopMediaStream(mediaStream)
     set({
+      isStarting: false,
       isRecording: false,
       isPaused: false,
       recordingDuration: 0,
       audioChunks: [],
       mediaRecorder: null,
+      mediaStream: null,
+      mimeType: '',
+      recordingOwnerId: null,
+      startRequestId: startRequestId + 1,
       timerId: undefined
     })
   }

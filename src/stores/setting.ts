@@ -4,12 +4,226 @@ import { getVersion } from '@tauri-apps/api/app'
 import { AiConfig } from '@/app/core/setting/config'
 import { GitlabInstanceType } from '@/lib/sync/gitlab.types'
 import { GiteaInstanceType } from '@/lib/sync/gitea.types'
-import { noteGenDefaultModels, noteGenModelKeys } from '@/app/model-config'
 import { CustomThemeColors } from '@/types/theme'
 import { applyThemeColors, removeThemeColors } from '@/lib/theme-utils'
 import { getNormalizedImageHosting } from '@/lib/image-hosting-config'
 import { normalizeSpeechMode } from '@/lib/speech/preferences'
 import type { SpeechMode } from '@/lib/speech/types'
+
+const REMOVED_BUILTIN_MODEL_KEYS = new Set([
+  'note-gen-free',
+  'note-gen-chat',
+  'note-gen-embedding',
+  'note-gen-vlm',
+  'lingmo',
+  'lingmo-free',
+  'lingmo-pro',
+  'lingmo-advanced',
+  'lingmo-chat',
+  'lingmo-embedding',
+  'lingmo-vlm',
+])
+
+const MODEL_SELECTION_KEYS = [
+  'primaryModel',
+  'placeholderModel',
+  'completionModel',
+  'markDescModel',
+  'commitModel',
+  'embeddingModel',
+  'rerankingModel',
+  'imageMethodModel',
+  'audioModel',
+  'sttModel',
+  'condenseModel',
+  'inspirationModel',
+]
+
+type ModelSelectionPredicate = (
+  model: {
+    id: string
+    model: string
+    modelType?: string
+    supportsImageInput?: boolean
+  },
+  config: AiConfig
+) => boolean
+
+const DEFAULT_MODEL_SLOTS: Array<{
+  storeKey: string
+  predicate: ModelSelectionPredicate
+}> = [
+  { storeKey: 'primaryModel', predicate: isChatModel },
+  { storeKey: 'placeholderModel', predicate: isChatModel },
+  { storeKey: 'completionModel', predicate: isChatModel },
+  { storeKey: 'markDescModel', predicate: isChatModel },
+  { storeKey: 'commitModel', predicate: isChatModel },
+  { storeKey: 'condenseModel', predicate: isChatModel },
+  { storeKey: 'inspirationModel', predicate: isChatModel },
+  { storeKey: 'embeddingModel', predicate: isEmbeddingModel },
+  { storeKey: 'rerankingModel', predicate: isRerankModel },
+  { storeKey: 'imageMethodModel', predicate: isVisionChatModel },
+  { storeKey: 'audioModel', predicate: isTtsModel },
+  { storeKey: 'sttModel', predicate: isSttModel },
+]
+
+function isChatModel(model: { modelType?: string }) {
+  return model.modelType === 'chat' || !model.modelType
+}
+
+function isEmbeddingModel(model: { modelType?: string }) {
+  return model.modelType === 'embedding'
+}
+
+function isRerankModel(model: { modelType?: string }) {
+  return model.modelType === 'rerank'
+}
+
+function isVisionChatModel(
+  model: { modelType?: string; supportsImageInput?: boolean },
+  config: AiConfig
+) {
+  return isChatModel(model) && (model.supportsImageInput === true || config.supportsImageInput === true)
+}
+
+function isTtsModel(model: { modelType?: string }) {
+  return model.modelType === 'tts'
+}
+
+function isSttModel(model: { modelType?: string }) {
+  return model.modelType === 'stt'
+}
+
+function isRemovedBuiltinModelId(modelId?: string) {
+  if (!modelId) return false
+  const normalized = modelId.trim().toLowerCase()
+
+  return (
+    REMOVED_BUILTIN_MODEL_KEYS.has(normalized) ||
+    normalized.startsWith('note-gen-') ||
+    normalized.startsWith('lingmo-advanced') ||
+    normalized.startsWith('lingmo-pro')
+  )
+}
+
+function isRemovedBuiltinAiConfig(config: AiConfig) {
+  const key = config.key?.trim().toLowerCase()
+  const title = config.title?.trim().toLowerCase() || ''
+  const baseURL = config.baseURL?.trim().toLowerCase() || ''
+
+  return (
+    isRemovedBuiltinModelId(key) ||
+    title === '灵墨' ||
+    title === '灵墨 free' ||
+    title === '灵墨高级' ||
+    title === '灵墨 高级' ||
+    title === 'lingmo' ||
+    title === 'lingmo advanced' ||
+    title === 'lingmo pro' ||
+    baseURL.includes('notegen.top')
+  )
+}
+
+async function removeBuiltinLingMoModelSettings(store: Store) {
+  const aiModelList = ((await store.get('aiModelList')) as AiConfig[]) || []
+  const cleanedAiModelList = aiModelList.filter((config) => !isRemovedBuiltinAiConfig(config))
+  let changed = cleanedAiModelList.length !== aiModelList.length
+
+  if (changed) {
+    await store.set('aiModelList', cleanedAiModelList)
+  }
+
+  for (const key of MODEL_SELECTION_KEYS) {
+    const currentModel = (await store.get(key)) as string | undefined
+    if (isRemovedBuiltinModelId(currentModel)) {
+      await store.set(key, '')
+      changed = true
+    }
+  }
+
+  if (changed) {
+    await store.save()
+  }
+
+  return { aiModelList: cleanedAiModelList, changed }
+}
+
+function findConfiguredModelSelection(
+  aiModelList: AiConfig[],
+  predicate: ModelSelectionPredicate
+) {
+  for (const config of aiModelList) {
+    if (!config.baseURL || isRemovedBuiltinAiConfig(config)) continue
+
+    if (config.models?.length) {
+      const model = config.models.find((item) => item.model && predicate(item, config))
+      if (model) return model.id
+      continue
+    }
+
+    if (config.model && predicate({
+      id: config.key,
+      model: config.model,
+      modelType: config.modelType || 'chat',
+      supportsImageInput: config.supportsImageInput,
+    }, config)) {
+      return config.key
+    }
+  }
+
+  return ''
+}
+
+function hasConfiguredModelSelection(aiModelList: AiConfig[], modelId?: string) {
+  if (!modelId || isRemovedBuiltinModelId(modelId)) return false
+
+  for (const config of aiModelList) {
+    if (!config.baseURL || isRemovedBuiltinAiConfig(config)) continue
+
+    if (config.models?.length) {
+      const directMatch = config.models.some((model) => model.id === modelId)
+      if (directMatch) return true
+
+      const expectedPrefix = `${config.key}-`
+      if (modelId.startsWith(expectedPrefix)) {
+        const originalModelId = modelId.substring(expectedPrefix.length)
+        if (config.models.some((model) => model.id === originalModelId)) {
+          return true
+        }
+      }
+      continue
+    }
+
+    if (config.key === modelId) return true
+  }
+
+  return false
+}
+
+async function ensureConfiguredDefaultModelSettings(store: Store, aiModelList: AiConfig[]) {
+  const updates: Record<string, string> = {}
+  let changed = false
+
+  for (const { storeKey, predicate } of DEFAULT_MODEL_SLOTS) {
+    const currentModel = (await store.get(storeKey)) as string | undefined
+    if (hasConfiguredModelSelection(aiModelList, currentModel)) {
+      continue
+    }
+
+    const nextModel = findConfiguredModelSelection(aiModelList, predicate)
+    if ((currentModel || '') !== nextModel) {
+      await store.set(storeKey, nextModel)
+      updates[storeKey] = nextModel
+      changed = true
+    }
+  }
+
+  if (changed) {
+    await store.save()
+  }
+
+  return updates
+}
 
 export enum GenTemplateRange {
   All = 'all',
@@ -276,6 +490,18 @@ interface SettingState {
   setKeepLatestCount: (count: number) => Promise<void>
   condenseMaxLength: number
   setCondenseMaxLength: (length: number) => Promise<void>
+
+  // 打字机模式
+  typewriterMode: boolean
+  setTypewriterMode: (enabled: boolean) => Promise<void>
+
+  // 禅专注模式
+  zenMode: boolean
+  setZenMode: (enabled: boolean) => Promise<void>
+
+  // 编辑器 AI 灰字补全
+  aiCompletionEnabled: boolean
+  setAiCompletionEnabled: (enabled: boolean) => Promise<void>
 }
 
 export interface ChatToolbarItem {
@@ -302,162 +528,36 @@ const useSettingStore = create<SettingState>((set, get) => ({
       set({ useImageRepo: savedUseImageRepo })
     }
 
-    // 初始化默认的灵墨模型配置
-    const existingAiModelList = (await store.get('aiModelList') as AiConfig[]) || []
-    const hasNoteGenModels = existingAiModelList.some(config => 
-      config.key === 'note-gen-free' || 
-      noteGenModelKeys.includes(config.key) ||
-      config.models?.some(model => noteGenModelKeys.includes(model.id))
-    )
-    
-    let finalAiModelList = existingAiModelList
-    if (!hasNoteGenModels) {
-      finalAiModelList = [...existingAiModelList, ...noteGenDefaultModels]
-      await store.set('aiModelList', finalAiModelList)
-      set({ aiModelList: finalAiModelList })
+    // 初始化打字机模式
+    const savedTypewriterMode = await store.get<boolean>('typewriterMode')
+    if (savedTypewriterMode !== undefined && savedTypewriterMode !== null) {
+      set({ typewriterMode: savedTypewriterMode })
     }
 
-    // 检查是否设置了主要模型，如果没有且存在note-gen-chat，则设置为主要模型
-    const currentPrimaryModel = await store.get('primaryModel') as string
-    const hasNoteGenChat = finalAiModelList.some(config => 
-      config.models?.some(model => model.id === 'note-gen-chat') || config.key === 'note-gen-chat'
-    )
-    
-    if (!currentPrimaryModel && hasNoteGenChat) {
-      const noteGenFreeConfig = finalAiModelList.find(config => config.key === 'note-gen-free')
-      if (noteGenFreeConfig?.models?.some(model => model.id === 'note-gen-chat')) {
-        await store.set('primaryModel', 'note-gen-chat')
-        set({ primaryModel: 'note-gen-chat' })
-      } else {
-        await store.set('primaryModel', 'note-gen-chat')
-        set({ primaryModel: 'note-gen-chat' })
-      }
+    // 初始化禅专注模式
+    const savedZenMode = await store.get<boolean>('zenMode')
+    if (savedZenMode !== undefined && savedZenMode !== null) {
+      set({ zenMode: savedZenMode })
     }
 
-    // 检查是否设置了嵌入模型，如果没有且存在note-gen-embedding，则设置为默认嵌入模型
-    const currentEmbeddingModel = await store.get('embeddingModel') as string
-    const hasNoteGenEmbedding = finalAiModelList.some(config => 
-      config.models?.some(model => model.id === 'note-gen-embedding') || config.key === 'note-gen-embedding'
-    )
-    
-    if (!currentEmbeddingModel && hasNoteGenEmbedding) {
-      const noteGenFreeConfig = finalAiModelList.find(config => config.key === 'note-gen-free')
-      if (noteGenFreeConfig?.models?.some(model => model.id === 'note-gen-embedding')) {
-        await store.set('embeddingModel', 'note-gen-embedding')
-        set({ embeddingModel: 'note-gen-embedding' })
-      } else {
-        await store.set('embeddingModel', 'note-gen-embedding')
-        set({ embeddingModel: 'note-gen-embedding' })
-      }
+    const savedAiCompletionEnabled = await store.get<boolean>('aiCompletionEnabled')
+    if (savedAiCompletionEnabled !== undefined && savedAiCompletionEnabled !== null) {
+      set({ aiCompletionEnabled: savedAiCompletionEnabled })
     }
 
-    // 检查是否设置了视觉语言模型，如果没有且存在note-gen-vlm，则设置为默认视觉语言模型
-    const currentImageMethodModel = await store.get('imageMethodModel') as string
-    const hasNoteGenVlm = finalAiModelList.some(config => 
-      config.models?.some(model => model.id === 'note-gen-vlm') || config.key === 'note-gen-vlm'
-    )
-    
-    if (!currentImageMethodModel && hasNoteGenVlm) {
-      const noteGenFreeConfig = finalAiModelList.find(config => config.key === 'note-gen-free')
-      if (noteGenFreeConfig?.models?.some(model => model.id === 'note-gen-vlm')) {
-        await store.set('imageMethodModel', 'note-gen-vlm')
-        set({ imageMethodModel: 'note-gen-vlm' })
-      } else {
-        await store.set('imageMethodModel', 'note-gen-vlm')
-        set({ imageMethodModel: 'note-gen-vlm' })
-      }
-    }
+    const { aiModelList: finalAiModelList } = await removeBuiltinLingMoModelSettings(store)
+    set({ aiModelList: finalAiModelList })
 
-    // 检查是否设置了TTS模型，如果没有且存在note-gen-tts，则设置为默认TTS模型
-    const currentAudioModel = await store.get('audioModel') as string
-    const hasNoteGenTTS = finalAiModelList.some(config => 
-      config.models?.some(model => model.modelType === 'tts') || config.modelType === 'tts'
-    )
-    
-    if (!currentAudioModel && hasNoteGenTTS) {
-      // 查找第一个可用的TTS模型
-      for (const config of finalAiModelList) {
-        if (config.models && config.models.length > 0) {
-          const ttsModel = config.models.find(model => model.modelType === 'tts')
-          if (ttsModel) {
-            await store.set('audioModel', `${config.key}-${ttsModel.id}`)
-            set({ audioModel: `${config.key}-${ttsModel.id}` })
-            break
-          }
-        } else if (config.modelType === 'tts') {
-          await store.set('audioModel', config.key)
-          set({ audioModel: config.key })
-          break
-        }
-      }
-    }
-
-    // 检查是否设置了STT模型，如果没有且存在note-gen-stt，则设置为默认STT模型
-    const currentSttModel = await store.get('sttModel') as string
-    const hasNoteGenSTT = finalAiModelList.some(config => 
-      config.models?.some(model => model.modelType === 'stt') || config.modelType === 'stt'
-    )
-    
-    if (!currentSttModel && hasNoteGenSTT) {
-      // 查找第一个可用的STT模型
-      for (const config of finalAiModelList) {
-        if (config.models && config.models.length > 0) {
-          const sttModel = config.models.find(model => model.modelType === 'stt')
-          if (sttModel) {
-            await store.set('sttModel', `${config.key}-${sttModel.id}`)
-            set({ sttModel: `${config.key}-${sttModel.id}` })
-            break
-          }
-        } else if (config.modelType === 'stt') {
-          await store.set('sttModel', config.key)
-          set({ sttModel: config.key })
-          break
-        }
-      }
-    }
+    const defaultModelUpdates = await ensureConfiguredDefaultModelSettings(store, finalAiModelList)
+    Object.entries(defaultModelUpdates).forEach(([key, value]) => {
+      set({ [key]: value })
+    })
 
     const currentTextToSpeechMode = await store.get('textToSpeechMode')
     set({ textToSpeechMode: normalizeSpeechMode(currentTextToSpeechMode) })
 
     const currentSpeechToTextMode = await store.get('speechToTextMode')
     set({ speechToTextMode: normalizeSpeechMode(currentSpeechToTextMode) })
-
-    // 检查并初始化其他模型类型
-    const modelTypes = [
-      { storeKey: 'completionModel', modelType: 'chat' },
-      { storeKey: 'markDescModel', modelType: 'chat' },
-      { storeKey: 'commitModel', modelType: 'chat' },
-      { storeKey: 'condenseModel', modelType: 'chat' },
-      { storeKey: 'inspirationModel', modelType: 'chat' }
-    ]
-
-    for (const { storeKey, modelType } of modelTypes) {
-      const currentModel = await store.get(storeKey) as string
-      if (!currentModel) {
-        // 查找第一个可用的聊天模型作为默认值
-        const noteGenFreeConfig = finalAiModelList.find(config => config.key === 'note-gen-free')
-        if (noteGenFreeConfig?.models?.some(model => model.id === 'note-gen-chat' && model.modelType === modelType)) {
-          await store.set(storeKey, 'note-gen-chat')
-          set({ [storeKey]: 'note-gen-chat' })
-        } else {
-          // 查找其他可用的聊天模型
-          for (const config of finalAiModelList) {
-            if (config.models && config.models.length > 0) {
-              const chatModel = config.models.find(model => model.modelType === modelType)
-              if (chatModel) {
-                await store.set(storeKey, `${config.key}-${chatModel.id}`)
-                set({ [storeKey]: `${config.key}-${chatModel.id}` })
-                break
-              }
-            } else if (config.modelType === modelType || !config.modelType) {
-              await store.set(storeKey, config.key)
-              set({ [storeKey]: config.key })
-              break
-            }
-          }
-        }
-      }
-    }
 
     Object.entries(get()).forEach(async ([key, value]) => {
       const res = await store.get(key)
@@ -469,9 +569,8 @@ const useSettingStore = create<SettingState>((set, get) => ({
           setTimeout(() => {
             set({ [key]: res as GenTemplate[] })
           }, 0);
-        } else if (key === 'aiModelList' && hasNoteGenModels) {
-          // 如果已经有灵墨模型，使用存储的配置
-          set({ [key]: res as AiConfig[] })
+        } else if (key === 'aiModelList') {
+          set({ [key]: finalAiModelList })
         } else if (key === 'recordToolbarConfig') {
           // 确保包含所有工具，如果缺少新工具则自动添加
           const storedConfig = res as RecordToolbarItem[]
@@ -1231,6 +1330,33 @@ const useSettingStore = create<SettingState>((set, get) => ({
     set({ showEditorUndoRedo: show })
     const store = await Store.load('store.json');
     await store.set('showEditorUndoRedo', show)
+    await store.save()
+  },
+
+  // 打字机模式
+  typewriterMode: false,
+  setTypewriterMode: async (enabled: boolean) => {
+    set({ typewriterMode: enabled })
+    const store = await Store.load('store.json');
+    await store.set('typewriterMode', enabled)
+    await store.save()
+  },
+
+  // 禅专注模式
+  zenMode: false,
+  setZenMode: async (enabled: boolean) => {
+    set({ zenMode: enabled })
+    const store = await Store.load('store.json');
+    await store.set('zenMode', enabled)
+    await store.save()
+  },
+
+  // 编辑器 AI 灰字补全
+  aiCompletionEnabled: true,
+  setAiCompletionEnabled: async (enabled: boolean) => {
+    set({ aiCompletionEnabled: enabled })
+    const store = await Store.load('store.json');
+    await store.set('aiCompletionEnabled', enabled)
     await store.save()
   },
 }))

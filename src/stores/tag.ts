@@ -80,7 +80,27 @@ const useTagStore = create<TagState>((set, get) => ({
   tags: [],
   fetchTags: async () => {
     const tags = await getTags()
-    set({ tags })
+    const currentTagId = get().currentTagId
+    const currentTag = tags.find(tag => tag.id === currentTagId)
+      || tags.find(tag => tag.name === '中转站')
+      || tags[0]
+
+    if (!currentTag) {
+      set({ tags, currentTag: undefined })
+      return
+    }
+
+    set({
+      tags,
+      currentTagId: currentTag.id,
+      currentTag,
+    })
+
+    if (currentTag.id !== currentTagId) {
+      const store = await Store.load('store.json')
+      await store.set('currentTagId', currentTag.id)
+      await store.save()
+    }
   },
 
   deleteTag: async (id: number) => {

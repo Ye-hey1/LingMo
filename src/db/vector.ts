@@ -168,7 +168,7 @@ export async function upsertVectorDocumentsBatch(docs: Omit<VectorDocument, 'id'
       }
     });
     await vectorCache.update();
-  })
+  });
 }
 
 export async function replaceVectorDocumentsForFile(

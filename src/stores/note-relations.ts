@@ -1,9 +1,6 @@
 import { create } from 'zustand'
 import {
-  getRelationsForNote,
-  getAllRelations,
   getRelationCount,
-  type NoteRelation,
 } from '@/db/note-relations'
 import {
   getCrossValidatedRelations,
@@ -62,7 +59,7 @@ export const useNoteRelationsStore = create<NoteRelationsState>((set, get) => ({
     set({ isComputing: true })
     try {
       const { buildAllRelations } = await import('@/lib/relation-engine')
-      const result = await buildAllRelations(onProgress, includeLLM)
+      await buildAllRelations(onProgress, includeLLM)
 
       set({
         isComputing: false,

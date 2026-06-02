@@ -109,6 +109,7 @@ interface MarkState {
   setMarks: (marks: Mark[]) => void
   fetchMarks: () => Promise<void>
   fetchAllTrashMarks: () => Promise<void>
+  refreshVisibleMarks: () => Promise<void>
 
   allMarks: Mark[]
   fetchAllMarks: () => Promise<void>
@@ -136,9 +137,11 @@ interface MarkState {
   recordFilters: RecordFilters
   setRecordSearch: (search: string) => void
   toggleRecordType: (type: Mark["type"]) => void
+  clearRecordTypes: () => void
   setRecordTimePreset: (preset: RecordTimePreset) => void
   setRecordTagId: (tagId: number | 'all') => void
   setRecordProcessState: (processState: RecordProcessState) => void
+  clearRecordFilter: (filter: keyof RecordFilters) => void
   resetRecordFilters: () => void
   hasActiveRecordFilters: () => boolean
   initRecordFilters: () => Promise<void>
@@ -211,7 +214,19 @@ const useMarkStore = create<MarkState>((set, get) => ({
   },
   fetchAllTrashMarks: async () => {
     const decodeRes = await fetchVisibleMarks(true)
-    set({ marks: decodeRes })
+    const allRes = await getAllMarks()
+    set({
+      marks: decodeRes,
+      allMarks: allRes.map(normalizeMark),
+    })
+  },
+  refreshVisibleMarks: async () => {
+    const { trashState } = get()
+    if (trashState) {
+      await get().fetchAllTrashMarks()
+      return
+    }
+    await get().fetchMarks()
   },
 
   allMarks: [],
@@ -329,6 +344,20 @@ const useMarkStore = create<MarkState>((set, get) => ({
       }
     })
   },
+  clearRecordTypes: () => {
+    set((state) => {
+      if (state.recordFilters.selectedTypes.length === 0) {
+        return state
+      }
+
+      const recordFilters = {
+        ...state.recordFilters,
+        selectedTypes: [],
+      }
+      void persistRecordFilters(recordFilters)
+      return { recordFilters }
+    })
+  },
   setRecordTimePreset: (preset) => {
     set((state) => {
       const recordFilters = {
@@ -354,6 +383,16 @@ const useMarkStore = create<MarkState>((set, get) => ({
       const recordFilters = {
         ...state.recordFilters,
         processState,
+      }
+      void persistRecordFilters(recordFilters)
+      return { recordFilters }
+    })
+  },
+  clearRecordFilter: (filter) => {
+    set((state) => {
+      const recordFilters = {
+        ...state.recordFilters,
+        [filter]: DEFAULT_RECORD_FILTERS[filter],
       }
       void persistRecordFilters(recordFilters)
       return { recordFilters }

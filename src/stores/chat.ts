@@ -147,6 +147,33 @@ function normalizeLinkedResources(resources: LinkedResource[]): LinkedResource[]
   return normalized
 }
 
+function buildOptimisticConversation(id: number, title = '新对话', messageCount = 0): Conversation {
+  const now = Date.now()
+  return {
+    id,
+    title,
+    createdAt: now,
+    updatedAt: now,
+    messageCount,
+    isPinned: false,
+  }
+}
+
+function sortConversations(conversations: Conversation[]): Conversation[] {
+  return [...conversations].sort((a, b) => {
+    if (a.isPinned && !b.isPinned) return -1
+    if (!a.isPinned && b.isPinned) return 1
+    return b.updatedAt - a.updatedAt
+  })
+}
+
+function upsertConversation(conversations: Conversation[], conversation: Conversation): Conversation[] {
+  return sortConversations([
+    conversation,
+    ...conversations.filter(item => item.id !== conversation.id),
+  ])
+}
+
 export interface PendingQuote {
   quote: string
   fullContent: string
@@ -257,6 +284,7 @@ interface ChatState {
 
   // 会话初始化和管理
   initConversations: () => Promise<void> // 初始化会话列表
+  ensureCurrentConversation: (title?: string) => Promise<number> // 确保当前已有会话，用于发送前快速切换 UI
   createConversation: (title?: string) => Promise<number> // 创建新会话
   switchConversation: (id: number) => Promise<void> // 切换会话
   updateConversationTitle: (id: number, title: string) => Promise<void> // 更新会话标题
@@ -289,6 +317,31 @@ const useChatStore = create<ChatState>((set, get) => ({
   chatMode: 'agent',
   setChatMode: async (chatMode: ChatMode) => {
     const store = await Store.load('store.json')
+
+    const prevMode = get().chatMode
+    try {
+      const settingStore = (await import('./setting')).default.getState()
+      const currentModel = settingStore.primaryModel
+
+      const modeModels = (await store.get<Record<string, string>>('chatModeModels')) || {}
+      if (currentModel) {
+        modeModels[prevMode] = currentModel
+        await store.set('chatModeModels', modeModels)
+      }
+
+      const newModel = modeModels[chatMode]
+      if (newModel) {
+        const modelExists = settingStore.aiModelList.some(config =>
+          config.models?.some(model => model.id === newModel) || config.key === newModel
+        )
+        if (modelExists) {
+          await settingStore.setPrimaryModel(newModel)
+        }
+      }
+    } catch (error) {
+      console.warn('[ChatStore] Failed to save/load mode-specific model:', error)
+    }
+
     await store.set('chatMode', chatMode)
     await store.save()
     set({ chatMode })
@@ -614,9 +667,14 @@ const useChatStore = create<ChatState>((set, get) => ({
       // 没有当前会话，创建一个新会话
       const { createConversation } = await import('@/db/conversations')
       conversationId = await createConversation('新对话')
-      // 设置为当前会话并刷新会话列表
-      set({ currentConversationId: conversationId })
-      await get().initConversations()
+      const optimisticConversation = buildOptimisticConversation(conversationId)
+      set({
+        currentConversationId: conversationId,
+        conversations: upsertConversation(get().conversations, optimisticConversation),
+      })
+      void get().initConversations().catch(error => {
+        console.error('[ChatStore] Failed to refresh conversations after creating fallback conversation:', error)
+      })
     }
 
     const res = await insertChat({ ...chat, conversationId })
@@ -630,31 +688,51 @@ const useChatStore = create<ChatState>((set, get) => ({
       }
       const chats = get().chats
       const newChats = [...chats, data]
-      set({ chats: newChats })
+      const now = Date.now()
+      const existingConversation = get().conversations.find(item => item.id === conversationId)
+      const shouldUseUserTitle = (existingConversation?.messageCount || 0) === 0 && chat.role === 'user' && chat.content
+      const optimisticTitle = shouldUseUserTitle
+        ? chat.content!.replace(/\n/g, ' ').trim().slice(0, 30) || existingConversation?.title || '新对话'
+        : existingConversation?.title || '新对话'
+      const optimisticConversation: Conversation = {
+        ...(existingConversation || buildOptimisticConversation(conversationId)),
+        title: optimisticTitle,
+        updatedAt: now,
+        messageCount: (existingConversation?.messageCount || 0) + 1,
+      }
+
+      set({
+        chats: newChats,
+        conversations: upsertConversation(get().conversations, optimisticConversation),
+      })
 
       // 更新会话的消息数量和更新时间
       if (conversationId) {
-        const { updateConversationMessageCount, updateConversationTime, updateConversationTitle, getConversation } = await import('@/db/conversations')
-        await updateConversationMessageCount(conversationId, 1)
-        await updateConversationTime(conversationId)
+        void (async () => {
+          const { updateConversationMessageCount, updateConversationTime, updateConversationTitle, getConversation } = await import('@/db/conversations')
+          await updateConversationMessageCount(conversationId!, 1)
+          await updateConversationTime(conversationId!)
 
-        // 如果是当前会话的第一条用户消息，用消息内容作为标题
-        // 从数据库获取最新的会话状态，而不是使用内存中的旧数据
-        const currentConv = await getConversation(conversationId)
-        if (currentConv && currentConv.messageCount === 1 && chat.role === 'user' && chat.content) {
-          // 直接使用用户输入的前30个字符作为标题
-          const title = chat.content
-            .replace(/\n/g, ' ')  // 移除换行符
-            .trim()
-            .slice(0, 30)
+          // 如果是当前会话的第一条用户消息，用消息内容作为标题
+          // 从数据库获取最新的会话状态，而不是使用内存中的旧数据
+          const currentConv = await getConversation(conversationId!)
+          if (currentConv && currentConv.messageCount === 1 && chat.role === 'user' && chat.content) {
+            // 直接使用用户输入的前30个字符作为标题
+            const title = chat.content
+              .replace(/\n/g, ' ')  // 移除换行符
+              .trim()
+              .slice(0, 30)
 
-          if (title && title !== currentConv.title) {
-            await updateConversationTitle(conversationId, title)
+            if (title && title !== currentConv.title) {
+              await updateConversationTitle(conversationId!, title)
+            }
           }
-        }
 
-        // 刷新会话列表
-        await get().initConversations()
+          // 刷新会话列表
+          await get().initConversations()
+        })().catch(error => {
+          console.error('[ChatStore] Failed to update conversation metadata after inserting chat:', error)
+        })
       }
 
       return data
@@ -810,12 +888,41 @@ const useChatStore = create<ChatState>((set, get) => ({
     set({ conversations })
   },
 
+  ensureCurrentConversation: async (title = '新对话') => {
+    const existingId = get().currentConversationId
+    if (existingId) return existingId
+
+    const { createConversation: createConv } = await import('@/db/conversations')
+    const id = await createConv(title)
+    const optimisticConversation = buildOptimisticConversation(id, title)
+    set({
+      currentConversationId: id,
+      chats: [],
+      pendingQuote: null,
+      chatSearchOpen: false,
+      chatSearchQuery: '',
+      chatSearchResults: [],
+      chatSearchCurrentIndex: 0,
+      conversations: upsertConversation(get().conversations, optimisticConversation),
+    })
+    void get().initConversations().catch(error => {
+      console.error('[ChatStore] Failed to refresh conversations after ensuring current conversation:', error)
+    })
+    return id
+  },
+
   createConversation: async (title = '新对话') => {
     const { createConversation: createConv } = await import('@/db/conversations')
     const id = await createConv(title)
     // 设置为当前会话并刷新会话列表
-    set({ currentConversationId: id })
-    await get().initConversations()
+    const optimisticConversation = buildOptimisticConversation(id, title)
+    set({
+      currentConversationId: id,
+      conversations: upsertConversation(get().conversations, optimisticConversation),
+    })
+    void get().initConversations().catch(error => {
+      console.error('[ChatStore] Failed to refresh conversations after creating conversation:', error)
+    })
     return id
   },
 
@@ -842,29 +949,23 @@ const useChatStore = create<ChatState>((set, get) => ({
     const { deleteConversation: deleteConv } = await import('@/db/conversations')
     await deleteConv(id)
 
-    const { currentConversationId, conversations, switchConversation } = get()
+    const { currentConversationId } = get()
 
-    // 如果删除的是当前会话，切换到另一个会话
+    // 如果删除的是当前会话，回到首页空状态，不自动切换到其他历史会话
     if (id === currentConversationId) {
-      const remainingConversations = conversations.filter(c => c.id !== id)
-      if (remainingConversations.length > 0) {
-        await switchConversation(remainingConversations[0].id)
-      } else {
-        // 没有其他会话了，清空状态，不创建新会话
-        set({
-          currentConversationId: null,
-          chats: [],
-          pendingQuote: null,
-          agentAutoApproveConversationId: null,
-          agentAutoApproveRuntimeSkillId: null,
-          chatSearchOpen: false,
-          chatSearchQuery: '',
-          chatSearchResults: [],
-          chatSearchCurrentIndex: 0,
-        })
-        get().resetAgentState()
-        get().clearMcpToolCalls()
-      }
+      set({
+        currentConversationId: null,
+        chats: [],
+        pendingQuote: null,
+        agentAutoApproveConversationId: null,
+        agentAutoApproveRuntimeSkillId: null,
+        chatSearchOpen: false,
+        chatSearchQuery: '',
+        chatSearchResults: [],
+        chatSearchCurrentIndex: 0,
+      })
+      get().resetAgentState()
+      get().clearMcpToolCalls()
     }
 
     // 刷新会话列表

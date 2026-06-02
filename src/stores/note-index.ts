@@ -197,8 +197,7 @@ export const useNoteIndexStore = create<NoteIndexStore>((set, get) => ({
     // 3. 从新内容中提取链接并添加反向引用
     const links = extractWikiLinksWithContext(content)
     for (const link of links) {
-      const normalizedTarget = normalizeWikiLinkTarget(link.target)
-      let targetPath = link.target.endsWith('.md') ? link.target : `${link.target}.md`
+      const targetPath = link.target.endsWith('.md') ? link.target : `${link.target}.md`
 
       if (!backlinks.has(targetPath)) {
         backlinks.set(targetPath, [])

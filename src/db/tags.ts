@@ -31,9 +31,27 @@ interface MaxSortRow {
   maxSort: number | null
 }
 
+const INBOX_TAG_NAME = '中转站'
+const LEGACY_INBOX_TAG_NAMES = ['Idea']
+const INBOX_DUPLICATE_NAME_PATTERN = /^中转站\s*(?:[（(]\s*\d+\s*[）)])?$/
+
+function normalizeTagName(name: string) {
+  return name.trim()
+}
+
+function isInboxTagName(name: string) {
+  const normalized = normalizeTagName(name)
+  return normalized === INBOX_TAG_NAME
+    || LEGACY_INBOX_TAG_NAMES.includes(normalized)
+    || INBOX_DUPLICATE_NAME_PATTERN.test(normalized)
+}
+
 async function ensureInboxTag() {
   const db = await getDb()
-  const inboxTags = await db.select<Tag[]>('select * from tags where name = $1 limit 1', ['中转站'])
+  const inboxTags = await db.select<Tag[]>(
+    'select * from tags where name = $1 order by isPin desc, id asc limit 1',
+    [INBOX_TAG_NAME],
+  )
   if (inboxTags.length > 0) {
     return inboxTags[0]
   }
@@ -41,10 +59,10 @@ async function ensureInboxTag() {
   const legacyDefaultTags = await db.select<Tag[]>('select * from tags where name = $1 order by id asc limit 1', ['Idea'])
   if (legacyDefaultTags.length > 0) {
     const legacyTag = legacyDefaultTags[0]
-    await db.execute('update tags set name = $1, isLocked = $2 where id = $3', ['中转站', false, legacyTag.id])
+    await db.execute('update tags set name = $1, isLocked = $2 where id = $3', [INBOX_TAG_NAME, false, legacyTag.id])
     return {
       ...legacyTag,
-      name: '中转站',
+      name: INBOX_TAG_NAME,
       isLocked: false,
     }
   }
@@ -53,17 +71,83 @@ async function ensureInboxTag() {
   const nextSortOrder = (maxSortRows[0]?.maxSort ?? -1) + 1
   const createResult = await db.execute(
     'insert into tags (name, isLocked, isPin, sortOrder, parentId) values ($1, $2, $3, $4, $5)',
-    ['中转站', false, true, nextSortOrder, null],
+    [INBOX_TAG_NAME, false, true, nextSortOrder, null],
   )
 
   return {
     id: Number(createResult.lastInsertId),
-    name: '中转站',
+    name: INBOX_TAG_NAME,
     isLocked: false,
     isPin: true,
     sortOrder: nextSortOrder,
     parentId: null,
   }
+}
+
+async function normalizeInboxTag() {
+  const db = await getDb()
+  const previewTags = await db.select<Tag[]>(
+    'select * from tags where name = $1 or name = $2 or name like $3 order by isPin desc, id asc',
+    [INBOX_TAG_NAME, 'Idea', '中转站%'],
+  )
+  const previewCandidates = previewTags.filter((tag) => isInboxTagName(tag.name))
+  const previewCanonicalTag = previewCandidates.find((tag) => tag.name === INBOX_TAG_NAME && tag.isPin)
+    || previewCandidates.find((tag) => tag.name === INBOX_TAG_NAME)
+    || previewCandidates[0]
+  const previewNeedsWrite = previewCandidates.length === 0
+    || !previewCanonicalTag
+    || previewCandidates.some((tag) => tag.id !== previewCanonicalTag.id)
+    || previewCanonicalTag.name !== INBOX_TAG_NAME
+    || previewCanonicalTag.isLocked
+    || !previewCanonicalTag.isPin
+    || previewCanonicalTag.parentId !== null
+
+  if (!previewNeedsWrite) {
+    return
+  }
+
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    const inboxLikeTags = await db.select<Tag[]>(
+      'select * from tags where name = $1 or name = $2 or name like $3 order by isPin desc, id asc',
+      [INBOX_TAG_NAME, 'Idea', '中转站%'],
+    )
+    const inboxCandidates = inboxLikeTags.filter((tag) => isInboxTagName(tag.name))
+
+    if (inboxCandidates.length === 0) {
+      await ensureInboxTag()
+      return
+    }
+
+    const canonicalTag = inboxCandidates.find((tag) => tag.name === INBOX_TAG_NAME && tag.isPin)
+      || inboxCandidates.find((tag) => tag.name === INBOX_TAG_NAME)
+      || inboxCandidates[0]
+    const duplicateTags = inboxCandidates.filter((tag) => tag.id !== canonicalTag.id)
+
+    const canonicalNeedsUpdate = canonicalTag.name !== INBOX_TAG_NAME
+      || canonicalTag.isLocked
+      || !canonicalTag.isPin
+      || canonicalTag.parentId !== null
+
+    if (canonicalNeedsUpdate) {
+      await db.execute(
+        'update tags set name = $1, isLocked = $2, isPin = $3, parentId = $4 where id = $5',
+        [INBOX_TAG_NAME, false, true, null, canonicalTag.id],
+      )
+    }
+
+    for (const duplicate of duplicateTags) {
+      await db.execute('update marks set tagId = $1 where tagId = $2', [canonicalTag.id, duplicate.id])
+      await db.execute('delete from tags where id = $1', [duplicate.id])
+    }
+
+    const store = await Store.load('store.json')
+    const savedCurrentTagId = await store.get<number>('currentTagId')
+    if (!savedCurrentTagId || duplicateTags.some((tag) => tag.id === savedCurrentTagId)) {
+      await store.set('currentTagId', canonicalTag.id)
+      await store.save()
+    }
+  })
 }
 
 async function repairOrphanMarkTags() {
@@ -85,7 +169,13 @@ async function repairOrphanMarkTags() {
   let nextSortOrder = (maxSortRows[0]?.maxSort ?? -1) + 1
 
   for (const orphan of orphanRows) {
-    const baseName = orphan.tagId === 1 ? '中转站' : `恢复标签 ${orphan.tagId}`
+    if (orphan.tagId === 1) {
+      const inboxTag = await ensureInboxTag()
+      await db.execute('update marks set tagId = $1 where tagId = $2', [inboxTag.id, orphan.tagId])
+      continue
+    }
+
+    const baseName = orphan.tagId === 1 ? INBOX_TAG_NAME : `恢复标签 ${orphan.tagId}`
     let recoveredName = baseName
 
     const duplicatedName = await db.select<Tag[]>('select id from tags where name = $1 limit 1', [recoveredName])
@@ -138,6 +228,7 @@ export async function initTagsDb() {
 
   await db.execute('update tags set isLocked = false where name = $1 and isLocked = true', ['Idea'])
   await repairOrphanMarkTags()
+  await normalizeInboxTag()
 
   const hasDefaultTag = (await db.select<Tag[]>('select * from tags')).length === 0
   if (hasDefaultTag) {
@@ -151,6 +242,8 @@ export async function initTagsDb() {
 }
 
 export async function getTags() {
+  await normalizeInboxTag()
+
   const db = await getDb()
   const tags = await db.select<Tag[]>('select * from tags order by sortOrder asc, id asc')
 
@@ -166,19 +259,33 @@ export async function getTags() {
 }
 
 export async function insertTag(tag: Partial<Tag>) {
+  const name = normalizeTagName(tag.name || '')
+  if (isInboxTagName(name)) {
+    await normalizeInboxTag()
+    const db = await getDb()
+    const inboxTags = await db.select<Tag[]>('select * from tags where name = $1 order by isPin desc, id asc limit 1', [INBOX_TAG_NAME])
+    const inboxTag = inboxTags[0] || await ensureInboxTag()
+    return { lastInsertId: inboxTag.id, rowsAffected: 0 }
+  }
+
   return await serializedWrite(async () => {
     const db = await getDb()
     return await db.execute(
       'insert into tags (name, parentId) values ($1, $2)',
-      [tag.name, tag.parentId ?? null],
+      [name, tag.parentId ?? null],
     )
   })
 }
 
 export async function ensureTagByName(name: string) {
-  const trimmedName = name.trim()
+  const trimmedName = normalizeTagName(name)
   if (!trimmedName) {
     throw new Error('标签名称不能为空')
+  }
+
+  if (isInboxTagName(trimmedName)) {
+    await normalizeInboxTag()
+    return await ensureInboxTag()
   }
 
   const db = await getDb()
@@ -213,12 +320,21 @@ export async function ensureTagByName(name: string) {
 }
 
 export async function updateTag(tag: Tag) {
+  const name = normalizeTagName(tag.name)
+  const nextTag = {
+    ...tag,
+    name: isInboxTagName(name) ? INBOX_TAG_NAME : name,
+    isPin: isInboxTagName(name) ? true : tag.isPin,
+    parentId: isInboxTagName(name) ? null : tag.parentId,
+  }
+
   return await serializedWrite(async () => {
     const db = await getDb()
-    return await db.execute(
+    const result = await db.execute(
       'update tags set name = $1, isLocked = $2, isPin = $3, sortOrder = $4, parentId = $5, color = $6 where id = $7',
-      [tag.name, tag.isLocked, tag.isPin, tag.sortOrder, tag.parentId ?? null, tag.color ?? null, tag.id],
+      [nextTag.name, nextTag.isLocked, nextTag.isPin, nextTag.sortOrder, nextTag.parentId ?? null, nextTag.color ?? null, nextTag.id],
     )
+    return result
   })
 }
 
@@ -248,7 +364,7 @@ export async function delTag(id: number) {
         const nextSortOrder = (maxSortRows[0]?.maxSort ?? -1) + 1
         const createResult = await db.execute(
           'insert into tags (name, isLocked, isPin, sortOrder, parentId) values ($1, $2, $3, $4, $5)',
-          ['中转站', false, false, nextSortOrder, null],
+          [INBOX_TAG_NAME, false, true, nextSortOrder, null],
         )
         fallbackTagId = Number(createResult.lastInsertId)
       }

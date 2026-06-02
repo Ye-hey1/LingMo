@@ -15,7 +15,7 @@ import { sanitizeFilePath } from '@/lib/sync/filename-utils'
 import { getCurrentFolder, computedParentPath } from '@/lib/path'
 import useVectorStore from './vector'
 import { join, appDataDir } from '@tauri-apps/api/path'
-import { BaseDirectory, DirEntry, exists, mkdir, readDir, readFile, readTextFile, writeTextFile, stat } from '@tauri-apps/plugin-fs'
+import { BaseDirectory, DirEntry, exists, mkdir, readDir, readTextFile, writeTextFile, stat } from '@tauri-apps/plugin-fs'
 import { Store } from '@tauri-apps/plugin-store'
 import { cloneDeep, uniq } from 'lodash-es'
 import { create } from 'zustand'
@@ -26,6 +26,7 @@ import { isSkillsFolder } from '@/lib/skills/utils'
 import { buildVectorIndexedMap, getVectorDocumentKey } from '@/lib/vector-document-key'
 import { buildRemotePathsToLoad } from './article-remote-sync'
 import { useNoteIndexStore } from './note-index'
+import { insertNoteHistory } from '@/db/history'
 
 // 缓存 Store 实例，避免每次都重新加载
 let storeInstance: Store | null = null
@@ -148,8 +149,12 @@ function dedupeTreeEntries(items: DirTree[], parent?: DirTree): DirTree[] {
   return Array.from(map.values())
 }
 
+function isHiddenWorkspaceRoot(item: DirTree) {
+  return item.isDirectory && isSkillsFolder(item.name)
+}
+
 function normalizeFileTree(tree: DirTree[]) {
-  return dedupeTreeEntries(tree)
+  return dedupeTreeEntries(tree.filter(item => !isHiddenWorkspaceRoot(item)))
 }
 
 function insertNodeIntoTree(tree: DirTree[], relativePath: string, isDirectory: boolean): boolean {
@@ -342,6 +347,7 @@ interface NoteState {
   setAiGeneratingFilePath: (path: string | null) => void
   setAiTerminateFn: (fn: (() => void) | null) => void
   saveCurrentArticle: (content: string) => Promise<void>
+  flushPendingSaveForPath: (path: string) => Promise<void>
   // 防抖保存相关
   debounceSaveTimer: NodeJS.Timeout | null
   pendingSaveContent: string | null
@@ -447,14 +453,8 @@ const useArticleStore = create<NoteState>((set, get) => ({
     // 复制树结构，避免直接修改原始数据
     const sortedTree = cloneDeep(tree)
 
-    // skills 文件夹始终置顶（在任何排序方式下，包括 sortType 为 'none' 时）
     const sortFunction = (a: DirTree, b: DirTree) => {
-      const aIsSkills = a.isDirectory && isSkillsFolder(a.name)
-      const bIsSkills = b.isDirectory && isSkillsFolder(b.name)
-      if (aIsSkills && !bIsSkills) return -1
-      if (!aIsSkills && bIsSkills) return 1
-
-      // 如果排序类型为 'none'，在 skills 置顶后，文件夹在文件上方
+      // 如果排序类型为 'none'，文件夹在文件上方
       if (sortType === 'none') {
         if (a.isDirectory && !b.isDirectory) return -1
         if (!a.isDirectory && b.isDirectory) return 1
@@ -1017,7 +1017,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
     }
         
     // 排序文件树
-    const sortedDirs = get().sortFileTree(dirs)
+    const sortedDirs = get().sortFileTree(normalizeFileTree(dirs))
     set({ fileTree: sortedDirs })
 
     // 先显示本地文件树
@@ -1275,7 +1275,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
               }
             });
           }
-          get().setFileTree([...dirs])
+          get().setFileTree(dirs)
         }
       } catch {
       }
@@ -2200,6 +2200,9 @@ const useArticleStore = create<NoteState>((set, get) => ({
           await writeTextFile(pathOptions.path, saveContent, { baseDir: pathOptions.baseDir })
         }
 
+        // 异步保存笔记历史增量快照
+        void insertNoteHistory(savePath, saveContent).catch(console.error)
+
         // 更新缓存树
         const cacheTree = cloneDeep(get().fileTree)
         const current = savePath.includes('/') ? getCurrentFolder(savePath, cacheTree) : cacheTree.find(item => item.name === savePath)
@@ -2281,6 +2284,129 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
       // 保存待处理的内容（最新的内容）
       set({ debounceSaveTimer: timer as any, pendingSaveContent: content })
+    }
+  },
+
+  flushPendingSaveForPath: async (path: string) => {
+    const state = get()
+    if (state.debounceSaveTimer && state.pendingSaveContent !== null) {
+      const activePath = state.activeFilePath
+      // 只有当待保存的路径匹配或者没有传具体路径时执行
+      if (!path || activePath === path) {
+        clearTimeout(state.debounceSaveTimer)
+        const pendingContent = state.pendingSaveContent
+        set({ debounceSaveTimer: null, pendingSaveContent: null })
+        // 直接触发实际的保存操作
+        const workspace = await getWorkspacePath()
+        const pathOptions = await getFilePathOptions(activePath)
+
+        // 检查文件是否存在
+        let isLocale = false
+        if (workspace.isCustom) {
+          isLocale = await exists(pathOptions.path)
+        } else {
+          isLocale = await exists(pathOptions.path, { baseDir: pathOptions.baseDir })
+        }
+
+        // 确保目录结构存在
+        if (activePath.includes('/')) {
+          let dir = ''
+          const dirPath = activePath.split('/')
+          for (let index = 0; index < dirPath.length - 1; index += 1) {
+            dir += `${dirPath[index]}/`
+            const dirOptions = await getFilePathOptions(dir)
+            let dirExists = false
+            if (workspace.isCustom) {
+              dirExists = await exists(dirOptions.path)
+            } else {
+              dirExists = await exists(dirOptions.path, { baseDir: dirOptions.baseDir })
+            }
+            if (!dirExists) {
+              if (workspace.isCustom) {
+                await mkdir(dirOptions.path)
+              } else {
+                await mkdir(dirOptions.path, { baseDir: dirOptions.baseDir })
+              }
+            }
+          }
+        }
+
+        if (workspace.isCustom) {
+          await writeTextFile(pathOptions.path, pendingContent)
+        } else {
+          await writeTextFile(pathOptions.path, pendingContent, { baseDir: pathOptions.baseDir })
+        }
+
+        // 异步保存笔记历史增量快照
+        void insertNoteHistory(activePath, pendingContent).catch(console.error)
+
+        // 更新缓存树
+        const cacheTree = cloneDeep(get().fileTree)
+        const current = activePath.includes('/') ? getCurrentFolder(activePath, cacheTree) : cacheTree.find(item => item.name === activePath)
+        if (current) {
+          const now = new Date().toISOString()
+          if (!isLocale) {
+            current.isLocale = true
+            current.createdAt = now
+            const updateParentFolders = async (node: DirTree | undefined) => {
+              let parent = node
+              const pathParts = activePath.split('/')
+              let currentDepth = pathParts.length - 1
+              while (parent && currentDepth > 0) {
+                if (parent.isLocale) break
+                const parentPath = pathParts.slice(0, currentDepth).join('/')
+                const parentOptions = await getFilePathOptions(parentPath)
+                let parentExists = false
+                try {
+                  if (workspace.isCustom) {
+                    parentExists = await exists(parentOptions.path)
+                  } else {
+                    parentExists = await exists(parentOptions.path, { baseDir: parentOptions.baseDir })
+                  }
+                } catch {
+                  parentExists = false
+                }
+                if (parentExists) {
+                  parent.isLocale = true
+                  parent = parent.parent
+                  currentDepth--
+                } else {
+                  break
+                }
+              }
+            }
+            await updateParentFolders(current.parent)
+          }
+          current.modifiedAt = now
+          set({ fileTree: cacheTree })
+        }
+
+        // 触发防抖向量计算
+        if (activePath.endsWith('.md')) {
+          get().scheduleVectorCalculation(activePath, pendingContent)
+          useNoteIndexStore.getState().updateFileIndex(activePath, pendingContent)
+          get().scheduleTopicExtraction(activePath, pendingContent)
+        }
+
+        set({ currentArticle: pendingContent })
+
+        try {
+          const { recordWritingActivity } = await import('@/db/activity')
+          const fileName = activePath.split('/').pop() || activePath
+          await recordWritingActivity({
+            path: activePath,
+            title: fileName,
+            description: activePath,
+          })
+        } catch (error) {
+          console.error('记录写作活动失败:', error)
+        }
+
+        const shouldSkipSync = get().skipSyncOnSave
+        if (!shouldSkipSync) {
+          emitter.emit('article-saved', { path: activePath, content: pendingContent })
+        }
+      }
     }
   },
 

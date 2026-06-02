@@ -278,12 +278,12 @@ export async function updateMarksProcessed(ids: number[], processed: boolean) {
   await serializedWrite(async () => {
     const db = await getDb()
     try {
-      for (const id of ids) {
-        await db.execute(
-          'update marks set processed = $1, processedAt = $2 where id = $3',
-          [processedValue, processedAt, id],
-        )
-      }
+      // 优化为 SQL IN 单次批量更新，极大提升多选操作数据库性能
+      const placeholders = ids.map(() => '?').join(', ')
+      await db.execute(
+        `update marks set processed = ?, processedAt = ? where id in (${placeholders})`,
+        [processedValue, processedAt, ...ids],
+      )
     } catch (error) {
       console.error('Error updating marks processed state:', error)
       throw error
@@ -292,16 +292,19 @@ export async function updateMarksProcessed(ids: number[], processed: boolean) {
 }
 
 export async function deleteMarks(ids: number[]) {
+  if (ids.length === 0) {
+    return
+  }
   const deletedAt = Date.now()
   await serializedWrite(async () => {
     const db = await getDb()
     try {
-      for (const id of ids) {
-        await db.execute(
-          'update marks set deleted = $1, deletedAt = $2 where id = $3',
-          [1, deletedAt, id],
-        )
-      }
+      // 优化为 SQL IN 批量移入回收站，避免循环多事务写入带来的阻塞和慢速
+      const placeholders = ids.map(() => '?').join(', ')
+      await db.execute(
+        `update marks set deleted = ?, deletedAt = ? where id in (${placeholders})`,
+        [1, deletedAt, ...ids],
+      )
     } catch (error) {
       console.error('Error deleting marks:', error)
       throw error
@@ -310,17 +313,43 @@ export async function deleteMarks(ids: number[]) {
 }
 
 export async function restoreMarks(ids: number[]) {
+  if (ids.length === 0) {
+    return
+  }
   await serializedWrite(async () => {
     const db = await getDb()
     try {
-      for (const id of ids) {
-        await db.execute(
-          'update marks set deleted = $1, deletedAt = $2 where id = $3',
-          [0, null, id],
-        )
-      }
+      // 优化为 SQL IN 批量恢复
+      const placeholders = ids.map(() => '?').join(', ')
+      await db.execute(
+        `update marks set deleted = ?, deletedAt = ? where id in (${placeholders})`,
+        [0, null, ...ids],
+      )
     } catch (error) {
       console.error('Error restoring marks:', error)
+      throw error
+    }
+  })
+}
+
+export async function deleteMarksForever(ids: number[]) {
+  if (ids.length === 0) {
+    return
+  }
+  await serializedWrite(async () => {
+    const db = await getDb()
+    try {
+      // 批量查询需要清理本地资源的文件
+      const placeholders = ids.map(() => '?').join(', ')
+      const marks = await db.select<Mark[]>(
+        `select type, url from marks where id in (${placeholders})`,
+        ids,
+      )
+      await deleteMarkLocalAssets(marks)
+      // 批量永久删除记录
+      await db.execute(`delete from marks where id in (${placeholders})`, ids)
+    } catch (error) {
+      console.error('Error deleting marks forever:', error)
       throw error
     }
   })
