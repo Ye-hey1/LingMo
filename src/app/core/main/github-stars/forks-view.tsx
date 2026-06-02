@@ -151,7 +151,7 @@ export function ForksView() {
               <p className="mt-1 max-w-md text-sm text-muted-foreground">
                 {forks.length > 0
                   ? '请调整搜索关键词，或清空搜索后查看全部 Fork。'
-                  : '点击“刷新复刻”后，LingMo 会读取当前 GitHub 账号下的 Fork 仓库。'}
+                  : '点击标题栏右上角刷新后，LingMo 会读取当前 GitHub 账号下的 Fork 仓库。'}
               </p>
             </div>
           ) : (

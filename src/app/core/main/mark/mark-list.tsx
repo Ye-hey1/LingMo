@@ -4,7 +4,6 @@ import React from "react"
 import { useTranslations } from "next-intl";
 import type { Mark } from "@/db/marks";
 import useMarkStore from "@/stores/mark";
-import { MarkLoading } from "./mark-loading";
 import MarkEmpty from "./mark-empty";
 import { filterMarks, getEffectiveRecordFilters } from "./mark-filters";
 import { MarkListDefaultView } from "./mark-list-default-view";
@@ -17,7 +16,6 @@ export const MarkList = React.memo(function MarkList() {
   const t = useTranslations('record.mark.list')
   const {
     marks,
-    queues,
     trashState,
     recordFilters,
     recordViewMode,
@@ -70,13 +68,7 @@ export const MarkList = React.memo(function MarkList() {
         <div>
           <RecordFilterChips count={filteredMarks.length} trashState={trashState} />
           {!trashState && hasTodoVisible && <TodoStats marks={filteredMarks} />}
-          {
-            queues.map(mark => {
-              return (
-                <MarkLoading key={mark.queueId} mark={mark} />
-              )
-            })
-          }
+          {/* 队列进度已迁移至全局底部状态栏（GlobalProgress）显示 */}
           {
             filteredMarks.length ? (
               view

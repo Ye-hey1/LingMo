@@ -20,7 +20,7 @@ import useTagStore from "@/stores/tag";
 import { fetchAiDesc } from "@/lib/ai/description";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { appDataDir } from "@tauri-apps/api/path";
-import { CheckSquare, Code2, ExternalLink, FileIcon, GitFork, ImageIcon, ImageUp, LinkIcon, ListTree, Loader2, Mic, NotebookText, Pencil, Pin, PinOff, RefreshCw, Save, Settings2, Sparkles, Square, Star, TextIcon, RotateCcw, Trash2 } from "lucide-react";
+import { CheckSquare, Code2, ExternalLink, FileIcon, GitFork, ImageIcon, ImageUp, LinkIcon, ListTree, Loader2, Mic, Pencil, Pin, PinOff, RefreshCw, Save, Settings2, Sparkles, Square, Star, TextIcon, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -153,22 +153,72 @@ function GitHubProjectDetailView({ mark }: { mark: Mark }) {
 }
 
 function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
-  const video = useMemo(() => parseVideoTranscriptRecord(mark), [mark])
+  const [localMark, setLocalMark] = useState(mark)
+  useEffect(() => {
+    setLocalMark(mark)
+  }, [mark])
+  const video = useMemo(() => parseVideoTranscriptRecord(localMark), [localMark])
   const [activeView, setActiveView] = useState<'timeline' | 'body' | 'summary'>('timeline')
   const [isSummarizing, setIsSummarizing] = useState(false)
   const { updateMark: updateMarkInStore } = useMarkStore()
+
   const views = [
-    { key: 'timeline' as const, label: '时间线', icon: ListTree },
-    { key: 'body' as const, label: '正文', icon: TextIcon },
-    { key: 'summary' as const, label: '总结', icon: NotebookText },
+    { key: 'timeline' as const, label: '视频时间线', icon: ListTree },
+    { key: 'body' as const, label: '结构化正文', icon: TextIcon },
+    { key: 'summary' as const, label: 'AI 深度总结', icon: Sparkles },
   ]
+
   const text = activeView === 'timeline'
     ? video.timeline || video.body
     : activeView === 'body'
       ? video.body
       : video.summaryMarkdown || video.description
-  const hasSummary = Boolean(video.meta.summary || video.meta.highlights?.length || video.meta.notes?.length)
-  const platformLabel = video.meta.platform === 'youtube' ? 'YouTube' : 'B站'
+
+  const hasSummary = Boolean(
+    video.meta.summary
+    || video.meta.chapters?.length
+    || video.meta.highlights?.length
+    || video.meta.viewpoints?.length
+    || video.meta.reflections?.length
+    || video.meta.terms?.length
+    || video.meta.notes?.length
+    || video.meta.actionItems?.length
+    || video.meta.questions?.length
+  )
+  const platform = video.meta.platform?.toLowerCase() || ''
+  const isBilibili = platform === 'bilibili' || platform === 'b站'
+  const isYoutube = platform === 'youtube'
+  const platformLabel = isYoutube ? 'YouTube' : isBilibili ? 'B站' : '视频转写'
+
+  const headerCardBgClass = isBilibili
+    ? "rounded-lg border border-sky-100 bg-background px-5 py-5 shadow-sm dark:border-sky-950/30"
+    : isYoutube
+      ? "rounded-lg border border-rose-100 bg-background px-5 py-5 shadow-sm dark:border-rose-950/30"
+      : "rounded-lg border border-border bg-background px-5 py-5 shadow-sm"
+
+  const platformBadgeClass = isBilibili
+    ? "rounded bg-sky-500 px-2.5 py-0.5 text-xs font-bold text-white shadow-sm shadow-sky-200/50"
+    : isYoutube
+      ? "rounded bg-rose-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-sm shadow-rose-200/50"
+      : "rounded bg-indigo-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-sm shadow-indigo-200/50"
+
+  const generateBtnClass = isBilibili
+    ? "inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-sky-500 disabled:cursor-not-allowed"
+    : isYoutube
+      ? "inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-rose-500 disabled:cursor-not-allowed"
+      : "inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-colors hover:opacity-90 disabled:cursor-not-allowed"
+
+  const originVideoBtnClass = isBilibili
+    ? "inline-flex items-center gap-1.5 rounded-md border border-sky-200/60 bg-background px-3.5 py-2 text-xs font-semibold text-sky-600 transition-colors hover:bg-sky-50/60 dark:border-sky-900/60 dark:text-sky-400 dark:hover:bg-sky-950/20"
+    : isYoutube
+      ? "inline-flex items-center gap-1.5 rounded-md border border-rose-200/60 bg-background px-3.5 py-2 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50/60 dark:border-rose-900/60 dark:text-rose-400 dark:hover:bg-rose-950/20"
+      : "inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent"
+
+  const activeTabClass = isBilibili
+    ? "bg-sky-50 text-sky-700 shadow-sm dark:bg-sky-950/20 dark:text-sky-400"
+    : isYoutube
+      ? "bg-rose-50 text-rose-700 shadow-sm dark:bg-rose-950/20 dark:text-rose-400"
+      : "bg-muted text-foreground shadow-sm"
 
   const handleGenerateSummary = useCallback(async () => {
     if (isSummarizing) return
@@ -176,23 +226,17 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
     try {
       const summary = await summarizeVideoTranscript({
         title: video.title,
-        transcript: video.body || video.timeline,
-        sourceUrl: video.meta.sourceUrl || mark.url || '',
+        transcript: video.rawTimeline || video.body || video.timeline,
+        sourceUrl: video.meta.sourceUrl || localMark.url || '',
       })
-      if (!summary) {
-        toast({
-          title: '总结生成失败',
-          description: '未获取到有效总结，请检查 AI 整理模型配置后重试。',
-          variant: 'destructive',
-        })
-        return
-      }
-      const nextContent = mergeVideoTranscriptSummary(mark.content || '', summary)
-      await updateMarkInStore({
-        ...mark,
+      const nextContent = mergeVideoTranscriptSummary(localMark.content || '', summary)
+      const nextMark = {
+        ...localMark,
         desc: [video.title, summary.summary || '', video.meta.transcriptSource ? `提取方式：${video.meta.transcriptSource}` : ''].filter(Boolean).join('\n'),
         content: nextContent,
-      })
+      }
+      setLocalMark(nextMark)
+      await updateMarkInStore(nextMark)
       setActiveView('summary')
       toast({
         title: '视频总结已生成',
@@ -207,49 +251,98 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
     } finally {
       setIsSummarizing(false)
     }
-  }, [isSummarizing, mark, updateMarkInStore, video])
+  }, [isSummarizing, localMark, updateMarkInStore, video])
+
+  const formattedTimeline = useMemo(() => {
+    if (activeView !== 'timeline') return null
+    const raw = video.rawTimeline || ''
+    if (!raw) return <ChatPreview text={video.timeline} className="video-transcript-markdown w-full max-w-none overflow-x-auto" />
+
+    const lines = raw.split(/\r?\n/)
+    const hasTimestamps = lines.some(line => /(?:\d{1,2}:)?\d{2}:\d{2}/.test(line))
+
+    if (!hasTimestamps) {
+      return <ChatPreview text={video.timeline} className="video-transcript-markdown w-full max-w-none overflow-x-auto" />
+    }
+
+    return (
+      <div className="relative space-y-6 before:absolute before:inset-y-1 before:left-3 before:w-px before:bg-border">
+        {lines.map((line, idx) => {
+          const trimmed = line.trim()
+          if (!trimmed) return null
+
+          const timeMatch = trimmed.match(/^(?:[-*]\s*)?((?:\d{1,2}:)?\d{2}:\d{2})(?:\s*[🎼♪♫♬])?\s*(.*)$/)
+          if (timeMatch) {
+            const time = timeMatch[1]
+            const contentText = timeMatch[2].replace(/[🎼♪♫♬]+/g, '').trim()
+            return (
+              <div key={idx} className="relative pl-8 group">
+                <div className="absolute left-1.5 top-1.5 size-3 rounded-full border-2 border-background bg-primary transition-transform duration-200 group-hover:scale-110" />
+                <div className="flex flex-col gap-1.5">
+                  <span className="inline-flex w-fit items-center gap-1 rounded border border-border bg-muted px-2 py-0.5 font-mono text-[11px] font-bold text-muted-foreground">
+                    {time}
+                  </span>
+                  <p className="font-sans text-sm leading-relaxed text-foreground">
+                    {contentText}
+                  </p>
+                </div>
+              </div>
+            )
+          }
+          return (
+            <div key={idx} className="pl-8 font-sans text-sm leading-relaxed text-foreground">
+              {trimmed.replace(/[🎼♪♫♬]+/g, '').trim()}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }, [activeView, video])
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4">
-      <div className="overflow-hidden rounded-lg border border-border bg-background shadow-sm">
-        <div className="bg-gradient-to-b from-muted/40 to-background px-5 py-5">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div className="min-w-0 space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-md border border-border bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                  {platformLabel}
-                </span>
-                <span className="rounded-md border border-border bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                  {video.meta.transcriptSource || '视频转写'}
-                </span>
-              </div>
-              <h2 className="max-w-4xl text-2xl font-semibold leading-snug tracking-normal text-foreground">{video.title}</h2>
-              {video.description ? (
-                <p className="max-w-4xl text-sm leading-6 text-muted-foreground">{video.description}</p>
-              ) : null}
+    <div className="mx-auto w-full max-w-4xl space-y-5">
+      <div className={headerCardBgClass}>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0 space-y-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={platformBadgeClass}>
+                {platformLabel}
+              </span>
+              <span className="rounded bg-zinc-100 dark:bg-zinc-800 border border-zinc-200/50 px-2.5 py-0.5 text-xs font-semibold text-zinc-600 dark:text-zinc-400">
+                {video.meta.transcriptSource || '语音识别'}
+              </span>
             </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={handleGenerateSummary}
-                disabled={isSummarizing}
-                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            <h2 className="max-w-3xl text-2xl font-semibold leading-snug text-foreground">
+              {video.title}
+            </h2>
+            {video.description ? (
+              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                {video.description}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleGenerateSummary}
+              disabled={isSummarizing}
+              className={generateBtnClass}
+            >
+              {isSummarizing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+              {hasSummary ? '重新生成总结' : '生成 AI 总结'}
+            </button>
+            {video.meta.sourceUrl || localMark.url ? (
+              <a
+                href={video.meta.sourceUrl || localMark.url || '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={originVideoBtnClass}
               >
-                {isSummarizing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-                {hasSummary ? '重新生成总结' : '生成总结'}
-              </button>
-              {video.meta.sourceUrl || mark.url ? (
-                <a
-                  href={video.meta.sourceUrl || mark.url || '#'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-accent"
-                >
-                  <ExternalLink className="size-3.5" />
-                  原视频
-                </a>
-              ) : null}
-            </div>
+                <ExternalLink className="size-3.5" />
+                原视频
+              </a>
+            ) : null}
           </div>
         </div>
       </div>
@@ -260,7 +353,7 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
             key={key}
             type="button"
             onClick={() => setActiveView(key)}
-            className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm transition-colors ${activeView === key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+            className={`inline-flex items-center gap-1.5 rounded px-4 py-2 text-sm font-semibold transition-colors ${activeView === key ? activeTabClass : 'text-muted-foreground hover:text-foreground'}`}
           >
             <Icon className="size-3.5" />
             {label}
@@ -268,26 +361,32 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
         ))}
       </div>
 
-      <div className="rounded-lg border border-border bg-background px-5 py-5 shadow-sm">
+      <div className="min-h-[300px] rounded-lg border border-border bg-background px-6 py-6 shadow-sm">
         {activeView === 'summary' && !hasSummary ? (
-          <div className="flex min-h-56 flex-col items-center justify-center rounded-md border border-dashed border-border bg-muted/20 px-6 py-10 text-center">
-            <NotebookText className="mb-3 size-8 text-muted-foreground" />
-            <h3 className="text-base font-semibold text-foreground">还没有生成总结</h3>
-            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-              点击“生成总结”后，会从摘要、章节导读、核心要点、关键观点、术语解释、行动清单和复盘问题等角度整理视频内容。
+          <div className="flex min-h-56 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 py-10 text-center">
+            <Sparkles className="mb-3 size-8 text-muted-foreground" />
+            <h3 className="text-base font-semibold text-foreground">一键生成视频总结</h3>
+            <p className="mt-2 max-w-sm text-xs leading-5 text-muted-foreground">
+              点击上方“生成 AI 总结”按钮，系统将基于视频时间线和结构化正文，梳理精要大纲、关键立场、思考启发和知识卡片。
             </p>
             <button
               type="button"
               onClick={handleGenerateSummary}
               disabled={isSummarizing}
-              className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              className={generateBtnClass}
             >
               {isSummarizing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
               生成总结
             </button>
           </div>
+        ) : activeView === 'timeline' ? (
+          <div className="max-w-2xl mx-auto py-2">
+            {formattedTimeline}
+          </div>
         ) : (
-          <ChatPreview text={text || '暂无内容'} className="video-transcript-markdown w-full max-w-none overflow-x-auto" />
+          <div className={activeView === 'body' ? "max-w-2xl mx-auto py-2" : "w-full"}>
+            <ChatPreview text={text || '暂无内容'} className="video-transcript-markdown w-full max-w-none" />
+          </div>
         )}
       </div>
     </div>

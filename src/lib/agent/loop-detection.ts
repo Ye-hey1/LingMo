@@ -9,6 +9,7 @@
  */
 
 import type { ReActStep } from './types'
+import { isTruncatedSafeGrepObservation } from './orchestration'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,6 +32,37 @@ export interface StrategyFailureResult {
   failedTool: string
   failureCount: number
   suggestion: string
+}
+
+function isFailedObservation(observation?: string): boolean {
+  if (!observation) {
+    return true
+  }
+
+  return observation.includes('失败') ||
+    observation.includes('错误') ||
+    observation.includes('无法') ||
+    isTruncatedSafeGrepObservation(observation)
+}
+
+function detectRepeatedTruncatedSearch(steps: ReActStep[]): LoopDetectionResult {
+  const recentSearches = steps
+    .filter((step) => step.action?.tool === 'safe_grep')
+    .slice(-3)
+
+  const truncatedCount = recentSearches.filter((step) =>
+    isTruncatedSafeGrepObservation(step.observation)
+  ).length
+
+  if (truncatedCount >= 2) {
+    return {
+      isLoop: true,
+      reason: 'safe_grep 连续返回截断结果，说明搜索范围过宽且没有收敛',
+      suggestion: '请停止重复宽泛检索，改为读取候选文件，或指定更具体的 query、folderPath、includeExtensions 后再搜索。',
+    }
+  }
+
+  return { isLoop: false }
 }
 
 // ---------------------------------------------------------------------------
@@ -156,10 +188,7 @@ export function detectStrategyFailure(
   if (!allSameTool) return null
 
   // 检查是否都失败了
-  const allFailed = recentSteps.every(s =>
-    s.observation &&
-    (s.observation.includes('失败') || s.observation.includes('错误') || s.observation.includes('无法'))
-  )
+  const allFailed = recentSteps.every(s => isFailedObservation(s.observation))
 
   if (allFailed) {
     return {
@@ -193,9 +222,7 @@ export function detectProgressStall(steps: ReActStep[], stallThreshold = 4): Pro
   // 1. 检查是否有成功的工具执行
   const hasSuccessfulStep = recentSteps.some(s =>
     s.action && s.observation &&
-    !s.observation.includes('失败') &&
-    !s.observation.includes('错误') &&
-    !s.observation.includes('无法')
+    !isFailedObservation(s.observation)
   )
 
   if (!hasSuccessfulStep) {
@@ -239,6 +266,9 @@ export function detectProgressStall(steps: ReActStep[], stallThreshold = 4): Pro
  * 综合循环检测（推荐使用此函数）
  */
 export function detectAgentLoop(steps: ReActStep[]): LoopDetectionResult {
+  const repeatedTruncatedSearch = detectRepeatedTruncatedSearch(steps)
+  if (repeatedTruncatedSearch.isLoop) return repeatedTruncatedSearch
+
   // 1. 语义循环检测
   const semanticLoop = detectSemanticLoop(steps)
   if (semanticLoop.isLoop) return semanticLoop

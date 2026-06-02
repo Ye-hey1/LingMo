@@ -503,6 +503,13 @@ export async function upsertGithubStarReleases(releases: GithubStarRelease[]) {
   })
 }
 
+export async function deleteGithubStarReleasesByRepository(repoId: number) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute('delete from github_star_releases where repo_id = $1', [repoId])
+  })
+}
+
 export async function upsertGithubStarForkRepositories(forks: GithubStarForkRepository[]) {
   const syncedAt = Date.now()
 

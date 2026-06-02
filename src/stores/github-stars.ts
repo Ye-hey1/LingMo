@@ -3,6 +3,7 @@ import { Store } from '@tauri-apps/plugin-store'
 import {
   addGithubStarCustomCategory,
   deleteGithubStarCustomCategory,
+  deleteGithubStarReleasesByRepository,
   getGithubStarForkRepositories,
   getGithubStarCustomCategories,
   getGithubStarReleases,
@@ -269,6 +270,7 @@ interface GithubStarsState {
   refreshForks: () => Promise<void>
   refreshTrending: (range?: GithubStarTrendingRange) => Promise<void>
   toggleReleaseSubscription: (repoId: number, subscribed: boolean) => Promise<void>
+  unsubscribeReleaseRepository: (repoId: number) => Promise<void>
   markReleaseRead: (releaseId: number) => Promise<void>
   setIncludePrerelease: (include: boolean) => void
   setTrendingRange: (range: GithubStarTrendingRange) => void
@@ -389,11 +391,13 @@ export const useGithubStarsStore = create<GithubStarsState>((set, get) => ({
       let savedFilters: AssetFilter[] = []
       let savedViewMode: 'timeline' | 'repository' = 'timeline'
       let savedSelectedFilters: string[] = []
+      let savedIncludePrerelease = get().includePrerelease
       try {
         const tauriStore = await Store.load('store.json')
         savedFilters = await tauriStore.get<AssetFilter[]>('githubStarsAssetFilters') || []
         savedViewMode = await tauriStore.get<'timeline' | 'repository'>('githubStarsReleaseViewMode') || 'timeline'
         savedSelectedFilters = await tauriStore.get<string[]>('githubStarsReleaseSelectedFilters') || []
+        savedIncludePrerelease = await tauriStore.get<boolean>('githubStarsIncludePrerelease') ?? savedIncludePrerelease
       } catch (err) {
         console.warn('[GitHubStars] failed to load state from store.json:', err)
       }
@@ -406,6 +410,7 @@ export const useGithubStarsStore = create<GithubStarsState>((set, get) => ({
         assetFilters: savedFilters,
         releaseViewMode: savedViewMode,
         releaseSelectedFilters: savedSelectedFilters,
+        includePrerelease: savedIncludePrerelease,
         ...getDerivedState(repositories, get().filters, customCategories, get().aiSearchResultIds),
       })
     } catch (error) {
@@ -686,6 +691,25 @@ export const useGithubStarsStore = create<GithubStarsState>((set, get) => ({
     })
   },
 
+  unsubscribeReleaseRepository: async (repoId) => {
+    await updateGithubStarReleaseSubscription(repoId, false)
+    await deleteGithubStarReleasesByRepository(repoId)
+
+    const repositories = get().repositories.map(repo =>
+      repo.id === repoId
+        ? { ...repo, subscribedToReleases: false, lastEdited: new Date().toISOString() }
+        : repo,
+    )
+    const expandedRepositories = new Set(get().releaseExpandedRepositories)
+    expandedRepositories.delete(repoId)
+    set({
+      repositories,
+      releases: get().releases.filter(release => release.repository.id !== repoId),
+      releaseExpandedRepositories: expandedRepositories,
+      ...getDerivedState(repositories, get().filters, get().customCategories, get().aiSearchResultIds),
+    })
+  },
+
   markReleaseRead: async (releaseId) => {
     await markGithubStarReleaseRead(releaseId)
     set({
@@ -695,7 +719,10 @@ export const useGithubStarsStore = create<GithubStarsState>((set, get) => ({
     })
   },
 
-  setIncludePrerelease: (include) => set({ includePrerelease: include }),
+  setIncludePrerelease: (include) => {
+    set({ includePrerelease: include })
+    void saveToTauriStore('githubStarsIncludePrerelease', include)
+  },
 
   setTrendingRange: (range) => set({ trendingRange: range }),
 

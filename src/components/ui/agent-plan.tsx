@@ -556,21 +556,6 @@ export function AgentPlan({
     }
   }, [currentThought, mode, autoScrollEnabled]);
 
-  // Auto-expand current step in live mode - keep current step always expanded while running
-  React.useEffect(() => {
-    if (mode === "live" && displaySteps.length > 0 && isRunning) {
-      const currentStepId = displaySteps[displaySteps.length - 1]?.id;
-      if (currentStepId && !expandedTasks.includes(currentStepId)) {
-        setExpandedTasks((prev) => {
-          const newState = [...prev, currentStepId];
-          // 非嵌入模式下自动展开后滚动到该步骤
-          scrollStepIntoView(currentStepId);
-          return newState;
-        });
-      }
-    }
-  }, [displaySteps.length, currentThought, currentObservation, isRunning, mode, expandedTasks, scrollStepIntoView]);
-
   const confirmationPreview = React.useMemo(() => {
     if (!pendingConfirmation) {
       return null;
@@ -911,6 +896,14 @@ export function AgentPlan({
   const hasCompletedStepsWithActions = displaySteps.some(step =>
     step.action && step.action.tool
   );
+  const hasRuntimeFailure =
+    eventTimeline.some(item => item.status === "failed") ||
+    displaySteps.some(step => step.status === "failed") ||
+    toolCalls.some(toolCall => toolCall.status === "error");
+
+  if (mode === "live" && embedded && !pendingConfirmation && !hasRuntimeFailure) {
+    return null;
+  }
 
   // 在 live 模式下，如果只是简单对话（没有工具调用），不显示执行流程面板
   // 只显示紧凑的状态指示器
@@ -1138,9 +1131,15 @@ export function AgentPlan({
       return null;
     }
 
+    const hasWaiting = eventTimeline.some(item => item.status === "waiting");
+    const hasFailed = eventTimeline.some(item => item.status === "failed");
+
+    if (mode === "live" && embedded && !hasWaiting && !hasFailed) {
+      return null;
+    }
+
     // 计算总体状态
     const hasRunning = eventTimeline.some(item => item.status === "running");
-    const hasFailed = eventTimeline.some(item => item.status === "failed");
     const completedCount = eventTimeline.filter(item => item.status === "completed").length;
     const totalDuration = eventTimeline.reduce((sum, item) => sum + (item.duration || 0), 0);
 
@@ -1261,6 +1260,9 @@ export function AgentPlan({
     if (!taskPlan || !taskPlan.isComplex || taskPlan.steps.length === 0) {
       return null;
     }
+    if (mode === "live" && embedded) {
+      return null;
+    }
 
     const { steps, summary, completedStepIndex } = taskPlan;
     const totalSteps = steps.length;
@@ -1346,14 +1348,9 @@ export function AgentPlan({
   const renderSteps = () => (
     <>
       {displaySteps.map((step, index) => {
-        const isLastStep = index === displaySteps.length - 1;
-        // In live mode, current (last) step is always expanded
-        const isExpanded = mode === "live" && isRunning && isLastStep
-          ? true
-          : expandedTasks.includes(step.id);
+        const isExpanded = expandedTasks.includes(step.id);
         const isCompleted = step.status === "completed";
-        const isCurrentStep = mode === "live" && isRunning && isLastStep;
-        const canToggle = !isCurrentStep; // Current step cannot be toggled in live mode
+        const canToggle = true;
 
         return (
           <li
@@ -1388,7 +1385,7 @@ export function AgentPlan({
 
                 <div className="flex shrink-0 items-center gap-2">
                   {/* 耗时显示 */}
-                  {step.duration !== undefined && (
+                  {mode === "history" && step.duration !== undefined && (
                     <span className="text-xs text-muted-foreground tabular-nums">
                       {formatDuration(step.duration)}
                     </span>

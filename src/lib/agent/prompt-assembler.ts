@@ -114,6 +114,7 @@ function buildCoreRules(language: string) {
       'Context priority: quoted selection/current note/explicitly linked files > RAG results > memories/working memory > older chat history.',
       'Answer directly when the provided context is sufficient. Use tools only for required reading, writing, searching, conversion, or execution.',
       'Use the minimum necessary tools. Do not repeat the same tool call with the same arguments after a failure or a completed write.',
+      'If safe_grep returns truncated or too many matches, do not repeat broad search. Read the most relevant candidate file or narrow query, folderPath, and includeExtensions.',
       'Do not claim that files were created, modified, deleted, searched, or commands executed unless a tool result confirms it.',
       'If a required parameter is missing, ask only for that parameter.',
       'After successful completion, stop and give a concise final answer.',

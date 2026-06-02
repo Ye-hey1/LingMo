@@ -82,6 +82,7 @@ export async function getAISettings(modelType?: string): Promise<AiConfig | unde
           temperature: targetModel.temperature,
           topP: targetModel.topP,
           contextWindow: targetModel.contextWindow,
+          supportsImageInput: targetModel.supportsImageInput ?? config.supportsImageInput,
           voice: targetModel.voice,
           enableStream: targetModel.enableStream
         }

@@ -197,6 +197,7 @@ export const ChatInput = React.memo(function ChatInput() {
   const {
     primaryModel,
     aiModelList,
+    imageMethodModel,
     sttModel,
     tavilyApiKey,
     webSearchEnabled,
@@ -249,7 +250,7 @@ export const ChatInput = React.memo(function ChatInput() {
   const [isComposing, setIsComposing] = useState(false)
   const [enhancingPrompt, setEnhancingPrompt] = useState(false)
   const [placeholder, setPlaceholder] = useState('')
-  const [aiQuickPrompts, setAiQuickPrompts] = useState<QuickPrompt[]>([])
+  const [, setAiQuickPrompts] = useState<QuickPrompt[]>([])
   const isModelRunning = loading || researchRunning
   const isResearchActive = researchRunning || (loading && chatMode === 'research')
   const effectivePlaceholder = isResearchActive
@@ -436,6 +437,10 @@ ${exec.prompt}`
     () => supportsImageInputForModel(aiModelList, primaryModel),
     [aiModelList, primaryModel]
   )
+  const visionBridgeAvailable = useMemo(
+    () => supportsImageInputForModel(aiModelList, imageMethodModel),
+    [aiModelList, imageMethodModel]
+  )
 
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current
@@ -499,17 +504,17 @@ ${exec.prompt}`
   })
 
   const ensureImageInputSupported = useCallback(() => {
-    if (currentModelSupportsImages) {
+    if (currentModelSupportsImages || visionBridgeAvailable) {
       return true
     }
 
     toast({
-      title: '当前模型不支持图片输入',
-      description: '请切换到支持视觉能力的模型（如 GPT-4o、Gemini、Qwen-VL）后再添加图片。',
+      title: '当前模型无法解析图片',
+      description: '请切换到支持视觉能力的主模型，或在“设置 > 图片识别 > VLM”配置一个视觉模型用于 Vision Bridge。',
       variant: 'destructive',
     })
     return false
-  }, [currentModelSupportsImages])
+  }, [currentModelSupportsImages, visionBridgeAvailable])
 
   useEffect(() => {
     linkedResourcesRef.current = linkedResources

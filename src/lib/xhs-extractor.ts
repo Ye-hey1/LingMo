@@ -1,4 +1,6 @@
 import { fetchWithProxy } from '@/lib/network-proxy'
+import type { Mark } from '@/db/marks'
+import { createOpenAIClient, getAISettings, prepareMessages } from '@/lib/ai/utils'
 
 export const XHS_NOTE_TAG_NAME = '小红书笔记'
 
@@ -301,12 +303,12 @@ export function extractXhsNoteId(url: string): string {
     }
 
     const pathSegments = parsed.pathname.split('/').filter(Boolean)
-    
+
     const exploreIndex = pathSegments.indexOf('explore')
     if (exploreIndex !== -1 && pathSegments[exploreIndex + 1]) {
       return pathSegments[exploreIndex + 1].split('?')[0]
     }
-    
+
     const itemIndex = pathSegments.indexOf('item')
     if (itemIndex !== -1 && pathSegments[itemIndex + 1]) {
       return pathSegments[itemIndex + 1].split('?')[0]
@@ -323,7 +325,7 @@ export function extractXhsNoteId(url: string): string {
     if (match?.[1]) {
       return match[1]
     }
-    
+
     return ''
   } catch {
     const match = url.match(/(?:note_id|noteId|source_note_id|sourceNoteId)=([a-zA-Z0-9]+)/)
@@ -461,7 +463,7 @@ export async function fetchXhsNoteData(url: string): Promise<XhsNoteData> {
 
   const buffer = await response.arrayBuffer()
   const bytes = new Uint8Array(buffer)
-  
+
   let html = ''
   try {
     html = new TextDecoder('utf-8').decode(bytes)
@@ -543,4 +545,308 @@ export function buildXhsNoteRecord(note: XhsNoteData): XhsNoteRecord {
     content,
     url: note.sourceUrl,
   }
+}
+
+export interface XhsNoteMeta {
+  summary?: string
+  highlights?: string[]
+  takeaways?: string[]
+  notes?: string[]
+}
+
+export interface XhsNoteRecordParsed {
+  url?: string
+  noteId?: string
+  title: string
+  author?: string
+  authorAvatar?: string
+  homeUrl?: string
+  type: 'normal' | 'video'
+  uploadTime?: string
+  ipLocation?: string
+  likedCount?: string
+  collectedCount?: string
+  commentCount?: string
+  shareCount?: string
+  tags: string[]
+  body: string
+  imageList: string[]
+  videoUrl?: string
+  summaryMarkdown: string
+  meta: XhsNoteMeta
+}
+
+export function isXhsNoteMark(mark: Mark) {
+  return mark.type === 'link' && /lingmo:xhs-note/.test(mark.content || '')
+}
+
+function buildXhsSummaryMarkdown(meta: XhsNoteMeta) {
+  const sections: string[] = []
+  const summary = meta.summary?.trim()
+  if (summary) {
+    sections.push('## AI 深度干货摘要', summary, '')
+  }
+  if (meta.highlights?.length) {
+    sections.push('## 核心知识点与干货方法论', ...meta.highlights.map(item => `- ${item}`), '')
+  }
+  if (meta.takeaways?.length) {
+    sections.push('## 深度启发与业务升级行动项', ...meta.takeaways.map(item => `- ${item}`), '')
+  }
+  if (meta.notes?.length) {
+    sections.push('## 笔记卡片与高能金句沉淀', ...meta.notes.map(item => `- ${item}`), '')
+  }
+  return sections.join('\n').trim()
+}
+
+export function parseXhsNoteRecord(mark: Mark): XhsNoteRecordParsed {
+  const content = mark.content || ''
+
+  // 1. 尝试提取 HTML 注释元数据
+  const metaMatch = content.match(/<!--\s*lingmo:xhs-note\s+({[\s\S]*?})\s*-->/)
+  let baseMeta: any = {}
+  if (metaMatch?.[1]) {
+    try {
+      baseMeta = JSON.parse(metaMatch[1])
+    } catch {}
+  }
+
+  const title = baseMeta.title || mark.desc?.split('\n')[0] || '小红书笔记'
+  const url = baseMeta.url || mark.url || ''
+  const noteId = baseMeta.noteId || ''
+  const author = baseMeta.author || ''
+  const type = baseMeta.type || 'normal'
+
+  const summary = baseMeta.summary || ''
+  const highlights = baseMeta.highlights || []
+  const takeaways = baseMeta.takeaways || []
+  const notes = baseMeta.notes || []
+
+  // 2. 提取其余元数据
+  const homeUrlMatch = content.match(/-\s*作者主页：\s*(https:\/\/\S*)/)
+  const homeUrl = baseMeta.homeUrl || homeUrlMatch?.[1] || ''
+
+  const uploadTimeMatch = content.match(/-\s*发布时间：\s*(.*)/)
+  const uploadTime = baseMeta.uploadTime || uploadTimeMatch?.[1]?.trim() || ''
+
+  const ipLocationMatch = content.match(/-\s*IP 属地：\s*(.*)/)
+  const ipLocation = baseMeta.ipLocation || ipLocationMatch?.[1]?.trim() || ''
+
+  const interactMatch = content.match(/-\s*互动数据：\s*(.*)/)
+  const statsStr = interactMatch?.[1] || ''
+
+  let likedCount = baseMeta.likedCount || ''
+  let collectedCount = baseMeta.collectedCount || ''
+  let commentCount = baseMeta.commentCount || ''
+  let shareCount = baseMeta.shareCount || ''
+  if (statsStr) {
+    const likeM = statsStr.match(/点赞\s*(\d+\w*)/)
+    const collectM = statsStr.match(/收藏\s*(\d+\w*)/)
+    const commentM = statsStr.match(/评论\s*(\d+\w*)/)
+    const shareM = statsStr.match(/分享\s*(\d+\w*)/)
+    if (likeM) likedCount = likeM[1]
+    if (collectM) collectedCount = collectM[1]
+    if (commentM) commentCount = commentM[1]
+    if (shareM) shareCount = shareM[1]
+  }
+
+  const tagsMatch = content.match(/-\s*标签：\s*(.*)/)
+  let tags: string[] = baseMeta.tags || []
+  if (tags.length === 0 && tagsMatch?.[1]) {
+    tags = tagsMatch[1].split(/[、\s#]+/).map(t => t.trim()).filter(Boolean)
+  }
+
+  let body = ''
+  const bodyMatch = content.match(/## 正文\s*([\s\S]*?)(?=## 图片|## 视频|$)/)
+  if (bodyMatch?.[1]) {
+    body = bodyMatch[1].trim()
+  } else {
+    body = content.replace(/<!--[\s\S]*?-->/g, '').replace(/#\s+.*/, '').replace(/-\s+来源[\s\S]*?---/, '').trim()
+  }
+
+  const imageList: string[] = []
+  const imgRegex = /!\[.*?\]\((https?:\/\/.*?)\)/g
+  let imgMatch
+  while ((imgMatch = imgRegex.exec(content)) !== null) {
+    imageList.push(imgMatch[1])
+  }
+
+  const videoMatch = content.match(/## 视频[\s\S]*?\((https?:\/\/.*?)\)/)
+  const videoUrl = baseMeta.videoUrl || videoMatch?.[1] || ''
+
+  const summaryMarkdown = buildXhsSummaryMarkdown({ summary, highlights, takeaways, notes })
+
+  return {
+    url,
+    noteId,
+    title,
+    author,
+    type,
+    homeUrl,
+    uploadTime,
+    ipLocation,
+    likedCount,
+    collectedCount,
+    commentCount,
+    shareCount,
+    tags,
+    body,
+    imageList,
+    videoUrl,
+    summaryMarkdown,
+    meta: {
+      summary,
+      highlights,
+      takeaways,
+      notes
+    }
+  }
+}
+
+export async function summarizeXhsNote(input: {
+  title: string
+  content: string
+  url: string
+}): Promise<Partial<XhsNoteMeta>> {
+  const cleanJsonString = (str: string): string => {
+    let inString = false
+    let escaped = false
+    let result = ''
+
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i]
+
+      if (inString) {
+        if (escaped) {
+          if (char === '"' || char === '\\' || char === '/' || char === 'b' || char === 'f' || char === 'n' || char === 'r' || char === 't') {
+            result += '\\' + char
+          } else if (char === 'u') {
+            const hex = str.slice(i + 1, i + 5)
+            if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+              result += '\\u'
+            } else {
+              result += '\\\\u'
+            }
+          } else {
+            result += '\\\\' + char
+          }
+          escaped = false
+        } else if (char === '\\') {
+          escaped = true
+        } else if (char === '"') {
+          inString = false
+          result += '"'
+        } else if (char === '\n') {
+          result += '\\n'
+        } else if (char === '\r') {
+          result += '\\r'
+        } else {
+          result += char
+        }
+      } else {
+        if (char === '"') {
+          inString = true
+        }
+        result += char
+      }
+    }
+
+    if (escaped) {
+      result += '\\\\'
+    }
+
+    return result
+  }
+
+  const parseSafeJson = (jsonStr: string): Partial<XhsNoteMeta> => {
+    try {
+      return JSON.parse(jsonStr) as Partial<XhsNoteMeta>
+    } catch (err) {
+      console.warn('[xhs-extractor] 标准 JSON 解析失败，尝试容错清洗机制...', err)
+      try {
+        const sanitized = cleanJsonString(jsonStr)
+        return JSON.parse(sanitized) as Partial<XhsNoteMeta>
+      } catch (err2) {
+        console.error('[xhs-extractor] 深度容错清洗依然失败:', err2)
+        throw err
+      }
+    }
+  }
+
+  const trySummarize = async (modelType: 'markDescModel' | 'primaryModel') => {
+    const aiConfig = await getAISettings(modelType)
+    if (!aiConfig?.model) {
+      throw new Error(`未启用或未配置 ${modelType === 'markDescModel' ? 'AI整理' : '主要聊天'} 模型。`)
+    }
+
+    const prompt = [
+      '你是专业的小红书爆款内容分析与深度干货总结专家。请基于小红书笔记正文内容生成中文结构化总结，帮助用户提炼核心洞察与行动项。',
+      '输出严格 JSON，不要 Markdown，不要额外解释。',
+      'JSON 字段：',
+      '{"summary":"","highlights":[""],"takeaways":[""],"notes":[""]}',
+      '要求：',
+      '- summary：100-150 字，高度浓缩提炼笔记的核心干货或观点，适合哪些有痛点的读者。',
+      '- highlights：3-5 条，提炼笔记里最有用处的实操步骤、方法论、工具推荐或数据论据。',
+      '- takeaways：3-5 条，对个人行动、业务提效、认知破圈有强启发的行动指南。',
+      '- notes：4-8 条，高能量的金句或独立知识卡片概念。',
+      '- 核心要求：生成的 JSON 字符串本身必须是标准的、无畸变的 JSON。如果总结 and highlights 内容中包含双引号（如 "Aria"），必须使用标准反斜杠转义为 \\" ；绝不能含有任何未转义的控制性字符或硬换行。',
+      '',
+      `标题：${input.title}`,
+      `原文链接：${input.url}`,
+      '笔记正文：',
+      input.content.slice(0, 15000),
+    ].join('\n')
+
+    const { messages } = await prepareMessages(prompt)
+    const openai = await createOpenAIClient(aiConfig)
+    const completion = await openai.chat.completions.create({
+      model: aiConfig.model,
+      messages,
+      temperature: 0.2,
+      top_p: aiConfig.topP || 1,
+    })
+
+    const text = completion.choices[0]?.message?.content || ''
+    const match = text.trim().match(/\{[\s\S]*\}/)
+    if (!match) {
+      throw new Error('AI 返回的内容不是有效的 JSON 结构。')
+    }
+    return parseSafeJson(match[0])
+  }
+
+  try {
+    return await trySummarize('markDescModel')
+  } catch (firstError: any) {
+    console.warn('[xhs-extractor] 优先记录整理模型调用失败，正在尝试使用主要聊天模型回退机制...', firstError)
+    try {
+      return await trySummarize('primaryModel')
+    } catch (secondError: any) {
+      console.error('[xhs-extractor] 主要聊天模型回退调用同样失败:', secondError)
+      const firstMsg = firstError?.body?.message || firstError?.message || String(firstError)
+      const secondMsg = secondError?.body?.message || secondError?.message || String(secondError)
+      throw new Error(`小红书 AI 总结失败。\n[整理模型错误]: ${firstMsg}\n[备用模型错误]: ${secondMsg}`)
+    }
+  }
+}
+
+export function mergeXhsNoteSummary(content: string, summary: Partial<XhsNoteMeta>) {
+  const metaMatch = content.match(/<!--\s*lingmo:xhs-note\s+({[\s\S]*?})\s*-->/)
+  let baseMeta: any = {}
+  if (metaMatch?.[1]) {
+    try {
+      baseMeta = JSON.parse(metaMatch[1])
+    } catch {}
+  }
+
+  const nextMeta = {
+    ...baseMeta,
+    summary: summary.summary || baseMeta.summary || '',
+    highlights: summary.highlights || baseMeta.highlights || [],
+    takeaways: summary.takeaways || baseMeta.takeaways || [],
+    notes: summary.notes || baseMeta.notes || [],
+  }
+
+  if (/<!--\s*lingmo:xhs-note\s+{[\s\S]*?}\s*-->/.test(content)) {
+    return content.replace(/<!--\s*lingmo:xhs-note\s+{[\s\S]*?}\s*-->/, `<!-- lingmo:xhs-note ${JSON.stringify(nextMeta)} -->`)
+  }
+  return `<!-- lingmo:xhs-note ${JSON.stringify(nextMeta)} -->\n${content}`
 }

@@ -595,15 +595,44 @@ export const safeGrepTool: Tool = {
         }
       }
 
+      const candidateFileMap = new Map<string, {
+        filePath: string
+        count: number
+        firstLine: number
+        preview: string
+      }>()
+
+      for (const match of matches) {
+        const existing = candidateFileMap.get(match.filePath)
+        if (existing) {
+          existing.count += 1
+          continue
+        }
+
+        candidateFileMap.set(match.filePath, {
+          filePath: match.filePath,
+          count: 1,
+          firstLine: match.line,
+          preview: match.preview,
+        })
+      }
+
+      const truncated = matches.length >= maxResults
+      const candidateFiles = Array.from(candidateFileMap.values())
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 12)
+
       return {
         success: true,
         data: {
           query,
           folderPath,
-          matches,
-          truncated: matches.length >= maxResults,
+          matchCount: matches.length,
+          truncated,
+          candidateFiles,
+          sampleMatches: matches.slice(0, 12),
         },
-        message: `Found ${matches.length} matches${matches.length >= maxResults ? ' (truncated)' : ''}.`,
+        message: `safe_grep found ${matches.length} matches${truncated ? ' (truncated)' : ''}.`,
       }
     } catch (error) {
       return {

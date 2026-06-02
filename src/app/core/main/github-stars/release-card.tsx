@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, type MouseEvent } from 'react'
 import {
   BookOpen,
   ChevronDown,
@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileArchive,
   GitBranch,
+  BellOff,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,18 +18,37 @@ import { cn, convertBytesToSize } from '@/lib/utils'
 import type { GithubStarRelease, AssetFilter } from '@/types/github-stars'
 import { PRESET_FILTERS } from './preset-filters'
 import { formatRelativeTime } from './github-stars-utils'
+import MarkdownRenderer from './MarkdownRenderer'
 
-function getDownloadLinks(release: GithubStarRelease) {
-  const links = release.assets.map(asset => ({
-    name: asset.name,
-    url: asset.browserDownloadUrl,
-    size: asset.size,
-    downloadCount: asset.downloadCount,
-    sourceCode: false,
-  }))
+interface ReleaseDownloadLink {
+  name: string
+  url: string
+  size: number
+  downloadCount: number
+  sourceCode: boolean
+}
+
+export function getReleaseDownloadLinks(release: GithubStarRelease): ReleaseDownloadLink[] {
+  const links: ReleaseDownloadLink[] = []
+
+  const addLink = (link: ReleaseDownloadLink) => {
+    if (!links.some(existing => existing.url === link.url || existing.name === link.name)) {
+      links.push(link)
+    }
+  }
+
+  release.assets.forEach(asset => {
+    addLink({
+      name: asset.name,
+      url: asset.browserDownloadUrl,
+      size: asset.size,
+      downloadCount: asset.downloadCount,
+      sourceCode: false,
+    })
+  })
 
   if (release.zipballUrl) {
-    links.push({
+    addLink({
       name: `Source code (${release.tagName}.zip)`,
       url: release.zipballUrl,
       size: 0,
@@ -38,7 +58,7 @@ function getDownloadLinks(release: GithubStarRelease) {
   }
 
   if (release.tarballUrl) {
-    links.push({
+    addLink({
       name: `Source code (${release.tagName}.tar.gz)`,
       url: release.tarballUrl,
       size: 0,
@@ -47,26 +67,79 @@ function getDownloadLinks(release: GithubStarRelease) {
     })
   }
 
+  const downloadRegex = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
+  const notes = release.body || ''
+  let match: RegExpExecArray | null
+  while ((match = downloadRegex.exec(notes)) !== null) {
+    const [, name, url] = match
+    const lowerName = name.toLowerCase()
+    const lowerUrl = url.toLowerCase()
+    const looksDownloadable = lowerUrl.includes('/download/') ||
+      lowerUrl.includes('/releases/') ||
+      lowerName.includes('download') ||
+      /\.(exe|dmg|deb|rpm|apk|ipa|zip|tar\.gz|msi|pkg|appimage)(?:[?#].*)?$/i.test(url)
+
+    if (looksDownloadable) {
+      addLink({
+        name,
+        url,
+        size: 0,
+        downloadCount: 0,
+        sourceCode: false,
+      })
+    }
+  }
+
   return links
+}
+
+function truncateReleaseNotes(notes: string, maxLength = 500) {
+  if (notes.length <= maxLength) return notes
+
+  const lines = notes.split(/\n\n|\r\n\r\n|\n|\r\n/)
+  let result = ''
+  for (const line of lines) {
+    if ((result + line).length > maxLength) break
+    result += `${result ? '\n\n' : ''}${line}`
+  }
+
+  if (result.length < maxLength * 0.3) {
+    const breakpoints = ['\n', ' ', ')', ']', '`', '*', '_', '.', ',', ';', '!', '?']
+    let cutPoint = maxLength
+    for (let index = maxLength; index >= maxLength * 0.5; index -= 1) {
+      if (breakpoints.includes(notes[index])) {
+        cutPoint = index + 1
+        break
+      }
+    }
+    result = notes.slice(0, cutPoint).trimEnd()
+  }
+
+  return `${result.trimEnd()}...`
 }
 
 export function ReleaseCard({
   release,
   onMarkRead,
+  onUnsubscribe,
   selectedFilters = [],
   assetFilters = [],
 }: {
   release: GithubStarRelease
   onMarkRead: (releaseId: number) => void
+  onUnsubscribe?: (repoId: number, fullName: string) => void
   selectedFilters?: string[]
   assetFilters?: AssetFilter[]
 }) {
   const [assetsOpen, setAssetsOpen] = useState(false)
   const [notesOpen, setNotesOpen] = useState(false)
+  const [fullNotesOpen, setFullNotesOpen] = useState(false)
   const notes = (release.body || '').trim()
+  const truncatedNotes = useMemo(() => truncateReleaseNotes(notes), [notes])
+  const isNotesTruncated = notes.length > truncatedNotes.length
 
   const downloadLinks = useMemo(() => {
-    const allLinks = getDownloadLinks(release)
+    const allLinks = getReleaseDownloadLinks(release)
     if (selectedFilters.length === 0) return allLinks
 
     return allLinks.filter(link => {
@@ -95,6 +168,11 @@ export function ReleaseCard({
     } else {
       setNotesOpen(value => !value)
     }
+  }
+
+  const handleUnsubscribe = (event: MouseEvent) => {
+    event.stopPropagation()
+    onUnsubscribe?.(release.repository.id, release.repository.fullName)
   }
 
   return (
@@ -166,6 +244,18 @@ export function ReleaseCard({
           <BookOpen className="size-3.5" />
           日志
         </Button>
+        {onUnsubscribe ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-destructive"
+            title="取消订阅 Release"
+            onClick={handleUnsubscribe}
+          >
+            <BellOff className="size-3.5" />
+            取消订阅
+          </Button>
+        ) : null}
       </div>
 
       {assetsOpen && downloadLinks.length > 0 ? (
@@ -204,12 +294,38 @@ export function ReleaseCard({
             <BookOpen className="size-3.5" />
             Release 说明
           </div>
-          <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 text-sm leading-6 text-foreground/85">
-            {notes}
-          </pre>
+          <div className="max-h-96 overflow-auto rounded-md border bg-background p-3">
+            <MarkdownRenderer
+              content={fullNotesOpen ? notes : truncatedNotes}
+              shouldRender
+              baseUrl={`https://github.com/${release.repository.fullName}`}
+              fontSize="small"
+            />
+          </div>
+          {isNotesTruncated ? (
+            <div className="mt-2 flex items-center justify-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-7 px-3 text-xs"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setFullNotesOpen(value => !value)
+                }}
+              >
+                <BookOpen className="mr-1 size-3.5" />
+                {fullNotesOpen ? '收起' : '查看完整'}
+              </Button>
+              <Button asChild variant="ghost" size="sm" className="h-7 px-3 text-xs">
+                <a href={release.htmlUrl} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>
+                  <ExternalLink className="mr-1 size-3.5" />
+                  GitHub
+                </a>
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </article>
   )
 }
-

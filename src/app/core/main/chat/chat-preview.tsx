@@ -376,6 +376,14 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       return self.renderToken(tokens, idx, options);
     }
 
+    const defaultImage = markdown.renderer.rules.image || function (tokens, idx, options, _env, self) {
+      return self.renderToken(tokens, idx, options);
+    };
+    markdown.renderer.rules.image = function (tokens, idx, options, env, self) {
+      tokens[idx].attrSet('referrerpolicy', 'no-referrer');
+      return defaultImage(tokens, idx, options, env, self);
+    };
+
     md.current = markdown;
 
     if (displayedTextRef.current) {

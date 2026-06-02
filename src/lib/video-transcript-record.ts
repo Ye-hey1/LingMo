@@ -25,10 +25,52 @@ export interface VideoTranscriptRecord {
   timeline: string
   body: string
   summaryMarkdown: string
+  rawTimeline?: string
 }
 
 function cleanText(value?: string | null) {
   return value?.replace(/\s+/g, ' ').trim() || ''
+}
+
+function cleanTranscriptText(value?: string | null) {
+  return cleanText(value?.replace(/[🎼♪♫♬]+/g, ' '))
+}
+
+function normalizeBodyParagraphs(value: string) {
+  const blocks: string[] = []
+  let paragraphBuffer: string[] = []
+
+  function flushParagraph() {
+    const paragraph = cleanTranscriptText(paragraphBuffer.join(' ').replace(/^[-*]\s*/, ''))
+    if (paragraph) {
+      blocks.push(paragraph)
+    }
+    paragraphBuffer = []
+  }
+
+  value
+    .replace(/```(?:markdown|md)?/gi, '')
+    .replace(/```/g, '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .forEach((line) => {
+      if (!line) {
+        flushParagraph()
+        return
+      }
+
+      const headingMatch = line.match(/^#{2,4}\s+(.+)$/)
+      if (headingMatch) {
+        flushParagraph()
+        blocks.push(`### ${cleanTranscriptText(headingMatch[1])}`)
+        return
+      }
+
+      paragraphBuffer.push(line.replace(/^[-*]\s*/, ''))
+    })
+
+  flushParagraph()
+  return blocks.join('\n\n')
 }
 
 function extractVideoMeta(content?: string | null): VideoTranscriptMeta {
@@ -62,8 +104,21 @@ function stripMetaComment(content: string) {
 }
 
 function extractBody(content: string) {
-  const section = extractSection(content, '转写正文') || extractSection(content, '正文')
+  const section = extractSection(content, '结构化正文')
+    || extractSection(content, '整理正文')
+    || extractSection(content, '正文整理')
+    || extractSection(content, '转写正文')
+    || extractSection(content, '正文')
   return section || stripMetaComment(content)
+}
+
+function extractTimeline(content: string) {
+  return extractSection(content, '视频时间线')
+    || extractSection(content, '转写时间线')
+    || extractSection(content, '时间线')
+    || extractSection(content, '转写正文')
+    || extractSection(content, '正文')
+    || stripMetaComment(content)
 }
 
 function timelineToBody(timeline: string) {
@@ -71,7 +126,7 @@ function timelineToBody(timeline: string) {
   let buffer: string[] = []
 
   function flush() {
-    const text = cleanText(buffer.join(' '))
+    const text = cleanTranscriptText(buffer.join(' '))
     if (text) {
       paragraphs.push(text)
     }
@@ -80,11 +135,12 @@ function timelineToBody(timeline: string) {
 
   timeline
     .split(/\r?\n/)
-    .map(line => line.replace(/^[-*]\s*(?:\d{1,2}:)?\d{2}:\d{2}\s*/, '').trim())
+    .map(line => line.replace(/^[-*]\s*(?:\d{1,2}:)?\d{2}:\d{2}\s*(?:[🎼♪♫♬]\s*)?/, '').trim())
+    .map(cleanTranscriptText)
     .filter(Boolean)
     .forEach((line) => {
       buffer.push(line)
-      const shouldBreak = /[。！？!?]$/.test(line) || cleanText(buffer.join(' ')).length >= 180
+      const shouldBreak = /[。！？!?]$/.test(line) || cleanTranscriptText(buffer.join(' ')).length >= 180
       if (shouldBreak) {
         flush()
       }
@@ -97,7 +153,10 @@ function timelineToBody(timeline: string) {
 function buildTimelineOutline(timeline: string) {
   const lines = timeline
     .split(/\r?\n/)
-    .map(line => cleanText(line))
+    .map(line => {
+      const match = line.match(/^[-*]\s*((?:\d{1,2}:)?\d{2}:\d{2})\s*(?:[🎼♪♫♬]\s*)?(.*)$/)
+      return match ? `- ${match[1]} ${cleanTranscriptText(match[2])}` : cleanTranscriptText(line)
+    })
     .filter(Boolean)
 
   if (lines.length === 0) {
@@ -111,7 +170,7 @@ function buildTimelineOutline(timeline: string) {
   lines.forEach((line, index) => {
     const match = line.match(/^[-*]\s*((?:\d{1,2}:)?\d{2}:\d{2})\s*(.*)$/)
     const time = match?.[1] || ''
-    const text = match?.[2] || line.replace(/^[-*]\s*/, '')
+    const text = cleanTranscriptText(match?.[2] || line.replace(/^[-*]\s*/, ''))
     if (current.length === 0) {
       currentStart = time || `片段 ${Math.floor(index / 6) + 1}`
     }
@@ -180,8 +239,9 @@ export function parseVideoTranscriptRecord(mark: Mark): VideoTranscriptRecord {
   const content = mark.content || ''
   const meta = extractVideoMeta(content)
   const title = cleanText(meta.title) || cleanText(mark.desc?.split('\n')[0]) || '视频转写'
-  const timeline = extractBody(content)
-  const body = timelineToBody(timeline)
+  const timeline = extractTimeline(content)
+  const bodySection = extractBody(content)
+  const body = bodySection ? normalizeBodyParagraphs(bodySection) : timelineToBody(timeline)
   const description = cleanText(meta.summary) || cleanText(body).slice(0, 180) || cleanText(mark.desc?.split('\n').slice(1).join(' '))
   const summaryMarkdown = buildSummaryMarkdown(meta, description)
 
@@ -192,18 +252,20 @@ export function parseVideoTranscriptRecord(mark: Mark): VideoTranscriptRecord {
     timeline: buildTimelineOutline(timeline),
     body,
     summaryMarkdown,
+    rawTimeline: timeline,
   }
 }
 
-function parseSummaryJson(text: string): Partial<VideoTranscriptMeta> | null {
+function parseSummaryJson(text: string): Partial<VideoTranscriptMeta> {
   const match = text.trim().match(/\{[\s\S]*\}/)
   if (!match) {
-    return null
+    throw new Error('AI 返回的内容不是有效的 JSON 结构。')
   }
+
   try {
     return JSON.parse(match[0]) as Partial<VideoTranscriptMeta>
-  } catch {
-    return null
+  } catch (error) {
+    throw new Error(`AI 返回的 JSON 解析失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -211,11 +273,11 @@ export async function summarizeVideoTranscript(input: {
   title: string
   transcript: string
   sourceUrl: string
-}): Promise<Partial<VideoTranscriptMeta> | null> {
-  try {
-    const aiConfig = await getAISettings('markDescModel')
+}): Promise<Partial<VideoTranscriptMeta>> {
+  const trySummarize = async (modelType: 'markDescModel' | 'primaryModel') => {
+    const aiConfig = await getAISettings(modelType)
     if (!aiConfig?.model) {
-      return null
+      throw new Error(`未启用或未配置 ${modelType === 'markDescModel' ? 'AI整理' : '主要聊天'} 模型。`)
     }
 
     const prompt = [
@@ -250,8 +312,20 @@ export async function summarizeVideoTranscript(input: {
       top_p: aiConfig.topP || 1,
     })
     return parseSummaryJson(completion.choices[0]?.message?.content || '')
-  } catch {
-    return null
+  }
+
+  try {
+    return await trySummarize('markDescModel')
+  } catch (firstError: any) {
+    console.warn('[video-transcript-record] 优先记录整理模型调用失败，正在尝试使用主要聊天模型回退机制...', firstError)
+    try {
+      return await trySummarize('primaryModel')
+    } catch (secondError: any) {
+      console.error('[video-transcript-record] 主要聊天模型回退调用同样失败:', secondError)
+      const firstMsg = firstError?.body?.message || firstError?.message || String(firstError)
+      const secondMsg = secondError?.body?.message || secondError?.message || String(secondError)
+      throw new Error(`视频 AI 深度分析失败。\n[整理模型错误]: ${firstMsg}\n[备用模型错误]: ${secondMsg}`)
+    }
   }
 }
 

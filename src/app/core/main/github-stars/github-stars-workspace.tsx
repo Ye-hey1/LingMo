@@ -359,12 +359,24 @@ export function GithubStarsWorkspace() {
   const headerRefreshTitle = view === 'repositories'
     ? '同步星标'
     : view === 'releases'
-      ? '刷新发布'
+      ? '刷新当前发布页'
       : view === 'forks'
-        ? '刷新复刻'
-        : '刷新趋势'
+        ? '刷新当前复刻页'
+        : '刷新当前趋势页'
+  const lastSyncRelativeTime = formatRelativeTime(stats.lastSyncAt)
+  const compactLastSyncTime = lastSyncRelativeTime.replace(/(\d+)\s+(分钟|小时|天)前/u, '$1$2前')
   const headerStatusText = view === 'repositories'
-    ? `上次同步 ${formatRelativeTime(stats.lastSyncAt)}`
+    ? compactLastSyncTime
+    : view === 'releases'
+      ? '发布'
+      : view === 'forks'
+        ? '复刻'
+        : '趋势'
+  const headerStatusTitle = view === 'repositories'
+    ? `上次同步 ${lastSyncRelativeTime}`
+    : headerRefreshTitle
+  const headerRefreshButtonTitle = view === 'repositories'
+    ? `${headerRefreshTitle}，${headerStatusTitle}`
     : headerRefreshTitle
   const isHeaderRefreshing = view === 'repositories'
     ? isSyncing
@@ -408,8 +420,8 @@ export function GithubStarsWorkspace() {
 
           {/* Right: Status + Refresh */}
           <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="hidden sm:inline">{headerStatusText}</span>
-            <Button variant="ghost" size="icon" className="size-7" onClick={handleHeaderRefresh} disabled={isHeaderRefreshDisabled} title={headerRefreshTitle}>
+            <span className="hidden sm:inline" title={headerStatusTitle}>{headerStatusText}</span>
+            <Button variant="ghost" size="icon" className="size-7" onClick={handleHeaderRefresh} disabled={isHeaderRefreshDisabled} title={headerRefreshButtonTitle}>
               {isHeaderRefreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
             </Button>
           </div>

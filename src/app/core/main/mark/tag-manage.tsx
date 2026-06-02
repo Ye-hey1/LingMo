@@ -23,7 +23,6 @@ import type { Mark } from "@/db/marks"
 import useTagStore from "@/stores/tag"
 import useMarkStore from "@/stores/mark"
 import useChatStore from "@/stores/chat"
-import { MarkLoading } from './mark-loading'
 import { ImageGallery } from './image-gallery'
 import { filterMarks, getEffectiveRecordFilters } from './mark-filters'
 import { MarkListDefaultView } from './mark-list-default-view'
@@ -651,10 +650,7 @@ export function TagManage() {
                   </ContextMenu>
                   <AccordionContent className="px-0 pb-0">
 
-                    {/* 显示当前标签的队列（正在处理中的记录） */}
-                    {queues.filter(queue => queue.tagId === tag.id && queueMatchesFilters(queue)).map((queue) => (
-                      <MarkLoading key={queue.queueId} mark={queue} />
-                    ))}
+                    {/* 队列进度已迁移至全局底部状态栏（GlobalProgress）显示 */}
 
                     {/* 图片画廊 - 显示当前标签下所有无内容的图片 */}
                     <ImageGallery marks={getFilteredTagMarks(tag.id)} />

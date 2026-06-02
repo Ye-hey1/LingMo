@@ -26,6 +26,12 @@ import { generateTaskPlan, isTaskLikelyComplex, formatTaskPlanForPrompt, type Ta
 import { detectAgentLoop } from './loop-detection'
 import { MetricsCollector } from './metrics-collector'
 import { buildAgentSystemPrompt } from './prompt-assembler'
+import {
+  buildLoopFallbackAnswer,
+  formatToolObservation,
+  getSafeGrepConvergenceMessage,
+  isTruncatedSafeGrepObservation,
+} from './orchestration'
 import type { SkillMatchSummary } from '@/lib/skills/types'
 import OpenAI from 'openai'
 
@@ -155,6 +161,10 @@ function shouldKeepFocusOnLinkedNote(
 
 function isSuccessfulObservation(observation?: string): boolean {
   if (!observation) {
+    return false
+  }
+
+  if (isTruncatedSafeGrepObservation(observation)) {
     return false
   }
 
@@ -349,21 +359,7 @@ export class ReActAgent extends BaseAgent {
         const loopResult = detectAgentLoop(this.steps)
         if (loopResult.isLoop) {
           console.warn(`[Agent] Loop detected: ${loopResult.reason}`)
-          // 尝试从已有步骤中提取有用信息作为最终答案
-          const successfulSteps = this.steps.filter(s =>
-            s.action && s.observation &&
-            !s.observation.includes('失败') &&
-            !s.observation.includes('无法解析') &&
-            !s.observation.includes('你只输出')
-          )
-          if (successfulSteps.length > 0) {
-            const lastSuccess = successfulSteps[successfulSteps.length - 1]
-            finalAnswer = loopResult.suggestion
-              ? `${loopResult.suggestion}\n\n基于已完成的分析：\n\n${lastSuccess.observation}`
-              : `基于已完成的分析：\n\n${lastSuccess.observation}`
-          } else {
-            finalAnswer = loopResult.suggestion || '抱歉，执行过程中遇到了格式问题，请重试。'
-          }
+          finalAnswer = buildLoopFallbackAnswer(loopResult, this.steps)
           break
         }
       }
@@ -1247,7 +1243,10 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
     const policyCheck = this.evaluateToolPolicy(toolName, tool, params)
     if (!policyCheck.allowed) {
       const blockedMessage = this.getPolicyAdjustmentMessage(toolName, policyCheck.reason || '已调整工具选择')
-      const isBenignAdjustment = Boolean(policyCheck.reason?.includes('完整内容已在上下文中'))
+      const isBenignAdjustment = Boolean(
+        policyCheck.reason?.includes('完整内容已在上下文中') ||
+        policyCheck.reason?.includes('safe_grep 结果已截断')
+      )
       toolCall.status = isBenignAdjustment ? 'success' : 'error'
       toolCall.result = {
         success: isBenignAdjustment,
@@ -1607,10 +1606,11 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
           this.emitEvent('skills.selected', { skillIds: selectedSkillIds })
         }
 
-        let observation = result.message || `工具 ${toolName} 执行成功。`
+        const formattedObservation = formatToolObservation(toolName, result)
+        let observation = formattedObservation || result.message || `工具 ${toolName} 执行成功。`
 
         // 如果有数据，根据数据类型进行格式化
-          if (result.data) {
+          if (result.data && !formattedObservation) {
           // 特殊处理 MCP 搜索结果（category 为 'mcp' 的工具）
           if (tool.category === 'mcp') {
             // 从思考内容中提取简短标题
@@ -2229,6 +2229,15 @@ ${skillsList.join('\n---\n\n')}
       }
     }
 
+    const safeGrepConvergenceMessage = getSafeGrepConvergenceMessage(toolName, params, this.steps)
+    if (safeGrepConvergenceMessage) {
+      return {
+        allowed: false,
+        requiresConfirmation: false,
+        reason: safeGrepConvergenceMessage,
+      }
+    }
+
     if (this.isRedundantLinkedFileRead(toolName, params)) {
       return {
         allowed: false,
@@ -2261,6 +2270,10 @@ ${skillsList.join('\n---\n\n')}
       return '已避免重复探索：你已经拿到足够的笔记内容，请直接基于已读取内容继续整理，并给出 Final Answer。'
     }
 
+    if (reason.includes('safe_grep 结果已截断')) {
+      return '已避免重复宽泛检索：safe_grep 结果已截断。请读取上一轮候选文件，或使用更具体的 query、folderPath、includeExtensions 收窄检索。'
+    }
+
     if (reason.includes('replace_editor_content')) {
       return '已切换到编辑器写入路径：当前打开的文件请使用 replace_editor_content，而不是直接覆盖磁盘文件。'
     }
@@ -2291,7 +2304,8 @@ ${skillsList.join('\n---\n\n')}
 
     return observation.includes('已调整工具选择：') ||
       observation.includes('已保持任务聚焦：') ||
-      observation.includes('已避免重复探索：')
+      observation.includes('已避免重复探索：') ||
+      observation.includes('已避免重复宽泛检索：')
   }
 
   private isRedundantLinkedFileRead(toolName: string, params: Record<string, any>): boolean {

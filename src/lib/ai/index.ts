@@ -7,3 +7,4 @@ export * from './translate';
 export * from './description';
 export * from './rewrite';
 export * from './prompt-enhancer';
+export * from './vision-bridge';

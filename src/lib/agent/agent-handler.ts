@@ -17,6 +17,7 @@ import {
   getResumeSummary,
 } from './enhanced-resume'
 import { formatFriendlyError } from './friendly-errors'
+import { getDirectAgentReply } from './orchestration'
 
 export interface AgentHandlerConfig {
   activeChatId?: number
@@ -129,6 +130,22 @@ export class AgentHandler {
       activeChatId: this.config.activeChatId,
       isRunning: true,
     })
+
+    const directReply = getDirectAgentReply(userInput, imageUrls)
+    if (directReply) {
+      store.setAgentState({
+        isRunning: false,
+        isThinking: false,
+        currentIteration: 0,
+        isFinalAnswerMode: true,
+        finalAnswerContent: directReply,
+      })
+      await this.persistRunSummary(userInput, directReply, [], false)
+      this.config.onFinalAnswerRender?.(directReply)
+      this.config.onComplete?.(directReply, [], false)
+      this.executing = false
+      return directReply
+    }
 
     // 确保 MCP Store 已初始化
     try {

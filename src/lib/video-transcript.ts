@@ -2,6 +2,7 @@ import { Command } from '@tauri-apps/plugin-shell'
 import { readFile, readTextFile } from '@tauri-apps/plugin-fs'
 import { appCacheDir } from '@tauri-apps/api/path'
 import { fetchAudioTranscription } from '@/lib/audio'
+import { createOpenAIClient, getAISettings, prepareMessages } from '@/lib/ai/utils'
 import { fetchWithProxy, getProxyUrl } from '@/lib/network-proxy'
 import ffmpegStatic from 'ffmpeg-static'
 
@@ -129,6 +130,10 @@ function cleanText(value?: string | null) {
   return value?.replace(/\s+/g, ' ').trim() || ''
 }
 
+function cleanTranscriptText(value?: string | null) {
+  return cleanText(value?.replace(/[🎼♪♫♬]+/g, ' '))
+}
+
 function normalizeSubtitleText(value?: string | null) {
   const decoded = decodeHtmlEntities(value || '')
     .replace(/<[^>]+>/g, ' ')
@@ -136,11 +141,77 @@ function normalizeSubtitleText(value?: string | null) {
     .replace(/\{[^}]*\}/g, ' ')
     .replace(/&nbsp;/gi, ' ')
     .replace(/[\u200b-\u200d\ufeff]/g, '')
-    .replace(/[♪♫♬]+/g, ' ')
+    .replace(/[🎼♪♫♬]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 
   return decoded
+}
+
+function timelineToPlainParagraphs(timeline: string) {
+  const paragraphs: string[] = []
+  let buffer: string[] = []
+
+  function flush() {
+    const paragraph = cleanTranscriptText(buffer.join(' '))
+    if (paragraph) {
+      paragraphs.push(paragraph)
+    }
+    buffer = []
+  }
+
+  timeline
+    .split(/\r?\n/)
+    .map(line => line.replace(/^[-*]\s*(?:\d{1,2}:)?\d{2}:\d{2}\s*(?:[🎼♪♫♬]\s*)?/, '').trim())
+    .map(cleanTranscriptText)
+    .filter(Boolean)
+    .forEach((line) => {
+      buffer.push(line)
+      const current = cleanTranscriptText(buffer.join(' '))
+      if (/[。！？!?…]$/.test(line) || current.length >= 180) {
+        flush()
+      }
+    })
+
+  flush()
+  return paragraphs.join('\n\n')
+}
+
+function normalizeOrganizedBody(text: string) {
+  const blocks: string[] = []
+  let paragraphBuffer: string[] = []
+
+  function flushParagraph() {
+    const paragraph = cleanTranscriptText(paragraphBuffer.join(' ').replace(/^[-*]\s*/, ''))
+    if (paragraph) {
+      blocks.push(paragraph)
+    }
+    paragraphBuffer = []
+  }
+
+  text
+    .replace(/```(?:markdown|md)?/gi, '')
+    .replace(/```/g, '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .forEach((line) => {
+      if (!line) {
+        flushParagraph()
+        return
+      }
+
+      const headingMatch = line.match(/^#{2,4}\s+(.+)$/)
+      if (headingMatch) {
+        flushParagraph()
+        blocks.push(`### ${cleanTranscriptText(headingMatch[1])}`)
+        return
+      }
+
+      paragraphBuffer.push(line.replace(/^[-*]\s*/, ''))
+    })
+
+  flushParagraph()
+  return blocks.join('\n\n')
 }
 
 function isNoiseSubtitleText(value: string) {
@@ -768,9 +839,71 @@ function subtitleTextToTimeline(text: string) {
   return normalizeSubtitleEntries(entries)
 }
 
+async function organizeTranscriptBody(input: {
+  title: string
+  timeline: string
+}, options?: VideoTranscriptOptions) {
+  const fallbackBody = timelineToPlainParagraphs(input.timeline)
+  if (!fallbackBody) {
+    return ''
+  }
+
+  notifyVideoProgress(options, { progress: 92, stage: 'summary', message: '正在整理结构化正文' })
+
+  const tryOrganize = async (modelType: 'markDescModel' | 'primaryModel') => {
+    const aiConfig = await getAISettings(modelType)
+    if (!aiConfig?.model) {
+      throw new Error(`未启用或未配置 ${modelType === 'markDescModel' ? 'AI整理' : '主要聊天'} 模型。`)
+    }
+
+    const prompt = [
+      '你是视频内容编辑助手。请把视频语音识别/字幕内容整理成适合阅读的结构化正文。',
+      '只输出结构化正文，不要输出整篇总标题，不要写摘要，不要项目符号，不要 Markdown 代码块。',
+      '规则：',
+      '- 删除时间戳、音乐符号、无意义口头填充词和重复断句。',
+      '- 保留原意和原始表达顺序，不新增事实，不做整篇总结。',
+      '- 按视频内容推进拆成多个语义段落，每个段落前生成一个简短小标题，使用 Markdown 三级标题格式：### 小标题。',
+      '- 每个标题下面写 1-2 个自然段，每段 80-220 字左右。',
+      '- 对该段最关键的概念、结论、方法或数字用 **加粗** 标记，控制在每段 1-3 处。',
+      '- 如果转写不完整或有识别错误，只做最小必要修正。',
+      '',
+      `标题：${input.title}`,
+      '视频时间线：',
+      input.timeline.slice(0, 18000),
+    ].join('\n')
+
+    const { messages } = await prepareMessages(prompt)
+    const openai = await createOpenAIClient(aiConfig)
+    const completion = await openai.chat.completions.create({
+      model: aiConfig.model,
+      messages,
+      temperature: 0.1,
+      top_p: aiConfig.topP || 1,
+    })
+
+    const organized = normalizeOrganizedBody(completion.choices[0]?.message?.content || '')
+    if (!organized) {
+      throw new Error('AI 未返回有效正文整理结果。')
+    }
+    return organized
+  }
+
+  try {
+    return await tryOrganize('markDescModel')
+  } catch (firstError) {
+    console.warn('[video-transcript] AI整理模型整理正文失败，尝试主要聊天模型回退...', firstError)
+    try {
+      return await tryOrganize('primaryModel')
+    } catch (secondError) {
+      console.warn('[video-transcript] 主要聊天模型整理正文失败，使用本地正文整理兜底。', secondError)
+      return fallbackBody
+    }
+  }
+}
+
 async function buildVideoTranscriptRecord(
   result: Omit<VideoTranscriptResult, 'desc' | 'content'>,
-  _options?: VideoTranscriptOptions
+  options?: VideoTranscriptOptions
 ): Promise<VideoTranscriptResult> {
   const extractedAt = formatDateTime(Date.now())
   const platformLabel = result.platform === 'youtube' ? 'YouTube' : 'B站'
@@ -785,6 +918,7 @@ async function buildVideoTranscriptRecord(
     `- 提取方式：${result.transcriptSource}`,
     `- 提取时间：${extractedAt}`,
   ].filter(Boolean).join('\n')
+  const body = await organizeTranscriptBody({ title, timeline: result.transcript }, options)
 
   const content = [
     `<!-- lingmo:video-transcript ${JSON.stringify({
@@ -807,9 +941,13 @@ async function buildVideoTranscriptRecord(
     '',
     meta,
     '',
-    '## 转写正文',
+    '## 视频时间线',
     '',
     result.transcript,
+    '',
+    '## 结构化正文',
+    '',
+    body,
   ].join('\n')
 
   return {

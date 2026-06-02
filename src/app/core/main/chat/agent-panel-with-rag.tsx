@@ -130,8 +130,9 @@ export function AgentPanelWithRag({
   // 如果既没有 RAG 也没有 Agent 内容，不渲染
   const hasRag = ragSources.length > 0
   const hasAgent = agentHistoryJson || isRunning || thoughtHistory.length > 0
+  const showRag = hasRag && !(mode === "live" && isRunning)
 
-  if (!hasRag && !hasAgent) {
+  if (!showRag && !hasAgent) {
     return null
   }
 
@@ -140,7 +141,7 @@ export function AgentPanelWithRag({
       <div className="overflow-hidden">
         <ul className="space-y-2">
           {/* 知识库检索步骤 */}
-          {hasRag && (
+          {showRag && (
             <>
               <li>
                 <div

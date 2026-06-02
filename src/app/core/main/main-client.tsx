@@ -4,6 +4,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { LeftSidebar, LeftSidebarRail } from './left-sidebar'
 import { EditorLayout } from './editor/editor-layout'
 import Chat from './chat'
+import { GlobalProgress } from './global-progress'
 import { useSidebarStore } from '@/stores/sidebar'
 import useSettingStore from '@/stores/setting'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -113,7 +114,7 @@ function ResizableWrapper() {
   }
 
   return (
-    <div className={cn("flex h-full min-w-0 transition-all duration-300", zenMode && "zen-mode-active")}>
+    <div className={cn("flex h-full min-w-0 transition-all duration-300 relative", zenMode && "zen-mode-active")}>
       {!zenMode && <LeftSidebarRail />}
       <ResizablePanelGroup direction="horizontal" onLayout={onLayout} className="main-layout-panel-group h-full min-w-0 flex-1">
         <ResizablePanel
@@ -163,6 +164,7 @@ function ResizableWrapper() {
           <Chat />
         </ResizablePanel>
       </ResizablePanelGroup>
+      <GlobalProgress />
     </div>
   )
 }

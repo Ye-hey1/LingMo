@@ -676,16 +676,92 @@ export async function fetchRepositoryReleases(
   repo: GithubStarRepository,
   options: { includePrerelease?: boolean; perPage?: number } = {},
 ) {
-  const [owner, name] = repo.fullName.split('/')
-  if (!owner || !name) return []
+  const result = await fetchRepositoryReleasesPage(repo, {
+    includePrerelease: options.includePrerelease,
+    page: 1,
+    perPage: options.perPage || 20,
+  })
+  return result.releases
+}
 
-  const releases = await requestGitHub<GitHubReleaseResponse[]>(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/releases?per_page=${options.perPage || 20}`,
+async function fetchRepositoryReleasesPage(
+  repo: GithubStarRepository,
+  options: {
+    includePrerelease?: boolean
+    page?: number
+    perPage?: number
+  } = {},
+) {
+  const [owner, name] = repo.fullName.split('/')
+  if (!owner || !name) {
+    return { releases: [], allReleases: [], rawCount: 0 }
+  }
+
+  const rawReleases = await requestGitHub<GitHubReleaseResponse[]>(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/releases?page=${options.page || 1}&per_page=${options.perPage || 20}`,
   )
+  const allReleases = rawReleases.map(release => toRelease(repo, release))
+
+  return {
+    releases: allReleases.filter(release => options.includePrerelease || !release.prerelease),
+    allReleases,
+    rawCount: rawReleases.length,
+  }
+}
+
+async function fetchAllRepositoryReleases(
+  repo: GithubStarRepository,
+  options: { includePrerelease?: boolean; perPage?: number } = {},
+) {
+  const perPage = options.perPage || 30
+  const releases: GithubStarRelease[] = []
+  let page = 1
+
+  while (true) {
+    const batch = await fetchRepositoryReleasesPage(repo, {
+      includePrerelease: options.includePrerelease,
+      page,
+      perPage,
+    })
+    releases.push(...batch.releases)
+
+    if (batch.rawCount < perPage) break
+    page += 1
+    await new Promise(resolve => window.setTimeout(resolve, 100))
+  }
 
   return releases
-    .filter(release => options.includePrerelease || !release.prerelease)
-    .map(release => toRelease(repo, release))
+}
+
+async function fetchIncrementalRepositoryReleases(
+  repo: GithubStarRepository,
+  options: { includePrerelease?: boolean; perPage?: number } = {},
+) {
+  const sinceTime = repo.lastReleaseFetchTime ? new Date(repo.lastReleaseFetchTime) : null
+  if (!sinceTime || Number.isNaN(sinceTime.getTime())) {
+    return fetchAllRepositoryReleases(repo, options)
+  }
+
+  const perPage = options.perPage || 10
+  const releases: GithubStarRelease[] = []
+  let page = 1
+
+  while (true) {
+    const batch = await fetchRepositoryReleasesPage(repo, {
+      includePrerelease: options.includePrerelease,
+      page,
+      perPage,
+    })
+    const freshReleases = batch.releases.filter(release => new Date(release.publishedAt) > sinceTime)
+    releases.push(...freshReleases)
+
+    const reachedWatermark = batch.allReleases.some(release => new Date(release.publishedAt) <= sinceTime)
+    if (batch.rawCount < perPage || reachedWatermark) break
+    page += 1
+    await new Promise(resolve => window.setTimeout(resolve, 100))
+  }
+
+  return releases
 }
 
 export async function fetchReleasesForRepositories(
@@ -706,10 +782,15 @@ export async function fetchReleasesForRepositories(
       nextIndex += 1
 
       try {
-        const repoReleases = await fetchRepositoryReleases(repo, {
-          includePrerelease: options.includePrerelease,
-          perPage: repo.hasFetchedReleases ? 10 : 30,
-        })
+        const repoReleases = repo.hasFetchedReleases
+          ? await fetchIncrementalRepositoryReleases(repo, {
+              includePrerelease: options.includePrerelease,
+              perPage: 10,
+            })
+          : await fetchAllRepositoryReleases(repo, {
+              includePrerelease: options.includePrerelease,
+              perPage: 30,
+            })
         releases.push(...repoReleases)
         options.onRepositoryComplete?.(repo, repoReleases)
       } catch (error) {

@@ -1,8 +1,9 @@
 import OpenAI from 'openai';
-import { getAISettings, validateAIService, prepareMessages, createOpenAIClient, handleAIError, convertImageToBase64 } from './utils';
+import { getAISettings, validateAIService, prepareMessages, createOpenAIClient, handleAIError } from './utils';
 import type { AiConfig } from '@/app/core/setting/config'
 import { estimateTokens } from './token-counter'
 import { getModelCapabilityProfile } from './model-capabilities'
+import { prepareMessagesWithImages } from './vision-bridge'
 
 function inferProvider(config?: AiConfig) {
   const source = `${config?.templateKey || ''} ${config?.key || ''} ${config?.title || ''} ${config?.baseURL || ''}`.toLowerCase()
@@ -239,46 +240,9 @@ export async function fetchAiStream(
       preparedMessages = prepared.messages
     }
 
-    // 如果有图片，将最后一条用户消息转换为多模态格式
-    if (imageUrls && imageUrls.length > 0) {
-      const lastMessage = preparedMessages[preparedMessages.length - 1]
-      if (lastMessage && lastMessage.role === 'user') {
-        const content: any[] = []
-
-        // 添加所有图片（转换为 base64）
-        for (const imageUrl of imageUrls) {
-          try {
-            // 将 Tauri URL 转换为 base64
-            const base64Image = await convertImageToBase64(imageUrl)
-            if (base64Image) {
-              content.push({
-                type: 'image_url',
-                image_url: {
-                  url: base64Image
-                }
-              })
-            }
-          } catch (error) {
-            console.error('Failed to convert image to base64:', error)
-          }
-        }
-
-        // 添加文本内容
-        content.push({
-          type: 'text',
-          text: typeof lastMessage.content === 'string' ? lastMessage.content : ''
-        })
-
-        // 替换最后一条消息
-        preparedMessages[preparedMessages.length - 1] = {
-          role: 'user',
-          content: content
-        }
-      }
-    }
-
     const openai = await createOpenAIClient(aiConfig)
     const capabilities = getModelCapabilityProfile(aiConfig)
+    preparedMessages = await prepareMessagesWithImages(preparedMessages, aiConfig, imageUrls, abortSignal)
 
     // 构建请求参数
     const requestParams: any = {

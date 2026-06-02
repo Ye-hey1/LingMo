@@ -13,6 +13,11 @@ import { MetricsCollector, storeMetrics, formatMetricsSummary } from './metrics-
 import { trimMessages, aggressiveTrimForOverflow } from './message-trimmer'
 import { shouldTrimMessages } from './token-budget'
 import { buildAgentSystemPrompt } from './prompt-assembler'
+import {
+  buildLoopFallbackAnswer,
+  formatToolObservation,
+  getSafeGrepConvergenceMessage,
+} from './orchestration'
 import useArticleStore from '@/stores/article'
 import type { SkillMatchSummary } from '@/lib/skills/types'
 
@@ -101,7 +106,7 @@ export class FunctionCallAgent extends BaseAgent {
     const toolExecutionPrompt = buildToolExecutionPrompt(this.currentUserInput)
 
     // 构建初始消息
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = []
+    let messages: OpenAI.Chat.ChatCompletionMessageParam[] = []
 
     // System prompt（精简版 — Task 5）
     const systemPrompt = await this.buildSystemPrompt()
@@ -115,24 +120,13 @@ export class FunctionCallAgent extends BaseAgent {
     }
 
     // 用户消息
-    if (imageUrls && imageUrls.length > 0) {
-      const content: any[] = []
-      for (const url of imageUrls) {
-        try {
-          const { convertImageToBase64 } = await import('@/lib/ai/utils')
-          const base64 = await convertImageToBase64(url)
-          if (base64) content.push({ type: 'image_url', image_url: { url: base64 } })
-        } catch { /* skip */ }
-      }
-      content.push({ type: 'text', text: userInput })
-      messages.push({ role: 'user', content })
-    } else {
-      messages.push({ role: 'user', content: userInput })
-    }
+    messages.push({ role: 'user', content: userInput })
 
     // ---- 智能上下文裁剪（Task 2）: 在循环前裁剪一次 ----
     const { createOpenAIClient, getAISettings } = await import('@/lib/ai/utils')
+    const { prepareMessagesWithImages } = await import('@/lib/ai/vision-bridge')
     const aiConfig = await getAISettings()
+    messages = await prepareMessagesWithImages(messages, aiConfig, imageUrls, this.abortController?.signal)
     if (aiConfig?.model) {
       this.currentModelName = aiConfig.model
       const trimResult = shouldTrimMessages(messages as any[], this.currentModelName, systemPrompt, aiConfig.contextWindow)
@@ -158,9 +152,7 @@ export class FunctionCallAgent extends BaseAgent {
         const loopResult = detectAgentLoop(this.steps)
         if (loopResult.isLoop) {
           console.warn(`[Agent] Loop detected: ${loopResult.reason}`)
-          finalContent = loopResult.suggestion
-            ? `检测到执行循环：${loopResult.reason}\n\n建议：${loopResult.suggestion}`
-            : `检测到执行循环：${loopResult.reason}`
+          finalContent = buildLoopFallbackAnswer(loopResult, this.steps)
           break
         }
       }
@@ -361,6 +353,14 @@ export class FunctionCallAgent extends BaseAgent {
           continue
         }
 
+        const safeGrepConvergenceMessage = getSafeGrepConvergenceMessage(toolName, params, this.steps)
+        if (safeGrepConvergenceMessage) {
+          const message = '已避免重复宽泛检索：safe_grep 结果已截断。请读取上一轮候选文件，或使用更具体的 query、folderPath、includeExtensions 收窄检索。'
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: message })
+          this.steps.push({ thought: textContent, action: { tool: toolName, params }, observation: message })
+          continue
+        }
+
         this.config.onAction?.(toolName, params)
         this.emitEvent('action.parsed', { tool: toolName, params })
 
@@ -440,8 +440,9 @@ export class FunctionCallAgent extends BaseAgent {
         // 构建 observation
         let observation: string
         if (result.success) {
-          observation = result.message || `工具 ${toolName} 执行成功。`
-          if (result.data && typeof result.data === 'object') {
+          const formattedObservation = formatToolObservation(toolName, result)
+          observation = formattedObservation || result.message || `工具 ${toolName} 执行成功。`
+          if (!formattedObservation && result.data && typeof result.data === 'object') {
             observation += `\n${JSON.stringify(result.data, null, 2)}`
           }
           this.toolCache.set(toolName, params, observation)

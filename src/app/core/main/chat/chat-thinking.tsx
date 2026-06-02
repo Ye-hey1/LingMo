@@ -2,7 +2,7 @@
 
 import { Chat } from "@/db/chats"
 import { useState, useEffect, useMemo, useRef } from "react"
-import { Brain, ChevronDown, Clock, Link2, Loader2 } from "lucide-react"
+import { Brain, ChevronDown, Link2, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
 import type { MessageCitationDetail } from "@/lib/ai/citations"
@@ -13,14 +13,6 @@ interface ChatThinkingProps {
   isStreaming?: boolean
   citationDetails?: MessageCitationDetail[]
   ragSources?: string[]
-}
-
-function formatThinkDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms / 100) / 10}s`
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
-  const minutes = Math.floor(ms / 60000)
-  const seconds = Math.round((ms % 60000) / 1000)
-  return `${minutes}m ${seconds}s`
 }
 
 function getCitationLabel(detail: MessageCitationDetail, index: number) {
@@ -96,71 +88,6 @@ export default function ChatThinking({
 
   const [isExpanded, setIsExpanded] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
-  const [elapsed, setElapsed] = useState(0)
-  const startTimeRef = useRef<number | null>(null)
-  const elapsedRef = useRef(0)
-  const wasThinkingRef = useRef(false)
-
-  const durationCacheKey = chat.id ? `chat-thinking-duration:${chat.id}` : null
-
-  useEffect(() => {
-    if (!durationCacheKey || typeof window === 'undefined') return
-
-    const cached = window.sessionStorage.getItem(durationCacheKey)
-    const cachedDuration = cached ? Number(cached) : 0
-    if (Number.isFinite(cachedDuration) && cachedDuration > 0) {
-      elapsedRef.current = cachedDuration
-      setElapsed(cachedDuration)
-    }
-  }, [durationCacheKey])
-
-  useEffect(() => {
-    if (isThinking) {
-      if (!startTimeRef.current) {
-        startTimeRef.current = Date.now()
-        elapsedRef.current = 0
-        setElapsed(0)
-      }
-      wasThinkingRef.current = true
-      setIsExpanded(true)
-
-      const interval = setInterval(() => {
-        if (startTimeRef.current) {
-          const nextElapsed = Date.now() - startTimeRef.current
-          elapsedRef.current = nextElapsed
-          setElapsed(nextElapsed)
-        }
-      }, 100)
-
-      return () => clearInterval(interval)
-    }
-
-    if (wasThinkingRef.current) {
-      const finalElapsed = startTimeRef.current
-        ? Date.now() - startTimeRef.current
-        : elapsedRef.current
-
-      if (finalElapsed > 0) {
-        elapsedRef.current = finalElapsed
-        setElapsed(finalElapsed)
-        if (durationCacheKey && typeof window !== 'undefined') {
-          window.sessionStorage.setItem(durationCacheKey, String(finalElapsed))
-        }
-      }
-
-      startTimeRef.current = null
-      wasThinkingRef.current = false
-      setIsExpanded(false)
-      return
-    }
-
-    if (!hasThinkingContent) {
-      startTimeRef.current = null
-      elapsedRef.current = 0
-      wasThinkingRef.current = false
-      setElapsed(0)
-    }
-  }, [durationCacheKey, hasThinkingContent, isThinking])
 
   useEffect(() => {
     if (isThinking && isExpanded && contentRef.current) {
@@ -172,9 +99,8 @@ export default function ChatThinking({
     }
   }, [thinkingContent, isThinking, isExpanded])
 
-  if (!hasThinkingContent && !hasCitations && !isThinking) return null
+  if (!hasThinkingContent && !hasCitations) return null
 
-  const showTimer = isThinking || elapsed > 0
   const statusText = isThinking
     ? '思考中...'
     : hasThinkingContent
@@ -182,15 +108,14 @@ export default function ChatThinking({
       : '引用来源'
 
   return (
-    <div className="mb-2 w-full select-none rounded-md border border-border/25 bg-muted/10 px-2 py-1.5">
+    <div className="mb-1 w-full select-none">
       <button
         type="button"
         aria-expanded={isExpanded}
         className={cn(
-          "inline-flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5",
+          "inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5",
           "text-left transition-colors duration-150",
-          "hover:bg-muted/35 active:bg-muted/50",
-          isThinking && "bg-muted/20"
+          "text-muted-foreground/70 hover:bg-muted/25 hover:text-muted-foreground active:bg-muted/40"
         )}
         onClick={() => setIsExpanded(!isExpanded)}
       >
@@ -200,19 +125,12 @@ export default function ChatThinking({
           <Brain className="size-3.5 text-muted-foreground/70" />
         )}
 
-        <span className="text-xs text-muted-foreground">
+        <span className="text-[11px]">
           {statusText}
         </span>
 
-        {showTimer && (
-          <span className="flex items-center gap-1 text-[10px] text-muted-foreground/50 tabular-nums">
-            <Clock className="size-2.5" />
-            {formatThinkDuration(elapsed)}
-          </span>
-        )}
-
         {hasCitations && (
-          <span className="flex shrink-0 items-center gap-1 rounded-full bg-muted/40 px-1.5 py-0 text-[10px] text-muted-foreground/70">
+          <span className="flex shrink-0 items-center gap-1 rounded-full bg-muted/30 px-1.5 py-0 text-[10px] text-muted-foreground/65">
             <Link2 className="size-2.5" />
             {sourceLinks.length}
           </span>
@@ -252,12 +170,6 @@ export default function ChatThinking({
                   "font-mono"
                 )}>
                   {thinkingContent}
-                </div>
-              )}
-
-              {isThinking && !hasThinkingContent && (
-                <div className="px-1 py-0.5 text-[11px] leading-5 text-muted-foreground/60">
-                  正在接收思考内容...
                 </div>
               )}
 

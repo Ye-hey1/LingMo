@@ -18,13 +18,15 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { confirm } from '@tauri-apps/plugin-dialog'
+import { toast } from '@/hooks/use-toast'
 import { useGithubStarsStore } from '@/stores/github-stars'
-import { ReleaseCard } from './release-card'
+import { getReleaseDownloadLinks, ReleaseCard } from './release-card'
 import { AssetFilterManager } from './AssetFilterManager'
 import { PRESET_FILTERS } from './preset-filters'
 import type { AssetFilter } from '@/types/github-stars'
 
-const PAGE_SIZE_OPTIONS = [20, 50, 100]
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
 
 export function ReleasesView() {
   const {
@@ -34,6 +36,7 @@ export function ReleasesView() {
     isRefreshingReleases,
     releaseProgress,
     markReleaseRead,
+    unsubscribeReleaseRepository,
     setIncludePrerelease,
     // 资产过滤与双模视图相关的全局状态
     assetFilters,
@@ -87,10 +90,7 @@ export function ReleasesView() {
 
       // 1. 资产过滤器筛选：若选中了任何过滤器，但所有文件名都不匹配，则排除该 Release
       if (releaseSelectedFilters.length > 0) {
-        const links: string[] = []
-        release.assets.forEach(asset => links.push(asset.name))
-        if (release.zipballUrl) links.push(`Source code (${release.tagName}.zip)`)
-        if (release.tarballUrl) links.push(`Source code (${release.tagName}.tar.gz)`)
+        const links = getReleaseDownloadLinks(release).map(link => link.name)
 
         const hasMatchingLink = links.some(name => matchesActiveFilters(name, releaseSelectedFilters, assetFilters))
         if (!hasMatchingLink) return false
@@ -108,13 +108,7 @@ export function ReleasesView() {
     })
   }, [includePrerelease, query, releases, repoFilter, releaseSelectedFilters, assetFilters, matchesActiveFilters])
 
-  // 时间线模式下的分页计算
-  const totalPages = Math.max(1, Math.ceil(filteredReleases.length / pageSize))
-  const clampedPage = Math.min(page, totalPages)
-  const startIndex = (clampedPage - 1) * pageSize
-  const pageReleases = filteredReleases.slice(startIndex, startIndex + pageSize)
-
-  const resetToFirstPage = () => setPage(1)
+  const resetToFirstPage = useCallback(() => setPage(1), [])
 
   // 仓库分组折叠模式下的分组计算
   const repositoriesWithReleases = useMemo(() => {
@@ -140,6 +134,37 @@ export function ReleasesView() {
       return bLatest.localeCompare(aLatest)
     })
   }, [filteredReleases, repositories])
+
+  const totalItems = releaseViewMode === 'timeline' ? filteredReleases.length : repositoriesWithReleases.length
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
+  const clampedPage = Math.min(page, totalPages)
+  const startIndex = (clampedPage - 1) * pageSize
+  const pageReleases = filteredReleases.slice(startIndex, startIndex + pageSize)
+  const pageRepositoryGroups = repositoriesWithReleases.slice(startIndex, startIndex + pageSize)
+  const rangeStart = totalItems === 0 ? 0 : startIndex + 1
+  const rangeEnd = Math.min(startIndex + pageSize, totalItems)
+
+  const handleUnsubscribeRelease = useCallback(async (repoId: number, fullName: string) => {
+    const confirmed = await confirm(
+      `确定取消订阅「${fullName}」的 Release 吗？该仓库已抓取的发布记录也会从当前列表中移除。`,
+      {
+        title: '取消订阅 Release',
+        kind: 'warning',
+        okLabel: '取消订阅',
+        cancelLabel: '保留',
+      },
+    )
+    if (!confirmed) return
+
+    try {
+      await unsubscribeReleaseRepository(repoId)
+      toast({ title: `已取消订阅: ${fullName}`, duration: 2500 })
+      resetToFirstPage()
+    } catch (error) {
+      console.warn('[GitHubStars] release unsubscribe failed:', error)
+      toast({ title: '取消订阅失败', variant: 'destructive' })
+    }
+  }, [resetToFirstPage, unsubscribeReleaseRepository])
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-muted/20">
@@ -174,7 +199,10 @@ export function ReleasesView() {
                 variant={releaseViewMode === 'repository' ? 'secondary' : 'ghost'}
                 size="sm"
                 className="h-7 px-2.5 text-xs gap-1 shadow-none"
-                onClick={() => setReleaseViewMode('repository')}
+                onClick={() => {
+                  setReleaseViewMode('repository')
+                  resetToFirstPage()
+                }}
               >
                 <LayoutGrid className="size-3.5" />
                 仓库分组
@@ -233,7 +261,6 @@ export function ReleasesView() {
               setPageSize(Number(value))
               resetToFirstPage()
             }}
-            disabled={releaseViewMode === 'repository'}
           >
             <SelectTrigger className="h-9">
               <SelectValue placeholder="每页" />
@@ -299,13 +326,14 @@ export function ReleasesView() {
                   onMarkRead={(id) => void markReleaseRead(id)}
                   selectedFilters={releaseSelectedFilters}
                   assetFilters={assetFilters}
+                  onUnsubscribe={(repoId, fullName) => void handleUnsubscribeRelease(repoId, fullName)}
                 />
               ))}
             </div>
           ) : (
             /* 仓库折叠分组模式 */
             <div className="space-y-3">
-              {repositoriesWithReleases.map(({ repo, releases: repoReleases }) => {
+              {pageRepositoryGroups.map(({ repo, releases: repoReleases }) => {
                 const isExpanded = releaseExpandedRepositories.has(repo.id)
                 const unreadCount = repoReleases.filter(r => !r.isRead).length
                 
@@ -339,6 +367,7 @@ export function ReleasesView() {
                             onMarkRead={(id) => void markReleaseRead(id)}
                             selectedFilters={releaseSelectedFilters}
                             assetFilters={assetFilters}
+                            onUnsubscribe={(repoId, fullName) => void handleUnsubscribeRelease(repoId, fullName)}
                           />
                         ))}
                       </div>
@@ -351,23 +380,20 @@ export function ReleasesView() {
         </main>
       </ScrollArea>
 
-      {/* 分页栏：仅在时间线模式下渲染 */}
-      {releaseViewMode === 'timeline' && (
-        <div className="flex h-9 shrink-0 items-center border-t bg-background px-3 text-xs text-muted-foreground">
-          <span>
-            显示 {filteredReleases.length === 0 ? 0 : startIndex + 1}-{Math.min(startIndex + pageSize, filteredReleases.length)} / {filteredReleases.length}
-          </span>
-          <div className="ml-auto flex items-center gap-1">
-            <Button variant="ghost" size="icon" className="size-7" disabled={clampedPage <= 1} onClick={() => setPage(value => Math.max(1, value - 1))}>
-              <ChevronLeft className="size-4" />
-            </Button>
-            <span>{clampedPage}/{totalPages}</span>
-            <Button variant="ghost" size="icon" className="size-7" disabled={clampedPage >= totalPages} onClick={() => setPage(value => Math.min(totalPages, value + 1))}>
-              <ChevronRight className="size-4" />
-            </Button>
-          </div>
+      <div className="flex h-9 shrink-0 items-center border-t bg-background px-3 text-xs text-muted-foreground">
+        <span>
+          显示 {rangeStart}-{rangeEnd} / {totalItems} {releaseViewMode === 'repository' ? '个仓库' : '个发布'}
+        </span>
+        <div className="ml-auto flex items-center gap-1">
+          <Button variant="ghost" size="icon" className="size-7" disabled={clampedPage <= 1} onClick={() => setPage(value => Math.max(1, value - 1))}>
+            <ChevronLeft className="size-4" />
+          </Button>
+          <span>{clampedPage}/{totalPages}</span>
+          <Button variant="ghost" size="icon" className="size-7" disabled={clampedPage >= totalPages} onClick={() => setPage(value => Math.min(totalPages, value + 1))}>
+            <ChevronRight className="size-4" />
+          </Button>
         </div>
-      )}
+      </div>
     </div>
   )
 }

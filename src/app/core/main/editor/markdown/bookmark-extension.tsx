@@ -3,6 +3,7 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import { ReactNodeViewRenderer, NodeViewWrapper, ReactNodeViewProps } from '@tiptap/react'
 import React, { useEffect, useState } from 'react'
+import Image from 'next/image'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { Loader2, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -126,7 +127,15 @@ function BookmarkView({ node, updateAttributes }: ReactNodeViewProps) {
           </div>
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground truncate">
             {icon ? (
-              <img src={icon} alt="" className="w-3.5 h-3.5 rounded-sm shrink-0" onError={(e) => { e.currentTarget.style.display = 'none' }} />
+              <Image
+                src={icon}
+                alt=""
+                width={14}
+                height={14}
+                className="size-3.5 shrink-0 rounded-sm"
+                unoptimized
+                onError={(e) => { e.currentTarget.style.display = 'none' }}
+              />
             ) : (
               <Globe size={12} className="shrink-0 text-primary/70" />
             )}
@@ -137,10 +146,13 @@ function BookmarkView({ node, updateAttributes }: ReactNodeViewProps) {
         {/* 右侧封面 */}
         {cover && (
           <div className="w-36 h-full shrink-0 border-l border-border/40 overflow-hidden relative hidden sm:block bg-muted">
-            <img 
-              src={cover} 
-              alt="" 
-              className="w-full h-full object-cover transition-transform duration-500 hover:scale-105"
+            <Image
+              src={cover}
+              alt=""
+              fill
+              sizes="144px"
+              className="object-cover transition-transform duration-500 hover:scale-105"
+              unoptimized
               onError={(e) => { e.currentTarget.style.display = 'none' }}
             />
           </div>
