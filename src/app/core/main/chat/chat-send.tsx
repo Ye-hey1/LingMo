@@ -21,13 +21,18 @@ import {
 } from "@/lib/agent"
 import { ImageAttachment } from "./image-attachments"
 import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
-import { requiresAgentModeForLocalAction } from "@/lib/chat-mode-guard"
 import {
   completeResearchClarification,
   generateResearchClarification,
   runDeepResearch,
   type DeepResearchProgress,
+  type ResearchLocalContext,
+  type ResearchLocalSourceInput,
 } from "@/lib/research/deep-research"
+import {
+  listUnfinishedResearchSessions,
+  type DeepResearchSessionSummary,
+} from "@/lib/research/session-store"
 import {
   buildResearchProgressView,
   encodeResearchProgressView,
@@ -51,6 +56,7 @@ interface ChatSendProps {
   quoteData?: QuoteData | null;
   webSearchEnabled?: boolean;
   allowAutoCurrentFileContext?: boolean;
+  hideButton?: boolean;
   hideIdleButton?: boolean;
 }
 
@@ -200,7 +206,59 @@ function formatResearchClarificationMessage(originalQuery: string, questions: st
   ].join('\n')
 }
 
-export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, options?: { maxTokens?: number; temperature?: number }) => void }, ChatSendProps>(({
+function formatResearchResumeMessage(session: DeepResearchSessionSummary) {
+  const started = new Date(session.startedAt)
+  const startedText = Number.isNaN(started.getTime()) ? session.startedAt : started.toLocaleString()
+  return [
+    '## 发现未完成的 Research',
+    '',
+    `主题：${session.query}`,
+    `开始时间：${startedText}`,
+    `剩余查询：${session.pendingQueriesCount}`,
+    `已找到来源：${session.sourcesCount}`,
+    `已提取证据：${session.evidencesCount}`,
+    '',
+    '已在右下角提供“继续研究”入口。点击后会从保存的断点继续执行。若要新建研究，请再次发送并包含“直接开始研究”。',
+  ].join('\n')
+}
+
+function trimResearchLocalText(text: string, limit = 12000) {
+  const normalized = text.replace(/\r\n/g, '\n').trim()
+  if (normalized.length <= limit) {
+    return normalized
+  }
+  return `${normalized.slice(0, limit).trim()}\n\n[local context truncated: ${normalized.length - limit} chars omitted]`
+}
+
+function citationDetailToResearchLocalSource(detail: ChatCitationSource, index: number): ResearchLocalSourceInput | null {
+  const content = typeof detail.content === 'string' ? detail.content.trim() : ''
+  const title = detail.title || detail.filename || detail.filepath || `本地材料 ${index + 1}`
+  if (!content && !title) {
+    return null
+  }
+
+  const sourceType = detail.sourceType === 'current'
+    || detail.sourceType === 'linked'
+    || detail.sourceType === 'quote'
+    || detail.sourceType === 'rag'
+    ? detail.sourceType
+    : 'local'
+
+  return {
+    title,
+    content: trimResearchLocalText(content || title, 10000),
+    url: detail.url,
+    sourceType,
+    path: detail.filepath,
+    startLine: detail.startLine,
+    endLine: detail.endLine,
+  }
+}
+
+export const ChatSend = forwardRef<{
+  sendChat: (instructionOverride?: string, options?: { maxTokens?: number; temperature?: number }) => void
+  stopChat: () => Promise<void>
+}, ChatSendProps>(({
   inputValue,
   onSent,
   linkedResource,
@@ -210,6 +268,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
   quoteData = null,
   webSearchEnabled = false,
   allowAutoCurrentFileContext = true,
+  hideButton = false,
   hideIdleButton = false,
 }, ref) => {
   const { primaryModel } = useSettingStore()
@@ -284,6 +343,90 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
       '',
       `后续校验或附加步骤失败：${failureMessage}`,
     ].join('\n')
+  }
+
+  async function buildResearchLocalContext(userQuery: string): Promise<{
+    localContext?: ResearchLocalContext
+    ragSources: string[]
+    ragSourceDetails: ChatCitationSource[]
+  }> {
+    const useArticleStore = (await import('@/stores/article')).default
+    const articleStore = useArticleStore.getState()
+    const contextResult = await buildChatContext({
+      linkedResources: effectiveLinkedResources,
+      linkedResourcePreviews,
+      linkedResourcePreview,
+      quoteData,
+      isRagEnabled,
+      webSearchEnabled: false,
+      userQuery,
+      contextBudget: 50000,
+      currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
+      activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
+    })
+
+    const localSources = contextResult.ragSourceDetails
+      .map((detail, index) => citationDetailToResearchLocalSource(detail, index))
+      .filter((source): source is ResearchLocalSourceInput => !!source)
+
+    const diagnosticsSource: ResearchLocalSourceInput = {
+      title: '本地上下文诊断',
+      content: [
+        `策略：${contextResult.diagnostics.strategy}`,
+        contextResult.diagnostics.ragSkippedReason ? `跳过原因：${contextResult.diagnostics.ragSkippedReason}` : '',
+        contextResult.diagnostics.ragQuery ? `RAG query：${contextResult.diagnostics.ragQuery}` : '',
+        contextResult.diagnostics.ragKeywords.length ? `关键词：${contextResult.diagnostics.ragKeywords.join('、')}` : '',
+        `当前笔记：${contextResult.diagnostics.currentNoteInjected ? '已纳入' : '未纳入'}`,
+        `关联文件：${contextResult.diagnostics.linkedFileInjectedCount}/${contextResult.diagnostics.linkedFileCount}`,
+        `RAG 命中：${contextResult.diagnostics.ragSourceCount}`,
+        `注入字符：当前 ${contextResult.diagnostics.injectedChars.current} / 关联 ${contextResult.diagnostics.injectedChars.linked} / 引用 ${contextResult.diagnostics.injectedChars.quote} / RAG ${contextResult.diagnostics.injectedChars.rag}`,
+        ...contextResult.diagnostics.warnings.map(warning => `警告：${warning}`),
+      ].filter(Boolean).join('\n'),
+      sourceType: 'local',
+      path: 'research-local-context-diagnostics',
+    }
+
+    const brief = [
+      '以下是用户当前工作区材料，应纳入 Research brief，并作为本地来源参与证据判断。',
+      '',
+      contextResult.context ? trimResearchLocalText(contextResult.context, 30000) : '',
+      '',
+      diagnosticsSource.content,
+    ].filter(Boolean).join('\n')
+
+    const hasLocalMaterial = Boolean(contextResult.context.trim()) || localSources.length > 0
+    const localContext = hasLocalMaterial
+      ? {
+          brief,
+          sources: localSources,
+        }
+      : undefined
+
+    return {
+      localContext,
+      ragSources: contextResult.ragSources,
+      ragSourceDetails: contextResult.ragSourceDetails,
+    }
+  }
+
+  async function getLatestUnfinishedResearchSession(): Promise<DeepResearchSessionSummary | null> {
+    const sessions = await listUnfinishedResearchSessions(1)
+    return sessions[0] || null
+  }
+
+  function notifyResearchResumeAvailable(session: DeepResearchSessionSummary, onResume: () => void) {
+    toast({
+      title: '发现未完成的 Research',
+      description: `还有 ${session.pendingQueriesCount} 个查询未完成，来源 ${session.sourcesCount} 个。`,
+      action: (
+        <ToastAction
+          altText="继续研究"
+          onClick={onResume}
+        >
+          继续研究
+        </ToastAction>
+      ),
+    })
   }
 
   const sanitizeAgentFinalContent = (content: string) => {
@@ -535,7 +678,13 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
   async function executeDeepResearch(
     placeholderMessage: Chat,
     query: string,
-    abortController: AbortController
+    abortController: AbortController,
+    options: {
+      sessionId?: string
+      localContext?: ResearchLocalContext
+      localRagSources?: string[]
+      localRagSourceDetails?: ChatCitationSource[]
+    } = {}
   ) {
     if (!placeholderMessage) return
     const startedAt = Date.now()
@@ -552,6 +701,8 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
       const result = await runDeepResearch({
         query,
         abortSignal: abortController.signal,
+        sessionId: options.sessionId,
+        localContext: options.localContext,
         onProgress: (progress) => {
           if (researchFinished) {
             return
@@ -581,20 +732,38 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
         evidenceBySource.set(evidence.sourceId, claims)
       })
 
-      const ragSourceDetails: ChatCitationSource[] = result.sources.map((source) => ({
-        url: source.url,
-        title: source.title,
-        filepath: source.url,
-        filename: source.title || source.url,
-        content: evidenceBySource.get(source.id)?.join('\n') || source.snippet || '',
-        sourceType: 'web',
-      }))
+      const ragSourceDetails: ChatCitationSource[] = result.sources.map((source) => {
+        const localType = source.engine.replace(/^local:/, '')
+        const sourceType = source.engine.startsWith('local:')
+          && (localType === 'current' || localType === 'linked' || localType === 'quote' || localType === 'rag')
+          ? localType
+          : source.engine.startsWith('local:')
+            ? 'rag'
+            : 'web'
+
+        return {
+          url: source.url,
+          title: source.title,
+          filepath: source.url,
+          filename: source.title || source.url,
+          content: evidenceBySource.get(source.id)?.join('\n') || source.snippet || '',
+          sourceType,
+        }
+      })
+      const mergedRagSources = Array.from(new Set([
+        ...(options.localRagSources || []),
+        ...result.sources.map(source => source.title || source.url),
+      ].filter(Boolean)))
+      const mergedRagSourceDetails = [
+        ...(options.localRagSourceDetails || []),
+        ...ragSourceDetails,
+      ]
 
       await saveChat({
         ...placeholderMessage,
         content: abortController.signal.aborted ? t('record.chat.input.stopped') : result.report,
-        ragSources: result.sources.length > 0 ? JSON.stringify(result.sources.map(source => source.title || source.url)) : undefined,
-        ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+        ragSources: mergedRagSources.length > 0 ? JSON.stringify(mergedRagSources) : undefined,
+        ragSourceDetails: mergedRagSourceDetails.length > 0 ? JSON.stringify(mergedRagSourceDetails) : undefined,
       }, true)
 
       if (!abortController.signal.aborted) {
@@ -614,6 +783,19 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
           // 相对于工作区的文件路径（用于 setActiveFilePath）
           const relativeFilePath = `${researchDir}/${fileName}`
           const relativeSessionFilePath = `${researchDir}/${sessionFileName}`
+          const reportFileContent = [
+            '---',
+            `title: "${shortTitle}"`,
+            `date: ${now.toISOString()}`,
+            'type: research_report',
+            `session_id: ${result.session.id}`,
+            `sources_count: ${result.sources.length}`,
+            `evidence_count: ${result.evidences.length}`,
+            `visited_urls: ${result.visitedUrls.length}`,
+            '---',
+            '',
+            result.report,
+          ].join('\n')
 
           // 确保 research 目录存在
           const dirOptions = await getFilePathOptions(researchDir)
@@ -627,17 +809,13 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
 
           // 写入文件
           const fileOptions = await getFilePathOptions(relativeFilePath)
-          if (workspace.isCustom) {
-            await writeTextFile(fileOptions.path, result.report)
-          } else {
-            await writeTextFile(fileOptions.path, result.report, { baseDir: fileOptions.baseDir })
-          }
-
           const sessionOptions = await getFilePathOptions(relativeSessionFilePath)
           const sessionJson = JSON.stringify(result.session, null, 2)
           if (workspace.isCustom) {
+            await writeTextFile(fileOptions.path, reportFileContent)
             await writeTextFile(sessionOptions.path, sessionJson)
           } else {
+            await writeTextFile(fileOptions.path, reportFileContent, { baseDir: fileOptions.baseDir })
             await writeTextFile(sessionOptions.path, sessionJson, { baseDir: sessionOptions.baseDir })
           }
 
@@ -652,7 +830,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
           // 先设置路径，再手动设置内容（避免 readArticle 的竞态问题）
           await articleStore.setActiveFilePath(relativeFilePath)
           // 确保编辑器显示报告内容
-          articleStore.setCurrentArticle(result.report)
+          articleStore.setCurrentArticle(reportFileContent)
 
           toast({
             title: '深度研究已完成',
@@ -696,9 +874,15 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
   function startBackgroundDeepResearch(
     placeholderMessage: Chat,
     query: string,
-    abortController: AbortController
+    abortController: AbortController,
+    options: {
+      sessionId?: string
+      localContext?: ResearchLocalContext
+      localRagSources?: string[]
+      localRagSourceDetails?: ChatCitationSource[]
+    } = {}
   ) {
-    void executeDeepResearch(placeholderMessage, query, abortController)
+    void executeDeepResearch(placeholderMessage, query, abortController, options)
       .catch(error => {
         console.error('[DeepResearch] Unhandled error in background research:', error)
       })
@@ -711,6 +895,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
     const effectiveInstruction = instructionOverride ?? inputValue
     const trimmedInstruction = effectiveInstruction.trim()
     let backgroundResearchStarted = false
+    let researchLocalContextResult: Awaited<ReturnType<typeof buildResearchLocalContext>> | null = null
     const placeholderMessage = await insert({
       tagId: currentTagId,
       role: 'system',
@@ -726,6 +911,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
 
     try {
       const wantsDirectStart = /直接开始研究|直接研究|开始研究|跳过|不用问|no questions/i.test(trimmedInstruction)
+      researchLocalContextResult = await buildResearchLocalContext(trimmedInstruction)
       const { chats: currentChats } = useChatStore.getState()
       const previousResearchMessage = [...currentChats]
         .reverse()
@@ -760,6 +946,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
           originalQuery: pendingClarification.originalQuery,
           questions: pendingClarification.questions,
           answer: trimmedInstruction,
+          localContextBrief: researchLocalContextResult.localContext?.brief,
           abortSignal: abortController.signal,
         })
 
@@ -772,13 +959,21 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
         }
 
         backgroundResearchStarted = true
-        startBackgroundDeepResearch(placeholderMessage, completed.researchBrief, abortController)
+        startBackgroundDeepResearch(placeholderMessage, completed.researchBrief, abortController, {
+          localContext: researchLocalContextResult.localContext,
+          localRagSources: researchLocalContextResult.ragSources,
+          localRagSourceDetails: researchLocalContextResult.ragSourceDetails,
+        })
         return
       }
 
       if (pendingClarification && wantsDirectStart) {
         backgroundResearchStarted = true
-        startBackgroundDeepResearch(placeholderMessage, pendingClarification.originalQuery, abortController)
+        startBackgroundDeepResearch(placeholderMessage, pendingClarification.originalQuery, abortController, {
+          localContext: researchLocalContextResult.localContext,
+          localRagSources: researchLocalContextResult.ragSources,
+          localRagSourceDetails: researchLocalContextResult.ragSourceDetails,
+        })
         return
       }
 
@@ -789,6 +984,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
 
       const clarification = await generateResearchClarification({
         query: trimmedInstruction,
+        localContextBrief: researchLocalContextResult.localContext?.brief,
         abortSignal: abortController.signal,
       })
 
@@ -801,7 +997,37 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
       }
 
       backgroundResearchStarted = true
-      startBackgroundDeepResearch(placeholderMessage, clarification.researchBrief || trimmedInstruction, abortController)
+      const resumeSession = await getLatestUnfinishedResearchSession()
+      const researchBrief = clarification.researchBrief || trimmedInstruction
+
+      if (resumeSession && !wantsDirectStart) {
+        await saveChat({
+          ...placeholderMessage,
+          content: formatResearchResumeMessage(resumeSession),
+        }, true)
+        backgroundResearchStarted = false
+        if (abortControllerRef.current === abortController) {
+          abortControllerRef.current = null
+        }
+        notifyResearchResumeAvailable(resumeSession, () => {
+          const resumeController = new AbortController()
+          abortControllerRef.current = resumeController
+          setLoading(true)
+          startBackgroundDeepResearch(placeholderMessage, researchBrief, resumeController, {
+            sessionId: resumeSession.id,
+            localContext: researchLocalContextResult?.localContext,
+            localRagSources: researchLocalContextResult?.ragSources,
+            localRagSourceDetails: researchLocalContextResult?.ragSourceDetails,
+          })
+        })
+        return
+      }
+
+      startBackgroundDeepResearch(placeholderMessage, researchBrief, abortController, {
+        localContext: researchLocalContextResult.localContext,
+        localRagSources: researchLocalContextResult.ragSources,
+        localRagSourceDetails: researchLocalContextResult.ragSourceDetails,
+      })
     } catch (error) {
       await saveChat({
         ...placeholderMessage,
@@ -816,12 +1042,6 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
       }
     }
   }
-
-  useImperativeHandle(ref, () => ({
-    sendChat: (instructionOverride?: string) => {
-      void handleSubmit(instructionOverride)
-    },
-  }))
 
   // Agent 确认回调 - 使用内联确认而不是弹窗
   const requestConfirmation = async (
@@ -1196,15 +1416,6 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
 
     if (!requestText.trim() || !displayText) return
 
-    if (chatMode === 'chat' && requiresAgentModeForLocalAction(requestText)) {
-      toast({
-        title: '请切换到 Agent 模式',
-        description: '对话模式只回答问题、联网搜索和读取上下文；创建、编辑、删除文件或执行工具需要使用 Agent 模式。',
-        variant: 'destructive',
-      })
-      return
-    }
-
     const conversationTitle = displayText.replace(/\s+/g, ' ').slice(0, 30) || '新对话'
     await ensureCurrentConversation(conversationTitle)
 
@@ -1256,7 +1467,14 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
     setLoading(false)
   }
 
-  if (hideIdleButton && !isRunning) {
+  useImperativeHandle(ref, () => ({
+    sendChat: (instructionOverride?: string) => {
+      void handleSubmit(instructionOverride)
+    },
+    stopChat: handleStop,
+  }))
+
+  if (hideButton || (hideIdleButton && !isRunning)) {
     return null
   }
 

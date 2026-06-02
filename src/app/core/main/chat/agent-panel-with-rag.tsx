@@ -64,6 +64,12 @@ interface AgentPanelWithRagProps {
     sessionApprovalSkillId?: string
   }>
   currentStepStartTime?: number
+  taskPlan?: {
+    isComplex: boolean
+    steps: Array<{ description: string; tools: string[] }>
+    summary: string
+    completedStepIndex: number
+  }
   onConfirm?: (scope?: AgentApprovalScope) => void
   onCancel?: () => void
 }
@@ -87,6 +93,7 @@ export function AgentPanelWithRag({
   pendingConfirmation,
   confirmationHistory = [],
   currentStepStartTime,
+  taskPlan,
   onConfirm,
   onCancel,
 }: AgentPanelWithRagProps) {
@@ -242,6 +249,7 @@ export function AgentPanelWithRag({
               pendingConfirmation={pendingConfirmation}
               confirmationHistory={confirmationHistory}
               currentStepStartTime={currentStepStartTime}
+              taskPlan={taskPlan}
               historyJson={agentHistoryJson}
               onConfirm={onConfirm}
               onCancel={onCancel}

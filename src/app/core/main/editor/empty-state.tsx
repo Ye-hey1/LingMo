@@ -110,13 +110,7 @@ export function EmptyState({
   }
 
   const handleGlobalSearch = () => {
-    const event = new KeyboardEvent('keydown', {
-      key: 'f',
-      metaKey: true,
-      ctrlKey: true,
-      bubbles: true,
-    })
-    window.dispatchEvent(event)
+    emitter.emit('global-search-trigger')
   }
 
   const actions: ActionItem[] = [

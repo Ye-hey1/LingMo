@@ -109,6 +109,66 @@
   animation: recordSearchBreathe 1.5s ease-in-out 2;
 }
 
+@property --chat-input-flow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes chatInputBorderFlow {
+  to {
+    --chat-input-flow-angle: 360deg;
+  }
+}
+
+.chat-input-flow-border,
+.chat-input-flow-border:focus-within {
+  border-color: transparent;
+  background:
+    linear-gradient(hsl(var(--background)), hsl(var(--background))) padding-box,
+    var(--chat-input-flow-gradient) border-box;
+  animation: chatInputBorderFlow 4s linear infinite;
+}
+
+.chat-input-flow-border-chat {
+  --chat-input-flow-gradient: conic-gradient(
+    from var(--chat-input-flow-angle),
+    transparent 0deg,
+    rgb(56 189 248 / 0.92) 42deg,
+    rgb(59 130 246 / 0.82) 82deg,
+    transparent 132deg,
+    transparent 224deg,
+    rgb(125 211 252 / 0.78) 276deg,
+    transparent 340deg
+  );
+}
+
+.chat-input-flow-border-agent {
+  --chat-input-flow-gradient: conic-gradient(
+    from var(--chat-input-flow-angle),
+    transparent 0deg,
+    rgb(251 191 36 / 0.94) 44deg,
+    rgb(245 158 11 / 0.84) 86deg,
+    transparent 138deg,
+    transparent 222deg,
+    rgb(252 211 77 / 0.78) 282deg,
+    transparent 342deg
+  );
+}
+
+.chat-input-flow-border-research {
+  --chat-input-flow-gradient: conic-gradient(
+    from var(--chat-input-flow-angle),
+    transparent 0deg,
+    rgb(52 211 153 / 0.94) 42deg,
+    rgb(16 185 129 / 0.84) 86deg,
+    transparent 136deg,
+    transparent 222deg,
+    rgb(110 231 183 / 0.78) 282deg,
+    transparent 342deg
+  );
+}
+
 /* 基础样式 - 包含主题变量定义 */
 @layer base {
   :root {

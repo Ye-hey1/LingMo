@@ -1,6 +1,5 @@
 'use client'
 import { ChatHeader } from './chat-header'
-import { ChatFooter } from './chat-footer'
 import { ChatInput } from "./chat-input";
 import ChatContent from "./chat-content";
 import { ClipboardListener } from "./clipboard-listener";

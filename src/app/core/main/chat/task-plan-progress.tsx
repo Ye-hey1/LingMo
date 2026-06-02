@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useMemo } from "react"
-import { Clock3, Loader2, Search, Sparkles } from "lucide-react"
+import { Clock3, FileSearch, Loader2, Search, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react"
 import useChatStore from "@/stores/chat"
 import {
   buildResearchProgressView,
@@ -92,8 +92,27 @@ export function TaskPlanProgress({ content, compact = true, className }: TaskPla
               <Clock3 className="size-3" />
               {progress.estimatedMinutes}
             </span>
-            <span>发现 {progress.learningsCount}</span>
-            <span>来源 {progress.visitedUrlsCount}</span>
+            <span className="inline-flex items-center gap-1">
+              <FileSearch className="size-3" />
+              来源 {progress.sourceCount || progress.visitedUrlsCount}
+            </span>
+            <span>证据 {progress.evidenceCount}</span>
+          </div>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-muted-foreground sm:grid-cols-4">
+          <div className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-1">
+            <ShieldCheck className="size-3 text-emerald-600" />
+            <span>确认 {progress.confirmedClaimsCount}</span>
+          </div>
+          <div className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-1">
+            <TriangleAlert className="size-3 text-amber-600" />
+            <span>争议 {progress.disputedClaimsCount}</span>
+          </div>
+          <div className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-1">
+            <span>低置信 {progress.lowConfidenceCount}</span>
+          </div>
+          <div className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-1">
+            <span>本地 {progress.localSourcesCount}</span>
           </div>
         </div>
       </div>

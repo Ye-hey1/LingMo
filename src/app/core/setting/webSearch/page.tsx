@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Eye, EyeOff, Github, Globe2, LoaderCircle } from 'lucide-react'
+import { Eye, EyeOff, Github, Globe2, LoaderCircle, Search, Server, Sparkles } from 'lucide-react'
 
 import { SettingType, FormItem } from '../components/setting-base'
 import useSettingStore from '@/stores/setting'
@@ -25,6 +25,20 @@ export default function WebSearchPage() {
     setTavilyApiKey,
     tavilySearchDepth,
     setTavilySearchDepth,
+    serpApiKey,
+    setSerpApiKey,
+    exaApiKey,
+    setExaApiKey,
+    researchSearchTavilyEnabled,
+    setResearchSearchTavilyEnabled,
+    researchSearchSerpApiEnabled,
+    setResearchSearchSerpApiEnabled,
+    researchSearchExaEnabled,
+    setResearchSearchExaEnabled,
+    researchSearchAnySearchMcpEnabled,
+    setResearchSearchAnySearchMcpEnabled,
+    researchSearchFirecrawlMcpEnabled,
+    setResearchSearchFirecrawlMcpEnabled,
     webSearchEnabled,
     setWebSearchEnabled,
     githubProjectApiToken,
@@ -33,6 +47,8 @@ export default function WebSearchPage() {
 
   const normalizedSearchDepth = tavilySearchDepth === 'advanced' ? 'advanced' : 'basic'
   const [tavilyApiKeyVisible, setTavilyApiKeyVisible] = useState(false)
+  const [serpApiKeyVisible, setSerpApiKeyVisible] = useState(false)
+  const [exaApiKeyVisible, setExaApiKeyVisible] = useState(false)
   const [githubTokenVisible, setGithubTokenVisible] = useState(false)
   const [testingTavily, setTestingTavily] = useState(false)
   const [tavilyHealthStatus, setTavilyHealthStatus] = useState<{ ok: boolean; message: string } | null>(null)
@@ -112,6 +128,116 @@ export default function WebSearchPage() {
               {tavilyHealthStatus.message}
             </div>
           )}
+        </div>
+      </FormItem>
+      <FormItem title="Research 搜索渠道" desc="用于 Research 模式的深度检索。可同时启用多个渠道，Research 会合并去重来源；未配置 Key 的付费渠道会自动跳过。">
+        <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3">
+          <div className="grid gap-2 md:grid-cols-2">
+            <label className="flex items-start gap-2 rounded-md border border-border/60 bg-background/70 px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                checked={researchSearchTavilyEnabled}
+                onChange={(e) => void setResearchSearchTavilyEnabled(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-border"
+              />
+              <span>
+                <span className="block font-medium">Tavily</span>
+                <span className="block text-xs text-muted-foreground">通用网页搜索与正文提取。</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 rounded-md border border-border/60 bg-background/70 px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                checked={researchSearchAnySearchMcpEnabled}
+                onChange={(e) => void setResearchSearchAnySearchMcpEnabled(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-border"
+              />
+              <span>
+                <span className="block font-medium">AnySearch MCP</span>
+                <span className="block text-xs text-muted-foreground">从已连接 MCP 服务中调用 AnySearch。</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 rounded-md border border-border/60 bg-background/70 px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                checked={researchSearchSerpApiEnabled}
+                onChange={(e) => void setResearchSearchSerpApiEnabled(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-border"
+              />
+              <span>
+                <span className="block font-medium">SerpAPI</span>
+                <span className="block text-xs text-muted-foreground">Google SERP 结果补充。</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 rounded-md border border-border/60 bg-background/70 px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                checked={researchSearchExaEnabled}
+                onChange={(e) => void setResearchSearchExaEnabled(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-border"
+              />
+              <span>
+                <span className="block font-medium">Exa</span>
+                <span className="block text-xs text-muted-foreground">语义搜索与高相关网页补充。</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 rounded-md border border-border/60 bg-background/70 px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                checked={researchSearchFirecrawlMcpEnabled}
+                onChange={(e) => void setResearchSearchFirecrawlMcpEnabled(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-border"
+              />
+              <span>
+                <span className="block font-medium">Firecrawl MCP</span>
+                <span className="block text-xs text-muted-foreground">优先使用已连接的 Firecrawl 搜索工具。</span>
+              </span>
+            </label>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Search className="h-4 w-4 text-muted-foreground" />
+              <Input
+                className="flex-1"
+                value={serpApiKey}
+                type={serpApiKeyVisible ? 'text' : 'password'}
+                placeholder="SerpAPI Key"
+                onChange={(e) => void setSerpApiKey(e.target.value)}
+              />
+              <Button variant="outline" size="icon" onClick={() => setSerpApiKeyVisible((prev) => !prev)}>
+                {serpApiKeyVisible ? <Eye /> : <EyeOff />}
+              </Button>
+              <OpenBroswer
+                type="button"
+                url="https://serpapi.com/manage-api-key"
+                title="获取 SerpAPI Key"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-muted-foreground" />
+              <Input
+                className="flex-1"
+                value={exaApiKey}
+                type={exaApiKeyVisible ? 'text' : 'password'}
+                placeholder="Exa API Key"
+                onChange={(e) => void setExaApiKey(e.target.value)}
+              />
+              <Button variant="outline" size="icon" onClick={() => setExaApiKeyVisible((prev) => !prev)}>
+                {exaApiKeyVisible ? <Eye /> : <EyeOff />}
+              </Button>
+              <OpenBroswer
+                type="button"
+                url="https://dashboard.exa.ai/api-keys"
+                title="获取 Exa Key"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2 rounded-md border border-border/60 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
+            <Server className="mt-0.5 size-3.5 shrink-0" />
+            <span>AnySearch / Firecrawl 依赖已启用且已连接的 MCP 服务；Research 会在运行时自动发现名称或工具描述匹配的搜索工具。</span>
+          </div>
         </div>
       </FormItem>
       <FormItem title="GitHub 开源项目识别" desc="用于记录模块的链接收藏：粘贴 GitHub 仓库链接时，可通过 GitHub API 读取仓库元数据和 README，再由 AI 整理成开源项目卡片。未配置时保持原链接记录流程。">

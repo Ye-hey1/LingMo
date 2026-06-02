@@ -21,6 +21,13 @@ export type ResearchProgressView = {
   totalQueries: number
   learningsCount: number
   visitedUrlsCount: number
+  sourceCount: number
+  evidenceCount: number
+  confirmedClaimsCount: number
+  disputedClaimsCount: number
+  lowConfidenceCount: number
+  singleSourceCount: number
+  localSourcesCount: number
   steps: ResearchProgressStep[]
 }
 
@@ -109,6 +116,13 @@ export function buildResearchProgressView(
     totalQueries: progress?.totalQueries ?? 0,
     learningsCount: progress?.learningsCount ?? 0,
     visitedUrlsCount: progress?.visitedUrlsCount ?? 0,
+    sourceCount: progress?.sourceCount ?? progress?.visitedUrlsCount ?? 0,
+    evidenceCount: progress?.evidenceCount ?? 0,
+    confirmedClaimsCount: progress?.confirmedClaimsCount ?? 0,
+    disputedClaimsCount: progress?.disputedClaimsCount ?? 0,
+    lowConfidenceCount: progress?.lowConfidenceCount ?? 0,
+    singleSourceCount: progress?.singleSourceCount ?? 0,
+    localSourcesCount: progress?.localSourcesCount ?? 0,
     steps,
   }
 }
@@ -127,6 +141,8 @@ export function encodeResearchProgressView(view: ResearchProgressView) {
     `预计输出时间：${view.estimatedMinutes}`,
     `当前步骤：${view.currentStep}`,
     view.currentDetail || '',
+    `来源：${view.sourceCount}，本地材料：${view.localSourcesCount}，证据：${view.evidenceCount}`,
+    `已确认：${view.confirmedClaimsCount}，有争议：${view.disputedClaimsCount}，低置信：${view.lowConfidenceCount}，单源：${view.singleSourceCount}`,
     '',
     ...stepLines,
   ].filter(Boolean).join('\n')

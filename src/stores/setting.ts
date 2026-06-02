@@ -318,6 +318,27 @@ interface SettingState {
   tavilySearchDepth: 'basic' | 'advanced'
   setTavilySearchDepth: (depth: 'basic' | 'advanced') => Promise<void>
 
+  serpApiKey: string
+  setSerpApiKey: (apiKey: string) => Promise<void>
+
+  exaApiKey: string
+  setExaApiKey: (apiKey: string) => Promise<void>
+
+  researchSearchTavilyEnabled: boolean
+  setResearchSearchTavilyEnabled: (enabled: boolean) => Promise<void>
+
+  researchSearchSerpApiEnabled: boolean
+  setResearchSearchSerpApiEnabled: (enabled: boolean) => Promise<void>
+
+  researchSearchExaEnabled: boolean
+  setResearchSearchExaEnabled: (enabled: boolean) => Promise<void>
+
+  researchSearchAnySearchMcpEnabled: boolean
+  setResearchSearchAnySearchMcpEnabled: (enabled: boolean) => Promise<void>
+
+  researchSearchFirecrawlMcpEnabled: boolean
+  setResearchSearchFirecrawlMcpEnabled: (enabled: boolean) => Promise<void>
+
   webSearchEnabled: boolean
   setWebSearchEnabled: (enabled: boolean) => Promise<void>
 
@@ -757,6 +778,62 @@ const useSettingStore = create<SettingState>((set, get) => ({
     await store.set('tavilySearchDepth', normalizedDepth)
     await store.save()
     set({ tavilySearchDepth: normalizedDepth })
+  },
+
+  serpApiKey: '',
+  setSerpApiKey: async (serpApiKey) => {
+    const store = await Store.load('store.json')
+    await store.set('serpApiKey', serpApiKey)
+    await store.save()
+    set({ serpApiKey })
+  },
+
+  exaApiKey: '',
+  setExaApiKey: async (exaApiKey) => {
+    const store = await Store.load('store.json')
+    await store.set('exaApiKey', exaApiKey)
+    await store.save()
+    set({ exaApiKey })
+  },
+
+  researchSearchTavilyEnabled: true,
+  setResearchSearchTavilyEnabled: async (researchSearchTavilyEnabled) => {
+    const store = await Store.load('store.json')
+    await store.set('researchSearchTavilyEnabled', researchSearchTavilyEnabled)
+    await store.save()
+    set({ researchSearchTavilyEnabled })
+  },
+
+  researchSearchSerpApiEnabled: false,
+  setResearchSearchSerpApiEnabled: async (researchSearchSerpApiEnabled) => {
+    const store = await Store.load('store.json')
+    await store.set('researchSearchSerpApiEnabled', researchSearchSerpApiEnabled)
+    await store.save()
+    set({ researchSearchSerpApiEnabled })
+  },
+
+  researchSearchExaEnabled: false,
+  setResearchSearchExaEnabled: async (researchSearchExaEnabled) => {
+    const store = await Store.load('store.json')
+    await store.set('researchSearchExaEnabled', researchSearchExaEnabled)
+    await store.save()
+    set({ researchSearchExaEnabled })
+  },
+
+  researchSearchAnySearchMcpEnabled: true,
+  setResearchSearchAnySearchMcpEnabled: async (researchSearchAnySearchMcpEnabled) => {
+    const store = await Store.load('store.json')
+    await store.set('researchSearchAnySearchMcpEnabled', researchSearchAnySearchMcpEnabled)
+    await store.save()
+    set({ researchSearchAnySearchMcpEnabled })
+  },
+
+  researchSearchFirecrawlMcpEnabled: true,
+  setResearchSearchFirecrawlMcpEnabled: async (researchSearchFirecrawlMcpEnabled) => {
+    const store = await Store.load('store.json')
+    await store.set('researchSearchFirecrawlMcpEnabled', researchSearchFirecrawlMcpEnabled)
+    await store.save()
+    set({ researchSearchFirecrawlMcpEnabled })
   },
 
   webSearchEnabled: false,

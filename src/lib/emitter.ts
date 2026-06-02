@@ -6,6 +6,7 @@ import type { MemorySessionTarget } from '@/app/core/main/memory/memory-navigati
 // 定义事件类型
 interface Events {
   'searchAndScroll': string;
+  'global-search-trigger': unknown;
   'pdf-search-trigger': unknown;
   'pdf-jump-to-page': { filePath: string; pageNumber: number };
   'ai-completion-loading': boolean;

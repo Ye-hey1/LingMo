@@ -1,11 +1,11 @@
 import OpenAI from 'openai'
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { mcpServerManager } from '@/lib/mcp/server-manager'
 import type { MCPServerConfig, MCPTool } from '@/lib/mcp/types'
 import { useMcpStore } from '@/stores/mcp'
+import useSettingStore from '@/stores/setting'
 import { createOpenAIClient, getAISettings, validateAIService } from '@/lib/ai/utils'
 import { tavilyExtract, requestDuckDuckGoFallback, searchWeb, type TavilySearchDepth } from '@/lib/tavily'
-import { exists, mkdir, writeTextFile } from '@tauri-apps/plugin-fs'
-import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
 import type { AgentEventBus } from '@/lib/agent'
 import { saveSessionState, loadSessionState } from './session-store'
 
@@ -91,6 +91,31 @@ type FirecrawlBinding = {
   searchTool: MCPTool
 }
 
+type EvidenceStats = {
+  total: number
+  highConfidence: number
+  mediumConfidence: number
+  lowConfidence: number
+  singleSourceClaims: number
+  conflictingClaims: number
+  confirmedClaims: number
+}
+
+export type ResearchLocalSourceInput = {
+  title: string
+  content: string
+  url?: string
+  sourceType?: 'current' | 'linked' | 'quote' | 'rag' | 'local'
+  path?: string
+  startLine?: number
+  endLine?: number
+}
+
+export type ResearchLocalContext = {
+  brief: string
+  sources: ResearchLocalSourceInput[]
+}
+
 export type DeepResearchProgress = {
   stage: 'initializing' | 'planning' | 'searching' | 'analyzing' | 'verifying' | 'writing' | 'done'
   currentDepth: number
@@ -103,6 +128,12 @@ export type DeepResearchProgress = {
   learningsCount: number
   visitedUrlsCount: number
   evidenceCount?: number
+  sourceCount?: number
+  confirmedClaimsCount?: number
+  disputedClaimsCount?: number
+  lowConfidenceCount?: number
+  singleSourceCount?: number
+  localSourcesCount?: number
   providerStatus?: string
   strategy?: ResearchStrategyId
   estimatedMinutes?: string
@@ -425,6 +456,149 @@ function remapEvidenceSources(evidences: ResearchEvidence[], sources: ResearchSo
     }))
 }
 
+function createLocalResearchInputs(localContext?: ResearchLocalContext): {
+  sources: ResearchSource[]
+  evidences: ResearchEvidence[]
+  learnings: string[]
+} {
+  if (!localContext || (!localContext.brief.trim() && localContext.sources.length === 0)) {
+    return { sources: [], evidences: [], learnings: [] }
+  }
+
+  const retrievedAt = new Date().toISOString()
+  const localSources = localContext.sources
+    .map((source, index): ResearchSource | null => {
+      const title = source.title.trim() || source.path || `本地材料 ${index + 1}`
+      const content = source.content.replace(/\r\n/g, '\n').trim()
+      if (!title && !content) {
+        return null
+      }
+
+      const sourceKind = source.sourceType || 'local'
+      const url = source.url || `local:${sourceKind}:${encodeURIComponent(source.path || title || String(index + 1))}`
+      return {
+        id: `S${index + 1}`,
+        title,
+        url,
+        engine: `local:${sourceKind}`,
+        snippet: content ? trimText(content, 1200) : undefined,
+        retrievedAt,
+        credibilityScore: sourceKind === 'quote' || sourceKind === 'current' ? 0.78 : 0.7,
+      }
+    })
+    .filter((source): source is ResearchSource => !!source)
+
+  const evidences = localSources
+    .filter(source => source.snippet?.trim())
+    .map((source, index): ResearchEvidence => ({
+      id: `E${index + 1}`,
+      sourceId: source.id,
+      sourceUrl: source.url,
+      claim: `本地材料「${source.title}」包含与研究问题相关的上下文，应作为研究 brief 的事实背景参与分析。`,
+      quote: source.snippet ? trimText(source.snippet, 600) : undefined,
+      relevanceScore: 0.75,
+      confidence: 'medium',
+    }))
+
+  const learnings = [
+    localContext.brief.trim() ? `本地研究 brief：${trimText(localContext.brief, 800)}` : '',
+    ...localSources.map(source => `本地来源：${source.title}${source.snippet ? ` - ${trimText(source.snippet, 240)}` : ''}`),
+  ].filter(Boolean)
+
+  return { sources: localSources, evidences, learnings }
+}
+
+function formatLocalContextForPrompt(localContext?: ResearchLocalContext) {
+  if (!localContext || (!localContext.brief.trim() && localContext.sources.length === 0)) {
+    return ''
+  }
+
+  const sourceBlocks = localContext.sources
+    .filter(source => source.title.trim() || source.content.trim())
+    .slice(0, 12)
+    .map((source, index) => [
+      `<local_source index="${index + 1}" type="${source.sourceType || 'local'}">`,
+      `Title: ${source.title || source.path || `本地材料 ${index + 1}`}`,
+      source.path ? `Path: ${source.path}` : '',
+      source.startLine && source.endLine ? `Lines: ${source.startLine}-${source.endLine}` : '',
+      trimText(source.content, 2000),
+      '</local_source>',
+    ].filter(Boolean).join('\n'))
+
+  return [
+    '<local_research_brief>',
+    localContext.brief ? trimText(localContext.brief, 5000) : '',
+    sourceBlocks.join('\n\n'),
+    '</local_research_brief>',
+  ].filter(Boolean).join('\n')
+}
+
+function computeEvidenceStats(evidences: ResearchEvidence[]): EvidenceStats {
+  const normalizedClaims = new Map<string, {
+    sources: Set<string>
+    low: number
+    high: number
+    total: number
+  }>()
+
+  for (const evidence of evidences) {
+    const key = evidence.claim
+      .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '')
+      .slice(0, 80)
+      .toLowerCase()
+    const entry = normalizedClaims.get(key) || {
+      sources: new Set<string>(),
+      low: 0,
+      high: 0,
+      total: 0,
+    }
+    entry.sources.add(hostFromUrl(evidence.sourceUrl) || evidence.sourceUrl)
+    entry.total += 1
+    if (evidence.confidence === 'low') entry.low += 1
+    if (evidence.confidence === 'high') entry.high += 1
+    normalizedClaims.set(key, entry)
+  }
+
+  let singleSourceClaims = 0
+  let confirmedClaims = 0
+  normalizedClaims.forEach(entry => {
+    if (entry.sources.size <= 1) {
+      singleSourceClaims += 1
+    }
+    if (entry.sources.size >= 2 && entry.low === 0) {
+      confirmedClaims += 1
+    }
+  })
+
+  const lowConfidence = evidences.filter(evidence => evidence.confidence === 'low').length
+  return {
+    total: evidences.length,
+    highConfidence: evidences.filter(evidence => evidence.confidence === 'high').length,
+    mediumConfidence: evidences.filter(evidence => evidence.confidence === 'medium').length,
+    lowConfidence,
+    singleSourceClaims,
+    conflictingClaims: 0,
+    confirmedClaims,
+  }
+}
+
+function buildProgressStats(sources: ResearchSource[], evidences: ResearchEvidence[], localSourcesCount = 0, override?: Partial<EvidenceStats>) {
+  const stats = {
+    ...computeEvidenceStats(evidences),
+    ...override,
+  }
+
+  return {
+    sourceCount: sources.length,
+    evidenceCount: evidences.length,
+    confirmedClaimsCount: stats.confirmedClaims,
+    disputedClaimsCount: stats.conflictingClaims,
+    lowConfidenceCount: stats.lowConfidence,
+    singleSourceCount: stats.singleSourceClaims,
+    localSourcesCount,
+  }
+}
+
 function trimText(text: string, limit: number) {
   const normalized = text.replace(/\r\n/g, '\n').trim()
   if (normalized.length <= limit) {
@@ -474,6 +648,50 @@ function parseSearchItems(resultText: string): FirecrawlSearchItem[] {
       content: typeof item.content === 'string' ? item.content : undefined,
       description: typeof item.description === 'string' ? item.description : undefined,
     }))
+}
+
+function parseUnknownSearchItems(payload: unknown): FirecrawlSearchItem[] {
+  if (!payload) {
+    return []
+  }
+
+  const rawItems = Array.isArray(payload)
+    ? payload
+    : typeof payload === 'object'
+      ? Array.isArray((payload as { results?: unknown }).results)
+        ? (payload as { results: unknown[] }).results
+        : Array.isArray((payload as { data?: unknown }).data)
+          ? (payload as { data: unknown[] }).data
+          : Array.isArray((payload as { organic_results?: unknown }).organic_results)
+            ? (payload as { organic_results: unknown[] }).organic_results
+            : []
+      : []
+
+  return rawItems
+    .filter((item: unknown): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map(item => {
+      const title = firstString(item.title, item.name)
+      const url = firstString(item.url, item.link)
+      const content = firstString(item.text, item.content, item.snippet, item.description)
+      return {
+        title,
+        url,
+        markdown: content,
+        content,
+        description: firstString(item.snippet, item.description),
+        score: typeof item.score === 'number' ? item.score : undefined,
+        publishedDate: firstString(item.publishedDate, item.published_date, item.date),
+      }
+    })
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return undefined
 }
 
 function tavilyResultToSearchItems(results: Awaited<ReturnType<typeof searchWeb>>['results']): FirecrawlSearchItem[] {
@@ -550,6 +768,94 @@ function createTavilyProvider(): ResearchSearchProvider {
   }
 }
 
+function createSerpApiProvider(apiKey: string): ResearchSearchProvider {
+  return {
+    name: 'serpapi',
+    async search(query, options) {
+      const url = new URL('https://serpapi.com/search.json')
+      url.searchParams.set('engine', 'google')
+      url.searchParams.set('q', query)
+      url.searchParams.set('api_key', apiKey)
+      url.searchParams.set('num', String(Math.min(Math.max(options.maxResults, 1), 10)))
+      if (options.includeDomains?.length) {
+        url.searchParams.set('as_sitesearch', options.includeDomains[0])
+      }
+
+      const response = await tauriFetch(url.toString(), {
+        method: 'GET',
+        signal: options.abortSignal,
+        headers: {
+          Accept: 'application/json',
+        },
+      })
+      const text = await response.text()
+      if (!response.ok) {
+        throw new Error(`SerpAPI search failed (${response.status}): ${text.slice(0, 240)}`)
+      }
+
+      const parsed = extractJsonObject(text)
+      const organicResults = Array.isArray(parsed?.organic_results) ? parsed.organic_results : []
+      return organicResults
+        .filter((item: unknown): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .map(item => ({
+          title: firstString(item.title),
+          url: firstString(item.link),
+          markdown: firstString(item.snippet),
+          content: firstString(item.snippet),
+          description: firstString(item.snippet),
+          publishedDate: firstString(item.date),
+          provider: 'serpapi',
+        }))
+    },
+  }
+}
+
+function createExaProvider(apiKey: string): ResearchSearchProvider {
+  return {
+    name: 'exa',
+    async search(query, options) {
+      const response = await tauriFetch('https://api.exa.ai/search', {
+        method: 'POST',
+        signal: options.abortSignal,
+        headers: {
+          'x-api-key': apiKey,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          numResults: Math.min(Math.max(options.maxResults, 1), 10),
+          type: 'auto',
+          includeDomains: options.includeDomains,
+          text: true,
+        }),
+      })
+      const text = await response.text()
+      if (!response.ok) {
+        throw new Error(`Exa search failed (${response.status}): ${text.slice(0, 240)}`)
+      }
+
+      const parsed = extractJsonObject(text)
+      const results = Array.isArray(parsed?.results) ? parsed.results : []
+      return results
+        .filter((item: unknown): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .map(item => {
+          const content = firstString(item.text, item.summary, item.highlights)
+          return {
+            title: firstString(item.title),
+            url: firstString(item.url),
+            markdown: content,
+            content,
+            description: firstString(item.summary),
+            score: typeof item.score === 'number' ? item.score : undefined,
+            publishedDate: firstString(item.publishedDate, item.published_date),
+            provider: 'exa',
+          }
+        })
+    },
+  }
+}
+
 function createFirecrawlProvider(binding: FirecrawlBinding): ResearchSearchProvider {
   return {
     name: `firecrawl:${binding.server.name || binding.server.id}`,
@@ -591,19 +897,87 @@ function createFirecrawlProvider(binding: FirecrawlBinding): ResearchSearchProvi
   }
 }
 
+function createAnySearchMcpProvider(binding: FirecrawlBinding): ResearchSearchProvider {
+  return {
+    name: `anysearch:${binding.server.name || binding.server.id}`,
+    async search(query) {
+      const searchTimeout = 25000
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('AnySearch MCP search timeout (25s)')), searchTimeout)
+      })
+
+      const result = await Promise.race([
+        mcpServerManager.callTool(
+          binding.server.id,
+          binding.searchTool.name,
+          buildSearchArgs(binding.searchTool, query)
+        ),
+        timeoutPromise,
+      ]).finally(() => {
+        clearTimeout(timer)
+      })
+
+      if (!result) {
+        throw new Error('AnySearch MCP returned an empty response.')
+      }
+      if (result.isError) {
+        throw new Error(getTextContent(result) || `AnySearch MCP search failed for ${query}`)
+      }
+
+      const text = getTextContent(result)
+      const parsed = extractJsonObject(text)
+      const items = parseUnknownSearchItems(parsed || text)
+      if (items.length === 0) {
+        throw new Error('AnySearch MCP response did not contain parseable search results.')
+      }
+
+      return items.map(item => ({
+        ...item,
+        provider: 'anysearch',
+      }))
+    },
+  }
+}
+
 async function buildSearchProviders(): Promise<ResearchSearchProvider[]> {
   const providers: ResearchSearchProvider[] = []
+  const settings = useSettingStore.getState()
 
-  try {
-    const binding = await findFirecrawlBinding({ optional: true })
-    if (binding) {
-      providers.push(createFirecrawlProvider(binding))
+  if (settings.researchSearchAnySearchMcpEnabled) {
+    try {
+      const binding = await findMcpSearchBinding('anysearch', { optional: true })
+      if (binding) {
+        providers.push(createAnySearchMcpProvider(binding))
+      }
+    } catch (error) {
+      console.warn('[DeepResearch] AnySearch MCP provider unavailable:', error)
     }
-  } catch (error) {
-    console.warn('[DeepResearch] Firecrawl provider unavailable:', error)
   }
 
-  providers.push(createTavilyProvider())
+  if (settings.researchSearchFirecrawlMcpEnabled) {
+    try {
+      const binding = await findMcpSearchBinding('firecrawl', { optional: true })
+      if (binding) {
+        providers.push(createFirecrawlProvider(binding))
+      }
+    } catch (error) {
+      console.warn('[DeepResearch] Firecrawl provider unavailable:', error)
+    }
+  }
+
+  if (settings.researchSearchSerpApiEnabled && settings.serpApiKey.trim()) {
+    providers.push(createSerpApiProvider(settings.serpApiKey.trim()))
+  }
+
+  if (settings.researchSearchExaEnabled && settings.exaApiKey.trim()) {
+    providers.push(createExaProvider(settings.exaApiKey.trim()))
+  }
+
+  if (settings.researchSearchTavilyEnabled !== false) {
+    providers.push(createTavilyProvider())
+  }
+
   providers.push(createDuckDuckGoProvider())
   return providers
 }
@@ -645,15 +1019,16 @@ async function ensureMcpInitialized() {
   }
 }
 
-async function findFirecrawlBinding(options: { optional?: boolean } = {}): Promise<FirecrawlBinding | null> {
+async function findMcpSearchBinding(kind: 'firecrawl' | 'anysearch', options: { optional?: boolean } = {}): Promise<FirecrawlBinding | null> {
   await ensureMcpInitialized()
   const store = useMcpStore.getState()
+  const matcher = kind === 'firecrawl' ? /firecrawl/i : /any\s*search|anysearch|any-search/i
 
-  const firecrawlServers = store.servers.filter(server =>
-    server.enabled && /firecrawl/i.test(`${server.name} ${server.command || ''} ${(server.args || []).join(' ')}`)
+  const servers = store.servers.filter(server =>
+    server.enabled && matcher.test(`${server.name} ${server.command || ''} ${(server.args || []).join(' ')}`)
   )
 
-  for (const server of firecrawlServers) {
+  for (const server of servers) {
     let state = store.getServerState(server.id)
     if (state?.status !== 'connected') {
       await mcpServerManager.connectServer(server)
@@ -661,7 +1036,13 @@ async function findFirecrawlBinding(options: { optional?: boolean } = {}): Promi
     }
 
     const tools = state?.tools || mcpServerManager.getServerTools(server.id)
-    const searchTool = tools.find(tool => /search/i.test(tool.name))
+    const searchTool = tools.find(tool => {
+      const haystack = `${tool.name} ${tool.description || ''}`
+      if (kind === 'firecrawl') {
+        return /search/i.test(tool.name)
+      }
+      return /search|web|query/i.test(haystack)
+    })
     if (searchTool) {
       return { server, searchTool }
     }
@@ -671,7 +1052,7 @@ async function findFirecrawlBinding(options: { optional?: boolean } = {}): Promi
     return null
   }
 
-  throw new Error('未找到可用的 Firecrawl MCP 搜索工具。请在 MCP 设置中启用 firecrawl-mcp，并确认它能正常连接。')
+  throw new Error(`未找到可用的 ${kind === 'firecrawl' ? 'Firecrawl' : 'AnySearch'} MCP 搜索工具。请在 MCP 设置中启用对应服务，并确认它能正常连接。`)
 }
 
 async function askJson(
@@ -778,6 +1159,7 @@ async function askText(
 
 export async function generateResearchClarification(params: {
   query: string
+  localContextBrief?: string
   abortSignal?: AbortSignal
 }): Promise<ResearchClarification> {
   const parsed = await askJson([
@@ -788,8 +1170,10 @@ export async function generateResearchClarification(params: {
     '- Questions should help clarify role, goal, scope, application scenario, depth, deliverable format, and constraints.',
     '- If the request is already sufficiently specific, set canStart=true and ask no questions.',
     '- researchBrief should summarize the current research intent and known constraints.',
+    '- If local context is provided, use it to infer scope and avoid asking questions that the local material already answers.',
     '',
     `<user_query>${params.query}</user_query>`,
+    params.localContextBrief ? `<local_context>${trimText(params.localContextBrief, 3000)}</local_context>` : '',
   ].join('\n'), params.abortSignal)
 
   const questions = Array.isArray(parsed?.questions)
@@ -807,6 +1191,7 @@ export async function completeResearchClarification(params: {
   originalQuery: string
   questions: string[]
   answer: string
+  localContextBrief?: string
   abortSignal?: AbortSignal
 }): Promise<{ canStart: boolean; missingQuestions: string[]; researchBrief: string }> {
   const parsed = await askJson([
@@ -816,12 +1201,14 @@ export async function completeResearchClarification(params: {
     '- If the answer provides enough scope to start useful research, canStart=true.',
     '- If important information is still missing, ask at most 3 concrete missingQuestions in Simplified Chinese.',
     '- researchBrief must combine the original query, the clarification questions, and the user answer into a focused research plan.',
+    '- If local context is provided, fold it into the researchBrief as background constraints and local evidence to verify or extend.',
     '',
     `<original_query>${params.originalQuery}</original_query>`,
     '<clarification_questions>',
     params.questions.map((question, index) => `${index + 1}. ${question}`).join('\n'),
     '</clarification_questions>',
     `<user_answer>${params.answer}</user_answer>`,
+    params.localContextBrief ? `<local_context>${trimText(params.localContextBrief, 3000)}</local_context>` : '',
   ].join('\n'), params.abortSignal)
 
   const missingQuestions = Array.isArray(parsed?.missingQuestions)
@@ -840,6 +1227,7 @@ export async function completeResearchClarification(params: {
 
 async function classifyResearchIntent(params: {
   query: string
+  localContextBrief?: string
   abortSignal?: AbortSignal
 }): Promise<ResearchStrategyId> {
   const parsed = await askJson([
@@ -853,6 +1241,7 @@ async function classifyResearchIntent(params: {
     '- comprehensive: broad analysis, market research, decision support, or unclear depth.',
     '',
     `<user_query>${params.query}</user_query>`,
+    params.localContextBrief ? `<local_context>${trimText(params.localContextBrief, 2000)}</local_context>` : '',
   ].join('\n'), params.abortSignal)
 
   const strategy = typeof parsed?.strategy === 'string' ? parsed.strategy : ''
@@ -864,6 +1253,7 @@ async function generateSerpQueries(params: {
   breadth: number
   learnings: string[]
   strategy: ResearchStrategyConfig
+  localContextBrief?: string
   abortSignal?: AbortSignal
 }): Promise<SerpQuery[]> {
   const originalTopic = params.query.split('\n').find(line => line.trim())?.trim() || params.query.trim()
@@ -874,11 +1264,13 @@ async function generateSerpQueries(params: {
     '- Every query must be directly about the user prompt or a specific subtopic from previous learnings.',
     '- Do not invent unrelated example topics.',
     '- Include the core nouns/entities from the user prompt whenever possible.',
+    '- When local context is provided, generate queries that verify, expand, or challenge the local material instead of ignoring it.',
     `- Strategy: ${params.strategy.label}. ${params.strategy.queryHint}`,
     '- If the prompt is already clear, produce fewer focused queries.',
     'Each researchGoal should explain what this query should verify and what deeper direction it may open.',
     '',
     `<user_prompt>${params.query}</user_prompt>`,
+    params.localContextBrief ? `<local_context>${trimText(params.localContextBrief, 3000)}</local_context>` : '',
     params.learnings.length > 0 ? `<previous_learnings>${params.learnings.join('\n')}</previous_learnings>` : '',
   ].join('\n'), params.abortSignal)
 
@@ -1127,9 +1519,14 @@ export async function performCrossVerification(
 ): Promise<{
   evidences: ResearchEvidence[]
   verificationSummary: string
+  stats: EvidenceStats
 }> {
   if (evidences.length === 0) {
-    return { evidences, verificationSummary: '未收集到足够证据以进行交叉印证。' }
+    return {
+      evidences,
+      verificationSummary: '未收集到足够证据以进行交叉印证。',
+      stats: computeEvidenceStats(evidences),
+    }
   }
 
   const prompt = [
@@ -1217,6 +1614,7 @@ export async function performCrossVerification(
   const summaryLines: string[] = ['### 证据链交叉印证分析评估报告：']
   let conflictCount = 0
   let highConfCount = 0
+  let singleSourceCount = 0
 
   clusters.forEach((cluster: any, index: number) => {
     const cId = `cluster-${index}`
@@ -1232,6 +1630,7 @@ export async function performCrossVerification(
       highConfCount++
       summaryLines.push(`   - 状态：**多源印证（置信度高）**，支持证据：[${suppIds.join(', ')}]`)
     } else if (hosts && hosts.size === 1) {
+      singleSourceCount++
       summaryLines.push(`   - 状态：**孤证引用**（置信度受限，仅来源于单个域），支持证据：[${suppIds.join(', ')}]`)
     } else {
       summaryLines.push(`   - 状态：**多方提及**，支持证据：[${suppIds.join(', ')}]`)
@@ -1251,7 +1650,13 @@ export async function performCrossVerification(
 
   return {
     evidences: updatedEvidences,
-    verificationSummary: summaryLines.join('\n')
+    verificationSummary: summaryLines.join('\n'),
+    stats: {
+      ...computeEvidenceStats(updatedEvidences),
+      singleSourceClaims: singleSourceCount || computeEvidenceStats(updatedEvidences).singleSourceClaims,
+      conflictingClaims: conflictCount,
+      confirmedClaims: highConfCount,
+    },
   }
 }
 
@@ -1270,12 +1675,65 @@ function formatEvidenceForReport(sources: ResearchSource[], evidences: ResearchE
   }).join('\n\n')
 }
 
+function formatCompactReferenceSection(sources: ResearchSource[]) {
+  const rows = sources.map((source, index) => {
+    const published = source.publishedAt ? `，${source.publishedAt}` : ''
+    const host = hostFromUrl(source.url)
+    const label = source.title || host || source.url
+    if (source.url.startsWith('local:')) {
+      return `${index + 1}. ${label}，本地来源${published}`
+    }
+    return `${index + 1}. [${label}](${source.url})${host ? `，${host}` : ''}${published}`
+  })
+
+  return [
+    '## 参考来源',
+    '',
+    '<details>',
+    '<summary>查看本次研究使用的来源</summary>',
+    '',
+    ...rows,
+    '',
+    '</details>',
+  ].join('\n')
+}
+
 function appendFallbackSourceSection(report: string, sources: ResearchSource[]) {
-  if (report.includes('## 来源') || sources.length === 0) {
+  if (report.includes('## 参考来源') || report.includes('## 来源') || sources.length === 0) {
     return report.trim()
   }
 
-  return `${report.trim()}\n\n## 来源\n\n${sources.map(source => `- [${source.id}] ${source.title}：${source.url}`).join('\n')}`
+  return `${report.trim()}\n\n${formatCompactReferenceSection(sources)}`
+}
+
+function formatEvidenceAppendix(sources: ResearchSource[], evidences: ResearchEvidence[]) {
+  if (evidences.length === 0) {
+    return ''
+  }
+
+  const rows = evidences.map(ev => {
+    const source = sources.find(s => s.id === ev.sourceId)
+    const sourceTitle = source ? source.title : '未知来源'
+    const sourceRef = ev.sourceUrl.startsWith('local:')
+      ? `${sourceTitle}（本地来源）`
+      : `[${sourceTitle}](${ev.sourceUrl})`
+    return `| ${ev.id} | ${ev.confidence.toUpperCase()} | ${ev.claim} | ${sourceRef} |`
+  })
+
+  return [
+    '## 附录：证据索引与交叉验证',
+    '',
+    '以下内容用于追溯事实依据和置信度，默认折叠，避免干扰正文阅读。',
+    '',
+    '<details>',
+    '<summary>查看证据索引</summary>',
+    '',
+    '| 证据 ID | 来源置信度 | 事实主张 | 引用来源 |',
+    '|---|---|---|---|',
+    ...rows,
+    '',
+    '</details>',
+  ].join('\n')
 }
 
 export async function runDeepResearch(params: {
@@ -1285,11 +1743,15 @@ export async function runDeepResearch(params: {
   abortSignal?: AbortSignal
   onProgress?: (progress: DeepResearchProgress) => void
   sessionId?: string
+  localContext?: ResearchLocalContext
   eventBus?: AgentEventBus
 }): Promise<DeepResearchResult> {
   const startedAt = new Date().toISOString()
+  const localContextPrompt = formatLocalContextForPrompt(params.localContext)
+  const localResearchInputs = createLocalResearchInputs(params.localContext)
   const strategyId = await classifyResearchIntent({
     query: params.query,
+    localContextBrief: localContextPrompt,
     abortSignal: params.abortSignal,
   })
   const strategy = STRATEGY_CONFIGS[strategyId]
@@ -1303,6 +1765,7 @@ export async function runDeepResearch(params: {
   let allSources: ResearchSource[] = []
   let allEvidences: ResearchEvidence[] = []
   let pendingQueries: Array<{ query: string; researchGoal: string; depth: number; breadth: number }> = []
+  let localSourcesCount = localResearchInputs.sources.length
 
   // 尝试加载 Session 状态
   if (params.sessionId) {
@@ -1314,12 +1777,17 @@ export async function runDeepResearch(params: {
       allSources = savedState.sources || []
       allEvidences = savedState.evidences || []
       pendingQueries = savedState.pendingQueries || []
+      localSourcesCount = allSources.filter(source => source.engine.startsWith('local:')).length
       console.log(`[DeepResearch] Resumed from session ${sessionId}. Pending queries count: ${pendingQueries.length}`)
     }
   }
 
   // 若无可用 Session 则初始化任务队列
   if (pendingQueries.length === 0) {
+    allSources = mergeSources(allSources, localResearchInputs.sources)
+    allEvidences = remapEvidenceSources([...allEvidences, ...localResearchInputs.evidences], allSources)
+    allLearnings = uniqueStrings([...allLearnings, ...localResearchInputs.learnings])
+
     params.onProgress?.({
       stage: 'initializing',
       currentDepth: defaultDepth,
@@ -1328,12 +1796,12 @@ export async function runDeepResearch(params: {
       totalBreadth: defaultBreadth,
       completedQueries: 0,
       totalQueries: 0,
-      learningsCount: 0,
+      learningsCount: allLearnings.length,
       visitedUrlsCount: 0,
-      evidenceCount: 0,
       providerStatus: providers.map(provider => provider.name).join(', '),
       strategy: strategy.id,
       estimatedMinutes: `${Math.max(3, defaultDepth * defaultBreadth)}-${Math.max(5, defaultDepth * defaultBreadth * 2)} 分钟`,
+      ...buildProgressStats(allSources, allEvidences, localSourcesCount),
     })
 
     params.eventBus?.emit('research.started', {
@@ -1347,8 +1815,9 @@ export async function runDeepResearch(params: {
     const serpQueries = await generateSerpQueries({
       query: params.query,
       breadth: defaultBreadth,
-      learnings: [],
+      learnings: allLearnings,
       strategy,
+      localContextBrief: localContextPrompt,
       abortSignal: params.abortSignal,
     })
 
@@ -1410,9 +1879,9 @@ export async function runDeepResearch(params: {
       totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
       learningsCount: allLearnings.length,
       visitedUrlsCount: allUrls.length,
-      evidenceCount: allEvidences.length,
       providerStatus: providerNames,
       strategy: strategy.id,
+      ...buildProgressStats(allSources, allEvidences, localSourcesCount),
     })
 
     params.eventBus?.emit('research.progress', {
@@ -1421,7 +1890,7 @@ export async function runDeepResearch(params: {
       completedQueries: completedQueriesCount,
       totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
       learningsCount: allLearnings.length,
-      evidenceCount: allEvidences.length,
+      ...buildProgressStats(allSources, allEvidences, localSourcesCount),
       sessionId,
     })
 
@@ -1469,9 +1938,9 @@ export async function runDeepResearch(params: {
           totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
           learningsCount: allLearnings.length,
           visitedUrlsCount: allUrls.length,
-          evidenceCount: allEvidences.length,
           providerStatus: `${providerNames} | crawler`,
           strategy: strategy.id,
+          ...buildProgressStats(allSources, allEvidences, localSourcesCount),
         })
 
         const crawledSources = await runDeepCrawler({
@@ -1521,8 +1990,8 @@ export async function runDeepResearch(params: {
         totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
         learningsCount: allLearnings.length,
         visitedUrlsCount: allUrls.length,
-        evidenceCount: allEvidences.length,
         strategy: strategy.id,
+        ...buildProgressStats(allSources, allEvidences, localSourcesCount),
       })
 
       params.eventBus?.emit('research.progress', {
@@ -1531,7 +2000,7 @@ export async function runDeepResearch(params: {
         completedQueries: completedQueriesCount + currentBatch.length,
         totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
         learningsCount: allLearnings.length,
-        evidenceCount: allEvidences.length,
+        ...buildProgressStats(allSources, allEvidences, localSourcesCount),
         sessionId,
       })
 
@@ -1620,9 +2089,9 @@ export async function runDeepResearch(params: {
     totalQueries: completedQueriesCount,
     learningsCount: allLearnings.length,
     visitedUrlsCount: allUrls.length,
-    evidenceCount: allEvidences.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
     strategy: strategy.id,
+    ...buildProgressStats(allSources, allEvidences, localSourcesCount),
   })
 
   params.eventBus?.emit('research.progress', {
@@ -1633,6 +2102,7 @@ export async function runDeepResearch(params: {
 
   const verificationResult = await performCrossVerification(allSources, allEvidences, params.abortSignal)
   allEvidences = verificationResult.evidences
+  const verifiedProgressStats = buildProgressStats(allSources, allEvidences, localSourcesCount, verificationResult.stats)
 
   // 2. 生成最终报告
   params.onProgress?.({
@@ -1645,9 +2115,9 @@ export async function runDeepResearch(params: {
     totalQueries: completedQueriesCount,
     learningsCount: allLearnings.length,
     visitedUrlsCount: allUrls.length,
-    evidenceCount: allEvidences.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
     strategy: strategy.id,
+    ...verifiedProgressStats,
   })
 
   params.eventBus?.emit('research.progress', {
@@ -1657,20 +2127,33 @@ export async function runDeepResearch(params: {
 
   const learnings = allLearnings.slice(0, MAX_LEARNINGS_FOR_REPORT)
   const report = await askText([
-    'Write a detailed deep research report in Markdown for the user query.',
-    'Requirements:',
+    'Write a substantial deep-research article in Markdown for the user query.',
+    'The article must feel like a carefully reasoned research deliverable, not a fixed-template summary.',
+    'Writing requirements:',
     '- Use Simplified Chinese.',
     `- Research strategy: ${strategy.label}. ${strategy.reportFocus}`,
-    '- Include an executive summary, key findings, detailed analysis, confidence/limitations, and source list.',
-    '- Ground every major claim in the provided evidences and cite source IDs inline like [S1].',
-    '- If a key conclusion has only one independent source or low confidence evidence, explicitly mark it as single-source or uncertain.',
+    '- Build a topic-specific structure with meaningful section titles. Do not force the report into a generic template such as executive summary / key findings / detailed analysis / limitations.',
+    '- Cover the subject in depth: background and context, core mechanisms or concepts, current state, important actors or cases, evidence comparisons, disagreements, risks, trade-offs, and practical implications when relevant.',
+    '- Prefer coherent article flow over bullet-only output. Use paragraphs for reasoning, tables for comparisons, and lists only where they improve scanability.',
+    '- Start with a concise orientation that tells the reader what question is being answered and why it matters, then develop the argument layer by layer.',
+    '- Make the final structure proportional to the available evidence. If evidence is rich, write a more detailed long-form report with multiple sections and subsections; do not over-compress.',
+    '- Ground every major claim in the provided evidences, but do NOT show inline citation markers, bracketed source labels, or source IDs in the body text.',
+    '- Write the body as a clean article. Source tracing is handled in the compact reference section at the end.',
+    '- Make evidence quality visible in prose: clearly call out key conclusions that are single-source, low-confidence, or contradicted by other sources. Do this naturally in the article body or in a short evidence-quality section; do not use [S1] style markers.',
+    '- If local materials are provided, treat them as local sources: use them to frame the brief, verify them against web evidence, and distinguish local-context conclusions from externally verified conclusions.',
     '- Preserve concrete names, numbers, dates, and URLs.',
+    '- Include a compact "参考来源" section near the end. Keep it visually lightweight: use a folded details block or a concise numbered list, not a large flat wall of links.',
     '- When the report contains a process, architecture, relationship map, decision tree, timeline, or comparison that would benefit from visual structure, include a valid Mermaid fenced code block. Keep labels concise and syntax renderable.',
+    '- Avoid shallow filler, generic advice, and unsupported claims. If the evidence is insufficient for a requested angle, say so clearly and explain what is missing.',
     '',
     `<user_query>${params.query}</user_query>`,
+    localContextPrompt,
     '<verification_summary>',
     verificationResult.verificationSummary,
     '</verification_summary>',
+    '<evidence_quality_stats>',
+    JSON.stringify(verificationResult.stats, null, 2),
+    '</evidence_quality_stats>',
     '<sources>',
     allSources.map(source => [
       `[${source.id}] ${source.title}`,
@@ -1690,92 +2173,11 @@ export async function runDeepResearch(params: {
 
   const finalReport = appendFallbackSourceSection(report, allSources)
 
-  // 3. 沉淀至 docs/research-reports/ (优化 10)
-  params.onProgress?.({
-    stage: 'writing',
-    currentDepth: 0,
-    totalDepth: defaultDepth,
-    currentBreadth: 0,
-    totalBreadth: defaultBreadth,
-    completedQueries: completedQueriesCount,
-    totalQueries: completedQueriesCount,
-    learningsCount: allLearnings.length,
-    visitedUrlsCount: allUrls.length,
-    evidenceCount: allEvidences.length,
-    providerStatus: '正在沉淀研究结果至本地知识库...',
-    strategy: strategy.id,
-  })
-
-  // 整理并附加“附录：多源证据交叉验证印证表”
+  // 整理并附加可折叠的证据索引，避免干扰正文阅读。
   let appendedReport = finalReport.trim()
-  if (allEvidences.length > 0) {
-    appendedReport += `\n\n## 附录：多源证据交叉验证印证表\n\n`
-    appendedReport += `| 证据 ID | 来源置信度 | 事实主张 | 引用来源 URL |\n`
-    appendedReport += `|---|---|---|---|\n`
-    allEvidences.forEach(ev => {
-      const source = allSources.find(s => s.id === ev.sourceId)
-      const sourceTitle = source ? source.title : '未知来源'
-      appendedReport += `| ${ev.id} | **${ev.confidence.toUpperCase()}** | ${ev.claim} | [${sourceTitle}](${ev.sourceUrl}) |\n`
-    })
-  }
-
-  // 写入文件
-  const currentTime = new Date().toISOString()
-  const cleanSlug = params.query
-    .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s-]/g, '')
-    .trim()
-    .replace(/\s+/g, '-')
-    .slice(0, 15) || 'report'
-
-  const fileName = `research-${cleanSlug}-${Date.now()}.md`
-  const relativeFilePath = `docs/research-reports/${fileName}`
-  const fileOptions = await getFilePathOptions(relativeFilePath)
-  const workspace = await getWorkspacePath()
-
-  const frontmatter = [
-    '---',
-    `title: "深度研究报告：${params.query.split('\n')[0].slice(0, 30)}..."`,
-    `date: ${currentTime}`,
-    'type: research_report',
-    `sources_count: ${allSources.length}`,
-    `evidence_count: ${allEvidences.length}`,
-    `visited_urls: ${allUrls.length}`,
-    '---',
-    '',
-    appendedReport,
-  ].join('\n')
-
-  try {
-    const dirPath = 'docs/research-reports'
-    const dirOptions = await getFilePathOptions(dirPath)
-    if (workspace.isCustom) {
-      const dirExists = await exists(dirOptions.path)
-      if (!dirExists) {
-        await mkdir(dirOptions.path, { recursive: true })
-      }
-      await writeTextFile(fileOptions.path, frontmatter)
-    } else {
-      const dirExists = await exists(dirOptions.path, { baseDir: dirOptions.baseDir })
-      if (!dirExists) {
-        await mkdir(dirOptions.path, { baseDir: dirOptions.baseDir, recursive: true })
-      }
-      await writeTextFile(fileOptions.path, frontmatter, { baseDir: fileOptions.baseDir })
-    }
-    console.log(`[DeepResearch] Saved research report to ${relativeFilePath}`)
-  } catch (err) {
-    console.error('[DeepResearch] Failed to write research report to file:', err)
-  }
-
-  // 4. 触发知识库热重载
-  try {
-    const articleModule = await import('@/stores/article')
-    const useArticleStore = articleModule.default
-    if (useArticleStore) {
-      await useArticleStore.getState().loadFileTree()
-      console.log('[DeepResearch] Article tree reloaded successfully.')
-    }
-  } catch (err) {
-    console.warn('[DeepResearch] Failed to reload article file tree:', err)
+  const evidenceAppendix = formatEvidenceAppendix(allSources, allEvidences)
+  if (evidenceAppendix) {
+    appendedReport += `\n\n${evidenceAppendix}`
   }
 
   // 5. 广播研究结束
@@ -1812,10 +2214,10 @@ export async function runDeepResearch(params: {
     totalQueries: completedQueriesCount,
     learningsCount: allLearnings.length,
     visitedUrlsCount: visitedUrls.length,
-    evidenceCount: allEvidences.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
     strategy: strategy.id,
     estimatedMinutes: `0 分钟`,
+    ...buildProgressStats(allSources, allEvidences, localSourcesCount, verificationResult.stats),
   })
 
   params.eventBus?.emit('research.completed', {

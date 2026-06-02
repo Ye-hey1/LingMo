@@ -94,6 +94,17 @@ interface AgentPlanProps {
   confirmationHistory?: ConfirmationRecord[];
   currentStepStartTime?: number; // 当前步骤开始时间戳
 
+  // Task plan progress
+  taskPlan?: {
+    isComplex: boolean;
+    steps: Array<{
+      description: string;
+      tools: string[];
+    }>;
+    summary: string;
+    completedStepIndex: number;
+  };
+
   // Props for history mode
   historyJson?: string;
 
@@ -188,6 +199,7 @@ export function AgentPlan({
   pendingConfirmation,
   confirmationHistory = [],
   currentStepStartTime,
+  taskPlan,
   historyJson,
   onConfirm,
   onCancel,
@@ -1244,6 +1256,92 @@ export function AgentPlan({
     );
   };
 
+  // 渲染任务规划进度面板
+  const renderTaskPlan = () => {
+    if (!taskPlan || !taskPlan.isComplex || taskPlan.steps.length === 0) {
+      return null;
+    }
+
+    const { steps, summary, completedStepIndex } = taskPlan;
+    const totalSteps = steps.length;
+    const doneCount = Math.max(0, completedStepIndex + 1);
+    const progressPct = Math.round((doneCount / totalSteps) * 100);
+    const allDone = completedStepIndex >= totalSteps - 1;
+
+    return (
+      <div className="mb-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2 shadow-sm">
+        {/* Header */}
+        <div className="flex items-center gap-2 mb-2">
+          <ListChecks className="size-4 text-cyan-600 shrink-0" />
+          <span className="text-xs font-medium text-foreground truncate">
+            {summary || `任务规划 (${totalSteps} 步)`}
+          </span>
+          <span className={`ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-none font-medium ${
+            allDone
+              ? "bg-emerald-50 text-emerald-700"
+              : "bg-cyan-50 text-cyan-700"
+          }`}>
+            {allDone ? "全部完成" : `${doneCount}/${totalSteps}`}
+          </span>
+        </div>
+
+        {/* Progress bar */}
+        <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden mb-2">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${
+              allDone ? "bg-emerald-500" : "bg-cyan-500"
+            }`}
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+
+        {/* Step list */}
+        <ol className="space-y-1">
+          {steps.map((step, index) => {
+            const isCompleted = index <= completedStepIndex;
+            const isRunning = index === completedStepIndex + 1 && !allDone;
+
+            return (
+              <li key={index} className="flex items-start gap-2">
+                {/* Status indicator */}
+                <div className="mt-0.5 shrink-0">
+                  {isCompleted ? (
+                    <CheckCircle2 className="size-3.5 text-emerald-500" />
+                  ) : isRunning ? (
+                    <Loader2 className="size-3.5 animate-spin text-cyan-500" />
+                  ) : (
+                    <Circle className="size-3.5 text-muted-foreground/40" />
+                  )}
+                </div>
+
+                {/* Step content */}
+                <div className="min-w-0 flex-1">
+                  <div className={`text-xs leading-relaxed ${
+                    isCompleted ? "text-muted-foreground line-through decoration-muted-foreground/30" :
+                    isRunning ? "text-foreground font-medium" :
+                    "text-muted-foreground/60"
+                  }`}>
+                    <span className="text-muted-foreground/50 mr-1">{index + 1}.</span>
+                    {step.description}
+                  </div>
+                  {step.tools.length > 0 && !isCompleted && (
+                    <div className="mt-0.5 flex flex-wrap gap-1">
+                      {step.tools.map((tool, ti) => (
+                        <span key={ti} className="rounded bg-muted px-1 py-0 text-[10px] text-muted-foreground/50">
+                          {tool}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    );
+  };
+
   // 渲染步骤列表内容（用于 embedded 和非 embedded 模式）
   const renderSteps = () => (
     <>
@@ -1588,6 +1686,7 @@ export function AgentPlan({
     return (
       <>
         <li>{renderTimeline()}</li>
+        <li>{renderTaskPlan()}</li>
         {renderSteps()}
       </>
     )
@@ -1597,6 +1696,7 @@ export function AgentPlan({
   return (
     <div className="w-full mb-4">
       {renderTimeline()}
+      {renderTaskPlan()}
       {/* 步骤列表 */}
       <div className="overflow-hidden" ref={contentRef} onScroll={handleScroll}>
         <ul className="space-y-1">

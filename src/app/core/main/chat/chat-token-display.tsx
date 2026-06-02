@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { AlertTriangle, Coins, Gauge } from "lucide-react"
+import { AlertTriangle, Coins } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { estimateTokens } from "@/lib/ai/token-counter"
 import useChatStore from "@/stores/chat"
@@ -25,10 +25,6 @@ function formatTokenCount(count: number): string {
     return `${(count / 1000).toFixed(1)}K`
   }
   return count.toString()
-}
-
-function formatPreciseTokenCount(count: number): string {
-  return new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(count)))
 }
 
 // ============================================================
@@ -175,8 +171,7 @@ export const ChatContextRing = React.memo(function ChatContextRing({
     : isNearLimit
       ? 'text-amber-500'
       : 'text-emerald-600 dark:text-emerald-400'
-  const inputShare = totalTokens > 0 ? Math.min((inputTokens / totalTokens) * 100, 100) : 0
-  const historyShare = totalTokens > 0 ? Math.min((historyTokens / totalTokens) * 100, 100) : 0
+  const percentageLabel = precisePercentage < 1 && totalTokens > 0 ? '<1%' : `${Math.round(precisePercentage)}%`
 
   return (
     <TooltipProvider delayDuration={120}>
@@ -223,36 +218,23 @@ export const ChatContextRing = React.memo(function ChatContextRing({
         <TooltipContent
           side="top"
           align="end"
-          sideOffset={8}
-          className="w-[220px] rounded-lg border bg-popover px-3 py-2.5 text-popover-foreground shadow-lg"
+          sideOffset={6}
+          className="w-[168px] rounded-md border bg-popover px-2.5 py-2 text-popover-foreground shadow-sm"
         >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 text-sm font-medium leading-none text-foreground">
-                <Gauge className="size-3.5 text-muted-foreground" />
-                <span>上下文容量</span>
-              </div>
-              <div className="mt-1 text-[11px] text-muted-foreground">
-                最近 20 条消息 + 当前输入
-              </div>
-            </div>
-            <div className={cn("shrink-0 text-right text-xs font-medium", statusClassName)}>
-              {statusLabel}
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <div className="flex items-baseline justify-between gap-2">
-              <div className="text-2xl font-semibold leading-none tracking-normal tabular-nums text-foreground">
-                {precisePercentage < 1 && totalTokens > 0 ? '<1' : Math.round(precisePercentage)}%
-              </div>
-              <div className="text-right text-[11px] leading-4 text-muted-foreground tabular-nums">
-                <div>{formatTokenCount(totalTokens)} / {formatTokenCount(contextLimit)}</div>
-                <div>剩余 {formatTokenCount(remainingTokens)}</div>
-              </div>
+          <div className="space-y-2 text-[11px]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground">上下文</span>
+              <span className={cn("font-medium", statusClassName)}>{statusLabel}</span>
             </div>
 
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+            <div className="flex items-center justify-between gap-2 tabular-nums">
+              <span className="text-sm font-semibold text-foreground">{percentageLabel}</span>
+              <span className="text-muted-foreground">
+                {formatTokenCount(totalTokens)} / {formatTokenCount(contextLimit)}
+              </span>
+            </div>
+
+            <div className="h-1 overflow-hidden rounded-full bg-muted">
               <div
                 className={cn(
                   "h-full rounded-full transition-all",
@@ -261,28 +243,20 @@ export const ChatContextRing = React.memo(function ChatContextRing({
                 style={{ width: `${Math.max(usage * 100, totalTokens > 0 ? 2 : 0)}%` }}
               />
             </div>
-          </div>
 
-          <div className="mt-3 grid gap-1.5 text-[11px]">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                <span className="size-1.5 rounded-full bg-primary/70" />
-                <span>当前输入</span>
+            <div className="grid gap-1 border-t border-border/50 pt-2 tabular-nums">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">输入</span>
+                <span className="text-foreground">{formatTokenCount(inputTokens)}</span>
               </div>
-              <span className="tabular-nums text-foreground">{formatPreciseTokenCount(inputTokens)}</span>
-            </div>
-            <div className="h-1 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-primary/70" style={{ width: `${inputShare}%` }} />
-            </div>
-            <div className="flex items-center justify-between gap-2 pt-0.5">
-              <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                <span className="size-1.5 rounded-full bg-muted-foreground/45" />
-                <span>最近历史</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">历史</span>
+                <span className="text-foreground">{formatTokenCount(historyTokens)}</span>
               </div>
-              <span className="tabular-nums text-foreground">{formatPreciseTokenCount(historyTokens)}</span>
-            </div>
-            <div className="h-1 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-muted-foreground/45" style={{ width: `${historyShare}%` }} />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">剩余</span>
+                <span className="text-foreground">{formatTokenCount(remainingTokens)}</span>
+              </div>
             </div>
           </div>
         </TooltipContent>

@@ -66,8 +66,24 @@ export class AgentHandler {
         ...event.payload.plan,
         completedStepIndex: -1,
       }
+    } else if (event.type === 'observation.created' && taskPlan && taskPlan.isComplex) {
+      // Observation created means the current iteration's tool finished
+      // Only advance if this observation relates to the next unfinished step
+      const nextStepIndex = taskPlan.completedStepIndex + 1
+      if (nextStepIndex < taskPlan.steps.length) {
+        // Check if the observation content or tool matches the planned step
+        const observationContent = String(event.payload?.content || '')
+        const hasSuccess = /成功|完成|已创建|已保存|已更新|success|created|saved|updated/i.test(observationContent)
+        const hasFailure = /失败|错误|无法|failed|error|cannot/i.test(observationContent)
+        if (hasSuccess || hasFailure) {
+          taskPlan = {
+            ...taskPlan,
+            completedStepIndex: nextStepIndex,
+          }
+        }
+      }
     } else if (event.type === 'iteration.started' && taskPlan && taskPlan.isComplex && currentIteration > 1) {
-      // Map iteration to step progress (iteration 2 means step 0 is done)
+      // Fallback: map iteration to step progress
       const newCompletedIndex = Math.min(currentIteration - 2, taskPlan.steps.length - 1)
       taskPlan = {
         ...taskPlan,

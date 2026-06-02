@@ -3,7 +3,7 @@ import * as React from "react"
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import useSettingStore from "@/stores/setting"
 import { Textarea } from "@/components/ui/textarea"
-import useChatStore from "@/stores/chat"
+import useChatStore, { type ChatMode } from "@/stores/chat"
 import useMarkStore from "@/stores/mark"
 import useArticleStore from "@/stores/article"
 import useVectorStore from "@/stores/vector"
@@ -12,7 +12,6 @@ import { fetchAiQuickPrompts } from "@/lib/ai/placeholder"
 import { enhanceChatPrompt } from "@/lib/ai/prompt-enhancer"
 import {
   DICTATION_POLISH_MODE_LABELS,
-  DICTATION_POLISH_MODE_OPTIONS,
   isDictationPolishMode,
   type DictationPolishMode,
 } from "@/lib/ai/dictation-polish"
@@ -26,19 +25,11 @@ import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFold
 import emitter from "@/lib/emitter"
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { ImageAttachment } from "./image-attachments"
-import { Check, ChevronDown, GlobeIcon, Loader2, Mic, MousePointer2, Square, WandSparkles } from "lucide-react"
+import { GlobeIcon, Loader2, Mic, MousePointer2, Square, WandSparkles } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
-import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import type { PendingQuote } from "@/stores/chat"
 import { convertFileSrc } from "@tauri-apps/api/core"
 import { readTextFile, writeFile, BaseDirectory, exists } from "@tauri-apps/plugin-fs"
-import { ShineBorder } from "@/components/ui/shine-border"
 import { toast } from "@/hooks/use-toast"
 import { AgentStatusBar } from "./agent-status-bar"
 import { ChatInputContext } from "./chat-input-context"
@@ -89,11 +80,23 @@ const SENSITIVE_KEYWORDS = [
   'replace_file_content', 'write_to_file', 'create_file', 'modify_file'
 ]
 
+const RESEARCH_KEYWORDS = [
+  '调研', '研究', '深度研究', '资料检索', '联网检索', '查资料',
+  '市场分析', '竞品分析', '文献综述', '研究报告', '信息源', '引用来源',
+  'research', 'deep research', 'market research', 'competitive analysis',
+  'literature review', 'sources', 'citations'
+]
+
 const CHAT_DICTATION_POLISH_MODE_STORAGE_KEY = 'chat-dictation-polish-mode'
 
 function isSensitiveInstruction(val: string): boolean {
   const normalized = val.toLowerCase()
   return SENSITIVE_KEYWORDS.some(k => normalized.includes(k))
+}
+
+function isResearchInstruction(val: string): boolean {
+  const normalized = val.toLowerCase()
+  return RESEARCH_KEYWORDS.some(k => normalized.includes(k))
 }
 
 const IMAGE_CAPABLE_MODEL_PATTERNS = [
@@ -170,6 +173,10 @@ function supportsImageInputForModel(aiModelList: AiConfig[], primaryModel: strin
 
 type ResourceContextOrigin = 'auto' | 'manual' | 'diagram'
 type ResourceContentMode = 'active-editor' | 'full-file' | 'folder-rag' | 'pdf-active' | 'pdf-pending' | 'diagram-file'
+type ChatSendHandle = {
+  sendChat: (instructionOverride?: string, options?: { maxTokens?: number; temperature?: number }) => void
+  stopChat: () => Promise<void>
+}
 
 interface ResourceContextMeta {
   origin: ResourceContextOrigin
@@ -225,11 +232,15 @@ export const ChatInput = React.memo(function ChatInput() {
   }, [text])
   const atOpen = atQuery !== null
 
-  // 敏感指令意图预检 Banner 状态
-  const [showSuggestAgentBanner, setShowSuggestAgentBanner] = useState(false)
+  // 对话模式下，对需要工具或长任务的指令给出模式切换建议。
+  const [suggestedMode, setSuggestedMode] = useState<null | {
+    mode: Extract<ChatMode, 'agent' | 'research'>
+    title: string
+    description: string
+  }>(null)
   useEffect(() => {
     if (chatMode !== 'chat') {
-      setShowSuggestAgentBanner(false)
+      setSuggestedMode(null)
     }
   }, [chatMode])
 
@@ -239,9 +250,10 @@ export const ChatInput = React.memo(function ChatInput() {
   const [enhancingPrompt, setEnhancingPrompt] = useState(false)
   const [placeholder, setPlaceholder] = useState('')
   const [aiQuickPrompts, setAiQuickPrompts] = useState<QuickPrompt[]>([])
+  const isModelRunning = loading || researchRunning
   const isResearchActive = researchRunning || (loading && chatMode === 'research')
   const effectivePlaceholder = isResearchActive
-    ? '深度研究运行中，预计 3-6 分钟完成。你可以点击停止按钮中断。'
+    ? '研究运行中，预计 3-6 分钟完成。你可以点击停止按钮中断。'
     : placeholder
 
   // 斜杠命令面板状态
@@ -389,8 +401,25 @@ ${exec.prompt}`
   const [contextPanelExpandedPref, setContextPanelExpandedPref] = useLocalStorage<boolean>('chat-input-context-expanded', false)
   const [isFilePointerOverInput, setIsFilePointerOverInput] = useState(false)
   const [isFilePointerDragging, setIsFilePointerDragging] = useState(false)
+  const inputDropZoneStateClassName = isFilePointerOverInput
+    ? 'border-primary bg-primary/5'
+    : ''
+  const inputModeBorderClassName = !isFilePointerOverInput && !isModelRunning
+    ? chatMode === 'agent'
+      ? 'border-amber-500/45 focus-within:border-amber-500/60'
+      : chatMode === 'research'
+        ? 'border-emerald-500/45 focus-within:border-emerald-500/60'
+        : 'border-sky-500/45 focus-within:border-sky-500/60'
+    : ''
+  const inputFlowBorderClassName = !isFilePointerOverInput && isModelRunning
+    ? chatMode === 'agent'
+      ? 'chat-input-flow-border chat-input-flow-border-agent'
+      : chatMode === 'research'
+        ? 'chat-input-flow-border chat-input-flow-border-research'
+        : 'chat-input-flow-border chat-input-flow-border-chat'
+    : ''
   const hasContext = !!pendingQuote || linkedResources.length > 0 || attachedImages.length > 0
-  const chatSendRef = useRef<any>(null)
+  const chatSendRef = useRef<ChatSendHandle>(null)
   const isMobile = useIsMobile()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const inputDropZoneRef = useRef<HTMLDivElement>(null)
@@ -1434,22 +1463,25 @@ ${exec.prompt}`
 
   return (
     <footer id="onboarding-target-chat-input" className="relative z-20 flex w-full shrink-0 flex-col justify-between bg-background px-2 pb-2">
-      {/* 敏感指令智能路由提示 Banner */}
-      {showSuggestAgentBanner && (
-        <div className="mb-2 w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg border border-primary/20 bg-primary/5 text-xs text-foreground animate-in slide-in-from-top-1 duration-200">
+      {/* 对话模式智能路由提示 Banner */}
+      {suggestedMode && (
+        <div className="mb-2 flex w-full items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs text-foreground animate-in slide-in-from-top-1 duration-200">
           <div className="flex items-center gap-1.5">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
             </span>
-            <span>检测到编辑修改操作，建议切换到 <strong>Agent 模式</strong> 以自动运行本地工具</span>
+            <span>
+              <strong>{suggestedMode.title}</strong>
+              <span className="ml-1 text-muted-foreground">{suggestedMode.description}</span>
+            </span>
           </div>
           <button
             type="button"
             className="shrink-0 font-semibold text-primary hover:underline"
             onClick={async () => {
-              await setChatMode('agent')
-              setShowSuggestAgentBanner(false)
+              await setChatMode(suggestedMode.mode)
+              setSuggestedMode(null)
             }}
           >
             一键切换
@@ -1494,30 +1526,23 @@ ${exec.prompt}`
       <div className="relative">
         <div
           ref={inputDropZoneRef}
-          className={`group relative z-10 flex w-full flex-col gap-1 overflow-hidden rounded-xl bg-background p-1 transition-colors focus-within:border-primary ${isFilePointerOverInput ? 'border-primary bg-primary/5 shadow-[0_0_0_1px_hsl(var(--primary)/0.25)]' : ''}`}
+          className={`group relative z-10 flex w-full flex-col gap-1.5 overflow-hidden rounded-xl border border-border/70 bg-background p-1.5 transition-colors duration-200 ${inputDropZoneStateClassName} ${inputModeBorderClassName} ${inputFlowBorderClassName}`}
         >
         {isFilePointerDragging ? (
           <div
-            className={`pointer-events-none absolute right-3 top-2 z-20 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${isFilePointerOverInput ? 'border-primary bg-primary text-primary-foreground' : 'border-border/70 bg-background/95 text-muted-foreground'}`}
+            className={`pointer-events-none absolute right-3 top-3 z-20 inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium shadow-sm transition-colors ${isFilePointerOverInput ? 'border-primary bg-primary text-primary-foreground' : 'border-border/70 bg-background/95 text-muted-foreground'}`}
           >
             <MousePointer2 className="size-3" />
             <span>拖到这里附加为上下文</span>
           </div>
         ) : null}
-        {isResearchActive && (
-          <ShineBorder
-            borderWidth={1}
-            duration={5}
-            shineColor={["#5B8DEF", "#7DD3FC", "#34D399"]}
-          />
-        )}
         {aiQuickPrompts.length > 0 && !text.trim() && !isResearchActive ? (
-          <div className="flex w-full min-w-0 gap-1 overflow-x-auto px-1 pb-0.5">
+          <div className="flex w-full min-w-0 gap-1 overflow-x-auto px-1 pt-0.5 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {aiQuickPrompts.map((prompt) => (
               <button
                 key={prompt.id}
                 type="button"
-                className="inline-flex h-7 shrink-0 items-center rounded-md border border-border/70 bg-muted/35 px-2.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+                className="inline-flex h-7 shrink-0 items-center rounded-lg border border-border/60 bg-muted/30 px-2.5 text-xs text-muted-foreground transition-colors hover:border-primary/35 hover:bg-primary/10 hover:text-primary"
                 onClick={() => applyQuickPrompt(prompt.text)}
               >
                 <span className="max-w-[12rem] truncate">{prompt.text}</span>
@@ -1525,7 +1550,7 @@ ${exec.prompt}`
             ))}
           </div>
         ) : null}
-        <div className="relative w-full flex items-start">
+        <div className="relative flex w-full items-start rounded-lg bg-muted/15 transition-colors group-focus-within:bg-muted/10">
           <AiDocCommandPopover
             open={slashOpen}
             query={slashQuery || ''}
@@ -1557,7 +1582,7 @@ ${exec.prompt}`
           />
           <Textarea
             ref={textareaRef}
-            className="flex-1 p-2 relative border-none text-xs placeholder:text-sm md:placeholder:text-sm md:text-sm focus-visible:ring-1 focus-visible:ring-ring/30 shadow-none min-h-[36px] max-h-[240px] resize-none overflow-y-auto"
+            className="relative min-h-[44px] max-h-[240px] flex-1 resize-none overflow-y-auto border-none bg-transparent px-3 py-2.5 text-sm leading-6 shadow-none outline-none placeholder:text-sm placeholder:text-muted-foreground/60 focus-visible:ring-0 disabled:opacity-60"
             rows={1}
             disabled={!primaryModel || isResearchActive}
             value={text}
@@ -1568,9 +1593,19 @@ ${exec.prompt}`
               }
               setText(val)
               if (chatMode === 'chat' && isSensitiveInstruction(val)) {
-                setShowSuggestAgentBanner(true)
+                setSuggestedMode({
+                  mode: 'agent',
+                  title: '建议切换到 Agent',
+                  description: '这看起来需要编辑文件、运行工具或处理本地资源。',
+                })
+              } else if (chatMode === 'chat' && isResearchInstruction(val)) {
+                setSuggestedMode({
+                  mode: 'research',
+                  title: '建议切换到 Research',
+                  description: '这看起来需要持续检索、分析资料或生成研究报告。',
+                })
               } else {
-                setShowSuggestAgentBanner(false)
+                setSuggestedMode(null)
               }
               const textarea = e.target
               textarea.style.height = 'auto'
@@ -1740,11 +1775,13 @@ ${exec.prompt}`
           />
         </div>
         
-        <div className="flex w-full min-w-0 items-center gap-0.5 overflow-hidden px-0.5 pb-0.5">
-          <div className="flex min-w-0 shrink-0 items-center gap-0.5">
+        <div className="flex w-full min-w-0 items-center gap-1 overflow-hidden border-t border-border/50 px-1 pt-1.5 pb-0.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-lg bg-muted/20 p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <ChatInputAddMenu
               onSelectImages={isMobile ? handleSelectFromGallery : handleSelectLocalImages}
               disabled={!primaryModel || isResearchActive}
+              dictationPolishMode={dictationPolishMode}
+              onDictationPolishModeChange={setDictationPolishModeValue}
             />
             <TooltipButton
               variant={webSearchEnabled ? "secondary" : "ghost"}
@@ -1753,17 +1790,17 @@ ${exec.prompt}`
               tooltipText={webSearchEnabled ? '已启用 Web 搜索（Tavily）' : '启用 Web 搜索（Tavily）'}
               onClick={handleToggleWebSearch}
               disabled={loading || isResearchActive}
-              buttonClassName={webSearchEnabled ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/10' : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground'}
+              buttonClassName={webSearchEnabled ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/15' : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-background/70 hover:text-foreground'}
             />
             <ChatModeSelect variant="compact" />
           </div>
 
-          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-0.5 pr-0.5">
+          <div className="ml-auto flex min-w-fit shrink-0 items-center justify-end gap-1 rounded-lg bg-muted/20 p-0.5">
             <ChatContextRing
               inputText={text}
               model={currentModelContextKey}
               contextWindow={currentModelContextWindow}
-              className="h-7 w-7 shrink-0 rounded-md hover:bg-muted/40"
+              className="h-7 w-7 shrink-0 rounded-md hover:bg-background/70"
             />
             <TooltipButton
               variant={enhancingPrompt ? "secondary" : "ghost"}
@@ -1772,50 +1809,22 @@ ${exec.prompt}`
               tooltipText={enhancingPrompt ? '正在增强提示词...' : '增强提示词'}
               onClick={handleEnhancePrompt}
               disabled={loading || enhancingPrompt || isResearchActive}
-              buttonClassName={enhancingPrompt ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/10' : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground'}
+              buttonClassName={enhancingPrompt ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/15' : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-background/70 hover:text-foreground'}
             />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant={dictationPolishMode === 'raw' ? 'ghost' : 'secondary'}
-                  size="sm"
-                  disabled={dictation.isActive || loading || isResearchActive}
-                  className={dictationPolishMode === 'raw'
-                    ? 'h-7 shrink-0 gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground'
-                    : 'h-7 shrink-0 gap-1 rounded-md bg-primary/10 px-2 text-xs text-primary hover:bg-primary/10'
-                  }
-                  aria-label="语音文本整理模式"
-                >
-                  <span>{DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}</span>
-                  <ChevronDown className="size-3" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" side="top" className="w-32">
-                {DICTATION_POLISH_MODE_OPTIONS.map(option => (
-                  <DropdownMenuItem
-                    key={option.value}
-                    onSelect={() => setDictationPolishModeValue(option.value)}
-                    className="gap-2"
-                  >
-                    <Check className={option.value === dictationPolishMode ? 'size-4 opacity-100' : 'size-4 opacity-0'} />
-                    <span className="text-sm">{option.label}</span>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
             <TooltipButton
-              variant={dictation.isListening ? "destructive" : dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting" ? "secondary" : "ghost"}
+              variant={isModelRunning || dictation.isListening ? "destructive" : dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting" ? "secondary" : "ghost"}
               size="icon"
               icon={
-                dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting"
+                isModelRunning || dictation.isListening
+                  ? <Square className="size-4" />
+                  : dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting"
                   ? <Loader2 className="size-4 animate-spin" />
-                  : dictation.isListening
-                    ? <Square className="size-4" />
-                    : <Mic className="size-4" />
+                  : <Mic className="size-4" />
               }
               tooltipText={
-                dictation.phase === "transcribing"
+                isModelRunning
+                  ? '停止生成'
+                  : dictation.phase === "transcribing"
                   ? '正在识别语音...'
                   : dictation.phase === "polishing"
                     ? `正在整理语音文本：${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
@@ -1829,13 +1838,20 @@ ${exec.prompt}`
                         ? '请先配置语音识别模型'
                         : `语音输入，整理模式：${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
               }
-              onClick={dictation.toggle}
-              disabled={!primaryModel || isResearchActive || dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.isOtherRecordingActive || (loading && !dictation.isListening)}
-              buttonClassName={dictation.isListening
-                ? 'h-7 w-7 shrink-0 rounded-md'
+              onClick={() => {
+                if (isModelRunning) {
+                  void chatSendRef.current?.stopChat()
+                  return
+                }
+
+                dictation.toggle()
+              }}
+              disabled={!isModelRunning && (!primaryModel || isResearchActive || dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.isOtherRecordingActive)}
+              buttonClassName={isModelRunning || dictation.isListening
+                ? 'h-8 w-8 shrink-0 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90'
                 : dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting"
-                  ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/10'
-                  : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground'
+                  ? 'h-8 w-8 shrink-0 rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15 hover:bg-primary/15'
+                  : 'h-8 w-8 shrink-0 rounded-lg border border-primary/25 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary'
               }
             />
             <div className="shrink-0">
@@ -1849,6 +1865,7 @@ ${exec.prompt}`
                 quoteData={pendingQuote}
                 webSearchEnabled={webSearchEnabled}
                 allowAutoCurrentFileContext={!autoLinkSuppressedRef.current}
+                hideButton
                 hideIdleButton
                 ref={chatSendRef}
               />

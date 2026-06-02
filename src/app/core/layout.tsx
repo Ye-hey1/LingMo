@@ -177,13 +177,17 @@ export default function RootLayout({
       return
     }
 
+    const openGlobalSearch = () => {
+      setSearchOpen(true)
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
       // 搜索快捷键：Cmd+F (macOS) 或 Ctrl+F (Windows/Linux)
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         // 检查焦点是否在编辑器内
-        const target = e.target as HTMLElement
+        const targetNode = e.target instanceof Node ? e.target : null
         const editorElement = document.getElementById('aritcle-md-editor')
-        const isFocusInEditor = editorElement && editorElement.contains(target)
+        const isFocusInEditor = !!targetNode && editorElement?.contains(targetNode)
 
         // 如果焦点在编辑器内，触发编辑器搜索
         if (isFocusInEditor) {
@@ -195,7 +199,7 @@ export default function RootLayout({
 
         // 检查焦点是否在聊天区域内，触发会话内搜索
         const chatElement = document.getElementById('record-chat')
-        const isFocusInChat = chatElement && chatElement.contains(target)
+        const isFocusInChat = !!targetNode && chatElement?.contains(targetNode)
         if (isFocusInChat) {
           e.preventDefault()
           import('@/stores/chat').then(({ default: useChatStore }) => {
@@ -213,7 +217,7 @@ export default function RootLayout({
           return
         }
 
-        setSearchOpen(true)
+        openGlobalSearch()
         return
       }
 
@@ -230,8 +234,10 @@ export default function RootLayout({
 
     }
 
+    emitter.on('global-search-trigger' as any, openGlobalSearch)
     window.addEventListener('keydown', handleKeyDown)
     return () => {
+      emitter.off('global-search-trigger' as any, openGlobalSearch)
       window.removeEventListener('keydown', handleKeyDown)
     }
   }, [isTauri])

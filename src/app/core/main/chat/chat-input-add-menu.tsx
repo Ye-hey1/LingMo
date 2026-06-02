@@ -11,6 +11,7 @@ import {
   Drama,
   ImageIcon,
   Loader2,
+  Mic,
   Plus,
   Plug,
   PlugZap,
@@ -40,10 +41,17 @@ import type { SkillMetadata } from "@/lib/skills/types"
 import { checkEmbeddingModelAvailable } from "@/lib/rag"
 import { toast } from "@/hooks/use-toast"
 import { Store } from "@tauri-apps/plugin-store"
+import {
+  DICTATION_POLISH_MODE_LABELS,
+  DICTATION_POLISH_MODE_OPTIONS,
+  type DictationPolishMode,
+} from "@/lib/ai/dictation-polish"
 
 interface ChatInputAddMenuProps {
   onSelectImages: () => void
   disabled?: boolean
+  dictationPolishMode: DictationPolishMode
+  onDictationPolishModeChange: (mode: DictationPolishMode) => void
 }
 
 interface ToolMenuTriggerProps {
@@ -52,6 +60,7 @@ interface ToolMenuTriggerProps {
   active?: boolean
   disabled?: boolean
   hasSubmenu?: boolean
+  activeVariant?: 'filled' | 'plain'
   className?: string
 }
 
@@ -72,23 +81,33 @@ export function ToolMenuTrigger({
   active,
   disabled,
   hasSubmenu,
+  activeVariant = 'filled',
   className,
 }: ToolMenuTriggerProps) {
   return (
     <span
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors",
-        active ? "bg-primary/10 text-primary" : "hover:bg-muted/60",
+        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+        active
+          ? activeVariant === 'plain'
+            ? "text-primary hover:bg-muted/35"
+            : "bg-primary/10 text-primary"
+          : "hover:bg-muted/50",
         disabled && "cursor-not-allowed opacity-50 hover:bg-transparent",
         className
       )}
     >
-      <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted/60">
+      <span
+        className={cn(
+          "flex size-6 shrink-0 items-center justify-center rounded-md",
+          active && activeVariant === 'plain' ? "bg-transparent" : "bg-muted/45"
+        )}
+      >
         {icon}
       </span>
-      <span className="min-w-0 flex-1 text-sm font-medium">{title}</span>
+      <span className="min-w-0 flex-1 text-xs font-medium">{title}</span>
       {hasSubmenu && (
-        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+        <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
       )}
     </span>
   )
@@ -97,6 +116,8 @@ export function ToolMenuTrigger({
 export function ChatInputAddMenu({
   onSelectImages,
   disabled,
+  dictationPolishMode,
+  onDictationPolishModeChange,
 }: ChatInputAddMenuProps) {
   const [open, setOpen] = React.useState(false)
   const [ragLoading, setRagLoading] = React.useState(false)
@@ -245,9 +266,9 @@ export function ChatInputAddMenu({
         align="start"
         side="top"
         sideOffset={8}
-        className="w-48 p-1"
+        className="w-40 p-0.5"
       >
-        <div className="space-y-0.5">
+        <div className="space-y-px">
           {/* 图片 */}
           <button
             type="button"
@@ -256,20 +277,21 @@ export function ChatInputAddMenu({
             disabled={disabled}
           >
             <ToolMenuTrigger
-              icon={<ImageIcon className="size-4" />}
+              icon={<ImageIcon className="size-3.5" />}
               title="图片"
               disabled={disabled}
             />
           </button>
 
-          {/* 提示词 — 侧边弹窗 */}
+          {/* 语音整理 — 侧边弹窗 */}
           <Popover modal={false}>
             <PopoverTrigger asChild>
               <button type="button" className="w-full">
                 <ToolMenuTrigger
-                  icon={<Drama className="size-4" />}
-                  title="提示词"
-                  active={!!currentPrompt}
+                  icon={<Mic className="size-3.5" />}
+                  title="语音整理"
+                  active={dictationPolishMode !== 'raw'}
+                  activeVariant="plain"
                   hasSubmenu
                 />
               </button>
@@ -278,11 +300,49 @@ export function ChatInputAddMenu({
               side="left"
               align="start"
               sideOffset={4}
-              className="w-44 p-1"
+              className="w-36 p-0.5"
+            >
+              <div className="rounded-md py-0.5">
+                {DICTATION_POLISH_MODE_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] transition-colors",
+                      option.value === dictationPolishMode ? "text-primary" : "hover:bg-muted/45"
+                    )}
+                    onClick={() => onDictationPolishModeChange(option.value)}
+                  >
+                    <Check className={option.value === dictationPolishMode ? 'size-3 shrink-0 opacity-100' : 'size-3 shrink-0 opacity-0'} />
+                    <span className="min-w-0 flex-1 truncate">{DICTATION_POLISH_MODE_LABELS[option.value]}</span>
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {/* 提示词 — 侧边弹窗 */}
+          <Popover modal={false}>
+            <PopoverTrigger asChild>
+              <button type="button" className="w-full">
+                <ToolMenuTrigger
+                  icon={<Drama className="size-3.5" />}
+                  title="提示词"
+                  active={!!currentPrompt}
+                  activeVariant="plain"
+                  hasSubmenu
+                />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              side="left"
+              align="start"
+              sideOffset={4}
+              className="w-40 p-0.5"
             >
               <div className="max-h-52 overflow-y-auto rounded-md py-0.5">
                 {promptList.length === 0 ? (
-                  <div className="px-2.5 py-3 text-xs text-muted-foreground">
+                  <div className="px-2 py-2.5 text-[11px] text-muted-foreground">
                     当前没有可用的提示词
                   </div>
                 ) : (
@@ -291,8 +351,8 @@ export function ChatInputAddMenu({
                       key={item.id}
                       type="button"
                       className={cn(
-                        "flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-xs text-left transition-colors",
-                        currentPrompt?.id === item.id ? "text-primary bg-primary/10" : "hover:bg-muted/60"
+                        "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] transition-colors",
+                        currentPrompt?.id === item.id ? "text-primary" : "hover:bg-muted/45"
                       )}
                       onClick={async () => {
                         await setCurrentPrompt(item)
@@ -300,7 +360,7 @@ export function ChatInputAddMenu({
                     >
                       <span className="min-w-0 flex-1 truncate">{item.title}</span>
                       {currentPrompt?.id === item.id && (
-                        <Check className="size-3.5 shrink-0" />
+                        <Check className="size-3 shrink-0" />
                       )}
                     </button>
                   ))
@@ -314,7 +374,7 @@ export function ChatInputAddMenu({
             <PopoverTrigger asChild>
               <button type="button" className="w-full">
                 <ToolMenuTrigger
-                  icon={<Sparkles className="size-4" />}
+                  icon={<Sparkles className="size-3.5" />}
                   title="Skills"
                   hasSubmenu
                 />
@@ -324,16 +384,16 @@ export function ChatInputAddMenu({
               side="left"
               align="start"
               sideOffset={4}
-              className="w-48 p-1"
+              className="w-44 p-0.5"
             >
               <div className="max-h-52 overflow-y-auto rounded-md py-0.5">
                 {skillsLoading ? (
-                  <div className="flex items-center gap-2 px-2.5 py-3 text-xs text-muted-foreground">
-                    <Loader2 className="size-3.5 animate-spin" />
+                  <div className="flex items-center gap-1.5 px-2 py-2.5 text-[11px] text-muted-foreground">
+                    <Loader2 className="size-3 animate-spin" />
                     加载中
                   </div>
                 ) : displaySkills.length === 0 ? (
-                  <div className="px-2.5 py-3 text-xs text-muted-foreground">
+                  <div className="px-2 py-2.5 text-[11px] text-muted-foreground">
                     当前没有已安装 Skills
                   </div>
                 ) : (
@@ -341,18 +401,18 @@ export function ChatInputAddMenu({
                     <div
                       key={skill.key}
                       className={cn(
-                        "flex items-center gap-1.5 rounded px-2 py-1.5 text-xs",
+                        "flex items-center gap-1.5 rounded px-1.5 py-1 text-[11px]",
                         !skill.enabled && "text-muted-foreground"
                       )}
                     >
                       <span className="min-w-0 flex-1 truncate">{skill.name}</span>
                       {skill.updateStatus === 'available' && (
-                        <span className="shrink-0 text-[11px] text-primary">更新</span>
+                        <span className="shrink-0 text-[10px] text-primary">更新</span>
                       )}
                       {skill.enabled ? (
-                        <Check className="size-3.5 shrink-0" />
+                        <Check className="size-3 shrink-0" />
                       ) : (
-                        <span className="shrink-0 text-[11px] text-muted-foreground">停用</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">停用</span>
                       )}
                     </div>
                   ))
@@ -370,10 +430,10 @@ export function ChatInputAddMenu({
           >
             <ToolMenuTrigger
               icon={ragLoading
-                ? <Loader2 className="size-4 animate-spin" />
+                ? <Loader2 className="size-3.5 animate-spin" />
                 : isRagEnabled
-                  ? <DatabaseZap className="size-4" />
-                  : <Database className="size-4" />
+                  ? <DatabaseZap className="size-3.5" />
+                  : <Database className="size-3.5" />
               }
               title="知识库"
               active={isRagEnabled}
@@ -386,7 +446,7 @@ export function ChatInputAddMenu({
             <PopoverTrigger asChild>
               <button type="button" className="w-full">
                 <ToolMenuTrigger
-                  icon={<Server className="size-4" />}
+                  icon={<Server className="size-3.5" />}
                   title="MCP"
                   hasSubmenu
                   active={selectedServerIds.length > 0}
@@ -397,11 +457,11 @@ export function ChatInputAddMenu({
               side="left"
               align="start"
               sideOffset={4}
-              className="w-56 p-1"
+              className="w-48 p-0.5"
             >
               <div className="max-h-56 overflow-y-auto rounded-md py-0.5">
                 {enabledServers.length === 0 ? (
-                  <div className="px-2.5 py-3 text-xs text-muted-foreground">
+                  <div className="px-2 py-2.5 text-[11px] text-muted-foreground">
                     当前没有已启用的 MCP 服务器
                   </div>
                 ) : (
@@ -413,11 +473,11 @@ export function ChatInputAddMenu({
                     return (
                       <div
                         key={server.id}
-                        className="flex items-center gap-2 rounded px-2 py-1.5"
+                        className="flex items-center gap-1.5 rounded px-1.5 py-1"
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-xs font-medium leading-tight">{server.name}</div>
-                          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <div className="truncate text-[11px] font-medium leading-tight">{server.name}</div>
+                          <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
                             {status === 'connected' ? (
                               <PlugZap className="size-2.5 text-green-500" />
                             ) : (
@@ -448,7 +508,7 @@ export function ChatInputAddMenu({
             onClick={handleToggleClipboard}
           >
             <ToolMenuTrigger
-              icon={clipboardEnabled ? <Clipboard className="size-4" /> : <ClipboardX className="size-4" />}
+              icon={clipboardEnabled ? <Clipboard className="size-3.5" /> : <ClipboardX className="size-3.5" />}
               title="剪贴板"
               active={clipboardEnabled}
             />

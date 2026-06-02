@@ -35,7 +35,7 @@ const MODE_OPTIONS: Array<{
   },
   {
     id: "research",
-    label: "Deep Research",
+    label: "Research",
     icon: <Telescope className="size-4" />,
   },
 ]
@@ -57,10 +57,8 @@ export function ChatModeSelect({ variant = "icon" }: ChatModeSelectProps) {
             type="button"
             variant="ghost"
             size="sm"
-            disabled={loading}
             className={cn(
-              "h-7 min-w-0 max-w-[138px] shrink-0 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-              chatMode !== "chat" && "bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary"
+              "h-7 min-w-0 max-w-[138px] shrink-0 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-background/70 hover:text-foreground"
             )}
             aria-label={`对话模式：${current.label}`}
           >
@@ -71,12 +69,12 @@ export function ChatModeSelect({ variant = "icon" }: ChatModeSelectProps) {
         ) : (
           <div className="hidden md:block">
             <TooltipButton
-              variant={chatMode !== "chat" ? "secondary" : "ghost"}
+              variant="ghost"
               size="icon"
               icon={current.icon}
               tooltipText={`对话模式：${current.label}`}
               disabled={loading}
-              buttonClassName={cn(chatMode !== "chat" && "bg-primary/10 text-primary hover:bg-primary/15")}
+              buttonClassName="text-muted-foreground hover:bg-background/70 hover:text-foreground"
             />
           </div>
         )}

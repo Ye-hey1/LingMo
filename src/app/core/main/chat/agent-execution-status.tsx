@@ -105,6 +105,7 @@ export function AgentExecutionStatus() {
       pendingConfirmation={agentState.pendingConfirmation}
       confirmationHistory={agentState.confirmationHistory}
       currentStepStartTime={agentState.currentStepStartTime}
+      taskPlan={agentState.taskPlan}
       onConfirm={handleConfirm}
       onCancel={handleCancel}
     />
