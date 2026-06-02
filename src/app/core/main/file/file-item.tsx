@@ -3,7 +3,8 @@ import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import useArticleStore, { DirTree } from "@/stores/article";
 import { BaseDirectory, exists, readTextFile, remove, rename, writeTextFile } from "@tauri-apps/plugin-fs";
-import { Copy, File, FileDown, FileUp, FolderOpen, ImageIcon, LoaderCircle, RefreshCwOff, Trash2, FileText, Star } from "lucide-react"
+import { Copy, File, FileDown, FileUp, FolderOpen, LoaderCircle, RefreshCwOff, Trash2, Star, Sparkles, FileType2 } from "lucide-react"
+import { FileTypeIcon } from "./file-type-visuals"
 import { useEffect, useMemo, useRef, useState, useCallback, type CSSProperties } from "react";
 import { ask } from '@tauri-apps/plugin-dialog';
 import { platform } from '@tauri-apps/plugin-os';
@@ -19,6 +20,7 @@ import { toast } from "@/hooks/use-toast";
 import { useTranslations } from "next-intl";
 import useClipboardStore from "@/stores/clipboard";
 import { appDataDir, join } from '@tauri-apps/api/path';
+import { exportMarkdownFileToPdf } from "@/lib/md-to-pdf";
 import { deleteFile } from "@/lib/sync/github";
 import { deleteFile as deleteGiteeFile } from "@/lib/sync/gitee";
 import { deleteFile as deleteGitlabFile } from "@/lib/sync/gitlab";
@@ -31,17 +33,17 @@ import { MobileActionMenu, MobileMenuItem, MobileSeparator } from "./mobile-acti
 import { useIsMobile } from "@/hooks/use-mobile";
 import useSettingStore from "@/stores/setting";
 import { VectorKnowledgeMenu } from "./vector-knowledge-menu";
-import { isSkillsFolder } from "@/lib/skills/utils";
-import { KNOWLEDGE_GRAPH_TAG_DRAG_TYPE } from "@/lib/knowledge-graph-tags";
+import { isInSkillsFolder } from "@/lib/skills/utils";
 import {
-  emitNoteGenFilePointerDrag,
-  NOTE_GEN_FILE_POINTER_DRAG_THRESHOLD,
-  type NoteGenFilePointerDragPhase,
+  emitLingMoFilePointerDrag,
+  LINGMO_FILE_POINTER_DRAG_THRESHOLD,
+  type LingMoFilePointerDragPhase,
 } from "@/lib/file-pointer-drag";
 import { sanitizeFileName } from "@/lib/sync/filename-utils";
 import useFavoritesStore from "@/stores/favorites";
-import { isGeneratedFile } from "./file-browser-utils";
+import { isGeneratedFile, getFileManagerIconSize, stopRenameInputPropagation } from "./file-browser-utils";
 import { getFileSystemMetadata } from "@/lib/file-activity";
+import { clearFileKnowledgeIndexes, moveWorkspaceEntryToTrash } from "@/lib/file-trash";
 
 type Platform = 'macos' | 'windows' | 'linux' | 'unknown'
 
@@ -56,10 +58,6 @@ type FilePointerDragState = {
 
 function shouldAutoSyncOnInitialRead(options?: { isNewFile?: boolean }) {
   return options?.isNewFile !== true
-}
-
-function stopRenameInputPropagation(event: React.SyntheticEvent) {
-  event.stopPropagation()
 }
 
 function buildFileRenamePlan({
@@ -188,8 +186,8 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     cleanTabsByDeletedFile,
     cleanTabsByDeletedFolder,
     syncOpenTabsForPathChange,
+    flushPendingSaveForPath,
   } = useArticleStore()
-  const setArticleState = useArticleStore.setState
   const { setClipboardItem, clipboardItem, clipboardOperation } = useClipboardStore()
   const { centerPanelVisible } = useSidebarStore()
   const { fileManagerTextSize } = useSettingStore()
@@ -197,31 +195,15 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
   const t = useTranslations('article.file')
   const isMobile = useIsMobile()
 
-  // Check whether the path is inside a skills folder.
-  const isInSkillsFolder = (itemPath: string): boolean => {
-    const parts = itemPath.split('/')
-    return parts.some(part => isSkillsFolder(part))
-  }
-
   const path = computedParentPath(item)
+  const canExportPdf = item.isFile && item.isLocale && /\.(md|markdown)$/i.test(item.name)
+  const canLayout = item.isFile && item.isLocale && /\.(md|markdown|txt)$/i.test(item.name)
 
   const handleVectorUpdated = useCallback(() => {
     checkFileVectorIndexed(path)
   }, [path, checkFileVectorIndexed])
 
-  // Map text size settings to icon size classes.
-  const getIconSize = (textSize: string) => {
-    const sizeMap = {
-      'xs': 'size-3',
-      'sm': 'size-3.5',
-      'md': 'size-4',
-      'lg': 'size-5',
-      'xl': 'size-6'
-    }
-    return sizeMap[textSize as keyof typeof sizeMap] || 'size-4'
-  }
-
-  const iconSize = getIconSize(fileManagerTextSize)
+  const iconSize = getFileManagerIconSize(fileManagerTextSize)
 
   // Check whether this file is currently cut.
   const isCut = clipboardOperation === 'cut' && clipboardItem?.path === path
@@ -237,6 +219,24 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
       return <LoaderCircle className={`${iconSize} ml-1 shrink-0 animate-spin text-muted-foreground`} />
     }
     return null
+  }
+
+  const isMediaFile = /\.(jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i.test(item.name)
+
+  const renderFileIcon = () => {
+    if (isMediaFile || !item.isFile) {
+      return <FileTypeIcon fileName={item.name} className={iconSize} />
+    }
+    if (item.loading) {
+      return <LoaderCircle className={`${iconSize} animate-spin`} />
+    }
+    if (!item.isLocale) {
+      return <FileDown className={iconSize} />
+    }
+    if (!item.sha) {
+      return <FileUp className={iconSize} />
+    }
+    return <FileTypeIcon fileName={item.name} className={iconSize} />
   }
 
   const isFavorite = favorites.some(favorite => favorite.path === path)
@@ -285,14 +285,14 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
 
   function rememberDraggingPath() {
     if (typeof window === 'undefined') return
-    ;(window as unknown as { __noteGenDraggingFilePath?: string }).__noteGenDraggingFilePath = path
+    ;(window as unknown as { __lingMoDraggingFilePath?: string }).__lingMoDraggingFilePath = path
   }
 
   function clearDraggingPath() {
     if (typeof window === 'undefined') return
-    const dragState = window as unknown as { __noteGenDraggingFilePath?: string }
-    if (dragState.__noteGenDraggingFilePath === path) {
-      delete dragState.__noteGenDraggingFilePath
+    const dragState = window as unknown as { __lingMoDraggingFilePath?: string }
+    if (dragState.__lingMoDraggingFilePath === path) {
+      delete dragState.__lingMoDraggingFilePath
     }
   }
 
@@ -382,9 +382,9 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     }
   }
 
-  function emitCurrentPointerDrag(phase: NoteGenFilePointerDragPhase, point: PointerDragPoint) {
+  function emitCurrentPointerDrag(phase: LingMoFilePointerDragPhase, point: PointerDragPoint) {
     rememberDraggingPath()
-    emitNoteGenFilePointerDrag({
+    emitLingMoFilePointerDrag({
       phase,
       path,
       name: item.name,
@@ -407,7 +407,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     if (!state || state.pointerId !== event.pointerId) return
 
     const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY)
-    if (!state.dragging && distance < NOTE_GEN_FILE_POINTER_DRAG_THRESHOLD) return
+    if (!state.dragging && distance < LINGMO_FILE_POINTER_DRAG_THRESHOLD) return
 
     if (!state.dragging) {
       state.dragging = true
@@ -493,29 +493,11 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     // Continue only after the user confirms deletion.
     if (answer) {
       try {
-        const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
-        const workspace = await getWorkspacePath()
-
         // Use the current path instead of recalculating from mutated state.
         const currentPath = computedParentPath(item)
 
-        const pathOptions = await getFilePathOptions(currentPath)
-
-        // 先检查文件是否存在，避免删除不存在的文件时报错
-        let fileExists = false
-        if (workspace.isCustom) {
-          fileExists = await exists(pathOptions.path)
-        } else {
-          fileExists = await exists(pathOptions.path, { baseDir: pathOptions.baseDir })
-        }
-
-        if (fileExists) {
-          if (workspace.isCustom) {
-            await remove(pathOptions.path)
-          } else {
-            await remove(pathOptions.path, { baseDir: pathOptions.baseDir })
-          }
-        }
+        await flushPendingSaveForPath(currentPath)
+        await moveWorkspaceEntryToTrash({ relativePath: currentPath, kind: 'file' })
 
         if (currentFolder) {
           const cacheTree = cloneDeep(fileTree)
@@ -566,17 +548,13 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         }
 
         try {
-          const { deleteVectorDocumentsByFilename } = await import('@/db/vector')
-          await deleteVectorDocumentsByFilename(path)
-          // Remove the file from the vector index map.
-          const newMap = new Map(vectorIndexedFiles)
-          newMap.delete(path)
-          setArticleState({ vectorIndexedFiles: newMap })
+          await clearFileKnowledgeIndexes([currentPath])
         } catch (error) {
           console.error(`删除文件 ${item.name} 的向量数据失败`, error)
         }
 
         await cleanTabsByDeletedFile(currentPath)
+        toast({ title: '已移入回收站' })
       } catch (error) {
         console.error('Delete file failed:', error)
         // 文件不存在时静默刷新文件树即可，不需要弹窗提示
@@ -936,21 +914,57 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     }
   }
 
-  async function handleDragStart(ev: React.DragEvent<HTMLElement>) {
-    rememberDraggingPath()
-    const payload = JSON.stringify({
-      path,
-      name: item.name,
-      displayName: displayFileName,
-      isDirectory: item.isDirectory,
-      isFile: item.isFile,
-      source: 'note-gen-file',
-    })
-    ev.dataTransfer.effectAllowed = 'copyMove'
-    ev.dataTransfer.setData(KNOWLEDGE_GRAPH_TAG_DRAG_TYPE, payload)
-    ev.dataTransfer.setData('application/x-note-gen-file', payload)
-    ev.dataTransfer.setData('text/plain', path)
-    ev.dataTransfer.setData('text', path)
+  async function handleExportMarkdownToPdf() {
+    if (!canExportPdf) return
+
+    try {
+      const result = await exportMarkdownFileToPdf(path)
+      if (!result) return
+      toast({
+        title: '已转为 PDF',
+        description: `${result.outputPath} · ${result.pageCount} 页`,
+      })
+    } catch (error) {
+      console.error('Export markdown to PDF failed:', error)
+      toast({
+        title: '转为 PDF 失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
+  }
+
+  async function handleOpenInOutputWorkshop() {
+    if (!canLayout) return
+
+    try {
+      const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
+      const workspace = await getWorkspacePath()
+      const currentPath = computedParentPath(item)
+      const pathOptions = await getFilePathOptions(currentPath)
+
+      // 读取文件内容
+      let content = ""
+      if (workspace.isCustom) {
+        content = await readTextFile(pathOptions.path)
+      } else {
+        content = await readTextFile(pathOptions.path, { baseDir: pathOptions.baseDir })
+      }
+
+      // 动态引入 emitter
+      const { default: emitter } = await import("@/lib/emitter")
+      emitter.emit('open-output-workshop', {
+        filePath: currentPath,
+        fileContent: content,
+      })
+    } catch (error) {
+      console.error('进入输出工坊失败:', error)
+      toast({
+        title: '进入输出工坊失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
   }
 
   async function handleCopyFile() {
@@ -1201,10 +1215,10 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
             onClick={handleFileRowClick}
           >
             {
-              isEditing ? 
+              isEditing ?
               <div className="flex gap-1 items-center w-full select-none">
                 <span className={item.parent ? 'size-0' : `${iconSize} ml-1`} />
-                <File className={iconSize} />
+                <FileTypeIcon fileName={item.name} className={iconSize} />
                 <Input
                   ref={inputRef}
                   className={`h-5 rounded-sm text-${fileManagerTextSize} px-1 font-normal flex-1 mr-1`}
@@ -1231,7 +1245,6 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
                   }}
                 />
               </div> :
-              item.name.match(/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i) ?
               <span
                 draggable={false}
                 title={fileMetadataTitle}
@@ -1240,7 +1253,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
                   <span className={item.parent ? 'size-0' : `${iconSize} ml-1`}></span>
                   <div className="file-manager-icon-anchor relative flex items-center">
                     {renderFavoriteButton()}
-                    <ImageIcon className={iconSize} />
+                    {renderFileIcon()}
                   </div>
                   <FileNameLabel name={displayFileName} title={fileMetadataTitle} textSize={fileManagerTextSize} />
                   {renderVectorIcon()}
@@ -1261,68 +1274,17 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
                       {t('context.paste')}
                     </MobileMenuItem>
                     <MobileSeparator />
-                    <MobileMenuItem disabled={!item.isLocale} onClick={handleStartRename}>
-                      {t('context.rename')}
-                    </MobileMenuItem>
-                    <MobileMenuItem disabled={!item.sha} className="text-red-600" onClick={handleDeleteSyncFile}>
-                      {t('context.deleteSyncFile')}
-                    </MobileMenuItem>
-                    <MobileMenuItem disabled={!item.isLocale || item.name === ''} className="text-red-600" onClick={handleDeleteFile}>
-                      {t('context.deleteLocalFile')}
-                    </MobileMenuItem>
-                  </MobileActionMenu>
-                )}
-              </span> :
-              item.name.match(/\.pdf$/i) ?
-              <span
-                draggable={false}
-                title={fileMetadataTitle}
-                className={`${!item.isLocale || isCut ? 'opacity-50' : ''} flex min-w-0 flex-1 select-none items-center justify-between gap-1 dark:hover:text-white`}>
-                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-start gap-1.5">
-                  <span className={item.parent ? 'size-0' : `${iconSize} ml-1`}></span>
-                  <div className="file-manager-icon-anchor relative flex items-center">
-                    {renderFavoriteButton()}
-                    <FileText className={`${iconSize} text-red-500`} />
-                  </div>
-                  <FileNameLabel name={displayFileName} title={fileMetadataTitle} textSize={fileManagerTextSize} />
-                  {renderVectorIcon()}
-                </div>
-              </span> :
-              <span
-                draggable={false}
-                title={fileMetadataTitle}
-                className={`${!item.isLocale || isCut ? 'opacity-50' : ''} flex min-w-0 flex-1 select-none items-center justify-between gap-1 dark:hover:text-white`}>
-                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-start gap-1.5">
-                  <span className={item.parent ? 'size-0' : `${iconSize} ml-1`}></span>
-                  <div className="file-manager-icon-anchor relative flex items-center">
-                    {renderFavoriteButton()}
-                    { item.loading ? (
-                      <LoaderCircle className={`${iconSize} animate-spin`} />
-                    ) : item.isLocale ? (
-                      item.sha ? <FileUp className={iconSize} /> : <File className={iconSize} />
-                    ) : (
-                      <FileDown className={iconSize} />
+                    {canLayout && (
+                      <MobileMenuItem onClick={handleOpenInOutputWorkshop}>
+                        一键排版
+                      </MobileMenuItem>
                     )}
-                  </div>
-                  <FileNameLabel name={displayFileName} title={fileMetadataTitle} textSize={fileManagerTextSize} />
-                  {renderVectorIcon()}
-                </div>
-                {isMobile && (
-                  <MobileActionMenu className="ml-1">
-                    <MobileMenuItem onClick={handleShowFileManager}>
-                      {t('context.viewDirectory')}
-                    </MobileMenuItem>
-                    <MobileSeparator />
-                    <MobileMenuItem disabled={!item.isLocale} onClick={handleCutFile}>
-                      {t('context.cut')}
-                    </MobileMenuItem>
-                    <MobileMenuItem onClick={handleCopyFile}>
-                      {t('context.copy')}
-                    </MobileMenuItem>
-                    <MobileMenuItem disabled={!clipboardItem} onClick={handlePasteFile}>
-                      {t('context.paste')}
-                    </MobileMenuItem>
-                    <MobileSeparator />
+                    {canExportPdf && (
+                      <MobileMenuItem onClick={handleExportMarkdownToPdf}>
+                        转为 PDF
+                      </MobileMenuItem>
+                    )}
+                    {(canLayout || canExportPdf) && <MobileSeparator />}
                     <MobileMenuItem disabled={!item.isLocale} onClick={handleStartRename}>
                       {t('context.rename')}
                     </MobileMenuItem>
@@ -1371,6 +1333,23 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
               <Kbd>{modKey}V</Kbd>
             </ContextMenuShortcut>
           </ContextMenuItem>
+          {(canLayout || canExportPdf) && (
+            <>
+              <ContextMenuSeparator />
+              {canLayout && (
+                <ContextMenuItem inset onClick={handleOpenInOutputWorkshop} menuType="file">
+                  <Sparkles className="mr-2 h-4 w-4 text-primary animate-pulse" />
+                  <span className="text-primary font-medium">一键排版</span>
+                </ContextMenuItem>
+              )}
+              {canExportPdf && (
+                <ContextMenuItem inset onClick={handleExportMarkdownToPdf} menuType="file">
+                  <FileType2 className="mr-2 h-4 w-4" />
+                  转为 PDF
+                </ContextMenuItem>
+              )}
+            </>
+          )}
           <ContextMenuSeparator />
           <ContextMenuItem disabled={!item.isLocale} inset onClick={handleStartRename} menuType="file">
             <File className="mr-2 h-4 w-4" />

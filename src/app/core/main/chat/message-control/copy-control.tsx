@@ -4,6 +4,7 @@ import { Copy, Check } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useState } from "react"
 import { writeText } from "tauri-plugin-clipboard-api"
+import { getActionButtonClass } from "./styles"
 
 interface CopyControlProps {
   chat: Chat
@@ -14,9 +15,7 @@ interface CopyControlProps {
 export function CopyControl({ chat, translatedContent, compact = false }: CopyControlProps) {
   const t = useTranslations()
   const [isCopied, setIsCopied] = useState(false)
-  const actionButtonClass = compact
-    ? "size-6 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
-    : "size-6.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+  const actionButtonClass = getActionButtonClass(compact)
   
   // 处理复制功能
   async function handleCopy() {

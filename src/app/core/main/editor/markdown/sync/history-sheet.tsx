@@ -42,10 +42,16 @@ interface TimelineItem {
 type SyncProvider = 'github' | 'gitee' | 'gitlab' | 'gitea'
 
 interface HistorySheetProps {
-  editor: Editor
+  editor?: Editor
+  onRestoreContent?: (content: string) => void
+  restoreContentType?: 'markdown' | 'html'
 }
 
-export function HistorySheet({ editor }: HistorySheetProps) {
+export function HistorySheet({
+  editor,
+  onRestoreContent,
+  restoreContentType = 'markdown',
+}: HistorySheetProps) {
   const { activeFilePath } = useArticleStore()
   const [isOpen, setIsOpen] = useState(false)
   const [timeline, setTimeline] = useState<TimelineItem[]>([])
@@ -405,8 +411,12 @@ export function HistorySheet({ editor }: HistorySheetProps) {
         await saveLocalFile(activeFilePath, content)
 
         // 更新编辑器内容
-        editor.commands.clearContent()
-        editor.commands.setContent(content, { contentType: 'markdown' })
+        if (onRestoreContent) {
+          onRestoreContent(content)
+        } else if (editor) {
+          editor.commands.clearContent()
+          editor.commands.setContent(content, { contentType: restoreContentType })
+        }
 
         // 更新同步时间和恢复时间
         await updateFileSyncTime(activeFilePath)
@@ -429,7 +439,7 @@ export function HistorySheet({ editor }: HistorySheetProps) {
     } finally {
       setRestoringSha(null)
     }
-  }, [activeFilePath, editor, getProvider, restoringSha])
+  }, [activeFilePath, editor, getProvider, onRestoreContent, restoreContentType, restoringSha])
 
   // Load history when sheet opens
   useEffect(() => {

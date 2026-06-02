@@ -9,6 +9,7 @@ import { useTranslations } from 'next-intl'
 import { useSidebarStore } from '@/stores/sidebar'
 import useChatStore from '@/stores/chat'
 import { OnboardingSpotlight } from '@/components/onboarding-spotlight'
+import { ChunkErrorBoundary } from '@/components/chunk-error-boundary'
 import {
   Dialog,
   DialogContent,
@@ -22,6 +23,7 @@ import { EmptyState } from './empty-state'
 import { FolderView } from './folder'
 import { UnsupportedFile } from './unsupported-file'
 import { isDiagramPath } from '@/lib/diagram'
+import { isMermaidPath } from '@/lib/mermaid'
 import { TemplateSelectDialog, type TemplateSelectDialogRef, type TemplateSelectResult } from '../file/template-select-dialog'
 import { generateUniqueFilename } from '@/lib/default-filename'
 import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
@@ -31,10 +33,20 @@ import {
   isKnowledgeGraphTabPath,
 } from '../knowledge/knowledge-graph-constants'
 import {
+  ARTIFACT_STUDIO_TAB_ID,
+  ARTIFACT_STUDIO_TAB_NAME,
+  isArtifactStudioTabPath,
+} from '../artifacts/artifact-studio-constants'
+import {
   FLASHCARD_TAB_ID,
   FLASHCARD_TAB_NAME,
   isFlashcardTabPath,
 } from '../flashcard/flashcard-constants'
+import {
+  GITHUB_STARS_TAB_ID,
+  GITHUB_STARS_TAB_NAME,
+  isGithubStarsTabPath,
+} from '../github-stars/github-stars-constants'
 import {
   MEMORY_TAB_ID,
   MEMORY_TAB_NAME,
@@ -43,17 +55,22 @@ import {
 
 import { writeTextFile } from '@tauri-apps/plugin-fs'
 import { toast } from '@/hooks/use-toast'
+import { getImageAltText } from '@/lib/image-editor-actions'
+import { toMarkdownImagePath } from '@/lib/markdown-image-path'
+import { MdEditor } from './markdown/md-editor-wrapper'
 
-const MdEditor = dynamic(() => import('./markdown/md-editor-wrapper').then(m => m.MdEditor), { ssr: false })
 const BacklinksPanel = dynamic(() => import('./markdown/backlinks-panel').then(m => m.BacklinksPanel), { ssr: false })
 const RelatedNotesPanel = dynamic(() => import('@/lib/related-notes').then(m => m.RelatedNotesPanel), { ssr: false })
 const ImageEditor = dynamic(() => import('./image/image-editor').then(m => m.ImageEditor), { ssr: false })
 const PdfViewer = dynamic(() => import('./pdf/pdf-viewer').then(m => m.PdfViewer), { ssr: false })
 const DiagramEditor = dynamic(() => import('./diagram/diagram-editor').then(m => m.DiagramEditor), { ssr: false })
+const MermaidEditor = dynamic(() => import('./mermaid/mermaid-editor').then(m => m.MermaidEditor), { ssr: false })
 const HtmlEditor = dynamic(() => import('./html/html-editor').then(m => m.HtmlEditor), { ssr: false })
 const KnowledgeGraph = dynamic(() => import('../knowledge/knowledge-graph').then(m => m.KnowledgeGraph), { ssr: false })
+const ArtifactStudio = dynamic(() => import('../artifacts/artifact-studio').then(m => m.ArtifactStudio), { ssr: false })
 const FlashcardWorkspace = dynamic(() => import('../flashcard/flashcard-workspace').then(m => m.FlashcardWorkspace), { ssr: false })
 const MemoryWorkspace = dynamic(() => import('../memory/memory-workspace').then(m => m.MemoryWorkspace), { ssr: false })
+const GithubStarsWorkspace = dynamic(() => import('../github-stars/github-stars-workspace').then(m => m.GithubStarsWorkspace), { ssr: false })
 import {
   createDefaultOnboardingProgress,
   getCompletionFeedbackMode,
@@ -179,6 +196,77 @@ export function EditorLayout() {
     }
   }, [])
 
+  useEffect(() => {
+    const handleInsertMarkdownImage = (detail: unknown) => {
+      const payload = detail as { imagePath?: string; markdownPath?: string }
+      if (!payload?.imagePath) return
+
+      const candidatePath = payload.markdownPath
+        || [...tabsRef.current].reverse().find(tab => {
+          const extension = tab.path.split('.').pop()?.toLowerCase()
+          return extension && MARKDOWN_EXTENSIONS.has(extension)
+        })?.path
+
+      if (!candidatePath) {
+        toast({
+          title: '没有可插入的 Markdown 笔记',
+          description: '请先打开一个 Markdown 笔记，再插入图片引用。',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      const markdownImagePath = toMarkdownImagePath(candidatePath, payload.imagePath)
+      const altText = getImageAltText(payload.imagePath)
+      const snippet = `\n![${altText}](${markdownImagePath})\n`
+
+      void (async () => {
+        try {
+          const previousActivePath = useArticleStore.getState().activeFilePath
+          if (previousActivePath !== candidatePath) {
+            await setActiveFilePath(candidatePath)
+            await readArticle(candidatePath, '', false)
+            await new Promise(resolve => window.setTimeout(resolve, 80))
+          }
+
+          const inserted = await new Promise<{ success: boolean }>((resolve) => {
+            emitter.emit('editor-insert', {
+              content: snippet,
+              resolve,
+            })
+          })
+
+          if (inserted.success) {
+            toast({
+              title: '已插入图片引用',
+              description: candidatePath,
+            })
+            return
+          }
+
+          const store = useArticleStore.getState()
+          const currentContent = store.currentArticle || ''
+          await store.saveCurrentArticle(`${currentContent}${snippet}`)
+          toast({
+            title: '已插入图片引用',
+            description: candidatePath,
+          })
+        } catch (error) {
+          toast({
+            title: '插入图片失败',
+            description: error instanceof Error ? error.message : String(error),
+            variant: 'destructive',
+          })
+        }
+      })()
+    }
+
+    emitter.on('editor-insert-markdown-image', handleInsertMarkdownImage)
+    return () => {
+      emitter.off('editor-insert-markdown-image', handleInsertMarkdownImage)
+    }
+  }, [readArticle, setActiveFilePath])
+
   // Initialize tabs from store on mount
   useEffect(() => {
     if (!isInitializedRef.current) {
@@ -261,15 +349,21 @@ export function EditorLayout() {
   }, [])
 
   // Get item type based on path
-  const getItemType = useCallback((path: string): 'knowledgeGraph' | 'flashcards' | 'memory' | 'html' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'folder' | 'unknown' => {
+  const getItemType = useCallback((path: string): 'knowledgeGraph' | 'artifactStudio' | 'flashcards' | 'memory' | 'githubStars' | 'html' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'mermaid' | 'folder' | 'unknown' => {
     if (!path) return 'unknown'
     if (isKnowledgeGraphTabPath(path)) return 'knowledgeGraph'
+    if (isArtifactStudioTabPath(path)) return 'artifactStudio'
     if (isFlashcardTabPath(path)) return 'flashcards'
     if (isMemoryTabPath(path)) return 'memory'
+    if (isGithubStarsTabPath(path)) return 'githubStars'
 
     // First check if it's a folder
     const folder = findFolderInTree(path, fileTree)
     if (folder) return 'folder'
+
+    if (isMermaidPath(path)) {
+      return 'mermaid'
+    }
 
     if (isDiagramPath(path)) {
       return 'diagram'
@@ -296,7 +390,7 @@ export function EditorLayout() {
 
   const shouldKeepTabMounted = useCallback((tab: TabInfo): boolean => {
     const itemType = getItemType(tab.path)
-    return itemType === 'pdf' || itemType === 'diagram' || itemType === 'knowledgeGraph' || itemType === 'flashcards' || itemType === 'memory'
+    return itemType === 'pdf' || itemType === 'diagram' || itemType === 'mermaid' || itemType === 'knowledgeGraph' || itemType === 'artifactStudio' || itemType === 'flashcards' || itemType === 'memory' || itemType === 'githubStars'
   }, [getItemType])
 
   useEffect(() => {
@@ -387,7 +481,7 @@ export function EditorLayout() {
       let hasInvalid = false
 
       for (const tab of tabs) {
-        if (isKnowledgeGraphTabPath(tab.path) || isFlashcardTabPath(tab.path) || isMemoryTabPath(tab.path)) {
+        if (isKnowledgeGraphTabPath(tab.path) || isArtifactStudioTabPath(tab.path) || isFlashcardTabPath(tab.path) || isMemoryTabPath(tab.path) || isGithubStarsTabPath(tab.path)) {
           validTabs.push(tab)
           continue
         }
@@ -425,9 +519,11 @@ export function EditorLayout() {
 
     const name = activeFilePath.split('/').pop() || activeFilePath
     const isGraphTab = isKnowledgeGraphTabPath(activeFilePath)
+    const isArtifactStudioTab = isArtifactStudioTabPath(activeFilePath)
     const isFlashcardsTab = isFlashcardTabPath(activeFilePath)
     const isMemoryTab = isMemoryTabPath(activeFilePath)
-    const isVirtualTab = isGraphTab || isFlashcardsTab || isMemoryTab
+    const isGithubStarsTab = isGithubStarsTabPath(activeFilePath)
+    const isVirtualTab = isGraphTab || isArtifactStudioTab || isFlashcardsTab || isMemoryTab || isGithubStarsTab
     const isFolder = isVirtualTab ? false : isFolderPath(activeFilePath)
 
     // Check if tab already exists
@@ -443,19 +539,27 @@ export function EditorLayout() {
       const newTab: TabInfo = {
         id: isGraphTab
           ? KNOWLEDGE_GRAPH_TAB_ID
-          : isFlashcardsTab
-            ? FLASHCARD_TAB_ID
-            : isMemoryTab
-              ? MEMORY_TAB_ID
-              : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+          : isArtifactStudioTab
+            ? ARTIFACT_STUDIO_TAB_ID
+            : isFlashcardsTab
+              ? FLASHCARD_TAB_ID
+              : isMemoryTab
+                ? MEMORY_TAB_ID
+                : isGithubStarsTab
+                  ? GITHUB_STARS_TAB_ID
+                  : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
         path: activeFilePath,
         name: isGraphTab
           ? KNOWLEDGE_GRAPH_TAB_NAME
-          : isFlashcardsTab
-            ? FLASHCARD_TAB_NAME
-            : isMemoryTab
-              ? MEMORY_TAB_NAME
-              : name,
+          : isArtifactStudioTab
+            ? ARTIFACT_STUDIO_TAB_NAME
+            : isFlashcardsTab
+              ? FLASHCARD_TAB_NAME
+              : isMemoryTab
+                ? MEMORY_TAB_NAME
+                : isGithubStarsTab
+                  ? GITHUB_STARS_TAB_NAME
+                  : name,
         isFolder: isFolder
       }
       addTab(newTab)
@@ -708,9 +812,19 @@ export function EditorLayout() {
             <DiagramEditor filePath={tab.path} isActive={isActive} />
           </Suspense>
         )}
+        {itemType === 'mermaid' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <MermaidEditor filePath={tab.path} tabContentsRef={tabContentsRef} />
+          </Suspense>
+        )}
         {itemType === 'knowledgeGraph' && (
           <Suspense fallback={<div className="flex-1" />}>
             <KnowledgeGraph focusPath={lastDocumentPathRef.current} />
+          </Suspense>
+        )}
+        {itemType === 'artifactStudio' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <ArtifactStudio sourcePath={lastDocumentPathRef.current} />
           </Suspense>
         )}
         {itemType === 'flashcards' && (
@@ -722,6 +836,13 @@ export function EditorLayout() {
           <Suspense fallback={<div className="flex-1" />}>
             <div className="flex min-h-0 flex-1 overflow-hidden">
               <MemoryWorkspace />
+            </div>
+          </Suspense>
+        )}
+        {itemType === 'githubStars' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <GithubStarsWorkspace />
             </div>
           </Suspense>
         )}
@@ -828,7 +949,11 @@ export function EditorLayout() {
       />
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {renderedTabs.map(tab => renderContentPanel(tab, tab.id === localActiveTabId))}
+        {renderedTabs.map(tab => (
+          <ChunkErrorBoundary key={tab.id} label="编辑器资源">
+            {renderContentPanel(tab, tab.id === localActiveTabId)}
+          </ChunkErrorBoundary>
+        ))}
       </div>
       <OnboardingSpotlight
         targetId={activeOnboardingStep ? getOnboardingSpotlightTarget(activeOnboardingStep) : null}

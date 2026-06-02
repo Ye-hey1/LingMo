@@ -23,10 +23,12 @@ interface DrawioMessage {
   modified?: boolean
 }
 
-const DRAWIO_ORIGIN = 'https://embed.diagrams.net'
-const DRAWIO_SRC = `${DRAWIO_ORIGIN}/?embed=1&proto=json&spin=1&libraries=1&ui=min&lang=zh&configure=1&noExitBtn=1&noSaveBtn=1&saveAndExit=0`
+const DRAWIO_SRC = '/drawio/index.html?embed=1&proto=json&spin=1&libraries=1&ui=min&lang=zh&configure=1&noExitBtn=1&noSaveBtn=1&saveAndExit=0'
 const DRAWIO_DEFAULT_LIBRARIES = 'general;basic;arrows2;flowchart'
 const SAVE_DEBOUNCE_MS = 500
+
+// 全局变量，记录应用生命周期内，Draw.io 是否已至少加载过一次
+let globalHasInitialized = false
 
 function parseDrawioMessage(data: unknown): DrawioMessage | null {
   if (typeof data === 'string') {
@@ -47,30 +49,61 @@ function parseDrawioMessage(data: unknown): DrawioMessage | null {
 export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
   const [status, setStatus] = useState<DrawioStatus>('loading')
   const [reloadKey, setReloadKey] = useState(0)
-  const [initialXml, setInitialXml] = useState<string | null>(null)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const latestXmlRef = useRef('')
   const saveTimerRef = useRef<number | null>(null)
+  const hasInitializedRef = useRef(false)
+
+  const postToDrawio = useCallback((message: Record<string, unknown>) => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '*'
+    iframeRef.current?.contentWindow?.postMessage(JSON.stringify(message), origin)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
 
     async function loadXml() {
       setStatus('loading')
-      setInitialXml(null)
       try {
         const content = await readDiagramFileContent(filePath)
         if (cancelled) return
 
         const xml = content.trim().startsWith('<mxfile') ? content : createEmptyDrawioContent()
         latestXmlRef.current = xml
-        setInitialXml(xml)
+        
+        if (hasInitializedRef.current) {
+          postToDrawio({
+            action: 'load',
+            xml: xml,
+            autosave: 1,
+            modified: false,
+            noExitBtn: 1,
+            noSaveBtn: 1,
+            saveAndExit: 0,
+            title: '',
+            libs: DRAWIO_DEFAULT_LIBRARIES,
+          })
+          setStatus('ready')
+        }
       } catch {
         if (cancelled) return
 
         const xml = createEmptyDrawioContent()
         latestXmlRef.current = xml
-        setInitialXml(xml)
+        if (hasInitializedRef.current) {
+          postToDrawio({
+            action: 'load',
+            xml: xml,
+            autosave: 1,
+            modified: false,
+            noExitBtn: 1,
+            noSaveBtn: 1,
+            saveAndExit: 0,
+            title: '',
+            libs: DRAWIO_DEFAULT_LIBRARIES,
+          })
+          setStatus('ready')
+        }
       }
     }
 
@@ -79,17 +112,9 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
     return () => {
       cancelled = true
     }
-  }, [filePath])
+  }, [filePath, postToDrawio])
 
-  useEffect(() => {
-    if (initialXml !== null) {
-      latestXmlRef.current = initialXml
-    }
-  }, [initialXml])
 
-  const postToDrawio = useCallback((message: Record<string, unknown>) => {
-    iframeRef.current?.contentWindow?.postMessage(JSON.stringify(message), DRAWIO_ORIGIN)
-  }, [])
 
   const saveXml = useCallback(
     async (xml: string) => {
@@ -126,7 +151,8 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.origin !== DRAWIO_ORIGIN || event.source !== iframeRef.current?.contentWindow) {
+      const origin = typeof window !== 'undefined' ? window.location.origin : ''
+      if (event.origin !== origin || event.source !== iframeRef.current?.contentWindow) {
         return
       }
 
@@ -152,18 +178,22 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
       }
 
       if (message.event === 'init') {
-        postToDrawio({
-          action: 'load',
-          xml: latestXmlRef.current || createEmptyDrawioContent(),
-          autosave: 1,
-          modified: false,
-          noExitBtn: 1,
-          noSaveBtn: 1,
-          saveAndExit: 0,
-          title: '',
-          libs: DRAWIO_DEFAULT_LIBRARIES,
-        })
-        setStatus('ready')
+        hasInitializedRef.current = true
+        globalHasInitialized = true
+        if (latestXmlRef.current !== '') {
+          postToDrawio({
+            action: 'load',
+            xml: latestXmlRef.current,
+            autosave: 1,
+            modified: false,
+            noExitBtn: 1,
+            noSaveBtn: 1,
+            saveAndExit: 0,
+            title: '',
+            libs: DRAWIO_DEFAULT_LIBRARIES,
+          })
+          setStatus('ready')
+        }
         return
       }
 
@@ -220,7 +250,7 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
   }, [])
 
   const handleSendToAI = useCallback(() => {
-    const content = latestXmlRef.current || initialXml || createEmptyDrawioContent()
+    const content = latestXmlRef.current || createEmptyDrawioContent()
     emitter.emit('insert-quote', {
       quote: [`文件：${filePath}`, `类型：draw.io 图表`, `内容长度：${content.length} 字符`].join('\n'),
       fullContent: content,
@@ -236,12 +266,14 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
       path: filePath,
       relativePath: filePath,
     })
-  }, [filePath, initialXml])
+  }, [filePath])
 
   const isLoading = status === 'loading'
   const isSaving = status === 'saving'
   const isBusy = isLoading || isSaving
   const saveButtonLabel = isLoading ? '加载中' : isSaving ? '保存中' : '保存'
+  const isFirstLoading = isLoading && !hasInitializedRef.current && !globalHasInitialized
+  const isHotLoading = isLoading && !hasInitializedRef.current && globalHasInitialized
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-background">
@@ -295,22 +327,56 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
             </Button>
           </div>
         </div>
-        {isLoading ? (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 text-sm text-muted-foreground">
-            <Loader2 className="mr-2 size-4 animate-spin" />
-            正在打开 draw.io 编辑器...
+        {isFirstLoading ? (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/95 select-none">
+            {/* 模拟 Draw.io 的网格与画布预览 */}
+            <div 
+              className="absolute inset-0 z-0 opacity-5 pointer-events-none"
+              style={{
+                backgroundImage: `
+                  linear-gradient(to right, currentColor 1px, transparent 1px),
+                  linear-gradient(to bottom, currentColor 1px, transparent 1px)
+                `,
+                backgroundSize: '24px 24px',
+              }}
+            />
+            {/* 模拟顶部菜单占位 */}
+            <div className="absolute top-0 left-0 right-0 h-10 border-b bg-muted/20 flex items-center px-4 gap-4 animate-pulse">
+              <div className="h-4 w-12 bg-muted rounded-sm" />
+              <div className="h-4 w-8 bg-muted rounded-sm" />
+              <div className="h-4 w-8 bg-muted rounded-sm" />
+              <div className="h-4 w-8 bg-muted rounded-sm" />
+            </div>
+            {/* 模拟左侧图库占位 */}
+            <div className="absolute top-10 left-0 bottom-0 w-[220px] border-r bg-muted/10 p-4 flex flex-col gap-4 animate-pulse hidden md:flex">
+              <div className="h-6 w-full bg-muted rounded-sm" />
+              <div className="h-24 w-full bg-muted rounded-sm" />
+              <div className="h-24 w-full bg-muted rounded-sm" />
+            </div>
+            
+            {/* 中间核心加载指示器 */}
+            <div className="relative z-10 flex flex-col items-center gap-3 px-6 py-4 rounded-xl border bg-card shadow-md">
+              <Loader2 className="size-5 animate-spin text-indigo-500" />
+              <span className="text-xs font-semibold text-foreground/75 animate-pulse">正在打开 Draw.io 编辑器...</span>
+              <span className="text-[10px] text-muted-foreground/60">首次打开可能需要载入外部静态库，请稍候</span>
+            </div>
           </div>
         ) : null}
-        {initialXml !== null ? (
-          <iframe
-            key={reloadKey}
-            ref={iframeRef}
-            title="draw.io 图表编辑器"
-            src={DRAWIO_SRC}
-            className="h-full w-full border-0"
-            allow="clipboard-read; clipboard-write"
-          />
+        {isHotLoading ? (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/40 backdrop-blur-[2px] select-none">
+            <Loader2 className="size-4 animate-spin text-indigo-500/80" />
+          </div>
         ) : null}
+        <iframe
+          key={reloadKey}
+          ref={iframeRef}
+          title="draw.io 图表编辑器"
+          src={DRAWIO_SRC}
+          className={`h-full w-full border-0 transition-opacity duration-300 ${
+            isLoading && !hasInitializedRef.current ? 'opacity-0' : 'opacity-100'
+          }`}
+          allow="clipboard-read; clipboard-write"
+        />
       </div>
     </div>
   )

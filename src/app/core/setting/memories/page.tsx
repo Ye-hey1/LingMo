@@ -1,5 +1,7 @@
 'use client'
 
+export const dynamic = 'force-dynamic'
+
 import { useTranslations } from 'next-intl'
 import { SettingType } from '../components/setting-base'
 import { Brain } from 'lucide-react'

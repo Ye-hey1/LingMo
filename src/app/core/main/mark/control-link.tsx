@@ -22,11 +22,11 @@ import {
 } from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { insertMark } from "@/db/marks"
+import { getAllMarks, insertMark, updateMark as updateMarkRecord } from "@/db/marks"
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
-import { CircleX, Link, Sparkles } from "lucide-react"
-import { useState, useEffect, useCallback } from "react"
+import { CircleX, Link, Sparkles, FolderOpen } from "lucide-react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { v4 as uuidv4 } from 'uuid'
 import emitter from '@/lib/emitter'
@@ -37,7 +37,7 @@ import { isMobileDevice as checkIsMobileDevice } from '@/lib/check'
 import { hasText, readText } from 'tauri-plugin-clipboard-api'
 import { Store } from '@tauri-apps/plugin-store'
 import { toast } from "@/hooks/use-toast"
-import { parseWebPageContent, type ParsedWebPageContent } from "@/lib/web/content-extractor"
+import { normalizeWebContent, parseWebPageContent, type ParsedWebPageContent } from "@/lib/web/content-extractor"
 import { organizeLinkRecord } from "@/lib/ai/link-organizer"
 import { tavilyExtract } from "@/lib/tavily"
 import {
@@ -54,6 +54,20 @@ import {
 import { ensureTagByName } from "@/db/tags"
 import { fetchWechatArticleAsMarkdown, isWechatArticleUrl, parseWechatArticleHtml, WECHAT_ARTICLE_TAG_NAME } from "@/lib/wechat-article"
 import { fetchVideoTranscript, getVideoPlatform, isVideoTranscriptUrl, VIDEO_TRANSCRIPT_TAG_NAME } from "@/lib/video-transcript"
+import { isXhsUrl } from "@/lib/xhs-extractor"
+import { extractAudioTrack, segmentAudio } from "@/lib/ffmpeg-wasm"
+import { transcribeRecording } from "@/lib/audio"
+import { readFile, writeFile, BaseDirectory, exists, mkdir } from "@tauri-apps/plugin-fs"
+
+const INBOX_TAG_NAME = '中转站'
+const INBOX_TAG_PATTERN = /^中转站\s*(?:[（(]\s*\d+\s*[）)])?$/
+
+function isInboxLikeTagName(name?: string | null) {
+  const normalizedName = name?.trim()
+  return normalizedName === INBOX_TAG_NAME
+    || normalizedName === 'Idea'
+    || Boolean(normalizedName && INBOX_TAG_PATTERN.test(normalizedName))
+}
 
 export function ControlLink() {
   const t = useTranslations();
@@ -64,13 +78,30 @@ export function ControlLink() {
   const [autoReadClipboard, setAutoReadClipboard] = useState(true)
   const [organizeAfterSave, setOrganizeAfterSave] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
+  const [selectedLocalFile, setSelectedLocalFile] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [githubTokenConfigured, setGithubTokenConfigured] = useState(false)
   const [wechatHtmlFallback, setWechatHtmlFallback] = useState('')
   const [showWechatHtmlFallback, setShowWechatHtmlFallback] = useState(false)
   const isMobile = useIsMobile() || checkIsMobileDevice()
 
-  const { currentTagId, fetchTags, getCurrentTag } = useTagStore()
+  const { fetchTags, getCurrentTag } = useTagStore()
   const { fetchMarks, addQueue, setQueue, removeQueue } = useMarkStore()
+
+  async function resolveTargetTagId() {
+    const { currentTag, currentTagId: latestTagId, tags, setCurrentTagId } = useTagStore.getState()
+    const selectedTag = currentTag || tags.find((tag) => tag.id === latestTagId)
+
+    if (!latestTagId || isInboxLikeTagName(selectedTag?.name)) {
+      const inboxTag = await ensureTagByName(INBOX_TAG_NAME)
+      if (latestTagId !== inboxTag.id) {
+        await setCurrentTagId(inboxTag.id)
+      }
+      return inboxTag.id
+    }
+
+    return latestTagId
+  }
 
   // 初始化时从 store 读取设置
   useEffect(() => {
@@ -285,7 +316,7 @@ export function ControlLink() {
       timeout: 20,
     })
     const result = response.results[0]
-    const content = result?.rawContent?.trim() || ''
+    const content = normalizeWebContent(result?.rawContent?.trim() || '')
     if (!content) {
       const failedReason = response.failedResults[0]?.error
       throw new LinkCaptureError(failedReason || 'Tavily Extract 未返回可用正文', 'parse')
@@ -304,10 +335,13 @@ export function ControlLink() {
   // 清空输入框
   function handleClear() {
     setUrl('')
+    setSelectedLocalFile('')
     setErrorMessage('')
     setWechatHtmlFallback('')
     setShowWechatHtmlFallback(false)
   }
+
+  const isLocalMedia = Boolean(selectedLocalFile && url === selectedLocalFile)
 
   const githubRepoPreview = parseGitHubRepoUrl(url)
   const githubHint = githubRepoPreview
@@ -319,7 +353,7 @@ export function ControlLink() {
   const wechatHint = wechatArticlePreview
     ? `已识别微信公众号文章，将提取正文并保存到「${WECHAT_ARTICLE_TAG_NAME}」。`
     : ''
-  const videoPlatformPreview = getVideoPlatform(url)
+  const videoPlatformPreview = isXhsUrl(url) ? null : getVideoPlatform(url)
   const videoHint = videoPlatformPreview
     ? `已识别${videoPlatformPreview === 'youtube' ? ' YouTube' : ' B站'}视频，将优先提取公开字幕并保存到「${VIDEO_TRANSCRIPT_TAG_NAME}」。`
     : ''
@@ -337,7 +371,7 @@ export function ControlLink() {
             if (errorMessage) setErrorMessage('')
           }}
           disabled={loading}
-          className="h-10 border-border/80 bg-muted/30 pl-9 pr-10 text-sm shadow-sm"
+          className="h-10 border-border/80 bg-muted/30 pl-9 pr-16 text-sm shadow-sm"
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault()
@@ -345,17 +379,34 @@ export function ControlLink() {
             }
           }}
         />
-        {url && !loading && (
+        <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-2">
+          {url && !loading && (
+            <button
+              type="button"
+              onClick={handleClear}
+              className="text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="清空链接"
+            >
+              <CircleX className="size-4" />
+            </button>
+          )}
           <button
             type="button"
-            onClick={handleClear}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-            aria-label="清空链接"
+            onClick={handleLocalFileSelect}
+            disabled={loading}
+            className="text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="选择本地视频或音频"
           >
-            <CircleX className="size-4" />
+            <FolderOpen className="size-4" />
           </button>
-        )}
+        </div>
       </div>
+      {isLocalMedia ? (
+        <div className="flex items-start gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-700">
+          <Sparkles className="mt-0.5 size-3.5 shrink-0 animate-pulse text-violet-600" />
+          <span>已选择本地媒体：{selectedLocalFile.split('/').pop()}。点击下方「开始识别」即可一键提取转译。</span>
+        </div>
+      ) : null}
       {githubHint ? (
         <div className={githubTokenConfigured
           ? "flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700"
@@ -464,10 +515,225 @@ export function ControlLink() {
     } catch {
       return targetUrl
     }
+  }  // 处理移动端文件选择
+  async function handleFileInputChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const fileName = file.name
+      setUrl(fileName)
+      setSelectedLocalFile(fileName)
+    } catch (error) {
+      console.error('移动端选择文件失败:', error)
+      toast({
+        title: '选择文件失败',
+        description: error instanceof Error ? error.message : '选择文件失败',
+        variant: 'destructive'
+      })
+    }
   }
 
-  function handleSuccess() {
+  // 选择音频或视频文件
+  async function handleLocalFileSelect() {
+    try {
+      const { isMobileDevice } = await import('@/lib/check')
+      if (isMobileDevice()) {
+        fileInputRef.current?.click()
+        return
+      }
+
+      // PC 端使用 Tauri dialog
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({
+        multiple: false,
+        filters: [{
+          name: 'Media',
+          extensions: ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'wma', 'webm', 'mp4', 'mov']
+        }]
+      })
+
+      if (!selected) return
+
+      const filePath = selected as string
+      setUrl(filePath)
+      setSelectedLocalFile(filePath)
+    } catch (error) {
+      console.error('文件选择失败:', error)
+      toast({
+        title: '选择文件失败',
+        description: error instanceof Error ? error.message : '选择文件失败',
+        variant: 'destructive'
+      })
+    }
+  }
+
+  // 专门在后台对本地多媒体文件（视频、音频）进行音轨剥离和切片转译
+  const handleLocalMediaTranscription = async (
+    targetFilePath: string,
+    queueId: string,
+    targetTagId: number,
+  ) => {
+    const formatSeconds = (val: number) => {
+      const pad = (v: number) => String(v).padStart(2, '0')
+      const total = Math.max(0, Math.floor(val))
+      const mins = Math.floor(total / 60)
+      const secs = total % 60
+      return `${pad(mins)}:${pad(secs)}`
+    }
+
+    try {
+      let mediaBlob: Blob | null = null
+
+      const { isMobileDevice } = await import('@/lib/check')
+      if (isMobileDevice()) {
+        const file = fileInputRef.current?.files?.[0]
+        if (!file) {
+          throw new Error('未获取到有效的移动端文件实体')
+        }
+        mediaBlob = file
+      } else {
+        const fileData = await readFile(targetFilePath)
+        const extension = targetFilePath.split('.').pop()?.toLowerCase()
+        const mimeType = extension === 'wav' ? 'audio/wav' :
+                        extension === 'mp3' ? 'audio/mpeg' :
+                        extension === 'm4a' ? 'audio/mp4' :
+                        extension === 'mp4' ? 'video/mp4' :
+                        extension === 'mov' ? 'video/quicktime' :
+                        extension === 'webm' ? 'video/webm' :
+                        'audio/mpeg'
+
+        const buffer = fileData.buffer.slice(fileData.byteOffset, fileData.byteOffset + fileData.byteLength) as ArrayBuffer
+        mediaBlob = new Blob([buffer], { type: mimeType })
+      }
+
+      if (!mediaBlob || mediaBlob.size === 0) {
+        throw new Error('多媒体文件数据为空')
+      }
+
+      // 1. 调用 WASM 前端引擎提取标准化音轨（16kHz Mono MP3）
+      const audioBlob = await extractAudioTrack(mediaBlob, (progress) => {
+        setQueue(queueId, { progress: `音轨提取中 ${progress}%...` })
+      })
+
+      setQueue(queueId, { progress: '极速切片分片中 40%...' })
+
+      // 2. 使用 WASM 进行高速音频无损分片
+      const chunks = await segmentAudio(audioBlob, 180)
+
+      let transcription = ''
+      if (chunks.length === 0) {
+        throw new Error('未提取到任何有效音频数据')
+      } else if (chunks.length === 1) {
+        setQueue(queueId, { progress: '语音识别中 60%...' })
+        transcription = await transcribeRecording(chunks[0])
+      } else {
+        // 多片并发 Whisper 转录
+        const transcriptions = new Array<string>(chunks.length)
+        let finished = 0
+
+        setQueue(queueId, { progress: `并发识别中 0/${chunks.length}...` })
+
+        await Promise.all(chunks.map(async (chunk: Blob, index: number) => {
+          try {
+            const chunkText = await transcribeRecording(chunk)
+            if (chunkText && chunkText.trim()) {
+              transcriptions[index] = `- ${formatSeconds(index * 180)} ${chunkText.trim()}`
+            }
+          } catch (chunkError) {
+            console.error(`[WASM STT] Chunk ${index} failed:`, chunkError)
+          }
+          finished += 1
+          setQueue(queueId, {
+            progress: `并发识别中 ${finished}/${chunks.length} (${Math.round((finished / chunks.length) * 45 + 50)}%)...`
+          })
+        }))
+
+        transcription = transcriptions.filter(Boolean).join('\n\n')
+      }
+
+      if (!transcription || !transcription.trim()) {
+        throw new Error('未检测到有效的语音文本')
+      }
+
+      // 3. 将标准化音轨保存为本地 recordings 文件以支持卡片本地播放
+      const timestamp = Date.now()
+      const filename = `recording_${timestamp}.mp3`
+      const audioDir = 'recordings'
+
+      const dirExists = await exists(audioDir, { baseDir: BaseDirectory.AppData })
+      if (!dirExists) {
+        await mkdir(audioDir, { baseDir: BaseDirectory.AppData, recursive: true })
+      }
+
+      const arrayBuffer = await audioBlob.arrayBuffer()
+      const uint8Array = new Uint8Array(arrayBuffer)
+      const filePath = `${audioDir}/${filename}`
+      await writeFile(filePath, uint8Array, { baseDir: BaseDirectory.AppData })
+
+      // 4. 插入记录
+      const originalFileName = targetFilePath.split(/[/\\]/).pop() || '语音记录'
+      await insertMark({
+        tagId: targetTagId,
+        type: 'recording',
+        desc: originalFileName,
+        content: transcription,
+        url: filePath
+      })
+
+      removeQueue(queueId)
+      await fetchMarks()
+      await fetchTags()
+      getCurrentTag()
+
+      toast({
+        title: '音视频文件转录完成',
+        description: `已成功保存为语音记录。双击即可查阅并一键直绘精美卡片！`,
+      })
+
+    } catch (error) {
+      console.error('[WASM Media Select In Link] Failed:', error)
+      removeQueue(queueId)
+      toast({
+        title: '本地多媒体识别失败',
+        description: error instanceof Error ? error.message : '转写识别失败，请重试',
+        variant: 'destructive'
+      })
+    }
+  }
+
+  async function handleSuccess() {
     if (!url || loading) return
+    const targetTagId = await resolveTargetTagId()
+    const queueId = uuidv4()
+
+    if (isLocalMedia) {
+      // 本地多媒体文件识别流程
+      setLoading(true)
+      setOpen(false)
+      setLoading(false)
+
+      addQueue({
+        queueId,
+        tagId: targetTagId,
+        type: 'recording',
+        progress: '多媒体加载中...',
+        startTime: Date.now()
+      })
+
+      toast({
+        title: '已转入后台多媒体识别',
+        description: `状态：多媒体已载入。正在使用纯前端 WASM 引擎转换文件：${selectedLocalFile.split('/').pop()}`,
+      })
+
+      // 异步执行本地转译
+      void handleLocalMediaTranscription(selectedLocalFile, queueId, targetTagId)
+
+      // 清空选择状态
+      setUrl('')
+      setSelectedLocalFile('')
+      return
+    }
 
     if (!isValidUrl(url)) {
       setErrorMessage('请输入有效链接，例如 https://github.com/owner/repo')
@@ -475,8 +741,6 @@ export function ControlLink() {
     }
 
     const targetUrl = normalizeTargetUrl(url)
-    const queueId = uuidv4()
-    const targetTagId = currentTagId!
     const shouldOrganizeAfterSave = organizeAfterSave
     const isGitHubRepo = Boolean(parseGitHubRepoUrl(targetUrl))
     const isWechatArticle = isWechatArticleUrl(targetUrl)
@@ -719,18 +983,15 @@ export function ControlLink() {
         pageContent = await extractPageViaTavily(targetUrl)
       }
 
-      setQueue(queueId, { progress: '90%' });
+      setQueue(queueId, { progress: shouldOrganizeAfterSave ? '90% 正在保存清洗正文...' : '90%' });
 
       // 提取有用的内容
       const { title, metaDesc, mainContent, bodyText } = pageContent;
 
-      // 构建描述
-      let desc = [title, metaDesc].filter(Boolean).join('\n');
+      const rawDesc = [title, metaDesc].filter(Boolean).join('\n');
+      const rawContent = mainContent || bodyText || metaDesc || `来源链接：${targetUrl}`;
 
-      // 构建内容（优先使用主要内容，如果没有则使用正文）
-      let content = mainContent || bodyText || metaDesc || `来源链接：${targetUrl}`;
-
-      if (!content.trim()) {
+      if (!rawContent.trim()) {
         throw new LinkCaptureError('网页解析结果为空', 'parse')
       }
 
@@ -738,8 +999,8 @@ export function ControlLink() {
       const insertResult = await insertMark({
         tagId: targetTagId,
         type: 'link',
-        desc: desc,
-        content: content,
+        desc: rawDesc,
+        content: rawContent,
         url: targetUrl
       });
 
@@ -748,50 +1009,28 @@ export function ControlLink() {
       await fetchTags();
       getCurrentTag();
 
-      // 保存后后台异步整理，避免阻塞弹窗
       const insertedId = Number(insertResult.lastInsertId || 0)
       if (shouldOrganizeAfterSave && insertedId > 0) {
         toast({
           title: '链接已保存',
-          description: '状态：已保存。AI 正在后台整理内容，你可以继续操作。',
+          description: '状态：已保存正文，AI 正在后台整理为中文资料卡。',
         })
 
-        void (async () => {
-          try {
-            const organized = await organizeLinkRecord({
-              url: targetUrl,
-              title,
-              metaDesc,
-              content,
-            })
-            if (!organized) {
-              return
-            }
-
-            // 读取最新记录并更新
-            await fetchMarks()
-            const { marks, updateMark: updateMarkInStore } = useMarkStore.getState()
-            const targetMark = marks.find(item => item.id === insertedId)
-            if (!targetMark) {
-              return
-            }
-
-            await updateMarkInStore({
-              ...targetMark,
-              desc: organized.desc || targetMark.desc,
-              content: organized.content || targetMark.content,
-            })
-
-            toast({
-              title: 'AI 整理完成',
-              description: '状态：完成。链接内容已优化为结构化摘要。',
-            })
-          } catch (backgroundError) {
-            console.warn('[Link] Background link organize failed:', backgroundError)
-          }
-        })()
+        void organizeSavedLinkRecord({
+          insertedId,
+          targetUrl,
+          title,
+          metaDesc,
+          rawContent,
+        })
+      } else {
+        toast({
+          title: '链接已保存',
+          description: '状态：完成。网页正文已保存。',
+        })
       }
-      
+
+
     } catch (error) {
       const typedError = toLinkCaptureError(error)
       const message = getLinkErrorMessage(typedError)
@@ -803,6 +1042,55 @@ export function ControlLink() {
       console.warn('[Link] Crawling page failed:', error)
     } finally {
       removeQueue(queueId);
+    }
+  }
+
+  async function organizeSavedLinkRecord({
+    insertedId,
+    targetUrl,
+    title,
+    metaDesc,
+    rawContent,
+  }: {
+    insertedId: number
+    targetUrl: string
+    title: string
+    metaDesc?: string
+    rawContent: string
+  }) {
+    try {
+      const organized = await organizeLinkRecord({
+        url: targetUrl,
+        title,
+        metaDesc,
+        content: rawContent,
+      })
+      if (!organized) {
+        return
+      }
+
+      const latestMarks = await getAllMarks()
+      const targetMark = latestMarks.find(item => item.id === insertedId)
+      if (!targetMark || targetMark.deleted === 1) {
+        return
+      }
+
+      await updateMarkRecord({
+        ...targetMark,
+        desc: organized.desc || targetMark.desc,
+        content: organized.content || targetMark.content,
+      })
+
+      const { fetchAllMarks } = useMarkStore.getState()
+      await fetchMarks()
+      await fetchAllMarks()
+
+      toast({
+        title: 'AI 整理完成',
+        description: '链接内容已更新为中文结构化资料卡。',
+      })
+    } catch (backgroundError) {
+      console.warn('[Link] Background link organize failed:', backgroundError)
     }
   }
 
@@ -984,7 +1272,7 @@ export function ControlLink() {
                 disabled={!canSubmit}
                 className="h-10 w-full"
               >
-                保存并解析
+                {isLocalMedia ? '开始识别' : '保存并解析'}
               </Button>
             </DrawerFooter>
           </DrawerContent>
@@ -1010,11 +1298,20 @@ export function ControlLink() {
                 disabled={!canSubmit}
                 className="h-10 min-w-32 shrink-0"
               >
-                保存并解析
+                {isLocalMedia ? '开始识别' : '保存并解析'}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
+      )}
+      {isMobile && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="audio/*,video/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.wma,.webm,.mp4,.mov"
+          onChange={handleFileInputChange}
+          className="hidden"
+        />
       )}
     </>
   )

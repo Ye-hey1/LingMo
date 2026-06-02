@@ -1,9 +1,28 @@
 import type { DirTree } from "@/stores/article"
 import { computedParentPath } from "@/lib/path"
+import { isSkillsFolder } from "@/lib/skills/utils"
+import type React from "react"
 
-export type FileBrowserFilter = "all" | "markdown" | "pdf" | "drawio" | "json" | "folder" | "recent-created" | "generated"
+export type FileBrowserFilter = "all" | "markdown" | "html" | "pdf" | "drawio" | "json" | "folder" | "recent-created" | "generated"
+
+const FILE_MANAGER_ICON_SIZE_MAP = {
+  xs: "size-3",
+  sm: "size-3.5",
+  md: "size-4",
+  lg: "size-5",
+  xl: "size-6",
+} as const
+
+export function getFileManagerIconSize(textSize: string): string {
+  return FILE_MANAGER_ICON_SIZE_MAP[textSize as keyof typeof FILE_MANAGER_ICON_SIZE_MAP] ?? "size-4"
+}
+
+export function stopRenameInputPropagation(event: React.SyntheticEvent) {
+  event.stopPropagation()
+}
 
 const MARKDOWN_FILE_PATTERN = /\.md$/i
+const HTML_FILE_PATTERN = /\.html?$/i
 const PDF_FILE_PATTERN = /\.pdf$/i
 const DRAWIO_FILE_PATTERN = /\.(drawio|drawio\.xml)$/i
 const EXCALIDRAW_FILE_PATTERN = /\.(excalidraw|excalidraw\.json)$/i
@@ -27,6 +46,10 @@ const GENERATED_NAME_PATTERNS = [
 export interface FileBrowserStats {
   files: number
   folders: number
+}
+
+function isHiddenRootFolder(item: DirTree, parentPath: string) {
+  return !parentPath && item.isDirectory && isSkillsFolder(item.name)
 }
 
 function isRecentlyCreated(item: DirTree, days = RECENT_CREATED_DAYS) {
@@ -65,6 +88,21 @@ export function filterTreeByCloudVisibility(tree: DirTree[], showCloudFiles: boo
     }))
 }
 
+export function filterTreeByWorkspaceVisibility(tree: DirTree[], parentPath = ""): DirTree[] {
+  return tree.reduce<DirTree[]>((acc, item) => {
+    if (isHiddenRootFolder(item, parentPath)) {
+      return acc
+    }
+
+    const itemPath = parentPath ? `${parentPath}/${item.name}` : item.name
+    acc.push({
+      ...item,
+      children: item.children ? filterTreeByWorkspaceVisibility(item.children, itemPath) : undefined,
+    })
+    return acc
+  }, [])
+}
+
 function matchesFilter(item: DirTree, filter: FileBrowserFilter) {
   if (filter === "all") {
     return true
@@ -80,6 +118,10 @@ function matchesFilter(item: DirTree, filter: FileBrowserFilter) {
 
   if (filter === "markdown") {
     return MARKDOWN_FILE_PATTERN.test(item.name)
+  }
+
+  if (filter === "html") {
+    return HTML_FILE_PATTERN.test(item.name)
   }
 
   if (filter === "pdf") {

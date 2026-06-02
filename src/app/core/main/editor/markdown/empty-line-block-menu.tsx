@@ -824,7 +824,7 @@ export function EmptyLineBlockMenu({ editor }: { editor: Editor }) {
     ? createPortal(
       <form
         ref={linkDialogRef}
-        className="fixed z-[9999] rounded-lg border border-gray-200 bg-white p-4 text-gray-950 shadow-2xl dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-50"
+        className="fixed z-50 rounded-lg border border-border bg-background p-4 text-foreground shadow-2xl"
         style={{
           top: linkDialogPosition.top,
           left: linkDialogPosition.left,
@@ -887,7 +887,7 @@ export function EmptyLineBlockMenu({ editor }: { editor: Editor }) {
     ? createPortal(
       <div
         ref={tablePickerRef}
-        className="fixed z-[9999] pointer-events-auto"
+        className="fixed z-50 pointer-events-auto"
         style={{ top: tablePickerPosition.top, left: tablePickerPosition.left }}
         onMouseEnter={openTablePicker}
         onMouseLeave={closeTablePicker}
@@ -945,12 +945,9 @@ export function EmptyLineBlockMenu({ editor }: { editor: Editor }) {
         >
           <div className="text-xs font-medium text-muted-foreground">{t('emptyLineMenu.basic')}</div>
           <div
-            className="mt-1.5 text-foreground"
+            className="mt-1.5 grid gap-1.5 text-foreground"
             style={{
-              display: 'grid',
               gridTemplateColumns: 'repeat(5, 32px)',
-              columnGap: 6,
-              rowGap: 6,
             }}
           >
             {basicActions.map((action) => (

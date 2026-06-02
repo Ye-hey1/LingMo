@@ -54,6 +54,8 @@ export const SlashMenu = forwardRef<SlashMenuRef, SlashMenuProps>(({ editor, que
       tableDesc: t('items.tableDesc'),
       blockquote: t('items.blockquote'),
       blockquoteDesc: t('items.blockquoteDesc'),
+      callout: t('items.callout'),
+      calloutDesc: t('items.calloutDesc'),
       codeBlock: t('items.codeBlock'),
       codeBlockDesc: t('items.codeBlockDesc'),
       divider: t('items.divider'),

@@ -4,7 +4,7 @@ import dayjs from "dayjs"
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { updateMark } from "@/db/marks"
 import { useState, useMemo, useCallback } from "react"
-import { CheckSquare, Square, AlertTriangle, ChevronDown, ChevronRight } from "lucide-react"
+import { CheckSquare, Square, AlertTriangle, ChevronDown, ChevronRight, RotateCcw, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import useMarkStore from "@/stores/mark"
 import useSettingStore from "@/stores/setting"
@@ -35,7 +35,17 @@ function isDueToday(dueDate: string): boolean {
   return dueDate === today
 }
 
-export function TodoItemContent({ mark }: { mark: Mark }) {
+export function TodoItemContent({
+  mark,
+  trashState = false,
+  onRestore,
+  onDeleteForever,
+}: {
+  mark: Mark
+  trashState?: boolean
+  onRestore?: () => void
+  onDeleteForever?: () => void
+}) {
   const t = useTranslations()
   const { fetchMarks } = useMarkStore()
   const { recordTextSize } = useSettingStore()
@@ -106,13 +116,37 @@ export function TodoItemContent({ mark }: { mark: Mark }) {
 
   return (
     <>
-      <div className="flex-1 pr-10 md:pr-0 group">
+      <div 
+        className="flex-1 pr-10 md:pr-0 group"
+        title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
+      >
         <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
           <span className={getMarkTypeListBadgeClasses(mark.type, 'xs')}>
             {t('record.mark.type.todo')}
           </span>
           <span className={cn("w-2 h-2 rounded-full", priorityDotColor)} />
-          <span className="ml-auto">{dayjs(mark.createdAt).fromNow()}</span>
+          {trashState ? (
+            <div className="flex items-center gap-1 ml-auto">
+              <button
+                type="button"
+                className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                onClick={(e) => { e.stopPropagation(); onRestore?.() }}
+                title={`还原记录 (创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `, 删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''})`}
+              >
+                <RotateCcw className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                className="inline-flex size-6 items-center justify-center rounded-md text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-950/30"
+                onClick={(e) => { e.stopPropagation(); onDeleteForever?.() }}
+                title={`彻底删除 (创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `, 删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''})`}
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </div>
+          ) : (
+            <span className="ml-auto">{dayjs(mark.createdAt).fromNow()}</span>
+          )}
         </div>
 
         <div className="mt-2">

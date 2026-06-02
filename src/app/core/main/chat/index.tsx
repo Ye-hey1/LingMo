@@ -7,7 +7,7 @@ import { ClipboardListener } from "./clipboard-listener";
 import { ChatSearch } from './chat-search'
 
 export default function Chat() {
-  return <div id="record-chat" className="flex-col flex-1 flex relative overflow-x-hidden items-center h-full overflow-hidden">
+  return <div id="record-chat" className="flex flex-col flex-1 relative overflow-x-hidden h-full overflow-hidden">
     <ChatHeader />
     <ChatSearch />
     <ChatContent />

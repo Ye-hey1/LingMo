@@ -18,16 +18,15 @@ import {
   Settings2,
   SlidersHorizontal,
   Sparkles,
-  Trash2,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import { useTranslations } from 'next-intl'
 import useArticleStore from '@/stores/article'
 import { useNoteIndexStore, type Backlink } from '@/stores/note-index'
 import { useKnowledgeGraphTagsStore, type GraphTagGroup } from '@/stores/knowledge-graph-tags'
 import { DetailPanel } from './detail-panel'
+import { buildQuadTree, computeBarnesHutForce, computeBounds } from './quadtree'
 import emitter from '@/lib/emitter'
 import {
   appendUniqueGraphTagQuery,
@@ -154,9 +153,6 @@ const LAYOUT_CACHE_KEY = 'knowledge-graph-layout-cache-v5'
 // This is the minimum center-to-center gap between any two nodes.
 // It accounts for: node radius + label text width + breathing room.
 // The collision resolver enforces this regardless of force settings.
-const BASE_COLLISION_RADIUS = 18 // minimum distance for a zero-connection node
-const COLLISION_PADDING = 72 // extra gap for label + spacing
-
 // Approximate character width in graph units at labelSize 12
 const CHAR_WIDTH_APPROX = 8
 
@@ -209,13 +205,6 @@ const DEFAULT_SETTINGS: GraphSettings = {
   semanticThreshold: 0.78,
   showKeywordEdges: false,
   showLLMEdges: false,
-}
-
-const NODE_KIND_LABELS: Record<NodeKind, string> = {
-  current: '当前',
-  hub: '核心',
-  linked: '关联',
-  note: '笔记',
 }
 
 const SETTINGS_PANELS: Array<{ key: SettingsPanel; label: string; icon: typeof SlidersHorizontal }> = [
@@ -561,15 +550,14 @@ function simulateStep(
     // 使用四叉树优化（节点多时）— 注意：这里用同步方式，因为 simulateStep 不是 async
     // quadtree 模块会被 webpack 打包到同一个 chunk 中
     try {
-      const quadtree = require('./quadtree')
       const positions = nodes.map(n => ({ x: n.x, y: n.y }))
-      const bounds = quadtree.computeBounds(positions)
-      const tree = quadtree.buildQuadTree(positions, bounds)
+      const bounds = computeBounds(positions)
+      const tree = buildQuadTree(positions, bounds)
       const theta = 0.7
 
       for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i]
-        const { fx, fy } = quadtree.computeBarnesHutForce(
+        const { fx, fy } = computeBarnesHutForce(
           tree, node.x, node.y, bounds.width, theta,
           physicsRepulsion * effectiveAlpha, MIN_REPULSION_DIST
         )
@@ -624,8 +612,8 @@ function simulateStep(
     const target = nodeIndex.get(edge.target)
     if (!source || !target) continue
 
-    let dx = target.x - source.x
-    let dy = target.y - source.y
+    const dx = target.x - source.x
+    const dy = target.y - source.y
     if (dx === 0 && dy === 0) continue
     const dist = Math.sqrt(dx * dx + dy * dy)
 
@@ -734,12 +722,6 @@ function getNodeColors(kind: NodeKind, colors: GraphPalette, isDark: boolean) {
   return { fill: colors.note, stroke: '#d6d3d1', label: colors.note, tag: colors.tag }
 }
 
-function getNodeTagLabel(node: GraphNode, activeTagGroup?: GraphTagGroup) {
-  if (activeTagGroup) return activeTagGroup.name
-  if (node.kind === 'note') return null
-  return NODE_KIND_LABELS[node.kind]
-}
-
 function labelForRange(value: number, suffix = '') {
   if (Number.isInteger(value)) return `${value}${suffix}`
   if (Math.abs(value) < 0.01) return `${value.toFixed(4)}${suffix}`
@@ -753,7 +735,7 @@ function SettingSection({ icon: Icon, title, children }: {
 }) {
   return (
     <section className="space-y-3">
-      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-stone-800 dark:text-zinc-100">
+      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-foreground">
         <Icon className="h-3.5 w-3.5" />
         {title}
       </div>
@@ -770,12 +752,12 @@ function ToggleRow({ label, checked, onChange }: {
   return (
     <button
       type="button"
-      className="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-1.5 text-left text-[12px] text-stone-600 transition hover:bg-stone-100/80 active:scale-[0.99] dark:text-zinc-300 dark:hover:bg-zinc-800/80"
+      className="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-1.5 text-left text-[12px] text-muted-foreground transition hover:bg-muted/80 focus-visible:ring-1 focus-visible:ring-foreground/20 active:scale-[0.99] dark:text-muted-foreground dark:hover:bg-muted/80"
       onClick={() => onChange(!checked)}
     >
       <span>{label}</span>
-      <span className={`relative h-5 w-9 rounded-full transition ${checked ? 'bg-stone-900 dark:bg-zinc-100' : 'bg-stone-200 dark:bg-zinc-700'}`}>
-        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform dark:bg-zinc-950 ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
+      <span className={`relative h-5 w-9 rounded-full transition ${checked ? 'bg-foreground dark:bg-foreground' : 'bg-border dark:bg-muted'}`}>
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform dark:bg-background ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
       </span>
     </button>
   )
@@ -791,10 +773,10 @@ function RangeRow({ label, value, min, max, step, suffix, onChange }: {
   onChange: (value: number) => void
 }) {
   return (
-    <label className="block space-y-1.5 rounded-xl px-2 py-1.5 text-[12px] text-stone-600 dark:text-zinc-300">
+    <label className="block space-y-1.5 rounded-xl px-2 py-1.5 text-[12px] text-muted-foreground dark:text-muted-foreground">
       <span className="flex items-center justify-between">
         <span>{label}</span>
-        <span className="font-mono text-[11px] text-stone-400 dark:text-zinc-500">{labelForRange(value, suffix)}</span>
+        <span className="font-mono text-[11px] text-muted-foreground/70 dark:text-foreground0">{labelForRange(value, suffix)}</span>
       </span>
       <input
         type="range"
@@ -803,7 +785,7 @@ function RangeRow({ label, value, min, max, step, suffix, onChange }: {
         max={max}
         step={step}
         onChange={event => onChange(Number(event.target.value))}
-        className="h-1.5 w-full cursor-pointer accent-stone-900 dark:accent-zinc-100"
+        className="h-1.5 w-full cursor-pointer accent-foreground dark:accent-foreground"
       />
     </label>
   )
@@ -816,13 +798,13 @@ function TextField({ label, value, placeholder, onChange }: {
   onChange: (value: string) => void
 }) {
   return (
-    <label className="block space-y-1.5 rounded-xl px-2 py-1.5 text-[12px] text-stone-600 dark:text-zinc-300">
+    <label className="block space-y-1.5 rounded-xl px-2 py-1.5 text-[12px] text-muted-foreground dark:text-muted-foreground">
       <span>{label}</span>
       <input
         value={value}
         placeholder={placeholder}
         onChange={event => onChange(event.target.value)}
-        className="h-8 w-full rounded-lg border border-stone-200 bg-white/80 px-2 text-[12px] outline-none transition placeholder:text-stone-400 focus:border-stone-900 dark:border-white/10 dark:bg-zinc-950/60 dark:focus:border-zinc-100"
+        className="h-8 w-full rounded-lg border border-border bg-background/80 px-2 text-[12px] outline-none transition placeholder:text-muted-foreground/70 focus:border-foreground dark:border-border/50 dark:bg-background/60 dark:focus:border-foreground"
       />
     </label>
   )
@@ -834,18 +816,18 @@ function ColorField({ label, value, onChange }: {
   onChange: (value: string) => void
 }) {
   return (
-    <label className="flex items-center justify-between gap-3 rounded-xl px-2 py-1.5 text-[12px] text-stone-600 transition hover:bg-stone-100/80 dark:text-zinc-300 dark:hover:bg-zinc-800/80">
+    <label className="flex items-center justify-between gap-3 rounded-xl px-2 py-1.5 text-[12px] text-muted-foreground transition hover:bg-muted/80 dark:text-muted-foreground dark:hover:bg-muted/80">
       <span className="flex min-w-0 items-center gap-2">
         <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/70 shadow-sm" style={{ backgroundColor: value }} />
         <span>{label}</span>
       </span>
       <span className="flex items-center gap-2">
-        <span className="font-mono text-[11px] uppercase text-stone-400 dark:text-zinc-500">{value}</span>
+        <span className="font-mono text-[11px] uppercase text-muted-foreground/70 dark:text-foreground0">{value}</span>
         <input
           type="color"
           value={value}
           onChange={event => onChange(event.target.value)}
-          className="h-7 w-8 cursor-pointer rounded-lg border border-stone-200 bg-transparent p-0.5 dark:border-white/10"
+          className="h-7 w-8 cursor-pointer rounded-lg border border-border bg-transparent p-0.5 dark:border-border/50"
           title={`${label}调色板`}
         />
       </span>
@@ -862,7 +844,7 @@ function PanelTab({ active, label, icon: Icon, onClick }: {
   return (
     <button
       type="button"
-      className={`flex h-9 items-center justify-center gap-1 rounded-xl text-[12px] transition active:scale-[0.97] ${active ? 'bg-stone-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950' : 'text-stone-500 hover:bg-stone-100 hover:text-stone-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}`}
+      className={`flex h-9 items-center justify-center gap-1 rounded-xl text-[12px] transition active:scale-[0.97] ${active ? 'bg-foreground text-background dark:bg-foreground dark:text-background' : 'text-muted-foreground hover:bg-muted hover:text-foreground dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'}`}
       onClick={onClick}
     >
       <Icon className="h-3.5 w-3.5" />
@@ -872,7 +854,6 @@ function PanelTab({ active, label, icon: Icon, onClick }: {
 }
 
 export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
-  const t = useTranslations()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationRef = useRef<number>(0)
   const graphRef = useRef<GraphData>({ nodes: [], edges: [], nodeIndex: new Map() })
@@ -889,7 +870,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
   const { backlinks, buildIndex, isBuilding, isIndexed } = useNoteIndexStore()
   const { tagGroups, initTagGroups, addTagGroup: addStoredTagGroup, removeTagGroup: removeStoredTagGroup } = useKnowledgeGraphTagsStore()
   const [hoveredNode, setHoveredNode] = useState<string | null>(null)
-  const [hoveredNodePos, setHoveredNodePos] = useState<{ x: number; y: number } | null>(null)
+  const [, setHoveredNodePos] = useState<{ x: number; y: number } | null>(null)
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -1213,8 +1194,6 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
       visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)
     )
     const labelZoomAlpha = settings.showLabels ? clamp((zoom - 0.45) / 0.45, 0, 1) : 0
-    const tagZoomAlpha = settings.showTags ? clamp((zoom - 0.95) / 0.5, 0, 1) : 0
-
     // Only run simulation when alpha > 0 (has energy)
     if (needsSimulationRef.current && alphaRef.current > 0.001) {
       simulateStep(data.nodes, data.edges, data.nodeIndex, rect.width, rect.height, settings, alphaRef.current)
@@ -1622,12 +1601,12 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
   }, [isReplaying, restartReplay])
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-stone-50 text-stone-900 dark:bg-zinc-950 dark:text-zinc-100" onClick={() => setContextMenu(null)}>
+    <div className="relative h-full w-full overflow-hidden bg-muted/30 text-foreground dark:bg-background dark:text-foreground" onClick={() => setContextMenu(null)}>
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,rgba(217,119,6,0.07),transparent_24%),radial-gradient(circle_at_82%_20%,rgba(120,113,108,0.10),transparent_22%)]" />
 
-      <div className="absolute left-3 top-3 z-[2] flex items-center gap-1 rounded-full border border-stone-200/70 bg-white/72 p-1 shadow-[0_14px_40px_-28px_rgba(28,25,23,0.55)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/72">
+      <div className="absolute left-3 top-3 z-[2] flex items-center gap-1 rounded-full border border-border/70 bg-background/72 p-1 shadow-md backdrop-blur-sm dark:border-border/50 dark:bg-background/72">
         <button
-          className="relative inline-flex h-8 w-8 items-center justify-center rounded-full text-stone-700 transition hover:bg-stone-100 active:scale-[0.96] dark:text-zinc-200 dark:hover:bg-zinc-800"
+          className="relative inline-flex h-8 w-8 items-center justify-center rounded-full text-foreground/80 transition hover:bg-muted focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-foreground/80 dark:hover:bg-muted"
           title={isReplaying ? '暂停回放' : '时间回放'}
           onClick={handleReplayButton}
         >
@@ -1638,37 +1617,37 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
           />
         </button>
         <button
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-stone-500 transition hover:bg-stone-100 hover:text-stone-900 active:scale-[0.96] dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
           title="重放"
           onClick={restartReplay}
         >
           <RefreshCw className="h-4 w-4" />
         </button>
-        <span className="mx-0.5 h-5 w-px bg-stone-200 dark:bg-white/10" />
+        <span className="mx-0.5 h-5 w-px bg-border dark:bg-white/10" />
         <button
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-stone-500 transition hover:bg-stone-100 hover:text-stone-900 active:scale-[0.96] dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
           title="缩小"
           onClick={() => setZoom(value => clamp(value / 1.18, MIN_ZOOM, MAX_ZOOM))}
         >
           <ZoomOut className="h-4 w-4" />
         </button>
         <button
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-stone-500 transition hover:bg-stone-100 hover:text-stone-900 active:scale-[0.96] dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
           title="放大"
           onClick={() => setZoom(value => clamp(value * 1.18, MIN_ZOOM, MAX_ZOOM))}
         >
           <ZoomIn className="h-4 w-4" />
         </button>
         <button
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-stone-500 transition hover:bg-stone-100 hover:text-stone-900 active:scale-[0.96] dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
           title="复位视图"
           onClick={resetView}
         >
           <LocateFixed className="h-4 w-4" />
         </button>
-        <span className="mx-0.5 h-5 w-px bg-stone-200 dark:bg-white/10" />
+        <span className="mx-0.5 h-5 w-px bg-border dark:bg-white/10" />
         <button
-          className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition active:scale-[0.96] ${settingsOpen ? 'bg-stone-900 text-white dark:bg-zinc-100 dark:text-zinc-950' : 'text-stone-500 hover:bg-stone-100 hover:text-stone-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}`}
+          className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition active:scale-[0.96] ${settingsOpen ? 'bg-foreground text-background dark:bg-foreground dark:text-background' : 'text-muted-foreground hover:bg-muted hover:text-foreground dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'}`}
           title="图谱设置"
           onClick={() => setSettingsOpen(value => !value)}
         >
@@ -1677,11 +1656,11 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
       </div>
 
       {settingsOpen && (
-        <div className="absolute right-3 top-3 z-[3] w-[328px] max-w-[calc(100%-1.5rem)] overflow-hidden rounded-2xl border border-stone-200/80 bg-white/90 shadow-[0_24px_70px_-42px_rgba(28,25,23,0.55)] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-900/90">
-          <div className="flex items-center justify-between border-b border-stone-200/70 px-3 py-2 dark:border-white/10">
+        <div className="absolute right-3 top-3 z-[3] w-[328px] max-w-[calc(100%-1.5rem)] overflow-hidden rounded-2xl border border-border/80 bg-background/90 shadow-lg backdrop-blur-sm dark:border-border/50 dark:bg-background/90">
+          <div className="flex items-center justify-between border-b border-border/70 px-3 py-2 dark:border-border/50">
             <div>
               <div className="text-[13px] font-semibold tracking-tight">图谱设置</div>
-              <div className="text-[11px] text-stone-500 dark:text-zinc-400">
+              <div className="text-[11px] text-muted-foreground dark:text-muted-foreground">
                 {graphData.nodes.length} 个节点 · {graphData.edges.filter(e => e.type === 'wikilink').length} 条链接
                 {graphData.edges.some(e => e.type === 'semantic') && ` · ${graphData.edges.filter(e => e.type === 'semantic').length} 条语义关联`}
                 {graphData.edges.some(e => e.type === 'keyword') && ` · ${graphData.edges.filter(e => e.type === 'keyword').length} 条关键词关联`}
@@ -1690,14 +1669,14 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
             </div>
             <div className="flex items-center gap-1">
               <button
-                className="rounded-full p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-900 active:scale-[0.96] dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                className="rounded-full p-1.5 text-muted-foreground/70 transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:hover:bg-muted dark:hover:text-foreground"
                 title="恢复默认"
                 onClick={() => setSettings(DEFAULT_SETTINGS)}
               >
                 <RefreshCw className="h-3.5 w-3.5" />
               </button>
               <button
-                className="rounded-full p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-900 active:scale-[0.96] dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                className="rounded-full p-1.5 text-muted-foreground/70 transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:hover:bg-muted dark:hover:text-foreground"
                 title="关闭"
                 onClick={() => setSettingsOpen(false)}
               >
@@ -1706,7 +1685,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-1 border-b border-stone-200/70 p-1.5 dark:border-white/10">
+          <div className="grid grid-cols-4 gap-1 border-b border-border/70 p-1.5 dark:border-border/50">
             {SETTINGS_PANELS.map(panel => (
               <PanelTab
                 key={panel.key}
@@ -1731,12 +1710,12 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                   <RangeRow label="关联置信度阈值" value={settings.semanticThreshold} min={0.3} max={0.95} step={0.01} onChange={value => updateSettings('semanticThreshold', value)} />
                 )}
                 {/* LLM 自动深度分析按钮 */}
-                <div className="mt-2 rounded-xl border border-stone-200/70 bg-stone-50/50 p-2.5 dark:border-white/10 dark:bg-zinc-800/50">
-                  <div className="mb-1.5 text-[11px] font-medium text-stone-700 dark:text-zinc-200">深度关系分析</div>
-                  <div className="mb-2 text-[10px] text-stone-500 dark:text-zinc-400">使用 AI 分析笔记间的深层语义关系（消耗 API 额度）</div>
+                <div className="mt-2 rounded-xl border border-border/70 bg-muted/50 p-2.5 dark:border-border/50 dark:bg-muted/50">
+                  <div className="mb-1.5 text-[11px] font-medium text-foreground/80 dark:text-foreground/80">深度关系分析</div>
+                  <div className="mb-2 text-[10px] text-muted-foreground dark:text-muted-foreground">使用 AI 分析笔记间的深层语义关系（消耗 API 额度）</div>
                   <button
                     type="button"
-                    className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-stone-900 px-3 py-1.5 text-[11px] font-medium text-white transition hover:bg-stone-700 active:scale-[0.98] disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-foreground px-3 py-1.5 text-[11px] font-medium text-background transition hover:bg-foreground/80 active:scale-[0.98] disabled:opacity-50 dark:bg-foreground dark:text-background dark:hover:bg-foreground/80"
                     disabled={isComputingRelations}
                     onClick={async () => {
                       setIsComputingRelations(true)
@@ -1761,7 +1740,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                   </button>
                 </div>
                 <div
-                  className={`mt-2 rounded-2xl border p-2 transition ${isTagDropActive ? 'border-stone-900 bg-stone-100/80 dark:border-zinc-100 dark:bg-zinc-800/80' : 'border-stone-200/70 dark:border-white/10'}`}
+                  className={`mt-2 rounded-2xl border p-2 transition ${isTagDropActive ? 'border-foreground bg-muted/80 dark:border-foreground dark:bg-muted/80' : 'border-border/70 dark:border-border/50'}`}
                   onDragOver={(event) => {
                     event.preventDefault()
                     setIsTagDropActive(true)
@@ -1769,17 +1748,17 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                   onDragLeave={() => setIsTagDropActive(false)}
                   onDrop={handleTagDrop}
                 >
-                  <div className="mb-2 text-[12px] font-semibold text-stone-800 dark:text-zinc-100">文章标签</div>
+                  <div className="mb-2 text-[12px] font-semibold text-foreground">文章标签</div>
                   <div className="grid grid-cols-2 gap-2">
                     <TextField label="标签名" value={tagGroupName} placeholder="例如 AI" onChange={setTagGroupName} />
                     <TextField label="关联文章" value={tagGroupQuery} placeholder="拖入文章或输入关键词" onChange={setTagGroupQuery} />
                   </div>
-                  <div className="mt-1.5 rounded-lg bg-stone-100/70 px-2 py-1 text-[11px] text-stone-500 dark:bg-zinc-800/70 dark:text-zinc-400">
+                  <div className="mt-1.5 rounded-lg bg-muted/70 px-2 py-1 text-[11px] text-muted-foreground dark:bg-muted/70 dark:text-muted-foreground">
                     可从左侧文件列表拖入文章，自动识别为标签关联范围。
                   </div>
                   <button
                     type="button"
-                    className="mt-2 h-8 w-full rounded-xl bg-stone-900 text-[12px] font-medium text-white transition hover:bg-stone-700 active:scale-[0.98] dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    className="mt-2 h-8 w-full rounded-xl bg-foreground text-[12px] font-medium text-background transition hover:bg-foreground/80 active:scale-[0.98] dark:bg-foreground dark:text-background dark:hover:bg-foreground/80"
                     onClick={addTagGroup}
                   >
                     添加标签组
@@ -1787,7 +1766,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <button
                       type="button"
-                      className={`rounded-full px-2.5 py-1 text-[11px] transition ${settings.activeTagGroupId === ALL_TAG_GROUP_ID ? 'bg-stone-900 text-white dark:bg-zinc-100 dark:text-zinc-950' : 'bg-stone-100 text-stone-600 hover:bg-stone-200 dark:bg-zinc-800 dark:text-zinc-300'}`}
+                      className={`rounded-full px-2.5 py-1 text-[11px] transition ${settings.activeTagGroupId === ALL_TAG_GROUP_ID ? 'bg-foreground text-background dark:bg-foreground dark:text-background' : 'bg-muted text-muted-foreground hover:bg-border dark:bg-muted dark:text-muted-foreground'}`}
                       onClick={() => updateSettings('activeTagGroupId', ALL_TAG_GROUP_ID)}
                     >
                       全部
@@ -1795,7 +1774,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                     {tagGroups.map(group => (
                       <span
                         key={group.id}
-                        className={`inline-flex items-center gap-1 rounded-full py-1 pl-2.5 pr-1 text-[11px] transition ${settings.activeTagGroupId === group.id ? 'bg-stone-900 text-white dark:bg-zinc-100 dark:text-zinc-950' : 'bg-stone-100 text-stone-600 dark:bg-zinc-800 dark:text-zinc-300'}`}
+                        className={`inline-flex items-center gap-1 rounded-full py-1 pl-2.5 pr-1 text-[11px] transition ${settings.activeTagGroupId === group.id ? 'bg-foreground text-background dark:bg-foreground dark:text-background' : 'bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground'}`}
                       >
                         <button type="button" onClick={() => updateSettings('activeTagGroupId', group.id)}>
                           {group.name}
@@ -1842,7 +1821,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                 <RangeRow label="相连节点吸引力" value={settings.attraction} min={0.3} max={1.5} step={0.05} onChange={value => { updateSettings('attraction', value); wakeSimulation() }} />
                 <RangeRow label="图谱向心力" value={settings.centerGravity} min={0.1} max={1} step={0.05} onChange={value => { updateSettings('centerGravity', value); wakeSimulation() }} />
                 <RangeRow label="连线长度" value={settings.springLength} min={30} max={100} step={5} onChange={value => { updateSettings('springLength', value); wakeSimulation() }} />
-                <div className="mt-1 rounded-lg bg-stone-100/70 px-2 py-1.5 text-[11px] leading-relaxed text-stone-500 dark:bg-zinc-800/70 dark:text-zinc-400">
+                <div className="mt-1 rounded-lg bg-muted/70 px-2 py-1.5 text-[11px] leading-relaxed text-muted-foreground dark:bg-muted/70 dark:text-muted-foreground">
                   调整后图谱会自动重新布局。排斥力越大节点越分散，吸引力越大相连节点越紧凑，向心力控制整体聚拢程度。
                 </div>
               </SettingSection>
@@ -1854,11 +1833,11 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
       {/* Timeline scrubber — 只在回放或拖动时显示 */}
       {timeRange && (isReplaying || isScrubbing || timeThreshold !== null) && (
         <div className="absolute bottom-3 left-1/2 z-[3] -translate-x-1/2 w-[calc(100%-2rem)] max-w-[640px]">
-          <div className="flex items-center gap-2.5 rounded-full border border-stone-200/60 bg-white/88 px-4 py-2 shadow-sm backdrop-blur-xl dark:border-white/8 dark:bg-zinc-900/88 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <div className="flex items-center gap-2.5 rounded-full border border-border/60 bg-background/88 px-4 py-2 shadow-sm backdrop-blur-sm dark:border-border/40 dark:bg-background/88 animate-in fade-in slide-in-from-bottom-2 duration-200">
             {/* 播放/暂停按钮 */}
             <button
               type="button"
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-stone-500 transition hover:bg-stone-100 hover:text-stone-900 active:scale-95 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground active:scale-95 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
               title={isReplaying ? '暂停' : '播放'}
               onClick={handleReplayButton}
             >
@@ -1866,17 +1845,17 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
             </button>
 
             {/* 当前进度文字 */}
-            <span className="shrink-0 min-w-[3rem] text-[11px] tabular-nums text-stone-500 dark:text-zinc-400">
+            <span className="shrink-0 min-w-[3rem] text-[11px] tabular-nums text-muted-foreground dark:text-muted-foreground">
               {timeThreshold !== null
                 ? `${Math.min(Math.floor(timeThreshold) + 1, timelineSortedNodes.length)}`
                 : `${timelineSortedNodes.length}`}
-              <span className="text-stone-300 dark:text-zinc-600">/{timelineSortedNodes.length}</span>
+              <span className="text-muted-foreground/50">/{timelineSortedNodes.length}</span>
             </span>
 
             {/* 滑块轨道 */}
             <div className="relative flex-1 flex items-center h-5">
               {/* 背景轨道 */}
-              <div className="absolute inset-x-0 h-[3px] rounded-full bg-stone-200/80 dark:bg-zinc-700/60" />
+              <div className="absolute inset-x-0 h-[3px] rounded-full bg-border/80 dark:bg-muted/60" />
               {/* 已填充部分 */}
               <div
                 className="absolute left-0 h-[3px] rounded-full transition-[width] duration-75"
@@ -1908,7 +1887,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
             {/* 关闭按钮 */}
             <button
               type="button"
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 dark:text-zinc-500 dark:hover:bg-zinc-800"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition hover:bg-muted hover:text-foreground/80 dark:text-foreground0 dark:hover:bg-muted"
               title="关闭时间线"
               onClick={() => {
                 setTimeThreshold(null)
@@ -1923,7 +1902,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
 
       {graphData.nodes.length === 0 ? (
         <div className="relative z-[1] flex h-full flex-col items-center justify-center px-8 text-center">
-          <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl border bg-white text-muted-foreground dark:border-white/10 dark:bg-zinc-900">
+          <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl border bg-background text-muted-foreground dark:border-border/50 dark:bg-background">
             <GitBranch className="h-5 w-5" />
           </div>
           <div className="text-sm font-medium">
@@ -1937,7 +1916,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
           {baseGraphData.nodes.length > 0 && hasGraphFilters ? (
             <button
               type="button"
-              className="mt-4 rounded-full bg-stone-900 px-4 py-2 text-xs font-medium text-white transition hover:bg-stone-700 active:scale-[0.98] dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+              className="mt-4 rounded-full bg-foreground px-4 py-2 text-xs font-medium text-background transition hover:bg-foreground/80 active:scale-[0.98] dark:bg-foreground dark:text-background dark:hover:bg-foreground/80"
               onClick={resetGraphFilters}
             >
               清除筛选
@@ -1962,18 +1941,18 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
           {/* Context menu */}
           {contextMenu && (
             <div
-              className="fixed z-50 min-w-[180px] rounded-xl border border-stone-200/80 bg-white/95 py-1 shadow-[0_16px_48px_-24px_rgba(28,25,23,0.45)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/95"
+              className="fixed z-50 min-w-[180px] rounded-xl border border-border/80 bg-background/95 py-1 shadow-lg backdrop-blur-sm dark:border-border/50 dark:bg-background/95"
               style={{ left: contextMenu.x, top: contextMenu.y }}
             >
               <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-stone-700 transition hover:bg-stone-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
                 onClick={() => handleOpenInEditor(contextMenu.nodeId)}
               >
                 <FileText className="h-3.5 w-3.5" />
                 打开笔记
               </button>
               <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-stone-700 transition hover:bg-stone-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
                 onClick={() => {
                   setSelectedNode(contextMenu.nodeId)
                   setDetailPanelOpen(true)
@@ -1985,7 +1964,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
               </button>
               {focusPath && focusPath !== contextMenu.nodeId && (
                 <button
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-stone-700 transition hover:bg-stone-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
                   onClick={() => handleCreateLinkFromGraph(focusPath, contextMenu.nodeId)}
                 >
                   <Link className="h-3.5 w-3.5" />
@@ -1993,7 +1972,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                 </button>
               )}
               <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-amber-600 transition hover:bg-stone-100 dark:text-amber-400 dark:hover:bg-zinc-800"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-amber-600 transition hover:bg-muted dark:text-amber-400 dark:hover:bg-muted"
                 onClick={() => {
                   setActiveFilePath(contextMenu.nodeId)
                   setContextMenu(null)
@@ -2003,9 +1982,9 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                 <LocateFixed className="h-3.5 w-3.5" />
                 聚焦此节点
               </button>
-              <div className="my-1 border-t border-stone-200/60 dark:border-white/10" />
+              <div className="my-1 border-t border-border/60 dark:border-border/50" />
               <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-stone-700 transition hover:bg-stone-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
                 onClick={() => {
                   if (highlightedNode === contextMenu.nodeId) {
                     setHighlightedNode(null)
@@ -2028,7 +2007,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                 )}
               </button>
               <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-stone-700 transition hover:bg-stone-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
                 onClick={() => {
                   void navigator.clipboard.writeText(contextMenu.nodeId)
                   setContextMenu(null)
@@ -2037,9 +2016,9 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                 <Copy className="h-3.5 w-3.5" />
                 复制节点路径
               </button>
-              <div className="my-1 border-t border-stone-200/60 dark:border-white/10" />
+              <div className="my-1 border-t border-border/60 dark:border-border/50" />
               <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-stone-500 transition hover:bg-stone-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-muted-foreground transition hover:bg-muted dark:text-muted-foreground dark:hover:bg-muted"
                 onClick={() => {
                   resetView()
                   setContextMenu(null)
@@ -2054,7 +2033,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
           {/* Detail Panel Toggle */}
           <button
             type="button"
-            className="absolute right-3 top-3 z-[2] inline-flex h-8 w-8 items-center justify-center rounded-full border border-stone-200/70 bg-white/72 text-stone-500 shadow-[0_14px_40px_-28px_rgba(28,25,23,0.55)] backdrop-blur-xl transition hover:bg-stone-100 hover:text-stone-900 active:scale-[0.96] dark:border-white/10 dark:bg-zinc-900/72 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            className="absolute right-3 top-3 z-[2] inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/70 bg-background/72 text-muted-foreground shadow-md backdrop-blur-sm transition hover:bg-muted hover:text-foreground active:scale-[0.96] dark:border-border/50 dark:bg-background/72 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
             title={detailPanelOpen ? '关闭详情' : '节点详情'}
             onClick={() => setDetailPanelOpen(v => !v)}
           >

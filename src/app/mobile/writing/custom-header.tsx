@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BaseDirectory, exists, mkdir, remove, rename as fsRename, stat, writeTextFile } from '@tauri-apps/plugin-fs'
+import { BaseDirectory, exists, mkdir, rename as fsRename, stat, writeTextFile } from '@tauri-apps/plugin-fs'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { useTranslations } from 'next-intl'
 import type { Editor } from '@tiptap/react'
@@ -33,6 +33,8 @@ import { getSyncRepoName } from '@/lib/sync/repo-utils'
 import { RepoNames } from '@/lib/sync/github.types'
 import { Store } from '@tauri-apps/plugin-store'
 import { S3Config, WebDAVConfig } from '@/types/sync'
+import { collectMarkdownFiles } from '@/lib/files'
+import { clearFileKnowledgeIndexes, moveWorkspaceEntryToTrash } from '@/lib/file-trash'
 
 interface WritingHeaderProps {
   editor: Editor | null
@@ -59,6 +61,7 @@ export function WritingHeader({ editor }: WritingHeaderProps) {
     loadCollapsibleFiles,
     loadFolderRemoteFiles,
     setCollapsibleList,
+    flushPendingSaveForPath,
   } = useArticleStore()
 
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -495,27 +498,33 @@ export function WritingHeader({ editor }: WritingHeaderProps) {
     )
     if (!ok) return
 
-    const pathOptions = await getFilePathOptions(entry.relativePath)
+    if (entry.type === 'folder' && (normalizedActivePath === entry.relativePath || normalizedActivePath.startsWith(`${entry.relativePath}/`))) {
+      await flushPendingSaveForPath(normalizedActivePath)
+    } else if (entry.type === 'file' && normalizedActivePath === entry.relativePath) {
+      await flushPendingSaveForPath(entry.relativePath)
+    }
+
+    const markdownPaths = entry.type === 'folder'
+      ? (await collectMarkdownFiles(entry.relativePath)).map(file => file.path)
+      : [entry.relativePath]
+
+    await moveWorkspaceEntryToTrash({
+      relativePath: entry.relativePath,
+      kind: entry.type === 'folder' ? 'directory' : 'file',
+    })
+    await clearFileKnowledgeIndexes(markdownPaths)
+
     if (entry.type === 'folder') {
-      if (pathOptions.baseDir) {
-        await remove(pathOptions.path, { baseDir: pathOptions.baseDir, recursive: true })
-      } else {
-        await remove(pathOptions.path, { recursive: true })
-      }
-      if (normalizedActivePath.startsWith(`${entry.relativePath}/`)) {
+      if (normalizedActivePath === entry.relativePath || normalizedActivePath.startsWith(`${entry.relativePath}/`)) {
         await setActiveFilePath('')
       }
     } else {
-      if (pathOptions.baseDir) {
-        await remove(pathOptions.path, { baseDir: pathOptions.baseDir })
-      } else {
-        await remove(pathOptions.path)
-      }
       if (normalizedActivePath === entry.relativePath) {
         await setActiveFilePath('')
       }
     }
     await refreshTree(currentDir)
+    toast({ title: '已移入回收站' })
   }
 
   const handleDeleteSyncFile = async (entry: BrowserEntry) => {

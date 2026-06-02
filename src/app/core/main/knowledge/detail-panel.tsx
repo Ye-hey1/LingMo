@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { FileText, Hash, Link2, Pencil, Sparkles, X, Brain, ExternalLink } from 'lucide-react'
+import { FileText, Hash, Link2, Sparkles, X, Brain, ExternalLink } from 'lucide-react'
 import { readWorkspaceTextFile } from '@/lib/file-binary'
 import { getTopicsForNote } from '@/db/note-topics'
 import { getCrossValidatedRelations, type CrossValidatedRelation } from '@/lib/relation-engine'
@@ -56,7 +56,7 @@ const RELATION_COLORS: Record<string, string> = {
   supports: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
   analogous: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
   example_of: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
-  related: 'bg-stone-100 text-stone-600 dark:bg-zinc-800 dark:text-zinc-400',
+  related: 'bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground',
 }
 
 const RELATION_LABELS: Record<string, string> = {
@@ -77,7 +77,7 @@ export function DetailPanel({
   settings,
   zoom,
   canvasRef,
-  palette,
+  palette: _palette,
   onClose,
   onSelectNode,
   onPan,
@@ -144,19 +144,19 @@ export function DetailPanel({
 
   return (
     <div
-      className="absolute right-0 top-0 z-[3] h-full w-80 border-l border-stone-200/70 bg-white/95 shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.1)] backdrop-blur-xl transition-transform duration-200 ease-out animate-in slide-in-from-right dark:border-white/10 dark:bg-zinc-900/95 dark:shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.4)]"
+      className="absolute right-0 top-0 z-[3] h-full w-80 border-l border-border/70 bg-background/95 shadow-sm backdrop-blur-sm transition-transform duration-200 ease-out animate-in slide-in-from-right dark:border-border/50 dark:bg-background/95 "
     >
       {/* 头部 */}
-      <div className="flex items-center justify-between border-b border-stone-200/70 px-4 py-2.5 dark:border-white/10">
+      <div className="flex items-center justify-between border-b border-border/70 px-4 py-2.5 dark:border-border/50">
         <div className="flex items-center gap-2">
-          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-stone-100 dark:bg-zinc-800">
-            <FileText className="h-3.5 w-3.5 text-stone-600 dark:text-zinc-300" />
+          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-muted dark:bg-muted">
+            <FileText className="h-3.5 w-3.5 text-muted-foreground dark:text-muted-foreground" />
           </div>
-          <span className="text-[13px] font-semibold text-stone-900 dark:text-zinc-50">详情</span>
+          <span className="text-[13px] font-semibold dark:text-foreground→text-foreground dark:text-foreground">详情</span>
         </div>
         <button
           type="button"
-          className="rounded-full p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-900 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          className="rounded-full p-1.5 text-muted-foreground/60 transition hover:bg-muted hover:dark:text-foreground→text-foreground dark:text-foreground0 dark:hover:bg-muted dark:hover:text-foreground"
           onClick={onClose}
         >
           <X className="h-3.5 w-3.5" />
@@ -165,14 +165,14 @@ export function DetailPanel({
 
       <div className="h-[calc(100%-44px)] overflow-y-auto">
         {/* 笔记标题和元信息 */}
-        <div className="border-b border-stone-100 px-4 py-3 dark:border-white/5">
-          <div className="mb-1.5 text-[14px] font-semibold leading-tight text-stone-900 dark:text-zinc-50">{node.label}</div>
+        <div className="border-b border-border/50 px-4 py-3 dark:border-border/30">
+          <div className="mb-1.5 text-[14px] font-semibold leading-tight dark:text-foreground→text-foreground dark:text-foreground">{node.label}</div>
           <div className="flex flex-wrap gap-1.5 mt-2">
-            <span className="inline-flex items-center gap-1 rounded-md bg-stone-100/80 px-2 py-0.5 text-[10px] text-stone-500 dark:bg-zinc-800 dark:text-zinc-400">
+            <span className="inline-flex items-center gap-1 rounded-md bg-muted/80 px-2 py-0.5 text-[10px] text-muted-foreground dark:bg-muted dark:text-muted-foreground">
               <Link2 className="h-2.5 w-2.5" />{node.connections}
             </span>
             {node.modifiedAt && (
-              <span className="rounded-md bg-stone-100/80 px-2 py-0.5 text-[10px] text-stone-500 dark:bg-zinc-800 dark:text-zinc-400">
+              <span className="rounded-md bg-muted/80 px-2 py-0.5 text-[10px] text-muted-foreground dark:bg-muted dark:text-muted-foreground">
                 {new Date(node.modifiedAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
               </span>
             )}
@@ -180,25 +180,25 @@ export function DetailPanel({
         </div>
 
         {/* 笔记摘要预览 */}
-        <div className="border-b border-stone-100 px-4 py-3 dark:border-white/5">
-          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-stone-600 dark:text-zinc-300">
+        <div className="border-b border-border/50 px-4 py-3 dark:border-border/30">
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground dark:text-muted-foreground">
             <FileText className="h-3 w-3" />摘要
           </div>
           {loadingPreview ? (
-            <div className="h-12 animate-pulse rounded-lg bg-stone-100 dark:bg-zinc-800" />
+            <div className="h-12 animate-pulse rounded-lg bg-muted dark:bg-muted" />
           ) : preview ? (
-            <div className="rounded-lg bg-stone-50 p-2.5 text-[11px] leading-relaxed text-stone-600 dark:bg-zinc-800/50 dark:text-zinc-300">
+            <div className="rounded-lg bg-muted/30 p-2.5 text-[11px] leading-relaxed text-muted-foreground dark:bg-muted/50 dark:text-muted-foreground">
               {preview}
             </div>
           ) : (
-            <div className="text-[11px] text-stone-400 dark:text-zinc-500">无内容预览</div>
+            <div className="text-[11px] text-muted-foreground/60 dark:text-foreground0">无内容预览</div>
           )}
         </div>
 
         {/* 关键词标签云 */}
         {keywords.length > 0 && (
-          <div className="border-b border-stone-100 px-4 py-3 dark:border-white/5">
-            <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-stone-600 dark:text-zinc-300">
+          <div className="border-b border-border/50 px-4 py-3 dark:border-border/30">
+            <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground dark:text-muted-foreground">
               <Hash className="h-3 w-3" />关键词
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -209,7 +209,7 @@ export function DetailPanel({
                 return (
                   <span
                     key={kw.keyword}
-                    className="inline-block rounded-md border border-stone-200/70 bg-white px-1.5 py-0.5 transition hover:border-stone-400 hover:bg-stone-50 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:border-zinc-500"
+                    className="inline-block rounded-md border border-border/70 bg-background px-1.5 py-0.5 transition hover:border-border hover:bg-muted/30 dark:border-border/60 dark:bg-muted dark:hover:border-border"
                     style={{ fontSize: `${fontSize}px`, opacity: 0.6 + intensity * 0.4 }}
                     title={`权重: ${kw.weight.toFixed(3)}`}
                   >
@@ -223,8 +223,8 @@ export function DetailPanel({
 
         {/* 语义关联笔记 */}
         {semanticRelations.length > 0 && (
-          <div className="border-b border-stone-100 px-4 py-3 dark:border-white/5">
-            <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-stone-600 dark:text-zinc-300">
+          <div className="border-b border-border/50 px-4 py-3 dark:border-border/30">
+            <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground dark:text-muted-foreground">
               <Brain className="h-3 w-3" />语义关联
             </div>
             <div className="space-y-1.5">
@@ -236,20 +236,20 @@ export function DetailPanel({
                   <button
                     key={`sem-${i}`}
                     type="button"
-                    className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-stone-50 dark:hover:bg-zinc-800/50"
+                    className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-muted/30 dark:hover:bg-muted/50"
                     onClick={() => handleRelatedNodeClick(rel.target_note)}
                   >
                     <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-blue-500" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[11px] font-medium text-stone-700 dark:text-zinc-200">{targetName}</span>
+                        <span className="truncate text-[11px] font-medium text-foreground/80 dark:text-foreground/80">{targetName}</span>
                         <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-medium ${relColor}`}>{relLabel}</span>
                       </div>
                       {rel.evidence && (
-                        <div className="mt-0.5 truncate text-[10px] text-stone-400 dark:text-zinc-500">{rel.evidence}</div>
+                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground/60 dark:text-foreground0">{rel.evidence}</div>
                       )}
                     </div>
-                    <span className="shrink-0 text-[10px] tabular-nums text-stone-400 dark:text-zinc-500">
+                    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60 dark:text-foreground0">
                       {Math.round(rel.final_score * 100)}%
                     </span>
                   </button>
@@ -260,8 +260,8 @@ export function DetailPanel({
         )}
 
         {/* Wikilink 关联节点 */}
-        <div className="border-b border-stone-100 px-4 py-3 dark:border-white/5">
-          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-stone-600 dark:text-zinc-300">
+        <div className="border-b border-border/50 px-4 py-3 dark:border-border/30">
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground dark:text-muted-foreground">
             <Link2 className="h-3 w-3" />链接关系 ({relatedNodes.filter(Boolean).length})
           </div>
           {relatedNodes.length > 0 ? (
@@ -274,21 +274,21 @@ export function DetailPanel({
                   (e.source === edge.source && e.target === edge.target && e !== edge)
                 )
                 const typeLabel = isBidirectional ? '双向' : isOutgoing ? '出链' : '入链'
-                const typeColor = edge.type === 'semantic' ? 'text-blue-500' : edge.type === 'keyword' ? 'text-green-500' : 'text-stone-400'
+                const typeColor = edge.type === 'semantic' ? 'text-blue-500' : edge.type === 'keyword' ? 'text-green-500' : 'text-muted-foreground/60'
                 return (
                   <button
                     key={rnode.id}
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] transition hover:bg-stone-50 dark:hover:bg-zinc-800/50"
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] transition hover:bg-muted/30 dark:hover:bg-muted/50"
                     onClick={() => handleRelatedNodeClick(rnode.id)}
                   >
                     <span
                       className="h-2 w-2 shrink-0 rounded-full"
                       style={{ backgroundColor: settings.colors[rnode.kind === 'current' ? 'current' : rnode.kind === 'hub' ? 'hub' : 'linked'] }}
                     />
-                    <span className="flex-1 truncate text-stone-700 dark:text-zinc-200">{rnode.label}</span>
+                    <span className="flex-1 truncate text-foreground/80 dark:text-foreground/80">{rnode.label}</span>
                     <span className={`shrink-0 text-[9px] ${typeColor}`}>{edge.type}</span>
-                    <span className="shrink-0 rounded-full bg-stone-100 px-1.5 py-0.5 text-[9px] text-stone-500 dark:bg-zinc-800 dark:text-zinc-400">
+                    <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground dark:bg-muted dark:text-muted-foreground">
                       {typeLabel}
                     </span>
                   </button>
@@ -296,7 +296,7 @@ export function DetailPanel({
               })}
             </div>
           ) : (
-            <div className="rounded-lg bg-stone-50 p-3 text-center text-[11px] text-stone-400 dark:bg-zinc-800/50 dark:text-zinc-500">
+            <div className="rounded-lg bg-muted/30 p-3 text-center text-[11px] text-muted-foreground/60 dark:bg-muted/50 dark:text-foreground0">
               无链接关系
             </div>
           )}
@@ -306,7 +306,7 @@ export function DetailPanel({
         <div className="px-4 py-3">
           <button
             type="button"
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-stone-900 py-2 text-[11px] font-medium text-white transition hover:bg-stone-700 active:scale-[0.98] dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-foreground py-2 text-[11px] font-medium text-background transition hover:bg-foreground/80 focus-visible:ring-2 focus-visible:ring-foreground/30 active:scale-[0.98] dark:bg-foreground dark:text-background dark:hover:bg-foreground/80"
             onClick={() => onOpenNote(selectedNode)}
           >
             <ExternalLink className="h-3.5 w-3.5" />

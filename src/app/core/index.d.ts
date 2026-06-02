@@ -1,4 +1,4 @@
-declare module "note-gen/screenshot" {
+declare module "lingmo/screenshot" {
     export interface ScreenshotImage {
         name: string;
         path: string;

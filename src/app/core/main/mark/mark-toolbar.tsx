@@ -14,15 +14,16 @@ import { isGitHubProjectMark } from "@/lib/github-project";
 import { MarkHealthButton } from "./mark-health-button";
 
 export function MarkToolbar() {
-  const { 
-    marks, 
+  const {
+    marks,
     visibleMarkIds,
-    isMultiSelectMode, 
-    setMultiSelectMode, 
-    selectedMarkIds, 
+    isMultiSelectMode,
+    setMultiSelectMode,
+    selectedMarkIds,
     setSelectedMarkIds,
-    selectAll, 
+    selectAll,
     clearSelection,
+    allMarks,
     recordViewMode,
     setRecordViewMode,
     expandedRecordTagIds,
@@ -62,7 +63,8 @@ export function MarkToolbar() {
 
   const visibleCount = visibleMarkIds.length > 0 ? visibleMarkIds.length : marks.length
   const isAllSelected = visibleCount > 0 && selectedMarkIds.size === visibleCount
-  const selectedMarks = marks.filter(mark => selectedMarkIds.has(mark.id))
+  const selectionSourceMarks = allMarks.length > 0 ? allMarks : marks
+  const selectedMarks = selectionSourceMarks.filter(mark => selectedMarkIds.has(mark.id))
   const selectedTagName = tags.find(tag => tag.id === currentTagId)?.name
   const canAppendToCurrentNote = Boolean(activeFilePath && /\.md$/i.test(activeFilePath))
   const canCreateGitHubComparison = selectedMarks.length > 1 && selectedMarks.every(isGitHubProjectMark)

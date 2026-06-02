@@ -31,6 +31,7 @@ interface SyncPlatformCardProps {
   defaultRepoName: string
   onCheckRepo: () => void
   onCreateRepo: () => void
+  errorMessage?: string | null
   children?: React.ReactNode
 }
 
@@ -45,6 +46,7 @@ export function SyncPlatformCard({
   defaultRepoName,
   onCheckRepo,
   onCreateRepo,
+  errorMessage,
   children,
 }: SyncPlatformCardProps) {
   const t = useTranslations()
@@ -182,10 +184,10 @@ export function SyncPlatformCard({
       </div>
 
       {/* 错误提示 */}
-      {error && (
+      {(errorMessage || error) && (
         <div className="mt-3 flex items-center gap-2 text-sm text-red-500">
           <AlertCircle className="size-4" />
-          {error}
+          {errorMessage || error}
         </div>
       )}
 

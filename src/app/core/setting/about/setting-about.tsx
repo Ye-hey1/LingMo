@@ -13,7 +13,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
   const items = [
     {
       id: "home",
-      url: "https://github.com/Ye-hey1/note-gen#readme",
+      url: "https://lingmonote.cc.cd/",
       title: t('items.home.title'),
       desc: t('items.home.desc'),
       icon: <HomeIcon className="size-4" />,
@@ -21,7 +21,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
     },
     {
       id: "guide",
-      url: "https://github.com/Ye-hey1/note-gen#readme",
+      url: "https://lingmonote.cc.cd/settings",
       title: t('items.guide.title'),
       desc: t('items.guide.desc'),
       icon: <SettingsIcon className="size-4" />,
@@ -29,7 +29,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
     },
     {
       id: "github",
-      url: "https://github.com/Ye-hey1/note-gen",
+      url: "https://github.com/Ye-hey1/LingMo",
       title: t('items.github.title'),
       desc: t('items.github.desc'),
       icon: <Github className="size-4" />,
@@ -37,7 +37,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
     },
     {
       id: "releases",
-      url: "https://github.com/Ye-hey1/note-gen/releases",
+      url: "https://github.com/Ye-hey1/LingMo/releases",
       title: t('items.releases.title'),
       desc: t('items.releases.desc'),
       icon: <DownloadIcon className="size-4" />,
@@ -45,7 +45,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
     },
     {
       id: "issues",
-      url: "https://github.com/Ye-hey1/note-gen/issues",
+      url: "https://github.com/Ye-hey1/LingMo/issues",
       title: t('items.issues.title'),
       desc: t('items.issues.desc'),
       icon: <Bug className="size-4" />,
@@ -53,7 +53,7 @@ export function SettingAbout({id, icon}: {id: string, icon?: React.ReactNode}) {
     },
     {
       id: "discussions",
-      url: "https://github.com/Ye-hey1/note-gen/discussions",
+      url: "https://github.com/Ye-hey1/LingMo/discussions",
       title: t('items.discussions.title'),
       desc: t('items.discussions.desc'),
       icon: <MessageSquare className="size-4" />,

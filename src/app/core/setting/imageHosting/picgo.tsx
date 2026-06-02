@@ -55,12 +55,12 @@ export default function PicgoImageHosting() {
 
   const getStatusIcon = () => {
     if (loading) {
-      return <LoaderCircle className="size-4 animate-spin text-blue-500" />;
+      return <LoaderCircle className="size-4 animate-spin text-muted-foreground" />;
     }
     if (picgoState) {
-      return <CheckCircle className="size-4 text-green-500" />;
+      return <CheckCircle className="size-4 text-foreground" />;
     }
-    return <XCircle className="size-4 text-red-500" />;
+    return <XCircle className="size-4 text-destructive" />;
   };
 
   const getStatusText = () => {

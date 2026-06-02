@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Bot, Check, MessageCircle, Telescope } from "lucide-react"
+import { Bot, Check, ChevronDown, ChevronUp, MessageCircle, Telescope } from "lucide-react"
 import {
   Popover,
   PopoverContent,
@@ -16,6 +16,7 @@ import {
 import { TooltipButton } from "@/components/tooltip-button"
 import useChatStore, { type ChatMode } from "@/stores/chat"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 
 const MODE_OPTIONS: Array<{
   id: ChatMode
@@ -39,7 +40,11 @@ const MODE_OPTIONS: Array<{
   },
 ]
 
-export function ChatModeSelect() {
+interface ChatModeSelectProps {
+  variant?: "icon" | "compact"
+}
+
+export function ChatModeSelect({ variant = "icon" }: ChatModeSelectProps) {
   const { chatMode, setChatMode, loading } = useChatStore()
   const [open, setOpen] = React.useState(false)
   const current = MODE_OPTIONS.find(option => option.id === chatMode) || MODE_OPTIONS[0]
@@ -47,16 +52,34 @@ export function ChatModeSelect() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <div className="hidden md:block">
-          <TooltipButton
-            variant={chatMode !== "chat" ? "secondary" : "ghost"}
-            size="icon"
-            icon={current.icon}
-            tooltipText={`对话模式：${current.label}`}
+        {variant === "compact" ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
             disabled={loading}
-            buttonClassName={cn(chatMode !== "chat" && "bg-primary/10 text-primary hover:bg-primary/15")}
-          />
-        </div>
+            className={cn(
+              "h-7 min-w-0 max-w-[138px] shrink-0 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+              chatMode !== "chat" && "bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary"
+            )}
+            aria-label={`对话模式：${current.label}`}
+          >
+            <span className="shrink-0">{current.icon}</span>
+            <span className="truncate">{current.label}</span>
+            {open ? <ChevronUp className="size-3.5 shrink-0" /> : <ChevronDown className="size-3.5 shrink-0" />}
+          </Button>
+        ) : (
+          <div className="hidden md:block">
+            <TooltipButton
+              variant={chatMode !== "chat" ? "secondary" : "ghost"}
+              size="icon"
+              icon={current.icon}
+              tooltipText={`对话模式：${current.label}`}
+              disabled={loading}
+              buttonClassName={cn(chatMode !== "chat" && "bg-primary/10 text-primary hover:bg-primary/15")}
+            />
+          </div>
+        )}
       </PopoverTrigger>
       <PopoverContent className="w-[160px] p-0" align="start">
         <Command>

@@ -40,6 +40,7 @@ import emitter from "@/lib/emitter"
 import { shouldEmitOrganizeOnboardingComplete } from "./organize-onboarding"
 import type { Mark } from "@/db/marks"
 import { getTemplateRangeLabel, getTemplateRangeOptions } from "@/lib/template-range-utils"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 function shouldAutoSyncOnInitialRead(options?: { isNewFile?: boolean }) {
   return options?.isNewFile !== true
@@ -50,6 +51,51 @@ const MAX_FIELD_CHARS = 1600
 const MAX_TOTAL_CONTEXT_CHARS = 28000
 const STREAM_EDITOR_UPDATE_INTERVAL_MS = 500
 const STREAM_FILE_WRITE_INTERVAL_MS = 1200
+
+type OrganizeMode = 'summary' | 'study' | 'project' | 'meeting' | 'research'
+type OrganizeSourceMode = 'currentRange' | 'selected'
+
+const ORGANIZE_MODE_OPTIONS: Array<{
+  value: OrganizeMode
+  label: string
+  description: string
+  instruction: string
+}> = [
+  {
+    value: 'summary',
+    label: '快速摘要',
+    description: '适合把零散记录压缩成一篇清晰短笔记',
+    instruction: 'Write a concise synthesis note with a clear summary, key points, useful details, and references.',
+  },
+  {
+    value: 'study',
+    label: '学习笔记',
+    description: '适合知识整理、教程、论文或资料学习',
+    instruction: 'Write a study note with concepts, explanations, examples, open questions, and review prompts.',
+  },
+  {
+    value: 'project',
+    label: '项目资料',
+    description: '适合需求、方案、开源项目和技术选型',
+    instruction: 'Write a project brief with background, goals, requirements, solution options, risks, next actions, and useful project metadata.',
+  },
+  {
+    value: 'meeting',
+    label: '会议纪要',
+    description: '适合录音转写、讨论记录和行动项沉淀',
+    instruction: 'Write meeting notes with decisions, discussion points, action items, owners if present, deadlines if present, and unresolved issues.',
+  },
+  {
+    value: 'research',
+    label: '资料库',
+    description: '适合链接、文件、引用和来源型资料归档',
+    instruction: 'Write a research digest with source summaries, evidence, comparisons, citations/links, and a reference list.',
+  },
+]
+
+function getOrganizeModeOption(mode: OrganizeMode) {
+  return ORGANIZE_MODE_OPTIONS.find(option => option.value === mode) || ORGANIZE_MODE_OPTIONS[0]
+}
 
 function compactRecordText(value?: string | null, maxLength = MAX_FIELD_CHARS) {
   const text = (value || '').replace(/\s+/g, ' ').trim()
@@ -85,12 +131,16 @@ function buildOrganizePrompt({
   locale,
   inputValue,
   removeThinking,
+  mode,
+  sourceLabel,
 }: {
   marks: Mark[]
   template?: GenTemplate
   locale: string
   inputValue?: string
   removeThinking: boolean
+  mode: OrganizeMode
+  sourceLabel: string
 }) {
   const selectedMarks = [...marks]
     .sort((a, b) => a.createdAt - b.createdAt)
@@ -109,19 +159,29 @@ function buildOrganizePrompt({
     usedChars += block.length
   }
 
+  const modeOption = getOrganizeModeOption(mode)
+  const recordIds = selectedMarks.map(mark => mark.id).join(', ')
+
   return [
     'You are a note organization assistant. Convert the following collected records into one useful Markdown note.',
     `Output language: ${locale}.`,
+    `Organization mode: ${modeOption.label}.`,
+    `Mode instruction: ${modeOption.instruction}`,
     'Requirements:',
     '- Use Markdown syntax.',
+    '- Start with YAML frontmatter containing source: record-organizer, mode, sourceLabel, recordIds, and organizedAt.',
     '- Include exactly one level 1 heading.',
     '- Keep useful code, commands, tables, links, and project metadata intact when they appear in records.',
     '- Do not invent facts not supported by the records.',
+    '- If a conclusion is uncertain or only implied by the records, mark it as uncertain.',
+    '- Preserve original URLs, file paths, and record IDs where they help trace the source.',
     '- If records contain GitHub project cards, preserve project name, link, intro, tech stack, installation, architecture, and use cases.',
     '- Put reference links at the end when link records are included.',
     inputValue ? `User extra requirements: ${inputValue}` : '',
     template?.content ? `Template instruction:\n${template.content}` : '',
     '',
+    `Source label: ${sourceLabel}`,
+    `Record IDs: ${recordIds}`,
     `Records included: ${recordBlocks.length}`,
     '---',
     recordBlocks.join('\n\n---\n\n'),
@@ -135,7 +195,7 @@ interface OrganizeNotesProps {
 export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNotesProps>(({ inputValue }, ref) => {
   const [open, setOpen] = useState(false)
   const { primaryModel } = useSettingStore()
-  const { fetchMarks, marks, isMultiSelectMode, selectedMarkIds } = useMarkStore()
+  const { fetchMarks, marks, isMultiSelectMode, selectedMarkIds, setMarksProcessed, clearSelection } = useMarkStore()
   const { currentTag, currentTagId, tags, setCurrentTagId, getCurrentTag } = useTagStore()
   const { setActiveFilePath, loadFileTree, readArticle, setCurrentArticle, setSkipSyncOnSave, setAiGeneratingFilePath, setAiTerminateFn } = useArticleStore()
   const { setLeftSidebarTab } = useSidebarStore()
@@ -144,6 +204,9 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
   const [genTemplate, setGenTemplate] = useState<GenTemplate[]>([])
   const [overrideRange, setOverrideRange] = useState<GenTemplateRange | null>(null)
   const [loading, setLoading] = useState(false)
+  const [organizeMode, setOrganizeMode] = useState<OrganizeMode>('summary')
+  const [sourceMode, setSourceMode] = useState<OrganizeSourceMode>('currentRange')
+  const [markProcessedAfterSuccess, setMarkProcessedAfterSuccess] = useState(true)
   const abortControllerRef = useRef<AbortController | null>(null)
   const organizingRef = useRef(false)
   const [isRemoveThinking, setIsRemoveThinking] = useState(true)
@@ -200,14 +263,18 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
   const selectedRange = overrideRange || selectedTemplate?.range || GenTemplateRange.All
   const selectedRangeLabel = getTemplateRangeLabel(selectedRange, tRoot)
   const selectedTagName = currentTag?.name || tags.find(tag => tag.id === currentTagId)?.name || '-'
+  const hasSelectedRecords = isMultiSelectMode && selectedMarkIds.size > 0
+  const sourceLabel = sourceMode === 'selected'
+    ? '已选记录'
+    : `${selectedTagName} · ${selectedRangeLabel}`
 
   const organizeSourceMarks = useMemo(() => {
-    if (isMultiSelectMode && selectedMarkIds.size > 0) {
+    if (sourceMode === 'selected') {
       return marksByRange.filter(item => selectedMarkIds.has(item.id))
     }
 
     return marksByRange
-  }, [isMultiSelectMode, marksByRange, selectedMarkIds])
+  }, [marksByRange, selectedMarkIds, sourceMode])
 
   const organizePreviewStats = useMemo(() => {
     const included = Math.min(organizeSourceMarks.length, MAX_RECORDS_PER_ORGANIZE)
@@ -225,8 +292,9 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
 
   const openOrganize = useCallback(() => {
     setOpen(true)
+    setSourceMode(isMultiSelectMode && selectedMarkIds.size > 0 ? 'selected' : 'currentRange')
     void initGenTemplates()
-  }, [])
+  }, [isMultiSelectMode, selectedMarkIds.size])
 
   const handleOrganize = useCallback(async () => {
     if (loading || organizingRef.current) {
@@ -282,37 +350,6 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
 
       await fetchMarks()
 
-      // Get latest marks from store after fetch
-      const latestMarks = useMarkStore.getState().marks
-
-      // Calculate marksByRange with latest marks
-      const range = selectedRange
-      let subtractDate: Dayjs
-      switch (range) {
-        case GenTemplateRange.All:
-          subtractDate = dayjs().subtract(99, 'year')
-          break
-        case GenTemplateRange.Today:
-          subtractDate = dayjs().subtract(1, 'day')
-          break
-        case GenTemplateRange.Week:
-          subtractDate = dayjs().subtract(1, 'week')
-          break
-        case GenTemplateRange.Month:
-          subtractDate = dayjs().subtract(1, 'month')
-          break
-        case GenTemplateRange.ThreeMonth:
-          subtractDate = dayjs().subtract(3, 'month')
-          break
-        case GenTemplateRange.Year:
-          subtractDate = dayjs().subtract(1, 'year')
-          break
-        default:
-          subtractDate = dayjs().subtract(99, 'year')
-          break
-      }
-      const marksByRange = latestMarks.filter(item => dayjs(item.createdAt).isAfter(subtractDate))
-
       const marksForPrompt = organizeSourceMarks.slice(-MAX_RECORDS_PER_ORGANIZE)
 
       const store = await Store.load('store.json')
@@ -324,6 +361,8 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
         locale,
         inputValue,
         removeThinking: isRemoveThinking,
+        mode: organizeMode,
+        sourceLabel,
       })
 
       // Emit AI streaming start event with target file path
@@ -448,6 +487,11 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
           emitter.emit('onboarding-step-complete', { step: 'organize-note', filePath: newFilePath })
         }
 
+        if (markProcessedAfterSuccess && !signal.aborted) {
+          await setMarksProcessed(marksForPrompt.map(mark => mark.id), true)
+          clearSelection()
+        }
+
         toast({
           description: tMark('toolbar.organizeSuccess', { title: sanitizedTitle }),
         })
@@ -461,6 +505,11 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
         await readArticle(filePath, '', shouldAutoSyncOnInitialRead())
         if (shouldEmitOrganizeOnboardingComplete({ streamFinished, aborted: signal.aborted })) {
           emitter.emit('onboarding-step-complete', { step: 'organize-note', filePath })
+        }
+
+        if (markProcessedAfterSuccess && !signal.aborted) {
+          await setMarksProcessed(marksForPrompt.map(mark => mark.id), true)
+          clearSelection()
         }
 
         toast({
@@ -510,6 +559,11 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
     terminateGeneration,
     organizePreviewStats.included,
     organizeSourceMarks,
+    organizeMode,
+    sourceLabel,
+    markProcessedAfterSuccess,
+    setMarksProcessed,
+    clearSelection,
     isMultiSelectMode,
     selectedMarkIds.size,
   ])
@@ -577,6 +631,41 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
               请先在设置中配置主模型，否则无法调用 AI 整理。
             </div>
           ) : null}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">整理模式</Label>
+              <Select value={organizeMode} onValueChange={(value) => setOrganizeMode(value as OrganizeMode)}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ORGANIZE_MODE_OPTIONS.map(option => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-4 text-muted-foreground">
+                {getOrganizeModeOption(organizeMode).description}
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">记录来源</Label>
+              <Select value={sourceMode} onValueChange={(value) => setSourceMode(value as OrganizeSourceMode)}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="currentRange">当前标签和范围</SelectItem>
+                  <SelectItem value="selected" disabled={!hasSelectedRecords}>已选记录</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-4 text-muted-foreground">
+                {sourceMode === 'selected' ? '只整理当前多选的记录。' : '整理当前标签中符合时间范围的记录。'}
+              </p>
+            </div>
+          </div>
           <div className="space-y-1">
             <div className="mb-2 flex items-center justify-between gap-3">
               <Label htmlFor="name">模板内容</Label>
@@ -623,7 +712,7 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
             </div>
             <div className="mb-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
               <span className="rounded-md border border-border px-2 py-1">
-                数据来源：{isMultiSelectMode && selectedMarkIds.size > 0 ? '已选记录' : '当前范围'}
+                数据来源：{sourceLabel}
               </span>
               <span className="rounded-md border border-border px-2 py-1">
                 送入 AI：{organizePreviewStats.included} 条{organizePreviewStats.excluded > 0 ? `，已省略 ${organizePreviewStats.excluded} 条` : ''}
@@ -644,6 +733,10 @@ export const OrganizeNotes = forwardRef<{ openOrganize: () => void }, OrganizeNo
           <div className="flex items-center gap-2">
             <Checkbox id="remove-thinking" checked={isRemoveThinking} onCheckedChange={(checked) => setIsRemoveThinking(checked === true)} />
             <Label htmlFor="remove-thinking">移除记录中的思考内容</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="mark-processed" checked={markProcessedAfterSuccess} onCheckedChange={(checked) => setMarkProcessedAfterSuccess(checked === true)} />
+            <Label htmlFor="mark-processed">生成成功后标记这些记录为已整理</Label>
           </div>
         </div>
         <AlertDialogFooter>

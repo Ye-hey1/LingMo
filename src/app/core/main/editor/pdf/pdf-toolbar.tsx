@@ -141,7 +141,7 @@ export function PdfToolbar({
                 event.currentTarget.blur()
               }
             }}
-            className="h-6 w-10 border-0 bg-transparent px-0 text-center text-sm shadow-none focus-visible:ring-0"
+            className="h-6 w-10 border-0 bg-transparent px-0 text-center text-sm shadow-none focus-visible:ring-1 focus-visible:ring-ring/30"
           />
           <span className="text-xs text-muted-foreground">/ {Math.max(numPages, 1)}</span>
         </div>
@@ -240,7 +240,7 @@ export function PdfToolbar({
                 }
               }}
               placeholder="搜索 PDF"
-              className="h-6 w-32 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0"
+              className="h-6 w-32 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-1 focus-visible:ring-ring/30"
             />
             <span className="min-w-12 text-center text-xs text-muted-foreground">
               {searchQuery.trim()

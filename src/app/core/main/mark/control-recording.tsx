@@ -1,7 +1,6 @@
 import { insertMark } from "@/db/marks"
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
-import useSettingStore from "@/stores/setting"
 import useRecordingStore from "@/stores/recording"
 import { Mic } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -9,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useTranslations } from 'next-intl'
 import { toast } from '@/hooks/use-toast'
 import { transcribeRecording } from '@/lib/audio'
+import { extractAudioTrack, segmentAudio } from '@/lib/ffmpeg-wasm'
 import { useRouter } from 'next/navigation'
 import { open } from '@tauri-apps/plugin-dialog'
 import { readFile, writeFile, BaseDirectory, exists, mkdir } from '@tauri-apps/plugin-fs'
@@ -18,19 +18,17 @@ import { convertToWav } from '@/lib/audio-converter'
 import { useEffect } from 'react'
 import emitter from '@/lib/emitter'
 import { handleRecordComplete } from '@/lib/record-navigation'
-import { getTranscriptionFallbackMessage } from '@/lib/speech/transcription-fallback.ts'
 
 export function ControlRecording() {
   const t = useTranslations();
   const router = useRouter();
-  const { sttModel } = useSettingStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isMobile = isMobileDevice();
   const lastClickTime = useRef<number>(0);
   const clickTimer = useRef<NodeJS.Timeout | null>(null);
 
   const { currentTagId, fetchTags, getCurrentTag } = useTagStore()
-  const { fetchMarks, addQueue, removeQueue } = useMarkStore()
+  const { fetchMarks, addQueue, setQueue, removeQueue } = useMarkStore()
   
   // 大模型录音
   const {
@@ -117,94 +115,122 @@ export function ControlRecording() {
     }
   }
   
-  // 保存音频文件到本地
-  const saveAudioFile = async (audioBlob: Blob): Promise<string> => {
-    const timestamp = Date.now()
-    // 根据 MIME 类型确定文件扩展名
-    const extension = audioBlob.type.includes('wav') ? 'wav' :
-                      audioBlob.type.includes('mpeg') || audioBlob.type.includes('mp3') ? 'mp3' :
-                      audioBlob.type.includes('mp4') || audioBlob.type.includes('m4a') ? 'mp4' : 
-                      audioBlob.type.includes('webm') ? 'webm' : 
-                      audioBlob.type.includes('ogg') ? 'ogg' :
-                      audioBlob.type.includes('flac') ? 'flac' :
-                      audioBlob.type.includes('aac') ? 'aac' : 'webm'
-    const filename = `recording_${timestamp}.${extension}`
-    const audioDir = 'recordings'
-    
-    // 确保目录存在
-    const dirExists = await exists(audioDir, { baseDir: BaseDirectory.AppData })
-    if (!dirExists) {
-      await mkdir(audioDir, { baseDir: BaseDirectory.AppData, recursive: true })
-    }
-    
-    // 将 Blob 转换为 ArrayBuffer
-    const arrayBuffer = await audioBlob.arrayBuffer()
-    const uint8Array = new Uint8Array(arrayBuffer)
-    
-    // 保存文件
-    const filePath = `${audioDir}/${filename}`
-    await writeFile(filePath, uint8Array, { baseDir: BaseDirectory.AppData })
-    
-    return filePath
-  }
-  
-  // 后台处理识别
+  // 后台处理识别（升级为高性能 WASM 媒体抽取与切片版本）
   const processTranscription = async (
-    audioBlob: Blob,
+    mediaBlob: Blob,
     queueId: string,
   ) => {
-    let audioPath = ''
+    const formatSeconds = (val: number) => {
+      const pad = (v: number) => String(v).padStart(2, '0')
+      const total = Math.max(0, Math.floor(val))
+      const mins = Math.floor(total / 60)
+      const secs = total % 60
+      return `${pad(mins)}:${pad(secs)}`
+    }
+
     try {
       // 先验证 Blob 是否有效
-      if (!audioBlob || audioBlob.size === 0) {
-        throw new Error('音频数据为空')
+      if (!mediaBlob || mediaBlob.size === 0) {
+        throw new Error('多媒体文件数据为空')
       }
       
-      // 保存音频文件
-      audioPath = await saveAudioFile(audioBlob)
+      toast({
+        title: '多媒体已载入 (WASM)',
+        description: '状态：提取中。正在使用 WASM 引擎优化抽取并标准化音轨...',
+      })
+
+      // 1. 调用 WASM 前端引擎提取标准化音轨（16kHz Mono MP3）
+      const audioBlob = await extractAudioTrack(mediaBlob, (progress) => {
+        setQueue(queueId, { progress: `音轨提取中 ${progress}%...` })
+      })
+
+      setQueue(queueId, { progress: '极速切片分片中 40%...' })
+
+      // 2. 使用 WASM 进行高速音频无损分片
+      const chunks = await segmentAudio(audioBlob, 180)
       
-      // 调用STT API识别
       let transcription = ''
-      try {
-        transcription = await transcribeRecording(audioBlob)
-      } catch (error) {
-        console.error('STT识别出错:', error)
+      if (chunks.length === 0) {
+        throw new Error('未提取到任何有效音频数据')
+      } else if (chunks.length === 1) {
+        setQueue(queueId, { progress: '语音识别中 60%...' })
+        transcription = await transcribeRecording(chunks[0])
+      } else {
+        // 多片并发 Whisper 转录
+        const transcriptions = new Array<string>(chunks.length)
+        let finished = 0
+        
+        setQueue(queueId, { progress: `并发识别中 0/${chunks.length}...` })
+        
+        await Promise.all(chunks.map(async (chunk, index) => {
+          try {
+            const chunkText = await transcribeRecording(chunk)
+            if (chunkText && chunkText.trim()) {
+              transcriptions[index] = `- ${formatSeconds(index * 180)} ${chunkText.trim()}`
+            }
+          } catch (chunkError) {
+            console.error(`[WASM STT] Chunk ${index} failed:`, chunkError)
+          }
+          finished += 1
+          setQueue(queueId, { 
+            progress: `并发识别中 ${finished}/${chunks.length} (${Math.round((finished / chunks.length) * 45 + 50)}%)...` 
+          })
+        }))
+        
+        transcription = transcriptions.filter(Boolean).join('\n\n')
       }
+
+      if (!transcription || !transcription.trim()) {
+        throw new Error('未检测到有效的语音文本')
+      }
+
+      // 3. 将标准化音轨保存为本地 recordings 文件以支持卡片本地播放
+      const saveLocalAudioFile = async (blob: Blob): Promise<string> => {
+        const timestamp = Date.now()
+        const filename = `recording_${timestamp}.mp3`
+        const audioDir = 'recordings'
+        
+        const dirExists = await exists(audioDir, { baseDir: BaseDirectory.AppData })
+        if (!dirExists) {
+          await mkdir(audioDir, { baseDir: BaseDirectory.AppData, recursive: true })
+        }
+        
+        const arrayBuffer = await blob.arrayBuffer()
+        const uint8Array = new Uint8Array(arrayBuffer)
+        const filePath = `${audioDir}/${filename}`
+        await writeFile(filePath, uint8Array, { baseDir: BaseDirectory.AppData })
+        return filePath
+      }
+
+      const audioPath = await saveLocalAudioFile(audioBlob)
       
-      // 无论是否识别成功，都保存记录
-      const noContent = !transcription || !transcription.trim()
-      const fallbackMessage = getTranscriptionFallbackMessage(sttModel)
-      const displayContent = noContent ? (fallbackMessage || t('recording.noContentDetected')) : transcription
-      
+      // 4. 插入记录
       await insertMark({
-        tagId: currentTagId,
+        tagId: currentTagId!,
         type: 'recording',
-        desc: displayContent.substring(0, 100),
-        content: displayContent,
-        url: audioPath  // 保存音频文件路径
+        desc: transcription.substring(0, 100),
+        content: transcription,
+        url: audioPath
       })
       
-      // 移除队列
       removeQueue(queueId)
-      
-      // 刷新列表
       await fetchMarks()
       await fetchTags()
       getCurrentTag()
       
-      // 录制结束后不再显示提示
+      toast({
+        title: '音视频文件转录完成',
+        description: `已成功保存为语音记录。双击即可查阅并一键直绘精美卡片！`,
+      })
+
     } catch (error) {
-      console.error('识别失败:', error)
-      
-      // 移除队列
+      console.error('[WASM Media Select] Failed:', error)
       removeQueue(queueId)
-      
       toast({
         title: t('recording.error'),
-        description: error instanceof Error ? error.message : t('recording.transcriptionError'),
+        description: error instanceof Error ? error.message : '转写识别失败，请重试',
         variant: 'destructive'
       })
-    } finally {
     }
   }
   
@@ -221,8 +247,8 @@ export function ControlRecording() {
       const selected = await open({
         multiple: false,
         filters: [{
-          name: 'Audio',
-          extensions: ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'wma', 'webm']
+          name: 'Media',
+          extensions: ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'wma', 'webm', 'mp4', 'mov']
         }]
       })
 
@@ -354,7 +380,7 @@ export function ControlRecording() {
         <input
           ref={fileInputRef}
           type="file"
-          accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.wma,.webm"
+          accept="audio/*,video/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.wma,.webm,.mp4,.mov"
           onChange={handleFileInputChange}
           className="hidden"
         />

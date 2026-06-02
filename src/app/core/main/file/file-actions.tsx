@@ -68,13 +68,13 @@ export function FileActions({
   const compactIconClassName = dense ? "size-3" : "h-4 w-4"
 
   const debounceNewFolder = debounce(newFolder, 200)
-
   function handleNewArticle() {
-    emitter.emit('template-select-dialog:open')
+    emitter.emit("template-select-dialog:open")
   }
 
   async function handleNewDiagram(kind: DiagramKind) {
-    const parentPath = activeFilePath?.includes("/") ? activeFilePath.split("/").slice(0, -1).join("/") : ""
+    const isVirtual = activeFilePath?.startsWith("lingmo://")
+    const parentPath = (!isVirtual && activeFilePath?.includes("/")) ? activeFilePath.split("/").slice(0, -1).join("/") : ""
 
     try {
       await createDiagramFile(parentPath, kind)

@@ -6,6 +6,7 @@ import { readTextFile } from "@tauri-apps/plugin-fs";
 import useTagStore from "@/stores/tag";
 import useMarkStore from "@/stores/mark";
 import { insertMark } from "@/db/marks";
+import { ensureTagByName } from "@/db/tags";
 import { useEffect, useCallback } from 'react'
 import emitter from '@/lib/emitter'
 import { useRouter } from 'next/navigation'
@@ -29,12 +30,36 @@ const codeExtensions = [
 const textFileExtensions = ['txt', 'md', 'csv'];
 const pdfExtensions = ['pdf'];
 const fileExtensions: string[] = []
+const INBOX_TAG_NAME = '中转站'
+const INBOX_TAG_PATTERN = /^中转站\s*(?:[（(]\s*\d+\s*[）)])?$/
+
+function isInboxLikeTagName(name?: string | null) {
+  const normalizedName = name?.trim()
+  return normalizedName === INBOX_TAG_NAME
+    || normalizedName === 'Idea'
+    || Boolean(normalizedName && INBOX_TAG_PATTERN.test(normalizedName))
+}
 
 export function ControlFile() {
   const t = useTranslations();
   const router = useRouter();
-  const { currentTagId, fetchTags, getCurrentTag } = useTagStore()
+  const { fetchTags, getCurrentTag } = useTagStore()
   const { fetchMarks, addQueue, setQueue, removeQueue } = useMarkStore()
+
+  async function resolveTargetTagId() {
+    const { currentTag, currentTagId: latestTagId, tags, setCurrentTagId } = useTagStore.getState()
+    const selectedTag = currentTag || tags.find((tag) => tag.id === latestTagId)
+
+    if (!latestTagId || !selectedTag || isInboxLikeTagName(selectedTag.name)) {
+      const inboxTag = await ensureTagByName(INBOX_TAG_NAME)
+      if (latestTagId !== inboxTag.id) {
+        await setCurrentTagId(inboxTag.id)
+      }
+      return inboxTag.id
+    }
+
+    return latestTagId
+  }
 
   const handleSelectFile = useCallback(() => {
     selectFile()
@@ -65,6 +90,7 @@ export function ControlFile() {
   }
 
   async function readFileByPath(path: string) {
+    const targetTagId = await resolveTargetTagId()
     const ext = path.substring(path.lastIndexOf('.') + 1)
     // 提取文件名（不含路径）
     const fileName = path.split('/').pop() || path.split('\\').pop() || path
@@ -76,7 +102,7 @@ export function ControlFile() {
     if (pdfExtensions.includes(ext)) {
       const queueId = uuid()
       try {
-        addQueue({ queueId, tagId: currentTagId!, progress: t('record.mark.progress.cacheFile'), type: 'file', startTime: Date.now() })
+        addQueue({ queueId, tagId: targetTagId, progress: t('record.mark.progress.cacheFile'), type: 'file', startTime: Date.now() })
         content = await extractTextFromPDF(path, (progress) => {
           setQueue(queueId, { progress })
         })
@@ -89,7 +115,7 @@ export function ControlFile() {
 
       // 将完整路径存储在 url 字段，用于点击时打开文件夹
       await insertMark({
-        tagId: currentTagId,
+        tagId: targetTagId,
         type: 'file',
         desc: desc,
         content: content,
@@ -112,7 +138,7 @@ export function ControlFile() {
 
     // 将完整路径存储在 url 字段，用于点击时打开文件夹
     await insertMark({
-      tagId: currentTagId,
+      tagId: targetTagId,
       type: 'file',
       desc: desc,
       content: content,

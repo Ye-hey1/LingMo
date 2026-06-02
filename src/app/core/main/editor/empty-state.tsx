@@ -289,12 +289,12 @@ export function EmptyState({
           <p className="text-xs text-muted-foreground">
             查看使用文档：
             <a
-              href="https://notegen.top/"
+              href="https://lingmonote.cc.cd/"
               target="_blank"
               rel="noopener noreferrer"
               className="ml-1 text-primary hover:underline"
             >
-              https://notegen.top/
+              https://lingmonote.cc.cd/
             </a>
           </p>
         </div>

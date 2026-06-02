@@ -99,12 +99,12 @@ export function S3ImageHosting() {
   const getStatusIcon = () => {
     switch (s3State) {
       case SyncStateEnum.success:
-        return <CheckCircle className="size-4 text-green-500" />;
+        return <CheckCircle className="size-4 text-foreground" />;
       case SyncStateEnum.checking:
-        return <Loader2 className="size-4 animate-spin text-blue-500" />;
+        return <Loader2 className="size-4 animate-spin text-muted-foreground" />;
       case SyncStateEnum.fail:
       default:
-        return <XCircle className="size-4 text-red-500" />;
+        return <XCircle className="size-4 text-destructive" />;
     }
   };
 

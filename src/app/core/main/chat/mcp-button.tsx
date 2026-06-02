@@ -20,8 +20,21 @@ import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { useMcpStore } from '@/stores/mcp'
 import { useTranslations } from 'next-intl'
+import { cn } from '@/lib/utils'
 
-export function McpButton() {
+interface McpButtonProps {
+  trigger?: React.ReactNode
+  triggerClassName?: string
+  contentAlign?: 'start' | 'center' | 'end'
+  contentSide?: 'top' | 'right' | 'bottom' | 'left'
+}
+
+export function McpButton({
+  trigger,
+  triggerClassName,
+  contentAlign = 'center',
+  contentSide,
+}: McpButtonProps) {
   const t = useTranslations('mcp')
   const [open, setOpen] = useState(false)
   const { servers, selectedServerIds, toggleServerSelection, initMcpData, serverStates } = useMcpStore()
@@ -38,16 +51,26 @@ export function McpButton() {
   return (
     <Popover open={open} onOpenChange={handleSetOpen}>
       <PopoverTrigger asChild>
-        <div className="hidden md:block relative">
-          <TooltipButton
-            icon={selectedServerIds.length ? <ServerCrash className="size-4" /> : <Server className="size-4" />}
-            tooltipText={t('selectServers')}
-            size="icon"
-            side="bottom"
-          />
-        </div>
+        {trigger ? (
+          <button
+            type="button"
+            className={cn(triggerClassName, selectedServerIds.length && 'text-primary')}
+            aria-label={t('selectServers')}
+          >
+            {trigger}
+          </button>
+        ) : (
+          <div className="hidden md:block relative">
+            <TooltipButton
+              icon={selectedServerIds.length ? <ServerCrash className="size-4" /> : <Server className="size-4" />}
+              tooltipText={t('selectServers')}
+              size="icon"
+              side="bottom"
+            />
+          </div>
+        )}
       </PopoverTrigger>
-      <PopoverContent className="w-[400px] p-0">
+      <PopoverContent className="w-[400px] p-0" align={contentAlign} side={contentSide}>
         <Command>
           <CommandInput placeholder={t('searchServers')} className="h-9" />
           <CommandList>

@@ -18,6 +18,7 @@ import { Item, ItemContent, ItemTitle, ItemDescription, ItemActions, ItemMedia }
 import useSyncStore from "@/stores/sync";
 import { SyncStateEnum } from "@/lib/sync/github.types";
 import { Switch } from "@/components/ui/switch";
+import { ProxySettingItem } from "../components/proxy-setting-item";
 
 export default function SyncPage() {
   const t = useTranslations();
@@ -139,6 +140,8 @@ export default function SyncPage() {
       {/* 全局自动同步设置 */}
       <div className="mt-4">
         <h3 className="text-sm mb-2 font-bold">{t('settings.sync.moreSettings')}</h3>
+        <ProxySettingItem className="mb-2" />
+
         <Item variant="outline">
           <ItemMedia variant="icon"><RefreshCcw className="size-4" /></ItemMedia>
           <ItemContent>

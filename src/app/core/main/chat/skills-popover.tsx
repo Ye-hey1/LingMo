@@ -41,7 +41,19 @@ function runtimeRow(skill: SkillMetadata): DisplaySkill {
   }
 }
 
-export function SkillsPopover() {
+interface SkillsPopoverProps {
+  trigger?: React.ReactNode
+  triggerClassName?: string
+  contentAlign?: 'start' | 'center' | 'end'
+  contentSide?: 'top' | 'right' | 'bottom' | 'left'
+}
+
+export function SkillsPopover({
+  trigger,
+  triggerClassName,
+  contentAlign = 'end',
+  contentSide = 'top',
+}: SkillsPopoverProps) {
   const [open, setOpen] = useState(false)
   const {
     skills: installedSkills,
@@ -103,15 +115,25 @@ export function SkillsPopover() {
         <Tooltip>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9"
-                aria-label="查看已安装 Skills"
-              >
-                <Sparkles className="size-4" />
-              </Button>
+              {trigger ? (
+                <button
+                  type="button"
+                  className={cn(triggerClassName)}
+                  aria-label="查看已安装 Skills"
+                >
+                  {trigger}
+                </button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  aria-label="查看已安装 Skills"
+                >
+                  <Sparkles className="size-4" />
+                </Button>
+              )}
             </PopoverTrigger>
           </TooltipTrigger>
           <TooltipContent side="top">
@@ -120,7 +142,7 @@ export function SkillsPopover() {
         </Tooltip>
       </TooltipProvider>
 
-      <PopoverContent align="end" side="top" className="w-[180px] p-0">
+      <PopoverContent align={contentAlign} side={contentSide} className="w-[180px] p-0">
         <Command>
           <CommandInput placeholder="选择 Skill" className="h-9" />
           <CommandList className="max-h-[180px]">

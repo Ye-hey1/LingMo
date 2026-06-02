@@ -151,10 +151,7 @@ export function useAIAutocomplete({ editor, isEnabled, onComplete }: AICompletio
     if (!isEnabled) return
 
     const { from } = editor.state.selection
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const textBefore = (editor.state.doc as any).textBefore(from, 50)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const lineBefore = (editor.state.doc as any).textAfter(from, '\n')
+    const textBefore = editor.state.doc.textBetween(Math.max(0, from - 50), from, '\n')
 
     // Show loading state
     const rect = editor.view.coordsAtPos(from) as DOMRect
@@ -163,8 +160,7 @@ export function useAIAutocomplete({ editor, isEnabled, onComplete }: AICompletio
     ], rect)
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await onComplete((textBefore || '') + (lineBefore || ''))
+      const result = await onComplete(textBefore)
 
       // Parse suggestions from result
       const suggestions = result

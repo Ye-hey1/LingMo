@@ -7,12 +7,9 @@ import { TooltipButton } from "@/components/tooltip-button"
 import { useImperativeHandle, forwardRef, useRef, useEffect } from "react"
 import { useTranslations } from "next-intl"
 import useVectorStore from "@/stores/vector"
-import { getContextForQuery, getContextForQueryInFolder } from '@/lib/rag'
 import { fetchAiStream } from "@/lib/ai/chat"
-import { invoke } from "@tauri-apps/api/core"
-import { type LinkedResource, isLinkedFolder } from "@/lib/files"
-import { readTextFile } from "@tauri-apps/plugin-fs"
-import { getFilePathOptions, getWorkspacePath } from "@/lib/workspace"
+import { type LinkedResource } from "@/lib/files"
+import { getWorkspacePath, getFilePathOptions } from "@/lib/workspace"
 import { AgentHandler } from "@/lib/agent/agent-handler"
 import { getToolByName } from "@/lib/agent/tools"
 import { getSessionApprovalScope, matchesSessionApproval } from "@/lib/agent/session-approval"
@@ -22,9 +19,7 @@ import {
   recordPersistentApprovalHistory,
 } from "@/lib/agent/persistent-approval"
 import { ImageAttachment } from "./image-attachments"
-import type { RagSource } from "@/lib/rag"
 import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
-import { searchWeb } from "@/lib/tavily"
 import { requiresAgentModeForLocalAction } from "@/lib/chat-mode-guard"
 import {
   completeResearchClarification,
@@ -39,17 +34,11 @@ import {
 import type { Chat } from "@/db/chats"
 import { toast } from "@/hooks/use-toast"
 import { ToastAction } from "@/components/ui/toast"
-
-interface QuoteData {
-  quote: string
-  fullContent: string
-  fileName: string
-  startLine: number
-  endLine: number
-  from: number
-  to: number
-  articlePath: string
-}
+import {
+  buildChatContext,
+  type QuoteData,
+  type ChatCitationSource,
+} from "@/lib/ai/context-builder"
 
 interface ChatSendProps {
   inputValue: string;
@@ -61,55 +50,12 @@ interface ChatSendProps {
   quoteData?: QuoteData | null;
   webSearchEnabled?: boolean;
   allowAutoCurrentFileContext?: boolean;
+  hideIdleButton?: boolean;
 }
 
-type ChatCitationSource = RagSource & {
-  url?: string
-  title?: string
-  sourceType?: 'rag' | 'web' | 'current' | 'linked' | 'quote'
-  startLine?: number
-  endLine?: number
-  from?: number
-  to?: number
-}
-
-const CITATION_CONTENT_LIMIT = 1600
 const MIN_AUTO_EXTRACT_CHAR_COUNT = 500
 const AGENT_CONTEXT_TOTAL_LIMIT = 70000
-const AGENT_CURRENT_NOTE_CONTEXT_LIMIT = 18000
-const AGENT_LINKED_FILE_CONTEXT_LIMIT = 16000
-const AGENT_RAG_CONTEXT_LIMIT = 24000
-const AGENT_QUOTE_CONTEXT_LIMIT = 10000
-const AGENT_PREVIEW_CONTEXT_LIMIT = 4000
 const AI_DOC_COMMAND_PREFIX = '你正在执行一个应用内命令：'
-
-type AgentContextBudget = {
-  remaining: number
-}
-
-function takeAgentContextContent(
-  content: string,
-  perSectionLimit: number,
-  budget: AgentContextBudget,
-  label: string
-): string {
-  const normalized = content.replace(/\r\n/g, '\n').trim()
-  if (!normalized) {
-    return ''
-  }
-
-  const allowed = Math.max(0, Math.min(perSectionLimit, budget.remaining))
-  if (allowed <= 0) {
-    return `[Context omitted: ${label}; total context budget exhausted.]`
-  }
-
-  budget.remaining -= Math.min(normalized.length, allowed)
-  if (normalized.length <= allowed) {
-    return normalized
-  }
-
-  return `${normalized.slice(0, allowed).trim()}\n\n[Context truncated: ${label}; ${normalized.length - allowed} characters omitted.]`
-}
 
 function buildAutoNoteTitle(userInput: string) {
   const normalized = userInput
@@ -157,137 +103,6 @@ function shouldSuggestExtractToNote(content: string, hasSuccessfulToolCall: bool
   if (hasSuccessfulToolCall && trimmed.length >= 400) return true
 
   return false
-}
-
-function getLinkedResourceKey(resource: LinkedResource): string {
-  return resource.relativePath || resource.path || resource.name
-}
-
-function getLinkedFileName(path: unknown): string {
-  const normalized = typeof path === 'string' ? path.trim() : ''
-  return normalized.split('/').pop() || normalized
-}
-
-function matchesLinkedResourcePath(candidate: unknown, resource: LinkedResource): boolean {
-  const normalized = typeof candidate === 'string' ? candidate.trim() : ''
-  if (!normalized) {
-    return false
-  }
-
-  const linkedPaths = new Set([
-    resource.relativePath,
-    resource.path,
-    resource.name,
-    getLinkedFileName(resource.relativePath),
-    getLinkedFileName(resource.path),
-  ].filter(Boolean))
-
-  return linkedPaths.has(normalized) || linkedPaths.has(getLinkedFileName(normalized))
-}
-
-function normalizeCitationContent(content: unknown): string {
-  if (typeof content !== 'string') {
-    return ''
-  }
-
-  const normalized = content.replace(/\r\n/g, '\n').trim()
-  if (normalized.length <= CITATION_CONTENT_LIMIT) {
-    return normalized
-  }
-
-  return `${normalized.slice(0, CITATION_CONTENT_LIMIT).trim()}\n...`
-}
-
-function addCitationSource(
-  sources: string[],
-  details: ChatCitationSource[],
-  detail: ChatCitationSource
-) {
-  const filepath = detail.filepath?.trim() || ''
-  const filename = detail.filename?.trim() || getLinkedFileName(filepath)
-  const content = normalizeCitationContent(detail.content)
-
-  if (!filename && !filepath) {
-    return
-  }
-
-  const nextDetail: ChatCitationSource = {
-    ...detail,
-    filepath,
-    filename,
-    content,
-  }
-
-  const exists = details.some((item) =>
-    (item.filepath || item.filename) === (nextDetail.filepath || nextDetail.filename)
-    && (item.sourceType || 'rag') === (nextDetail.sourceType || 'rag')
-    && normalizeCitationContent(item.content).slice(0, 120) === content.slice(0, 120)
-  )
-
-  if (!exists) {
-    details.push(nextDetail)
-  }
-
-  if (filename && !sources.includes(filename)) {
-    sources.push(filename)
-  }
-}
-
-async function buildWebSearchContext(
-  query: string,
-  signal?: AbortSignal
-): Promise<{ context: string; sources: ChatCitationSource[] }> {
-  const response = await searchWeb({
-    query,
-    maxResults: 5,
-    includeAnswer: true,
-    signal,
-  })
-
-  const lines = [
-    '## Web search results',
-    '',
-    `Provider: ${response.provider}${response.degraded ? ' (fallback)' : ''}`,
-  ]
-
-  if (response.answer?.trim()) {
-    lines.push('', `Answer: ${response.answer.trim()}`)
-  }
-
-  if (response.results.length > 0) {
-    lines.push('', 'Sources:')
-    response.results.forEach((result, index) => {
-      const title = result.title?.trim() || result.url || `Result ${index + 1}`
-      lines.push(`${index + 1}. ${title}`)
-      if (result.url?.trim()) {
-        lines.push(`   URL: ${result.url.trim()}`)
-      }
-      if (result.publishedDate?.trim()) {
-        lines.push(`   Published: ${result.publishedDate.trim()}`)
-      }
-      if (result.content?.trim()) {
-        lines.push(`   Snippet: ${result.content.trim()}`)
-      }
-    })
-  } else {
-    lines.push('', 'No web results were found.')
-  }
-
-  const sources = response.results
-    .filter(result => result.url || result.title || result.content)
-    .map((result, index): ChatCitationSource => ({
-      url: result.url,
-      title: result.title,
-      filepath: result.url || `web-search:${query}:${index + 1}`,
-      filename: result.title || result.url || `Web result ${index + 1}`,
-      content: result.content || response.answer || '',
-      sourceType: 'web',
-    }))
-
-  return {
-    context: `${lines.join('\n')}\n\n`,
-    sources,
-  }
 }
 
 function buildWebSearchQuery(instruction: string): string | null {
@@ -394,6 +209,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
   quoteData = null,
   webSearchEnabled = false,
   allowAutoCurrentFileContext = true,
+  hideIdleButton = false,
 }, ref) => {
   const { primaryModel } = useSettingStore()
   const { currentTagId } = useTagStore()
@@ -404,6 +220,7 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
     chatMode,
     setLoading,
     setResearchRunning,
+    ensureCurrentConversation,
     saveChat,
     setAgentState,
     maybeCondense,
@@ -421,8 +238,6 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
     : linkedResource
       ? [linkedResource]
       : []
-  const linkedFolders = effectiveLinkedResources.filter(isLinkedFolder)
-  const linkedFiles = effectiveLinkedResources.filter(resource => !isLinkedFolder(resource))
   const isRunning = loading || researchRunning
 
   // 跟踪上一次的 loading 状态
@@ -437,32 +252,6 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
     }
     wasLoadingRef.current = loading
   }, [loading, maybeCondense])
-
-  // RAG 关键词停用词过滤
-  // 过滤掉没有实际检索意义的虚词
-  const filterRAGKeywords = (keywords: {text: string, weight: number}[]) => {
-    const stopWords = new Set([
-      // 中文虚词/系动词
-      '的', '了', '是', '在', '有', '和', '就', '不', '人', '都', '一', '一个',
-      '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看',
-      '好', '自己', '这', '那', '里', '就是', '为', '与', '之', '用', '可以',
-      '但', '而', '或', '及', '等', '对', '把', '被', '让', '给', '从', '向',
-      '什么', '怎么', '怎样', '如何', '为什么', '哪些', '多少',
-
-      // 英文停用词
-      'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-      'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been',
-      'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-      'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those',
-      'what', 'how', 'why', 'where', 'when', 'who', 'which'
-    ])
-
-    return keywords.filter(k => {
-      const text = k.text.trim().toLowerCase()
-      // 过滤掉停用词和单字
-      return !stopWords.has(text) && text.length > 1
-    })
-  }
 
   const shouldCarryUserHistoryForAgent = (input: string) => {
     const normalized = input.trim().toLowerCase()
@@ -621,77 +410,43 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
     abortControllerRef.current = abortController
 
     try {
-      let context = ''
-      const ragSources: string[] = []
-      const ragSourceDetails: ChatCitationSource[] = []
+      // 使用统一的上下文构建器
+      const useArticleStore = (await import('@/stores/article')).default
+      const articleStore = useArticleStore.getState()
 
-      if (webSearchEnabled) {
-        const webSearchQuery = buildWebSearchQuery(effectiveInstruction)
-        if (webSearchQuery) {
-          try {
-            const webSearchContext = await buildWebSearchContext(webSearchQuery, abortController.signal)
-            context += webSearchContext.context
-            webSearchContext.sources.forEach(source => {
-              addCitationSource(ragSources, ragSourceDetails, source)
-            })
-          } catch (error) {
-            if (abortController.signal.aborted) {
-              throw error
-            }
-            console.error('Failed to get web search context in Chat mode:', error)
-            context += `## Web search results\n\nWeb search was enabled, but the search request failed: ${error instanceof Error ? error.message : String(error)}\n\n`
-          }
-        }
+      const contextResult = await buildChatContext({
+        linkedResources: effectiveLinkedResources,
+        linkedResourcePreviews,
+        linkedResourcePreview,
+        quoteData,
+        isRagEnabled,
+        webSearchEnabled,
+        userQuery: effectiveInstruction,
+        webSearchQuery: webSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
+        contextBudget: 15000,
+        currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
+        activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
+      })
+
+      const { context, ragSources, ragSourceDetails } = contextResult
+      const diagnosticDetail: ChatCitationSource = {
+        filepath: 'rag-diagnostics',
+        filename: 'RAG 检索诊断',
+        content: [
+          `策略：${contextResult.diagnostics.strategy}`,
+          contextResult.diagnostics.ragSkippedReason ? `跳过原因：${contextResult.diagnostics.ragSkippedReason}` : '',
+          contextResult.diagnostics.ragQuery ? `检索 query：${contextResult.diagnostics.ragQuery}` : '',
+          contextResult.diagnostics.ragKeywords.length ? `关键词：${contextResult.diagnostics.ragKeywords.join('、')}` : '',
+          `当前文档注入：${contextResult.diagnostics.currentNoteInjected ? '是' : '否'}`,
+          `关联文件：${contextResult.diagnostics.linkedFileInjectedCount}/${contextResult.diagnostics.linkedFileCount}`,
+          `RAG 命中：${contextResult.diagnostics.ragSourceCount}`,
+          `注入字符：当前 ${contextResult.diagnostics.injectedChars.current} / 关联 ${contextResult.diagnostics.injectedChars.linked} / 引用 ${contextResult.diagnostics.injectedChars.quote} / RAG ${contextResult.diagnostics.injectedChars.rag} / 总计 ${contextResult.diagnostics.injectedChars.total}`,
+          ...contextResult.diagnostics.warnings.map(warning => `警告：${warning}`),
+        ].filter(Boolean).join('\n'),
+        sourceType: 'rag' as const,
       }
-
-      if (isRagEnabled) {
-        try {
-          let keywords = await invoke<{ text: string; weight: number }[]>('rank_keywords', {
-            text: effectiveInstruction,
-            topK: 15,
-          })
-          keywords = filterRAGKeywords(keywords)
-
-          if (keywords.length > 0) {
-            const linkedFolder = linkedFolders[0]
-            const ragResult = linkedFolder
-              ? await getContextForQueryInFolder(keywords, linkedFolder.relativePath)
-              : await getContextForQuery(keywords)
-
-            ragResult.sources.forEach(source => {
-              if (!ragSources.includes(source)) {
-                ragSources.push(source)
-              }
-            })
-            ragResult.sourceDetails.forEach(sourceDetail => {
-              addCitationSource(ragSources, ragSourceDetails, {
-                ...sourceDetail,
-                sourceType: 'rag',
-              })
-            })
-
-            if (ragResult.context) {
-              context += `## 知识库检索结果\n\n${ragResult.context}\n\n`
-            }
-          }
-        } catch (error) {
-          console.error('Failed to get RAG context in Chat mode:', error)
-        }
-      }
-
-      if (quoteData) {
-        context += `## 用户引用内容\n\n文件: ${quoteData.fileName}\n\n---\n${quoteData.fullContent}\n---\n\n`
-        addCitationSource(ragSources, ragSourceDetails, {
-          filepath: quoteData.articlePath,
-          filename: quoteData.fileName,
-          content: quoteData.fullContent,
-          sourceType: 'quote',
-          startLine: quoteData.startLine,
-          endLine: quoteData.endLine,
-          from: quoteData.from,
-          to: quoteData.to,
-        })
-      }
+      const enrichedRagSourceDetails = [diagnosticDetail, ...ragSourceDetails]
+      const enrichedRagSources = ['RAG 检索诊断', ...ragSources]
 
       const { chats: currentChats } = useChatStore.getState()
       const latestUserChatId = currentChats
@@ -720,12 +475,13 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
       if (ragSources.length > 0 || ragSourceDetails.length > 0) {
         await saveChat({
           ...placeholderMessage,
-          ragSources: ragSources.length > 0 ? JSON.stringify(ragSources) : undefined,
-          ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+          ragSources: JSON.stringify(enrichedRagSources),
+          ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
         }, true)
       }
 
       let finalContent = ''
+      let thinkingContent = ''
       const result = await fetchAiStream(
         effectiveInstruction,
         async (content) => {
@@ -733,8 +489,9 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
           await saveChat({
             ...placeholderMessage,
             content,
-            ragSources: ragSources.length > 0 ? JSON.stringify(ragSources) : undefined,
-            ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+            thinking: thinkingContent || undefined,
+            ragSources: JSON.stringify(enrichedRagSources),
+            ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
           }, false)
         },
         abortController.signal,
@@ -742,7 +499,16 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
         t,
         placeholderMessage.id,
         imageUrls,
-        undefined,
+        // 思考内容更新回调
+        async (thinking: string) => {
+          thinkingContent = thinking
+          await saveChat({
+            ...placeholderMessage,
+            thinking,
+            ragSources: JSON.stringify(enrichedRagSources),
+            ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
+          }, false)
+        },
         messages
       )
       if (!finalContent && result) {
@@ -752,8 +518,8 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
       await saveChat({
         ...placeholderMessage,
         content: abortController.signal.aborted ? (finalContent || t('record.chat.input.stopped')) : finalContent,
-        ragSources: ragSources.length > 0 ? JSON.stringify(ragSources) : undefined,
-        ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+        ragSources: JSON.stringify(enrichedRagSources),
+        ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
       }, true)
     } catch (error) {
       await saveChat({
@@ -1324,308 +1090,88 @@ export const ChatSend = forwardRef<{ sendChat: (instructionOverride?: string, op
     agentHandlerRef.current = agentHandler
 
     try {
-      // 构建上下文信息
-      let context = ''
-      const contextBudget: AgentContextBudget = { remaining: AGENT_CONTEXT_TOTAL_LIMIT }
-      const ragSources: string[] = []
-      const ragSourceDetails: ChatCitationSource[] = []
-
-      if (webSearchEnabled) {
-        context += `## 联网搜索\n\n用户已为本轮对话开启联网搜索。请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或 Tavily Extract 不可用时再使用 web_fetch。搜索与提取结果来自 Tavily Search API。\n\n`
-      }
-
-      // 1. 如果有当前打开的笔记，自动传入其内容
+      // 使用统一的上下文构建器
       const useArticleStore = (await import('@/stores/article')).default
       const articleStore = useArticleStore.getState()
 
-      const activeFileAlreadyLinked = linkedFiles.some(resource =>
-        matchesLinkedResourcePath(articleStore.activeFilePath, resource)
-      )
+      const contextResult = await buildChatContext({
+        linkedResources: effectiveLinkedResources,
+        linkedResourcePreviews,
+        linkedResourcePreview,
+        quoteData,
+        isRagEnabled,
+        webSearchEnabled,
+        userQuery: effectiveInstruction,
+        contextBudget: AGENT_CONTEXT_TOTAL_LIMIT,
+        currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
+        activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
+      })
 
-      if (allowAutoCurrentFileContext && articleStore.activeFilePath && articleStore.currentArticle && !activeFileAlreadyLinked) {
-        const currentArticleContext = takeAgentContextContent(
-          articleStore.currentArticle,
-          AGENT_CURRENT_NOTE_CONTEXT_LIMIT,
-          contextBudget,
-          `current note ${articleStore.activeFilePath}`
-        )
-        context += `## 当前打开的笔记\n文件路径: ${articleStore.activeFilePath}\n\n内容:\n${currentArticleContext}\n\n`
-        addCitationSource(ragSources, ragSourceDetails, {
-          filepath: articleStore.activeFilePath,
-          filename: getLinkedFileName(articleStore.activeFilePath),
-          content: articleStore.currentArticle,
-          sourceType: 'current',
+      const { context, ragSources, ragSourceDetails } = contextResult
+      const diagnosticDetail: ChatCitationSource = {
+        filepath: 'rag-diagnostics',
+        filename: 'RAG 检索诊断',
+        content: [
+          `策略：${contextResult.diagnostics.strategy}`,
+          contextResult.diagnostics.ragSkippedReason ? `跳过原因：${contextResult.diagnostics.ragSkippedReason}` : '',
+          contextResult.diagnostics.ragQuery ? `检索 query：${contextResult.diagnostics.ragQuery}` : '',
+          contextResult.diagnostics.ragKeywords.length ? `关键词：${contextResult.diagnostics.ragKeywords.join('、')}` : '',
+          `当前文档注入：${contextResult.diagnostics.currentNoteInjected ? '是' : '否'}`,
+          `关联文件：${contextResult.diagnostics.linkedFileInjectedCount}/${contextResult.diagnostics.linkedFileCount}`,
+          `RAG 命中：${contextResult.diagnostics.ragSourceCount}`,
+          `注入字符：当前 ${contextResult.diagnostics.injectedChars.current} / 关联 ${contextResult.diagnostics.injectedChars.linked} / 引用 ${contextResult.diagnostics.injectedChars.quote} / RAG ${contextResult.diagnostics.injectedChars.rag} / 总计 ${contextResult.diagnostics.injectedChars.total}`,
+          ...contextResult.diagnostics.warnings.map(warning => `警告：${warning}`),
+        ].filter(Boolean).join('\n'),
+        sourceType: 'rag' as const,
+      }
+      const enrichedRagSourceDetails = [diagnosticDetail, ...ragSourceDetails]
+      const enrichedRagSources = ['RAG 检索诊断', ...ragSources]
+
+      // 如果启用了 Web 搜索，添加提示
+      let agentContext = context
+      if (webSearchEnabled) {
+        agentContext = `## 联网搜索\n\n用户已为本轮对话开启联网搜索。请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或 Tavily Extract 不可用时再使用 web_fetch。搜索与提取结果来自 Tavily Search API。\n\n${context}`
+      }
+
+      // 设置到 agentState，用于实时显示
+      if (enrichedRagSources.length > 0) {
+        const filteredSourceDetails = enrichedRagSourceDetails
+          .filter(d => d.sourceType !== 'web')
+          .map(d => ({
+            filepath: d.filepath,
+            filename: d.filename,
+            content: d.content,
+            sourceType: d.sourceType as 'rag' | 'current' | 'linked' | 'quote' | undefined,
+            startLine: d.startLine,
+            endLine: d.endLine,
+            from: d.from,
+            to: d.to,
+          }))
+        setAgentState({
+          ragSources: enrichedRagSources,
+          ragSourceDetails: filteredSourceDetails,
         })
       }
 
-      // 2. 如果启用 RAG，获取知识库相关上下文
-      if (isRagEnabled) {
-        try {
-          // 基于 TextRank 算法提取前 15 个关键词（增加数量以提高召回率）
-          let keywords = await invoke<{text: string, weight: number}[]>('rank_keywords', { text: inputValue, topK: 15 })
-
-          // 过滤掉停用词（如"是"、"的"等没有检索意义的虚词）
-          keywords = filterRAGKeywords(keywords)
-
-          // 如果过滤后没有有效关键词，明确告知
-          if (keywords.length === 0) {
-            context += `## 知识库检索结果\n\n由于用户问题中没有有效的关键词（仅包含停用词如"的"、"是"等），无法进行知识库检索。如果用户询问的是具体笔记内容，请告知用户需要提供更多具体信息。\n`
-          } else {
-            // 根据关联资源类型选择检索方式
-            let ragResult: { context: string; sources: string[]; sourceDetails: RagSource[] }
-
-            const linkedFolder = linkedFolders[0]
-
-            if (linkedFolder) {
-              // 文件夹关联：限定检索范围到文件夹
-              ragResult = await getContextForQueryInFolder(keywords, linkedFolder.relativePath)
-            } else {
-              // 文件关联或无关联：全局检索
-              ragResult = await getContextForQuery(keywords)
-            }
-
-            ragResult.sourceDetails.forEach(sourceDetail => {
-              addCitationSource(ragSources, ragSourceDetails, {
-                ...sourceDetail,
-                sourceType: 'rag',
-              })
-            })
-            ragResult.sources.forEach(source => {
-              if (!ragSources.includes(source)) {
-                ragSources.push(source)
-              }
-            })
-
-            // 设置到 agentState，用于实时显示
-            setAgentState({
-              ragSources: ragResult.sources,
-              ragSourceDetails: ragResult.sourceDetails,
-            })
-
-            if (ragResult.context) {
-              // 找到相关内容
-              const ragContext = takeAgentContextContent(
-                ragResult.context,
-                AGENT_RAG_CONTEXT_LIMIT,
-                contextBudget,
-                'RAG results'
-              )
-              context += `## 知识库检索结果\n\n已在知识库中找到与用户问题相关的笔记内容。请优先使用以下信息回答用户问题：\n\n${ragContext}\n`
-            } else {
-              // 未找到相关内容
-              const linkedFolder = linkedFolders[0]
-              const searchScope = linkedFolder
-                ? `在关联文件夹"${linkedFolder.name}"中`
-                : '在知识库中'
-
-              context += `## 知识库检索结果\n\n${searchScope}未找到与用户问题相关的笔记内容。\n\n请根据情况处理：\n- 如果用户询问的是具体笔记内容，请告知用户${searchScope}可能没有相关资料\n- 如果问题可以基于一般知识回答，请使用你的知识回答\n- 如果需要更多信息，可以请用户提供更具体的关键词或问题\n`
-            }
-          }
-        } catch (error) {
-          console.error('Failed to get RAG context in Agent mode:', error)
-          // 检索出错时的处理
-          context += `## 知识库检索结果\n\n知识库检索过程中出现错误。如果用户询问的是具体笔记内容，请告知用户暂时无法访问知识库。\n`
-        }
-      }
-
-      // 3. 如果有关联文件（非文件夹），注入内容作为 Agent 上下文
-      if (linkedFiles.length > 0) {
-        const workspace = await getWorkspacePath()
-
-        for (const [index, resource] of linkedFiles.entries()) {
-          try {
-            const resourceKey = getLinkedResourceKey(resource)
-            const resourcePath = resource.relativePath || resource.path
-            const isActiveResource = matchesLinkedResourcePath(articleStore.activeFilePath, resource)
-            const preview = linkedResourcePreviews[resourceKey] ?? (index === 0 ? linkedResourcePreview : null)
-            const isPdf = /\.pdf$/i.test(resourcePath)
-
-            if (preview) {
-              context += `\n${takeAgentContextContent(
-                preview,
-                AGENT_PREVIEW_CONTEXT_LIMIT,
-                contextBudget,
-                `linked preview ${resource.name || resourcePath}`
-              )}\n`
-            }
-
-            if (isPdf) {
-              // PDF 文件：使用已提取的文本（articleStore.currentArticle），不读取二进制
-              if (isActiveResource && articleStore.currentArticle) {
-                const pdfContext = takeAgentContextContent(
-                  articleStore.currentArticle,
-                  AGENT_LINKED_FILE_CONTEXT_LIMIT,
-                  contextBudget,
-                  `linked PDF ${resource.name || resourcePath}`
-                )
-                context += `\n## 关联文件内容 ${index + 1}（PDF 文本提取）\n\n文件: "${resource.name}" (${resource.relativePath})\n\n---\n${pdfContext}\n---\n`
-                addCitationSource(ragSources, ragSourceDetails, {
-                  filepath: resource.relativePath || resource.path,
-                  filename: resource.name || getLinkedFileName(resource.relativePath || resource.path),
-                  content: articleStore.currentArticle,
-                  sourceType: 'linked',
-                })
-              }
-              continue
-            }
-
-            let linkedFileContent = ''
-            if (isActiveResource && articleStore.currentArticle) {
-              linkedFileContent = articleStore.currentArticle
-            } else if (workspace.isCustom) {
-              linkedFileContent = await readTextFile(resource.path)
-            } else {
-              const { path, baseDir } = await getFilePathOptions(resource.path || resource.relativePath)
-              linkedFileContent = baseDir
-                ? await readTextFile(path, { baseDir })
-                : await readTextFile(path)
-            }
-
-            if (linkedFileContent) {
-              const linkedContext = takeAgentContextContent(
-                linkedFileContent,
-                AGENT_LINKED_FILE_CONTEXT_LIMIT,
-                contextBudget,
-                `linked file ${resource.name || resourcePath}`
-              )
-              context += `\n## 关联文件内容 ${index + 1}\n\nContent from linked file "${resource.name}" (${resource.relativePath}) is included below. If it is truncated, only call tools to read more when the user task requires missing parts.\n\n---\n${linkedContext}\n---\n`
-              addCitationSource(ragSources, ragSourceDetails, {
-                filepath: resource.relativePath || resource.path,
-                filename: resource.name || getLinkedFileName(resource.relativePath || resource.path),
-                content: linkedFileContent,
-                sourceType: 'linked',
-              })
-            }
-          } catch (error) {
-            console.error('Failed to read linked file in Agent mode:', error)
-          }
-        }
-      }
-
-      // 4. 如果有引用内容，添加引用上下文（在构建消息之前）
-      if (quoteData) {
-        const { fileName, startLine, endLine, fullContent, from, to } = quoteData
-        let lineInfo = ''
-        const hasValidLineNumbers = startLine !== -1 && endLine !== -1
-        const hasValidRange = from >= 0 && to >= from
-
-        if (hasValidLineNumbers) {
-          if (startLine === endLine) {
-            lineInfo = `第 ${startLine} 行`
-          } else {
-            lineInfo = `第 ${startLine}-${endLine} 行`
-          }
-        }
-
-        const quoteContext = takeAgentContextContent(
-          fullContent,
-          AGENT_QUOTE_CONTEXT_LIMIT,
-          contextBudget,
-          `quote ${fileName}`
-        )
-
-        context += `\n## 📌 用户引用内容
-
-用户引用了笔记 "${fileName}" ${lineInfo}的以下内容：
-
----
-${quoteContext}
----
-
-${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才允许编辑**。
-
-如果用户是在提问、解释、总结、分析、翻译、润色建议、代码说明，应该直接基于这段引用内容回答，**不要调用任何编辑工具**。
-
-**🚨 当且仅当用户明确要求修改时，必须精确替换用户选中的范围**: 当前引用内容来自编辑器选区，必须优先使用 replace_editor_content 的 position-based 模式，只替换这段选中的内容：
-- from: ${from}
-- to: ${to}
-- 使用 content 或 replaceContent 传入新内容
-- 只允许替换这个选区，禁止扩大到整篇文档或整段之外
-
-**如果用户说“在这段前面/后面/上面/下面插入、补充、添加”**:
-- 仍然使用 replace_editor_content
-- 基于当前引用范围整体替换
-- 前插: 新内容 + 原引用内容
-- 后插: 原引用内容 + 新内容
-- 不要使用 insert_at_cursor，因为聊天输入会让编辑器失焦，当前光标位置不可靠
-
-**如果用户明确要求“前面和后面都增加内容”**:
-- 仍然使用 replace_editor_content
-- 必须先分别生成前插内容和后插内容
-- 请在传给工具的 content 中使用这个精确格式：
-  <<BEFORE>>
-  [前插内容]
-  <<AFTER>>
-  [后插内容]
-- 系统会自动把它拼接成：前插内容 + 原引用内容 + 后插内容
-- 不要把前后内容合并成一整段普通文本
-
-**兜底行号信息**:
-- 单行修改: startLine: ${startLine}, endLine: ${endLine}
-- 多行范围: startLine: ${startLine}, endLine: ${endLine}
-
-**禁止**:
-- 禁止在解释/分析类请求中调用编辑工具
-- 禁止改动选区之外的内容
-- 禁止获取整个文档后再重写整篇
-- 禁止把 startLine/endLine 擅自改成 1/1` : hasValidLineNumbers ? `**仅在用户明确要求修改/改写/补充/插入时才允许编辑**。
-
-如果用户是在提问、解释、总结、分析、翻译、润色建议、代码说明，应该直接基于这段引用内容回答，**不要调用任何编辑工具**。
-
-**🚨 当且仅当用户明确要求修改时，必须使用行号修改**: 当用户引用内容并要求修改时，你必须使用 replace_editor_content 工具的 line-based 模式，传入精确的行号：
-- 单行修改: startLine: ${startLine}, endLine: ${endLine}
-- 多行范围: startLine: ${startLine}, endLine: ${endLine}
-- 必须使用 replaceContent 参数传入新内容
-
-**禁止**:
-- 禁止在解释/分析类请求中调用编辑工具
-- 禁止使用 from/to 位置参数
-- 禁止使用 searchContent 文本搜索模式
-- 禁止获取整个文档内容后再操作` : `**注意**: 此引用内容没有有效的行号信息。如果需要修改，请先使用 get_editor_selection 工具获取当前选中的行号信息。`}
-
-请基于这段引用内容回答用户的问题。
-
-`
-        addCitationSource(ragSources, ragSourceDetails, {
-          filepath: quoteData.articlePath,
-          filename: fileName,
-          content: fullContent,
-          sourceType: 'quote',
-          startLine,
-          endLine,
-          from,
-          to,
-        })
-      }
-
-      // 保存本轮上下文来源到 AI 消息中，最终在回答底部展示为可点击引用。
-      if (ragSources.length > 0 || ragSourceDetails.length > 0) {
-        const normalizedSources = ragSources.length > 0
-          ? ragSources
-          : ragSourceDetails.map(source => source.filename).filter((source): source is string => !!source)
-
+      // 保存本轮上下文来源到 AI 消息中
+      if (enrichedRagSources.length > 0 || enrichedRagSourceDetails.length > 0) {
         await saveChat({
           ...placeholderMessage,
-          ragSources: normalizedSources.length > 0 ? JSON.stringify(normalizedSources) : undefined,
-          ragSourceDetails: ragSourceDetails.length > 0 ? JSON.stringify(ragSourceDetails) : undefined,
+          ragSources: JSON.stringify(enrichedRagSources),
+          ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
         }, true)
       }
 
-      // 5. 构建消息数组，包含对话历史（使用压缩摘要替代已压缩的消息）
+      // 构建消息数组
       const { chats } = useChatStore.getState()
       const { buildMessagesWithHistory } = await import('@/lib/ai/condense')
 
-      // 使用 buildMessagesWithHistory 构建完整的消息数组
-      // 注意：Agent 模式下，不传入 systemPrompt（Agent 会自己构建）
-      // 将所有上下文（文章、RAG、关联文件、引用）作为 additionalContext
       const messages = buildMessagesWithHistory(
         chats,
-        undefined, // systemPrompt - Agent 会自己构建
-        context,   // additionalContext - 包含文章、RAG、关联文件、引用等
-        effectiveInstruction, // currentUserInput - 当前用户输入（可能来自命令模板）
+        undefined,
+        agentContext,
+        effectiveInstruction,
         {
-          // Agent 自己会在 think() 里重新注入当前请求，避免重复。
-          // 保留 assistant 历史，优先使用 condensedContent，避免丢失多轮上下文。
           includeAssistantMessages: true,
           includeLatestUserMessage: false,
           maxUserMessages: shouldCarryUserHistoryForAgent(effectiveInstruction) ? 3 : 0,
@@ -1636,18 +1182,18 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
     } catch (error) {
       console.error('Agent execution error:', error)
     } finally {
-      // 清空 ref
       agentHandlerRef.current = null
     }
   }
 
   // 对话（Agent 模式）
   async function handleSubmit(instructionOverride?: unknown) {
-    if (inputValue === '') return
-
     const effectiveInstruction =
       typeof instructionOverride === 'string' ? instructionOverride : undefined
     const requestText = effectiveInstruction ?? inputValue
+    const displayText = inputValue.trim()
+
+    if (!requestText.trim() || !displayText) return
 
     if (chatMode === 'chat' && requiresAgentModeForLocalAction(requestText)) {
       toast({
@@ -1658,19 +1204,24 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
       return
     }
 
+    const conversationTitle = displayText.replace(/\s+/g, ' ').slice(0, 30) || '新对话'
+    await ensureCurrentConversation(conversationTitle)
+
     onSent?.()
 
-    setLoading(true)
     const imageUrls = attachedImages.map(img => img.url)
-    await insert({
+    const userMessage = await insert({
       tagId: currentTagId,
       role: 'user',
-      content: inputValue,
+      content: displayText,
       type: 'chat',
       inserted: false,
       images: imageUrls.length > 0 ? JSON.stringify(imageUrls) : undefined,
       quoteData: quoteData ? JSON.stringify(quoteData) : undefined,
     })
+    if (!userMessage) return
+
+    setLoading(true)
     let keepLoading = false
     if (chatMode === 'chat') {
       await handleChatMode(imageUrls, effectiveInstruction)
@@ -1704,14 +1255,22 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
     setLoading(false)
   }
 
+  if (hideIdleButton && !isRunning) {
+    return null
+  }
+
   return (
     <>
       <TooltipButton 
-        variant={isRunning ? "destructive" : "default"}
-        size="sm"
+        variant={isRunning ? "destructive" : "ghost"}
+        size="icon"
         icon={isRunning ? <Square className="size-4" /> : <Send className="size-4" />} 
         disabled={!isRunning && (!primaryModel || !inputValue.trim())} 
         tooltipText={isRunning ? t('record.chat.input.stop') : t('record.chat.input.send')} 
+        buttonClassName={isRunning
+          ? "h-7 w-7 rounded-md"
+          : "h-7 w-7 rounded-md bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground disabled:bg-muted/30 disabled:text-muted-foreground/60"
+        }
         onClick={() => {
           if (isRunning) {
             void handleStop()

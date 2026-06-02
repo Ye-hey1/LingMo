@@ -10,57 +10,91 @@ import useVectorStore from "@/stores/vector"
 import { useSkillsStore } from "@/stores/skills"
 import { fetchAiQuickPrompts } from "@/lib/ai/placeholder"
 import { enhanceChatPrompt } from "@/lib/ai/prompt-enhancer"
+import {
+  DICTATION_POLISH_MODE_LABELS,
+  DICTATION_POLISH_MODE_OPTIONS,
+  isDictationPolishMode,
+  type DictationPolishMode,
+} from "@/lib/ai/dictation-polish"
 import { estimateTokens } from "@/lib/ai/token-counter"
 import { useTranslations } from 'next-intl'
 import { useLocalStorage } from 'react-use';
 import { ChatModeSelect } from "./chat-mode-select"
 import { getWorkspacePath } from "@/lib/workspace"
 import { ChatSend } from "./chat-send"
-import { SkillsPopover } from "./skills-popover"
 import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFolder } from "@/lib/files"
-import { McpButton } from "./mcp-button"
-import { RagSwitch } from "./rag-switch"
-import { ClipboardMonitor } from "./clipboard-monitor"
 import emitter from "@/lib/emitter"
-import { ChatToolsDrawer } from "@/app/mobile/chat/components/chat-tools-drawer"
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { ImageAttachment } from "./image-attachments"
-import { ChevronRight, GlobeIcon, ImageIcon, Loader2, MousePointer2, QuoteIcon, WandSparkles } from "lucide-react"
+import { Check, ChevronDown, GlobeIcon, Loader2, Mic, MousePointer2, Square, WandSparkles } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
-import { isMobileDevice } from '@/lib/check'
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import type { PendingQuote } from "@/stores/chat"
 import { convertFileSrc } from "@tauri-apps/api/core"
 import { readTextFile, writeFile, BaseDirectory, exists } from "@tauri-apps/plugin-fs"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ShineBorder } from "@/components/ui/shine-border"
 import { toast } from "@/hooks/use-toast"
+import { AgentStatusBar } from "./agent-status-bar"
+import { ChatInputContext } from "./chat-input-context"
+import { ChatContextRing } from "./chat-token-display"
+import { ChatInputAddMenu } from "./chat-input-add-menu"
 import {
-  getNoteGenFilePointerDragDetail,
+  getLingMoFilePointerDragDetail,
   isPointInsideElement,
-  NOTE_GEN_FILE_POINTER_DRAG_EVENT,
-  type NoteGenFilePointerDragDetail,
+  LINGMO_FILE_POINTER_DRAG_EVENT,
+  type LingMoFilePointerDragDetail,
 } from "@/lib/file-pointer-drag"
-import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragEndEvent,
-} from '@dnd-kit/core'
-import {
-  arrayMove,
-  SortableContext,
-  horizontalListSortingStrategy,
-  useSortable,
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 import { buildTypingFrames } from './onboarding-typing'
 import type { AiConfig, ModelConfig } from '@/app/core/setting/config'
 import { AiDocCommandPopover } from './ai-doc-command-popover'
 import { filterAiDocCommands, findAiDocCommand, type AiDocCommandId } from '@/lib/ai-doc-commands'
 import { loadActivityCalendarData, loadCachedActivityCalendarData } from '@/lib/activity'
 import { createActivityReviewNote } from '@/lib/activity/review-note'
+
+import { FileAutocompletePopover, type FileAutocompleteItem } from './file-autocomplete-popover'
+import type { DirTree } from '@/stores/article'
+import { useChatDictation } from './use-chat-dictation'
+import type { QuickPrompt } from '@/lib/ai/placeholder'
+
+function flattenFileTree(tree: DirTree[]): FileAutocompleteItem[] {
+  const list: FileAutocompleteItem[] = []
+  const traverse = (items: DirTree[], curFolder = '') => {
+    for (const item of items) {
+      const itemRelPath = curFolder ? `${curFolder}/${item.name}` : item.name
+      if (item.isFile) {
+        list.push({
+          name: item.name,
+          path: item.name,
+          relativePath: itemRelPath
+        })
+      } else if (item.isDirectory && item.children) {
+        traverse(item.children, itemRelPath)
+      }
+    }
+  }
+  traverse(tree)
+  return list
+}
+
+const SENSITIVE_KEYWORDS = [
+  '修改代码', '修改文件', '编辑文件', '编辑代码', '替换文件',
+  '新建文件', '创建文件', '写入文件', '删除文件', '执行指令',
+  '运行命令', '跑命令', '跑指令', '新建文件夹', '创建文件夹',
+  'replace_file_content', 'write_to_file', 'create_file', 'modify_file'
+]
+
+const CHAT_DICTATION_POLISH_MODE_STORAGE_KEY = 'chat-dictation-polish-mode'
+
+function isSensitiveInstruction(val: string): boolean {
+  const normalized = val.toLowerCase()
+  return SENSITIVE_KEYWORDS.some(k => normalized.includes(k))
+}
 
 const IMAGE_CAPABLE_MODEL_PATTERNS = [
   /vlm/i,
@@ -134,110 +168,6 @@ function supportsImageInputForModel(aiModelList: AiConfig[], primaryModel: strin
   return IMAGE_CAPABLE_MODEL_PATTERNS.some(pattern => pattern.test(capabilityText))
 }
 
-// Memoize toolbar item rendering to reduce ChatInput re-renders caused by prop churn.
-interface SortableToolbarItemProps {
-  id: string
-  loading: boolean
-  enhancingPrompt: boolean
-  webSearchEnabled: boolean
-  onEnhancePrompt: () => void
-  onToggleWebSearch: () => void
-}
-
-const SortableToolbarItem = React.memo(function SortableToolbarItem({
-  id,
-  loading,
-  enhancingPrompt,
-  webSearchEnabled,
-  onEnhancePrompt,
-  onToggleWebSearch,
-}: SortableToolbarItemProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id })
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  }
-
-  // Render the configured toolbar item by id.
-  const renderToolbarItem = () => {
-    switch (id) {
-      case 'chatModeSelect':
-        return <ChatModeSelect />
-      case 'mcpButton':
-        return <McpButton />
-      case 'ragSwitch':
-        return <RagSwitch />
-      case 'clipboardMonitor':
-        return <ClipboardMonitor />
-      case 'skillsPopover':
-        return <SkillsPopover />
-      case 'promptEnhancer':
-        return (
-          <TooltipButton
-            variant={enhancingPrompt ? "secondary" : "ghost"}
-            size="icon"
-            icon={enhancingPrompt ? <Loader2 className="size-4 animate-spin" /> : <WandSparkles className="size-4" />}
-            tooltipText={enhancingPrompt ? '正在增强提示词...' : '增强提示词'}
-            onClick={onEnhancePrompt}
-            disabled={loading || enhancingPrompt}
-            buttonClassName={enhancingPrompt ? 'bg-primary/10 text-primary' : undefined}
-          />
-        )
-      case 'webSearch':
-        return (
-          <TooltipButton
-            variant={webSearchEnabled ? "secondary" : "ghost"}
-            size="icon"
-            icon={<GlobeIcon className={webSearchEnabled ? "size-4 text-primary" : "size-4"} />}
-            tooltipText={webSearchEnabled ? '已启用 Web 搜索（Tavily）' : '启用 Web 搜索（Tavily）'}
-            onClick={onToggleWebSearch}
-            disabled={loading}
-            buttonClassName={webSearchEnabled ? 'bg-primary/10 text-primary hover:bg-primary/15' : undefined}
-          />
-        )
-      default:
-        return null
-    }
-  }
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
-      className="shrink-0 cursor-grab active:cursor-grabbing"
-    >
-      {renderToolbarItem()}
-    </div>
-  )
-})
-SortableToolbarItem.displayName = 'SortableToolbarItem'
-
-const REQUIRED_CHAT_TOOLBAR_ITEMS = [
-  'chatModeSelect',
-  'promptEnhancer',
-  'mcpButton',
-  'ragSwitch',
-  'clipboardMonitor',
-  'skillsPopover',
-  'webSearch',
-  'newChat',
-]
-
-const CHAT_TOOLBAR_ORDER: Record<string, number> = {
-  chatModeSelect: 0,
-}
-
 type ResourceContextOrigin = 'auto' | 'manual' | 'diagram'
 type ResourceContentMode = 'active-editor' | 'full-file' | 'folder-rag' | 'pdf-active' | 'pdf-pending' | 'diagram-file'
 
@@ -260,8 +190,7 @@ export const ChatInput = React.memo(function ChatInput() {
   const {
     primaryModel,
     aiModelList,
-    chatToolbarConfigPc,
-    setChatToolbarConfigPc,
+    sttModel,
     tavilyApiKey,
     webSearchEnabled,
     setWebSearchEnabled,
@@ -271,6 +200,7 @@ export const ChatInput = React.memo(function ChatInput() {
     loading,
     researchRunning,
     chatMode,
+    setChatMode,
     setLinkedResources: setChatLinkedResources,
     clearLinkedResources: clearChatLinkedResources,
     setLinkedResourcePreview,
@@ -282,12 +212,33 @@ export const ChatInput = React.memo(function ChatInput() {
     startNewConversation,
   } = useChatStore()
   const { marks, trashState } = useMarkStore()
-  const { activeFilePath, currentArticle, loadFileTree } = useArticleStore()
+  const { activeFilePath, currentArticle, loadFileTree, fileTree } = useArticleStore()
+
+  // 行内文件联想输入状态
+  const [atSelectedIndex, setAtSelectedIndex] = useState(0)
+  const flattenedFiles = useMemo(() => flattenFileTree(fileTree), [fileTree])
+  const atQuery = useMemo(() => {
+    const match = text.match(/@([^\s@]*)$/)
+    if (!match) return null
+    if (text.includes('\n')) return null
+    return match[1]
+  }, [text])
+  const atOpen = atQuery !== null
+
+  // 敏感指令意图预检 Banner 状态
+  const [showSuggestAgentBanner, setShowSuggestAgentBanner] = useState(false)
+  useEffect(() => {
+    if (chatMode !== 'chat') {
+      setShowSuggestAgentBanner(false)
+    }
+  }, [chatMode])
+
   const { isRagEnabled } = useVectorStore()
   const { skills, enabled: skillsEnabled } = useSkillsStore()
   const [isComposing, setIsComposing] = useState(false)
   const [enhancingPrompt, setEnhancingPrompt] = useState(false)
   const [placeholder, setPlaceholder] = useState('')
+  const [aiQuickPrompts, setAiQuickPrompts] = useState<QuickPrompt[]>([])
   const isResearchActive = researchRunning || (loading && chatMode === 'research')
   const effectivePlaceholder = isResearchActive
     ? '深度研究运行中，预计 3-6 分钟完成。你可以点击停止按钮中断。'
@@ -296,9 +247,11 @@ export const ChatInput = React.memo(function ChatInput() {
   // 斜杠命令面板状态
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   const slashCommandsCountRef = useRef(0)
+  const selectedSlashCommandRef = useRef<{ display: string; instruction: string; maxTokens?: number; temperature?: number } | null>(null)
 
   // 当输入以 / 开头时显示命令面板
   const slashQuery = useMemo(() => {
+    if (selectedSlashCommandRef.current?.display === text) return null
     if (!text.startsWith('/')) return null
     // 不允许跨行的命令查询；包含空格仍允许（用于模糊搜索）
     if (text.includes('\n')) return null
@@ -318,9 +271,6 @@ export const ChatInput = React.memo(function ChatInput() {
       return Math.min(prev, slashFilteredCommands.length - 1)
     })
   }, [slashFilteredCommands])
-
-  // 待发送的斜杠命令：display 是输入框中显示的命令名，instruction 是真正发给 LLM 的完整提示词
-  const pendingSendRef = useRef<{ display: string; instruction: string; maxTokens?: number; temperature?: number } | null>(null)
 
   const executeAiDocCommand = useCallback(async (commandId: AiDocCommandId) => {
     const command = findAiDocCommand(commandId)
@@ -346,7 +296,7 @@ export const ChatInput = React.memo(function ChatInput() {
     }
 
     // 知识管理类命令不需要活动数据，直接执行
-    const knowledgeCommands = new Set(['discover-connections', 'generate-flashcards', 'feynman-socratic', 'note-summary', 'note-to-mindmap', 'auto-wikilink'])
+    const knowledgeCommands = new Set(['discover-connections', 'generate-flashcards', 'feynman-socratic', 'note-summary', 'note-to-mindmap', 'note-to-visual-report', 'note-to-deck-brief', 'note-to-poster-card', 'auto-wikilink'])
     let data: any = null
 
     if (!knowledgeCommands.has(commandId)) {
@@ -397,21 +347,20 @@ export const ChatInput = React.memo(function ChatInput() {
     const displayLabel = `/${command.title}`
     const commandInstruction = `你正在执行一个应用内命令：${displayLabel}。
 这是明确的操作任务，不要先解释概念，不要做泛化介绍，必须直接按命令目标执行工具。
+如果上下文中已经包含“当前打开的笔记”“关联文件内容”或“用户引用内容”，必须优先直接基于这些内容完成任务，不要再要求用户粘贴原文。
 
 ${exec.prompt}`
-    pendingSendRef.current = { display: displayLabel, instruction: commandInstruction, maxTokens: exec.maxTokens, temperature: exec.temperature }
+    selectedSlashCommandRef.current = {
+      display: displayLabel,
+      instruction: commandInstruction,
+      maxTokens: exec.maxTokens,
+      temperature: exec.temperature,
+    }
     setText(displayLabel)
-  }, [chatMode, loadFileTree])
-
-  // 当显示文本已同步到 input 后，使用 instruction override 触发发送
-  useEffect(() => {
-    const pending = pendingSendRef.current
-    if (!pending) return
-    if (text !== pending.display) return
-    pendingSendRef.current = null
-    const timer = window.setTimeout(() => {
+    window.setTimeout(() => {
       try {
-        chatSendRef.current?.sendChat(pending.instruction, { maxTokens: pending.maxTokens, temperature: pending.temperature })
+        chatSendRef.current?.sendChat(commandInstruction, { maxTokens: exec.maxTokens, temperature: exec.temperature })
+        selectedSlashCommandRef.current = null
       } catch (error) {
         toast({
           title: '发送失败',
@@ -419,11 +368,17 @@ ${exec.prompt}`
           variant: 'destructive',
         })
       }
-    }, 30)
-    return () => window.clearTimeout(timer)
-  }, [text])
+    }, 0)
+  }, [chatMode, loadFileTree])
   const t = useTranslations()
   const [inputHistory, setInputHistory] = useLocalStorage<string[]>('chat-input-history', [])
+  const [dictationPolishModeValue, setDictationPolishModeValue] = useLocalStorage<string>(
+    CHAT_DICTATION_POLISH_MODE_STORAGE_KEY,
+    'raw'
+  )
+  const dictationPolishMode: DictationPolishMode = isDictationPolishMode(dictationPolishModeValue)
+    ? dictationPolishModeValue
+    : 'raw'
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [tempInput, setTempInput] = useState('')
   const [linkedResources, setLinkedResources] = useState<LinkedResource[]>([])
@@ -441,7 +396,7 @@ ${exec.prompt}`
   const inputDropZoneRef = useRef<HTMLDivElement>(null)
   const placeholderTimerRef = useRef<NodeJS.Timeout | null>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
-  const isMobileDevice_ = isMobileDevice()
+  const isMobileDevice_ = isMobile
   const onboardingAgentPromptArmedRef = useRef(false)
   const onboardingTypingTimerRefs = useRef<number[]>([])
   const linkedResourcesRef = useRef<LinkedResource[]>([])
@@ -453,19 +408,66 @@ ${exec.prompt}`
     [aiModelList, primaryModel]
   )
 
-  const applyTypedText = useCallback((value: string) => {
-    setText(value)
-
+  const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current
     if (!textarea) {
       return
     }
-    window.requestAnimationFrame(() => {
-      textarea.style.height = 'auto'
-      const newHeight = Math.min(textarea.scrollHeight, 240)
-      textarea.style.height = `${newHeight}px`
-    })
+
+    textarea.style.height = 'auto'
+    const newHeight = Math.min(textarea.scrollHeight, 240)
+    textarea.style.height = `${newHeight}px`
   }, [])
+
+  const applyTypedText = useCallback((value: string) => {
+    setText(value)
+
+    window.requestAnimationFrame(() => {
+      resizeTextarea()
+    })
+  }, [resizeTextarea])
+
+  const insertTextAtCursor = useCallback((insertedText: string) => {
+    const normalizedText = insertedText.trim()
+    if (!normalizedText) {
+      return
+    }
+
+    const textarea = textareaRef.current
+    const currentValue = textarea?.value ?? text
+    const start = textarea?.selectionStart ?? currentValue.length
+    const end = textarea?.selectionEnd ?? currentValue.length
+    let nextCursor = start + normalizedText.length
+
+    setText(() => {
+      const prefix = currentValue.slice(0, start)
+      const suffix = currentValue.slice(end)
+      const needsLeadingSpace = prefix.length > 0 && !/\s$/.test(prefix)
+      const needsTrailingSpace = suffix.length > 0 && !/^\s/.test(suffix)
+      nextCursor = start + (needsLeadingSpace ? 1 : 0) + normalizedText.length
+
+      return [
+        prefix,
+        needsLeadingSpace ? ' ' : '',
+        normalizedText,
+        needsTrailingSpace ? ' ' : '',
+        suffix,
+      ].join('')
+    })
+
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
+      resizeTextarea()
+    })
+  }, [resizeTextarea, text])
+
+  const dictation = useChatDictation({
+    blocked: isResearchActive || loading,
+    sttModel,
+    polishMode: dictationPolishMode,
+    onTranscript: insertTextAtCursor,
+  })
 
   const ensureImageInputSupported = useCallback(() => {
     if (currentModelSupportsImages) {
@@ -622,6 +624,23 @@ ${exec.prompt}`
     }, 30)
   }, [applyTypedText, clearLinkedFiles, loading, setPendingQuote, startNewConversation])
 
+  const handleQuickPromptSend = useCallback(async (prompt: string) => {
+    if (!prompt.trim()) return
+
+    clearAllContexts()
+    setPendingQuote(null)
+
+    if (chatMode !== 'agent') {
+      await setChatMode('agent')
+    }
+
+    applyTypedText(prompt)
+
+    window.setTimeout(() => {
+      chatSendRef.current?.sendChat()
+    }, 30)
+  }, [applyTypedText, chatMode, clearAllContexts, setChatMode, setPendingQuote])
+
   useEffect(() => {
     const handleResend = (detail: unknown) => {
       const payload = detail as {
@@ -646,14 +665,36 @@ ${exec.prompt}`
     }
   }, [sendPresetMessage])
 
-  // 拖拽排序传感器
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    })
-  )
+  useEffect(() => {
+    const handleAttachImage = (detail: unknown) => {
+      const payload = detail as ImageAttachment & { prompt?: string }
+      if (!payload?.url) return
+
+      if (!ensureImageInputSupported()) {
+        return
+      }
+
+      setAttachedImages(prev => [
+        ...prev,
+        {
+          id: payload.id || `workspace-image-${Date.now()}-${Math.random()}`,
+          url: payload.url,
+          name: payload.name,
+          source: payload.source || 'file',
+        },
+      ])
+      setIsContextExpanded(true)
+
+      if (payload.prompt) {
+        applyTypedText(payload.prompt)
+      }
+    }
+
+    emitter.on('chat-attach-image', handleAttachImage)
+    return () => {
+      emitter.off('chat-attach-image', handleAttachImage)
+    }
+  }, [applyTypedText, ensureImageInputSupported])
 
   // 输入历史（最多保留 50 条，自动去重）
   function addToHistory(input: string) {
@@ -691,19 +732,6 @@ ${exec.prompt}`
       setText(inputHistory[newIndex])
     }
   }
-
-  const handleLinkedTagsWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
-    const container = event.currentTarget
-    const canScrollX = container.scrollWidth > container.clientWidth
-    if (!canScrollX) {
-      return
-    }
-
-    if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
-      event.preventDefault()
-      container.scrollLeft += event.deltaY
-    }
-  }, [])
 
   function handleToggleWebSearch() {
     if (!webSearchEnabled && !tavilyApiKey.trim()) {
@@ -920,6 +948,18 @@ ${exec.prompt}`
     }
   }
 
+  const applyQuickPrompt = useCallback((prompt: string) => {
+    const nextText = prompt.trim()
+    if (!nextText) return
+
+    selectedSlashCommandRef.current = null
+    applyTypedText(nextText)
+    setPlaceholder('')
+    window.setTimeout(() => {
+      textareaRef.current?.focus()
+    }, 50)
+  }, [applyTypedText])
+
   async function genInputPlaceholder() {
     if (!primaryModel) return
     if (trashState) return
@@ -931,7 +971,10 @@ ${exec.prompt}`
 
     const prompts = await fetchAiQuickPrompts(request_content)
     if (prompts.length >= 3) {
+      setAiQuickPrompts(prompts.slice(0, 3))
       emitter.emit('ai-prompts-generated', prompts)
+    } else {
+      setAiQuickPrompts([])
     }
     if (prompts.length >= 4 && prompts[3]?.text) {
       setPlaceholder(prompts[3].text + ' [Tab]')
@@ -951,69 +994,48 @@ ${exec.prompt}`
 
   function insertPlaceholder() {
     if (placeholder.includes('[Tab]')) {
-      setText(placeholder.replace('[Tab]', ''))
+      applyQuickPrompt(placeholder.replace('[Tab]', ''))
       setPlaceholder('')
     }
   }
 
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event
-
-    if (over && active.id !== over.id) {
-      const enabledItems = chatToolbarConfigPc.filter(item => item.enabled)
-      const oldIndex = enabledItems.findIndex((item) => item.id === active.id)
-      const newIndex = enabledItems.findIndex((item) => item.id === over.id)
-
-      const reorderedItems = arrayMove(enabledItems, oldIndex, newIndex)
-      const allItems = [...chatToolbarConfigPc]
-
-      reorderedItems.forEach((item, index) => {
-        const globalIndex = allItems.findIndex(i => i.id === item.id)
-        if (globalIndex !== -1) {
-          allItems[globalIndex] = { ...item, order: enabledItems[0].order + index }
-        }
-      })
-
-      setChatToolbarConfigPc(allItems)
-    }
-  }, [chatToolbarConfigPc, setChatToolbarConfigPc])
-
-  const bottomToolbarItems = useMemo(() => {
-    return chatToolbarConfigPc
-      .filter(item => item.enabled && item.id !== 'newChat' && item.id !== 'modelSelect' && item.id !== 'promptSelect')
-      .sort((a, b) => (CHAT_TOOLBAR_ORDER[a.id] ?? a.order + 10) - (CHAT_TOOLBAR_ORDER[b.id] ?? b.order + 10))
-  }, [chatToolbarConfigPc])
-
   useEffect(() => {
-    const missingIds = REQUIRED_CHAT_TOOLBAR_ITEMS.filter(
-      id => !chatToolbarConfigPc.some(item => item.id === id)
-    )
-
-    if (missingIds.length === 0) {
-      return
-    }
-
-    const maxOrder = Math.max(...chatToolbarConfigPc.map(item => item.order), -1)
-    void setChatToolbarConfigPc([
-      ...chatToolbarConfigPc,
-      ...missingIds.map((id, index) => ({
-        id,
-        enabled: true,
-        order: maxOrder + index + 1,
-      })),
-    ])
-  }, [chatToolbarConfigPc, setChatToolbarConfigPc])
-
-  useEffect(() => {
-    // Generate AI placeholder suggestions when marks are available.
-    if (marks.length > 0) {
+    // Generate AI placeholder suggestions when there is useful chat context.
+    if (chats.length > 0 || marks.length > 0) {
       genInputPlaceholder()
     } else {
+      setAiQuickPrompts([])
       setPlaceholder(t('record.chat.input.placeholder.default'))
     }
-  }, [primaryModel, marks, t])
+  }, [primaryModel, marks, chats, trashState, t])
 
   useEffect(() => {
+    const handleGithubStarSendToChat = (event: unknown) => {
+      const data = event as { prompt?: string; quoteData?: PendingQuote }
+      if (!data?.quoteData) return
+
+      setPendingQuote(data.quoteData)
+      setIsContextExpanded(true)
+      setContextPanelExpandedPref(true)
+      if (data.prompt) {
+        applyTypedText(data.prompt)
+      }
+      setTimeout(() => {
+        textareaRef.current?.focus()
+      }, 50)
+      debouncedGenPlaceholder()
+    }
+    const handleAiPlaceholderGenerated = (event: unknown) => {
+      const promptText = event as string
+      if (promptText) {
+        setPlaceholder(promptText)
+      }
+    }
+    const handleAiPromptsGenerated = (event: unknown) => {
+      const prompts = Array.isArray(event) ? event as QuickPrompt[] : []
+      setAiQuickPrompts(prompts.slice(0, 3))
+    }
+
     emitter.on('revertChat', (event: unknown) => {
       setText(event as string)
     })
@@ -1037,16 +1059,11 @@ ${exec.prompt}`
       void attachResourceWithContextRef.current?.(event as MarkdownFile, 'diagram')
       textareaRef.current?.focus()
     })
-    emitter.on('quick-prompt-insert', (prompt: string) => {
-      setText(prompt)
-      textareaRef.current?.focus()
-    })
-    emitter.on('ai-placeholder-generated', (event: unknown) => {
-      const promptText = event as string
-      if (promptText) {
-        setPlaceholder(promptText)
-      }
-    })
+    emitter.on('quick-prompt-insert', applyQuickPrompt)
+    emitter.on('quick-prompt-send', handleQuickPromptSend)
+    emitter.on('ai-placeholder-generated', handleAiPlaceholderGenerated)
+    emitter.on('ai-prompts-generated', handleAiPromptsGenerated)
+    emitter.on('github-stars-send-to-chat', handleGithubStarSendToChat)
     return () => {
       onboardingTypingTimerRefs.current.forEach((timerId) => window.clearTimeout(timerId))
       onboardingTypingTimerRefs.current = []
@@ -1056,9 +1073,12 @@ ${exec.prompt}`
       emitter.off('insert-quote')
       emitter.off('diagramSelected')
       emitter.off('quick-prompt-insert')
-      emitter.off('ai-placeholder-generated')
+      emitter.off('quick-prompt-send')
+      emitter.off('ai-placeholder-generated', handleAiPlaceholderGenerated)
+      emitter.off('ai-prompts-generated', handleAiPromptsGenerated)
+      emitter.off('github-stars-send-to-chat', handleGithubStarSendToChat)
     }
-  }, [debouncedGenPlaceholder, setPendingQuote])
+  }, [applyQuickPrompt, applyTypedText, debouncedGenPlaceholder, handleQuickPromptSend, setContextPanelExpandedPref, setPendingQuote])
 
   useEffect(() => {
     if (!onboardingPromptDraft) {
@@ -1227,7 +1247,7 @@ ${exec.prompt}`
     attachResourceWithContextRef.current = attachResourceWithContext
   }, [attachResourceWithContext])
 
-  const attachDraggedResourceToChat = useCallback(async (detail: NoteGenFilePointerDragDetail) => {
+  const attachDraggedResourceToChat = useCallback(async (detail: LingMoFilePointerDragDetail) => {
     if (!detail.path || detail.isDirectory) return
 
     const relativePath = detail.path
@@ -1247,7 +1267,7 @@ ${exec.prompt}`
 
   useEffect(() => {
     function handleFilePointerDrag(event: Event) {
-      const detail = getNoteGenFilePointerDragDetail(event)
+      const detail = getLingMoFilePointerDragDetail(event)
       if (!detail?.path || detail.isDirectory) return
 
       const overInput = isPointInsideElement(inputDropZoneRef.current, detail.x, detail.y)
@@ -1266,10 +1286,10 @@ ${exec.prompt}`
       }
     }
 
-    window.addEventListener(NOTE_GEN_FILE_POINTER_DRAG_EVENT, handleFilePointerDrag)
+    window.addEventListener(LINGMO_FILE_POINTER_DRAG_EVENT, handleFilePointerDrag)
 
     return () => {
-      window.removeEventListener(NOTE_GEN_FILE_POINTER_DRAG_EVENT, handleFilePointerDrag)
+      window.removeEventListener(LINGMO_FILE_POINTER_DRAG_EVENT, handleFilePointerDrag)
       setIsFilePointerDragging(false)
       setIsFilePointerOverInput(false)
     }
@@ -1397,30 +1417,49 @@ ${exec.prompt}`
     }
   }, [contextPanelExpandedPref])
 
-  const contextSummary = useMemo(() => {
-    const firstLinked = linkedResources[0]
-    const linkedCount = linkedResources.length
-    const firstLabel = firstLinked
-      ? (() => {
-          const firstLinkedLabel = firstLinked.relativePath || firstLinked.name || getLinkedResourceKey(firstLinked)
-          if (linkedCount > 1) {
-            return `@${firstLinkedLabel}（共 ${linkedCount} 个文件）`
-          }
-          return `@${firstLinkedLabel}`
-        })()
-      : pendingQuote
-        ? pendingQuote.fileName
-        : attachedImages.length > 0
-          ? '图片附件'
-          : ''
+  const currentModelContextKey = useMemo(() => {
+    const resolved = resolvePrimaryChatModel(aiModelList, primaryModel)
+    return [
+      primaryModel,
+      resolved?.model?.model,
+      resolved?.config.model,
+      resolved?.config.title,
+    ].filter(Boolean).join(' ')
+  }, [aiModelList, primaryModel])
 
-    return {
-      firstLabel,
-    }
-  }, [attachedImages.length, getLinkedResourceKey, linkedResources, pendingQuote])
+  const currentModelContextWindow = useMemo(() => {
+    const resolved = resolvePrimaryChatModel(aiModelList, primaryModel)
+    return resolved?.model?.contextWindow || resolved?.config.contextWindow
+  }, [aiModelList, primaryModel])
 
   return (
-    <footer id="onboarding-target-chat-input" className="flex flex-col w-full p-1 justify-between items-center">
+    <footer id="onboarding-target-chat-input" className="relative z-20 flex w-full shrink-0 flex-col justify-between bg-background px-2 pb-2">
+      {/* 敏感指令智能路由提示 Banner */}
+      {showSuggestAgentBanner && (
+        <div className="mb-2 w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg border border-primary/20 bg-primary/5 text-xs text-foreground animate-in slide-in-from-top-1 duration-200">
+          <div className="flex items-center gap-1.5">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+            </span>
+            <span>检测到编辑修改操作，建议切换到 <strong>Agent 模式</strong> 以自动运行本地工具</span>
+          </div>
+          <button
+            type="button"
+            className="shrink-0 font-semibold text-primary hover:underline"
+            onClick={async () => {
+              await setChatMode('agent')
+              setShowSuggestAgentBanner(false)
+            }}
+          >
+            一键切换
+          </button>
+        </div>
+      )}
+
+      {/* Agent 状态栏 - 只在 Agent 模式下显示 */}
+      {chatMode === 'agent' && <AgentStatusBar />}
+
       {/* Hidden image input for mobile selection */}
       {isMobileDevice_ && (
         <input
@@ -1432,79 +1471,31 @@ ${exec.prompt}`
           className="hidden"
         />
       )}
-                  {hasContext && (
-        <Collapsible
-          open={isContextExpanded}
-          onOpenChange={(next) => {
-            setIsContextExpanded(next)
-            setContextPanelExpandedPref(next)
-          }}
-          className="mb-1 w-full overflow-hidden rounded-md border border-border/45 bg-muted/5"
+      {/* 上下文面板 */}
+      <ChatInputContext
+        hasContext={hasContext}
+        isExpanded={isContextExpanded}
+        onToggleExpand={() => {
+          setIsContextExpanded(!isContextExpanded)
+          setContextPanelExpandedPref(!isContextExpanded)
+        }}
+        pendingQuote={pendingQuote}
+        onClearQuote={clearPendingQuote}
+        linkedResources={linkedResources}
+        onRemoveResource={(key) => removeLinkedResourceByKey(key)}
+        onClearAllResources={clearLinkedFiles}
+        attachedImages={attachedImages}
+        onRemoveImage={(id) => setAttachedImages(prev => prev.filter(img => img.id !== id))}
+        onClearAllImages={() => setAttachedImages([])}
+        onClearAllContexts={clearAllContexts}
+      />
+
+      {/* 输入框容器 - 相对定位，用于放置 Token 气泡 */}
+      <div className="relative">
+        <div
+          ref={inputDropZoneRef}
+          className={`group relative z-10 flex w-full flex-col gap-1 overflow-hidden rounded-xl border border-border/80 bg-background p-1 transition-colors focus-within:border-primary ${isFilePointerOverInput ? 'border-primary bg-primary/5 shadow-[0_0_0_1px_hsl(var(--primary)/0.25)]' : ''}`}
         >
-          <div className="flex items-center justify-between gap-1.5 px-2 py-1">
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center gap-1 text-left"
-              >
-                <ChevronRight className={`size-3 shrink-0 text-muted-foreground transition-transform ${isContextExpanded ? 'rotate-90' : ''}`} />
-                <span className="truncate text-[11px] font-medium text-foreground/90">
-                  {contextSummary.firstLabel || '上下文'}
-                </span>
-              </button>
-            </CollapsibleTrigger>
-            <button
-              type="button"
-              className="shrink-0 text-[10px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-              onClick={clearAllContexts}
-            >
-              清空
-            </button>
-          </div>
-          <CollapsibleContent className="border-t border-border/45 px-2 pb-1 pt-1">
-            <div className="flex min-w-0 items-center gap-1">
-              {linkedResources.length > 0 && (
-                <div
-                  className="min-w-0 flex-1 overflow-x-auto scrollbar-hide"
-                  onWheel={handleLinkedTagsWheel}
-                >
-                  <div className="flex min-w-max items-center gap-1">
-                    {linkedResources.map((resource) => {
-                      const key = getLinkedResourceKey(resource)
-                      const label = resource.relativePath || resource.name || key
-                      return (
-                        <span
-                          key={key}
-                          className="inline-flex h-5 max-w-[140px] items-center rounded-md border border-border/55 bg-background/80 px-1.5 text-[10px] text-muted-foreground"
-                          title={`@${label}`}
-                        >
-                          <span className="truncate">@{label}</span>
-                        </span>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-              {pendingQuote && (
-                <span className="inline-flex h-5 items-center gap-1 rounded-md border border-border/55 bg-background/80 px-1.5 text-[10px] text-muted-foreground">
-                  <QuoteIcon className="size-2.5" />
-                  已附加引用
-                </span>
-              )}
-              {attachedImages.length > 0 && (
-                <span className="inline-flex h-5 items-center gap-1 rounded-md border border-border/55 bg-background/80 px-1.5 text-[10px] text-muted-foreground">
-                  <ImageIcon className="size-2.5" />
-                  已附加图片
-                </span>
-              )}
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
-      )}
-      <div
-        ref={inputDropZoneRef}
-        className={`group relative z-10 flex w-full flex-col gap-1 overflow-hidden rounded-xl border border-border/80 bg-background p-1 transition-colors focus-within:border-primary ${isFilePointerOverInput ? 'border-primary bg-primary/5 shadow-[0_0_0_1px_hsl(var(--primary)/0.25)]' : ''}`}
-      >
         {isFilePointerDragging ? (
           <div
             className={`pointer-events-none absolute right-3 top-2 z-20 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${isFilePointerOverInput ? 'border-primary bg-primary text-primary-foreground' : 'border-border/70 bg-background/95 text-muted-foreground'}`}
@@ -1520,6 +1511,20 @@ ${exec.prompt}`
             shineColor={["#5B8DEF", "#7DD3FC", "#34D399"]}
           />
         )}
+        {aiQuickPrompts.length > 0 && !text.trim() && !isResearchActive ? (
+          <div className="flex w-full min-w-0 gap-1 overflow-x-auto px-1 pb-0.5">
+            {aiQuickPrompts.map((prompt) => (
+              <button
+                key={prompt.id}
+                type="button"
+                className="inline-flex h-7 shrink-0 items-center rounded-md border border-border/70 bg-muted/35 px-2.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+                onClick={() => applyQuickPrompt(prompt.text)}
+              >
+                <span className="max-w-[12rem] truncate">{prompt.text}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="relative w-full flex items-start">
           <AiDocCommandPopover
             open={slashOpen}
@@ -1529,14 +1534,44 @@ ${exec.prompt}`
             onSelect={(commandId) => void executeAiDocCommand(commandId)}
             anchorRef={textareaRef}
           />
+          <FileAutocompletePopover
+            open={atOpen}
+            query={atQuery || ''}
+            selectedIndex={atSelectedIndex}
+            onSelectionChange={setAtSelectedIndex}
+            onSelect={(item) => {
+              void (async () => {
+                const workspace = await getWorkspacePath()
+                await attachResourceWithContext({
+                  name: item.name,
+                  path: workspace.isCustom ? `${workspace.path}/${item.relativePath}` : item.relativePath,
+                  relativePath: item.relativePath
+                }, 'manual')
+                setText(prev => prev.replace(/@([^\s@]*)$/, ''))
+                setIsContextExpanded(true)
+                setTimeout(() => textareaRef.current?.focus(), 50)
+              })()
+            }}
+            files={flattenedFiles}
+            anchorRef={textareaRef}
+          />
           <Textarea
             ref={textareaRef}
-            className="flex-1 p-2 relative border-none text-xs placeholder:text-sm md:placeholder:text-sm md:text-sm focus-visible:ring-0 shadow-none min-h-[36px] max-h-[240px] resize-none overflow-y-auto"
+            className="flex-1 p-2 relative border-none text-xs placeholder:text-sm md:placeholder:text-sm md:text-sm focus-visible:ring-1 focus-visible:ring-ring/30 shadow-none min-h-[36px] max-h-[240px] resize-none overflow-y-auto"
             rows={1}
             disabled={!primaryModel || isResearchActive}
             value={text}
             onChange={(e) => {
-              setText(e.target.value)
+              const val = e.target.value
+              if (selectedSlashCommandRef.current?.display !== val) {
+                selectedSlashCommandRef.current = null
+              }
+              setText(val)
+              if (chatMode === 'chat' && isSensitiveInstruction(val)) {
+                setShowSuggestAgentBanner(true)
+              } else {
+                setShowSuggestAgentBanner(false)
+              }
               const textarea = e.target
               textarea.style.height = 'auto'
               const newHeight = Math.min(textarea.scrollHeight, 240)
@@ -1548,6 +1583,78 @@ ${exec.prompt}`
               const cursorPosition = textarea.selectionStart
               const isAtStart = cursorPosition === 0
               const isAtEnd = cursorPosition === text.length
+
+              // @ 文件联想面板按键拦截
+              if (atOpen && !isComposing) {
+                const filteredCount = flattenedFiles.filter(
+                  file => file.name.toLowerCase().includes((atQuery || '').toLowerCase()) ||
+                          file.relativePath.toLowerCase().includes((atQuery || '').toLowerCase())
+                ).slice(0, 8).length
+
+                if (e.key === 'ArrowDown') {
+                  if (filteredCount > 0) {
+                    e.preventDefault()
+                    setAtSelectedIndex((prev) => (prev + 1) % filteredCount)
+                    return
+                  }
+                }
+                if (e.key === 'ArrowUp') {
+                  if (filteredCount > 0) {
+                    e.preventDefault()
+                    setAtSelectedIndex((prev) =>
+                      prev <= 0 ? filteredCount - 1 : prev - 1,
+                    )
+                    return
+                  }
+                }
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  const filtered = flattenedFiles.filter(
+                    file => file.name.toLowerCase().includes((atQuery || '').toLowerCase()) ||
+                            file.relativePath.toLowerCase().includes((atQuery || '').toLowerCase())
+                  ).slice(0, 8)
+
+                  if (filtered.length > 0) {
+                    e.preventDefault()
+                    const target = filtered[Math.min(atSelectedIndex, filtered.length - 1)]
+
+                    void (async () => {
+                      const workspace = await getWorkspacePath()
+                      await attachResourceWithContext({
+                        name: target.name,
+                        path: workspace.isCustom ? `${workspace.path}/${target.relativePath}` : target.relativePath,
+                        relativePath: target.relativePath
+                      }, 'manual')
+
+                      setText(prev => prev.replace(/@([^\s@]*)$/, ''))
+                      setIsContextExpanded(true)
+                      setTimeout(() => textareaRef.current?.focus(), 50)
+                    })()
+                    return
+                  }
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setText(prev => prev.replace(/@([^\s@]*)$/, ''))
+                  return
+                }
+              }
+
+              const selectedSlashCommand = selectedSlashCommandRef.current
+              if (
+                selectedSlashCommand &&
+                selectedSlashCommand.display === text &&
+                e.key === 'Enter' &&
+                !isComposing &&
+                !e.shiftKey
+              ) {
+                e.preventDefault()
+                chatSendRef.current?.sendChat(selectedSlashCommand.instruction, {
+                  maxTokens: selectedSlashCommand.maxTokens,
+                  temperature: selectedSlashCommand.temperature,
+                })
+                selectedSlashCommandRef.current = null
+                return
+              }
 
               // 斜杠命令面板按键拦截
               if (slashOpen && !isComposing) {
@@ -1584,9 +1691,18 @@ ${exec.prompt}`
 
               if (e.key === "Enter" && !isComposing && !e.shiftKey && e.keyCode === 13) {
                 e.preventDefault()
+                if (dictation.isActive) {
+                  return
+                }
+                selectedSlashCommandRef.current = null
                 chatSendRef.current?.sendChat()
               }
-              if (e.key === "Tab") {
+              if (e.key === "Escape" && dictation.isActive) {
+                e.preventDefault()
+                dictation.cancel()
+                return
+              }
+              if (e.key === "Tab" && placeholder.includes('[Tab]')) {
                 e.preventDefault()
                 insertPlaceholder()
               }
@@ -1624,71 +1740,122 @@ ${exec.prompt}`
           />
         </div>
         
-        <div className="flex w-full items-center gap-2 overflow-hidden">
-          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg bg-muted/30 px-1 py-0.5">
-            <div className="min-w-0 flex-1">
-              {/* Bottom toolbar */}
-              {!isMobile ? (
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragEnd={handleDragEnd}
-                >
-                  <SortableContext
-                    items={bottomToolbarItems.map(item => item.id)}
-                    strategy={horizontalListSortingStrategy}
-                  >
-                    <div className="flex max-w-full items-center gap-1.5 overflow-x-auto scrollbar-hide">
-                      {bottomToolbarItems.map(item => (
-                        <SortableToolbarItem
-                          key={item.id}
-                          id={item.id}
-                          loading={loading}
-                          enhancingPrompt={enhancingPrompt}
-                          webSearchEnabled={webSearchEnabled}
-                          onEnhancePrompt={handleEnhancePrompt}
-                          onToggleWebSearch={handleToggleWebSearch}
-                        />
-                      ))}
-                    </div>
-                  </SortableContext>
-                </DndContext>
-              ) : (
-                <div className="flex max-w-full items-center gap-1.5 overflow-x-auto scrollbar-hide">
-                  <ChatToolsDrawer />
-                </div>
-              )}
-            </div>
-
+        <div className="flex w-full min-w-0 items-center gap-0.5 overflow-hidden px-0.5 pb-0.5">
+          <div className="flex min-w-0 shrink-0 items-center gap-0.5">
+            <ChatInputAddMenu
+              onSelectImages={isMobile ? handleSelectFromGallery : handleSelectLocalImages}
+              disabled={!primaryModel || isResearchActive}
+            />
+            <TooltipButton
+              variant={webSearchEnabled ? "secondary" : "ghost"}
+              size="icon"
+              icon={<GlobeIcon className={webSearchEnabled ? "size-4 text-primary" : "size-4"} />}
+              tooltipText={webSearchEnabled ? '已启用 Web 搜索（Tavily）' : '启用 Web 搜索（Tavily）'}
+              onClick={handleToggleWebSearch}
+              disabled={loading || isResearchActive}
+              buttonClassName={webSearchEnabled ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/10' : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground'}
+            />
+            <ChatModeSelect variant="compact" />
           </div>
 
-          <div className="h-5 w-px shrink-0 bg-border/70" />
-
-          <div className="flex shrink-0 items-center justify-end gap-1 pr-1">
+          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-0.5 pr-0.5">
+            <ChatContextRing
+              inputText={text}
+              model={currentModelContextKey}
+              contextWindow={currentModelContextWindow}
+              className="h-7 w-7 shrink-0 rounded-md hover:bg-muted/40"
+            />
             <TooltipButton
-              variant="ghost"
+              variant={enhancingPrompt ? "secondary" : "ghost"}
               size="icon"
-              icon={<ImageIcon className="size-4" />}
-              tooltipText={t('record.chat.input.attachImage')}
-              onClick={isMobile ? handleSelectFromGallery : handleSelectLocalImages}
-              disabled={!primaryModel || isResearchActive}
-              buttonClassName="h-8 w-8 rounded-lg"
+              icon={enhancingPrompt ? <Loader2 className="size-4 animate-spin" /> : <WandSparkles className="size-4" />}
+              tooltipText={enhancingPrompt ? '正在增强提示词...' : '增强提示词'}
+              onClick={handleEnhancePrompt}
+              disabled={loading || enhancingPrompt || isResearchActive}
+              buttonClassName={enhancingPrompt ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/10' : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground'}
             />
-            <ChatSend
-              inputValue={text}
-              onSent={handleSent}
-              linkedResource={linkedResources[0] || null}
-              linkedResources={linkedResources}
-              linkedResourcePreviews={linkedResourcePreviews}
-              attachedImages={attachedImages}
-              quoteData={pendingQuote}
-              webSearchEnabled={webSearchEnabled}
-              allowAutoCurrentFileContext={!autoLinkSuppressedRef.current}
-              ref={chatSendRef}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant={dictationPolishMode === 'raw' ? 'ghost' : 'secondary'}
+                  size="sm"
+                  disabled={dictation.isActive || loading || isResearchActive}
+                  className={dictationPolishMode === 'raw'
+                    ? 'h-7 shrink-0 gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground'
+                    : 'h-7 shrink-0 gap-1 rounded-md bg-primary/10 px-2 text-xs text-primary hover:bg-primary/10'
+                  }
+                  aria-label="语音文本整理模式"
+                >
+                  <span>{DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}</span>
+                  <ChevronDown className="size-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" side="top" className="w-32">
+                {DICTATION_POLISH_MODE_OPTIONS.map(option => (
+                  <DropdownMenuItem
+                    key={option.value}
+                    onSelect={() => setDictationPolishModeValue(option.value)}
+                    className="gap-2"
+                  >
+                    <Check className={option.value === dictationPolishMode ? 'size-4 opacity-100' : 'size-4 opacity-0'} />
+                    <span className="text-sm">{option.label}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <TooltipButton
+              variant={dictation.isListening ? "destructive" : dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting" ? "secondary" : "ghost"}
+              size="icon"
+              icon={
+                dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting"
+                  ? <Loader2 className="size-4 animate-spin" />
+                  : dictation.isListening
+                    ? <Square className="size-4" />
+                    : <Mic className="size-4" />
+              }
+              tooltipText={
+                dictation.phase === "transcribing"
+                  ? '正在识别语音...'
+                  : dictation.phase === "polishing"
+                    ? `正在整理语音文本：${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
+                  : dictation.phase === "starting"
+                    ? '正在启动录音...'
+                    : dictation.isListening
+                    ? `停止录音并转文字 ${dictation.formattedDuration}，模式：${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
+                    : dictation.isOtherRecordingActive
+                      ? '当前已有录音任务'
+                      : !sttModel
+                        ? '请先配置语音识别模型'
+                        : `语音输入，整理模式：${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
+              }
+              onClick={dictation.toggle}
+              disabled={!primaryModel || isResearchActive || dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.isOtherRecordingActive || (loading && !dictation.isListening)}
+              buttonClassName={dictation.isListening
+                ? 'h-7 w-7 shrink-0 rounded-md'
+                : dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting"
+                  ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/10'
+                  : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground'
+              }
             />
+            <div className="shrink-0">
+              <ChatSend
+                inputValue={text}
+                onSent={handleSent}
+                linkedResource={linkedResources[0] || null}
+                linkedResources={linkedResources}
+                linkedResourcePreviews={linkedResourcePreviews}
+                attachedImages={attachedImages}
+                quoteData={pendingQuote}
+                webSearchEnabled={webSearchEnabled}
+                allowAutoCurrentFileContext={!autoLinkSuppressedRef.current}
+                hideIdleButton
+                ref={chatSendRef}
+              />
+            </div>
           </div>
         </div>
-
+        </div> {/* 关闭输入框外层容器 */}
       </div>
     </footer>
   )

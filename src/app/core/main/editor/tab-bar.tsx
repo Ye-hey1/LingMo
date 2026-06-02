@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState, useEffect, memo } from 'react'
-import { X, FileText, Folder, Plus, Undo2, Redo2, Network, WalletCards, Brain } from 'lucide-react'
+import { X, FileText, Folder, Plus, Undo2, Redo2, Network, WalletCards, Brain, Code2 } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import emitter from '@/lib/emitter'
@@ -147,6 +147,8 @@ function SortableTabWithMenu({
             <Brain className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
           ) : tab.isFolder ? (
             <Folder className="w-4 h-4 shrink-0 text-amber-500" />
+          ) : /\.(html?)$/i.test(tab.path) ? (
+            <Code2 className={cn('w-4 h-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
           ) : (
             <FileText className={cn('w-4 h-4 shrink-0', isActive ? 'text-primary' : '')} />
           )}

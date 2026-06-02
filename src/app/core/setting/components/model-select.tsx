@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { TooltipButton } from "@/components/tooltip-button"
+import { isOpenLessAsrPresetConfig, isOpenLessAsrPresetReady } from "@/lib/speech/asr-presets"
 
 interface GroupedModel {
   configKey: string
@@ -33,7 +34,19 @@ interface GroupedModel {
 
 export function ModelSelect({modelKey}: {modelKey: string}) {
   const [groupedModels, setGroupedModels] = useState<GroupedModel[]>([])
-  const { setCompletionModel, setMarkDescModel, setPrimaryModel, setImageMethodModel, setAudioModel, setSttModel, setEmbeddingModel, setRerankingModel, setCondenseModel, setInspirationModel } = useSettingStore()
+  const {
+    aiModelList,
+    setCompletionModel,
+    setMarkDescModel,
+    setPrimaryModel,
+    setImageMethodModel,
+    setAudioModel,
+    setSttModel,
+    setEmbeddingModel,
+    setRerankingModel,
+    setCondenseModel,
+    setInspirationModel,
+  } = useSettingStore()
   const [model, setModel] = useState<string>('')
   const [open, setOpen] = React.useState(false)
   const t = useTranslations('settings.defaultModel')
@@ -133,6 +146,10 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
     aiConfigs.forEach(config => {
       // 检查配置是否有效
       if (!config.baseURL) return
+      if (config.enabled === false) return
+      if (targetModelType === 'stt' && isOpenLessAsrPresetConfig(config) && !isOpenLessAsrPresetReady(config)) {
+        return
+      }
       
       // 处理新的 models 数组结构
       if (config.models && config.models.length > 0) {
@@ -246,7 +263,7 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
 
   useEffect(() => {
     initModelList()
-  }, [])
+  }, [aiModelList, modelKey])
   
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -260,7 +277,7 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
               className="w-[280px] justify-between"
             >
               {model
-                ? findSelectedModelDisplay()
+                ? findSelectedModelDisplay() || t('tooltip')
                 : modelKey === 'primaryModel' ? t('noModel') : t('tooltip')}
               <ChevronsUpDown className="opacity-50" />
             </Button>

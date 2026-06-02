@@ -616,7 +616,7 @@ export function BubbleMenu({
     ? createPortal(
       <div
         ref={colorMenuRef}
-        className="fixed z-[2147483647] rounded-lg border border-border bg-background p-3 shadow-xl"
+        className="fixed z-50 rounded-lg border border-border bg-background p-3 shadow-xl"
         style={{
           top: colorMenuPosition.top,
           left: colorMenuPosition.left,
@@ -628,8 +628,8 @@ export function BubbleMenu({
           <>
             <div className="mb-2 whitespace-nowrap text-xs font-medium text-muted-foreground">单元格填充色</div>
             <div
-              className="grid"
-              style={{ gridTemplateColumns: 'repeat(8, 28px)', gap: 6 }}
+              className="grid gap-1.5"
+              style={{ gridTemplateColumns: 'repeat(8, 28px)' }}
             >
               {CELL_FILL_COLOR_SWATCHES.map((color) => (
                 <button
@@ -653,8 +653,8 @@ export function BubbleMenu({
             <div>
               <div className="mb-2 whitespace-nowrap text-xs font-medium text-muted-foreground">{t('bubbleMenu.textColor')}</div>
               <div
-                className="grid"
-                style={{ gridTemplateColumns: 'repeat(8, 28px)', gap: 6 }}
+                className="grid gap-1.5"
+                style={{ gridTemplateColumns: 'repeat(8, 28px)' }}
               >
                 {TEXT_COLOR_SWATCHES.map((color) => (
                   <button
@@ -676,8 +676,8 @@ export function BubbleMenu({
             <div className="mt-3">
               <div className="mb-2 whitespace-nowrap text-xs font-medium text-muted-foreground">{t('bubbleMenu.backgroundColor')}</div>
               <div
-                className="grid"
-                style={{ gridTemplateColumns: 'repeat(8, 28px)', gap: 6 }}
+                className="grid gap-1.5"
+                style={{ gridTemplateColumns: 'repeat(8, 28px)' }}
               >
                 {HIGHLIGHT_COLOR_SWATCHES.map((color) => (
                   <button
@@ -715,7 +715,7 @@ export function BubbleMenu({
     <>
       <div
         ref={menuRef}
-        className="fixed z-[2147483646] transition-[top,left] duration-150 ease-out"
+        className="fixed z-50 transition-[top,left] duration-150 ease-out"
         style={{
           top: position.top,
           left: position.left
@@ -750,7 +750,7 @@ export function BubbleMenu({
           </button>
 
           {showBlockMenu && (
-            <div className="absolute top-full left-0 mt-1 max-h-96 w-52 overflow-y-auto rounded-lg border border-border bg-background py-1 shadow-lg z-[2147483647]">
+            <div className="absolute top-full left-0 mt-1 max-h-96 w-52 overflow-y-auto rounded-lg border border-border bg-background py-1 shadow-lg z-50">
               <button
                 className={cn(
                   'flex h-9 w-full items-center gap-2 px-2.5 text-left text-sm transition-colors hover:bg-muted/70',
@@ -833,7 +833,7 @@ export function BubbleMenu({
           </button>
 
           {showAlignMenu && (
-            <div className="absolute top-full left-0 mt-1 w-36 rounded-lg border border-border bg-background py-1 shadow-lg z-[2147483647]">
+            <div className="absolute top-full left-0 mt-1 w-36 rounded-lg border border-border bg-background py-1 shadow-lg z-50">
               <button className={cn('w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2', effectiveTextAlign === 'left' && 'bg-muted text-primary')} onClick={() => isTableSelectionActive ? setTableCellAlign('left') : setTextAlign('left')}>
                 <AlignLeft className="h-4 w-4" />
                 <span>{t('bubbleMenu.alignLeft')}</span>
@@ -992,7 +992,7 @@ export function BubbleMenu({
           {showAISubmenu && (
             <div
               ref={aiSubmenuRef}
-              className="absolute top-full right-0 mt-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-32 z-[2147483647] data-right-edge:left-auto data-right-edge:right-0 data-right-edge:translate-x-0 data-bottom-edge:top-full data-bottom-edge:mt-1 data-bottom-edge:translate-y-0"
+              className="absolute top-full right-0 mt-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-32 z-50 data-right-edge:left-auto data-right-edge:right-0 data-right-edge:translate-x-0 data-bottom-edge:top-full data-bottom-edge:mt-1 data-bottom-edge:translate-y-0"
             >
               <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIPolish?.() }}>
                 <Sparkles className="w-3.5 h-3.5" /><span>{t('bubbleMenu.polish')}</span>
@@ -1021,7 +1021,7 @@ export function BubbleMenu({
                 {showTranslateSubmenu && (
                   <div
                     ref={translateSubmenuRef}
-                    className="absolute top-0 left-full ml-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-40 z-[2147483647] max-h-60 overflow-y-auto data-translate-submenu-right:left-auto data-translate-submenu-right:right-full data-translate-submenu-right:ml-0 data-translate-submenu-right:mr-1"
+                    className="absolute top-0 left-full ml-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-40 z-50 max-h-60 overflow-y-auto data-translate-submenu-right:left-auto data-translate-submenu-right:right-full data-translate-submenu-right:ml-0 data-translate-submenu-right:mr-1"
                     data-submenu="translate"
                   >
                     {POPULAR_LANGUAGES.map((lang) => (

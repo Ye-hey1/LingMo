@@ -9,8 +9,9 @@ import { TranslateControl } from "./translate-control"
 import { CopyControl } from "./copy-control"
 import { ReadAloudControl } from "./read-aloud-control"
 import { TooltipButton } from "@/components/tooltip-button"
-import { useTranslations } from 'next-intl';
+import { useTranslations } from 'next-intl'
 import emitter from "@/lib/emitter"
+import { getActionButtonClass } from "./styles"
 
 export default function MessageControl({chat, children}: {chat: Chat, children: React.ReactNode}) {
   const { deleteChat, chats, loading } = useChatStore()
@@ -39,7 +40,7 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
       observer.disconnect()
     }
   }, [])
-  
+
   async function deleteHandler() {
     if (chat.type === "clipboard" && !chat.image) {
       const hasTextRes = await hasText()
@@ -101,88 +102,105 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
   }
 
   function restartFromMessageHandler() {
-    emitResendFromUserMessage(chat, true)
+    emitResendFromUserMessage(chat)
   }
 
   const actionChildren = Children.map(children, (child) => {
     if (!isValidElement(child)) return child
     if (child.type === Fragment) return child
-    return cloneElement(child, { compact } as Record<string, unknown>)
+    if (typeof child.type === 'string') return child
+    return cloneElement(child, { compact: compact || undefined } as Record<string, unknown>)
   })
 
-  const actionButtonClass = compact
-    ? "size-6 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
-    : "size-6.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+  const actionButtonClass = getActionButtonClass(compact)
+
+  // 分隔线组件
+  const Separator = () => (
+    <div className='h-4 w-px shrink-0 bg-border' />
+  )
 
   return (
     <>
-      <div ref={containerRef} className='mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1'>
-
-        <div className="flex min-w-0 items-center gap-1.5">
+      <div
+        ref={containerRef}
+        className='mt-2 flex min-w-0 items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2 py-1 transition-colors hover:border-border/90'
+      >
+        {/* 左侧：消息元信息 */}
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5">
           <MessageInfo chat={chat} compact={compact} />
           <CondensedIndicator chat={chat} />
         </div>
 
-        <div className="ml-auto flex min-w-0 max-w-full items-center gap-0.5 overflow-x-auto scrollbar-hide">
+        {/* 右侧：操作按钮组 */}
+        <div className="ml-auto flex min-w-0 max-w-full shrink items-center gap-1 overflow-x-auto scrollbar-hide">
+          {/* 扩展操作：笔记、标记 */}
           {actionChildren ? (
             <>
-              <div className='flex shrink-0 items-center gap-0.5'>
+              <div className='flex shrink-0 items-center gap-1'>
                 {actionChildren}
               </div>
-              <div className='mx-0.5 h-4 w-px bg-border/70' />
+              <Separator />
             </>
           ) : null}
 
-          <CopyControl
-            chat={chat}
-            translatedContent={translatedContent}
-            compact={compact}
-          />
+          {/* 内容操作：复制、翻译、朗读 */}
+          <div className="flex shrink-0 items-center gap-0.5">
+            <CopyControl
+              chat={chat}
+              translatedContent={translatedContent}
+              compact={compact}
+            />
 
-          <TranslateControl
-            chat={chat}
-            onTranslatedContent={setTranslatedContent}
-            compact={compact}
-          />
+            <TranslateControl
+              chat={chat}
+              onTranslatedContent={setTranslatedContent}
+              compact={compact}
+            />
 
             <ReadAloudControl
-            chat={chat}
-            translatedContent={translatedContent}
-            compact={compact}
-          />
+              chat={chat}
+              translatedContent={translatedContent}
+              compact={compact}
+            />
+          </div>
 
-          {chat.role === 'system' && chat.type === 'chat' ? (
+          <Separator />
+
+          {/* 破坏性/流程操作：重新生成、重新开始、删除 */}
+          <div className="flex shrink-0 items-center gap-0.5">
+            {chat.role === 'system' && chat.type === 'chat' ? (
+              <TooltipButton
+                icon={<RefreshCw className='size-4' />}
+                tooltipText="重新生成"
+                variant={"ghost"}
+                size={"sm"}
+                buttonClassName={actionButtonClass}
+                onClick={regenerateHandler}
+                disabled={loading}
+              />
+            ) : null}
+
+            {chat.role === 'user' && chat.type === 'chat' ? (
+              <TooltipButton
+                icon={<CornerUpLeft className='size-4' />}
+                tooltipText="从这里重新开始"
+                variant={"ghost"}
+                size={"sm"}
+                buttonClassName={actionButtonClass}
+                onClick={restartFromMessageHandler}
+                disabled={loading}
+              />
+            ) : null}
+
             <TooltipButton
-              icon={<RefreshCw className='size-4' />}
-              tooltipText="重新生成"
+              icon={<XIcon className='size-4' />}
+              tooltipText={t('delete')}
               variant={"ghost"}
               size={"sm"}
               buttonClassName={actionButtonClass}
-              onClick={regenerateHandler}
-              disabled={loading}
+              onClick={deleteHandler}
             />
-          ) : null}
-
-          {chat.role === 'user' && chat.type === 'chat' ? (
-            <TooltipButton
-              icon={<CornerUpLeft className='size-4' />}
-              tooltipText="从这里重新开始"
-              variant={"ghost"}
-              size={"sm"}
-              buttonClassName={actionButtonClass}
-              onClick={restartFromMessageHandler}
-              disabled={loading}
-            />
-          ) : null}
-
-          <TooltipButton
-            icon={<XIcon className='size-4' />}
-            tooltipText={t('delete')}
-            variant={"ghost"}
-            size={"sm"}
-            buttonClassName={actionButtonClass}
-            onClick={deleteHandler}
-          />
+          </div>
         </div>
       </div>
 

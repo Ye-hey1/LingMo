@@ -20,12 +20,11 @@ import { AgentExecutionStatus } from './agent-execution-status'
 import { AgentPanelWithRag } from './agent-panel-with-rag'
 import { TaskPlanProgress } from './task-plan-progress'
 import { ChatImages } from "./chat-images"
-import { useIsMobile } from '@/hooks/use-mobile'
-import { MessageCitations } from './message-citations'
 import { cleanAssistantGeneratedContent } from '@/lib/ai/assistant-content'
 import { extractWebCitationDetails, parseStoredAgentHistory, type MessageCitationDetail } from '@/lib/ai/citations'
 import { highlightTextReact } from '@/lib/highlight'
 import { parseResearchProgressView } from '@/lib/research/progress-status'
+import { motion } from 'framer-motion'
 
 const BOTTOM_THRESHOLD = 24
 const USER_SCROLL_GRACE_MS = 300
@@ -34,6 +33,7 @@ const USER_SCROLL_GRACE_MS = 300
 const ChatContent = React.memo(function ChatContent() {
   const { chats, init, agentState, loading, chatSearchQuery, chatSearchResults, chatSearchCurrentIndex } = useChatStore()
   const { currentTagId } = useTagStore()
+  const tContent = useTranslations('record.chat.content')
   const [isOnBottom, setIsOnBottom] = useState(true)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
   const wrapperRef = React.useRef<HTMLDivElement>(null)
@@ -43,6 +43,8 @@ const ChatContent = React.memo(function ChatContent() {
   const autoScrollEnabledRef = React.useRef(true)
   const delayedScrollTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastUserScrollAtRef = React.useRef(0)
+  const lastScrollTimeRef = React.useRef(0)
+  const isScrollPendingRef = React.useRef(false)
 
   const isNearBottom = useCallback((element: Element) => {
     return element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_THRESHOLD
@@ -77,26 +79,61 @@ const ChatContent = React.memo(function ChatContent() {
   }, [])
 
   const performAutoScroll = useCallback(() => {
-    programmaticScrollRef.current = true
-    bottomAnchorRef.current?.scrollIntoView({ block: 'end' })
-    setIsOnBottom(true)
+    if (!autoScrollEnabledRef.current) return
 
-    requestAnimationFrame(() => {
-      setTimeout(() => {
-        programmaticScrollRef.current = false
-        const md = wrapperRef.current
-        if (md) {
-          setIsOnBottom(isNearBottom(md))
-        }
-      }, 0)
-    })
+    // 如果处于滚动挂起状态，说明近期会触发滚动，避免重复调度
+    if (isScrollPendingRef.current) return
 
+    const now = Date.now()
+    const timeSinceLastScroll = now - lastScrollTimeRef.current
+    const throttleDelay = 60 // 60ms 内限制最多触发一次滚动
+
+    const executeScroll = () => {
+      isScrollPendingRef.current = false
+      if (!autoScrollEnabledRef.current) return
+
+      const md = wrapperRef.current
+      if (!md) return
+
+      // 双重检查，如果在等待期间用户主动滚动离开了底部（例如手动往上滚），不执行滚动
+      if (!isNearBottom(md) && Date.now() - lastUserScrollAtRef.current < USER_SCROLL_GRACE_MS) {
+        return
+      }
+
+      programmaticScrollRef.current = true
+      bottomAnchorRef.current?.scrollIntoView({ block: 'end' })
+      setIsOnBottom(true)
+      lastScrollTimeRef.current = Date.now()
+
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          programmaticScrollRef.current = false
+          if (md) {
+            setIsOnBottom(isNearBottom(md))
+          }
+        }, 0)
+      })
+    }
+
+    if (timeSinceLastScroll < throttleDelay) {
+      isScrollPendingRef.current = true
+      setTimeout(executeScroll, throttleDelay - timeSinceLastScroll)
+    } else {
+      executeScroll()
+    }
+
+    // 保留延迟兜底，以防异步资源（如图片加载、大型渲染）加载完成导致高度突变
     if (delayedScrollTimeoutRef.current) {
       clearTimeout(delayedScrollTimeoutRef.current)
     }
-
     delayedScrollTimeoutRef.current = setTimeout(() => {
       if (!autoScrollEnabledRef.current) return
+
+      const md = wrapperRef.current
+      if (!md) return
+      if (!isNearBottom(md) && Date.now() - lastUserScrollAtRef.current < USER_SCROLL_GRACE_MS) {
+        return
+      }
 
       programmaticScrollRef.current = true
       bottomAnchorRef.current?.scrollIntoView({ block: 'end' })
@@ -105,13 +142,12 @@ const ChatContent = React.memo(function ChatContent() {
       requestAnimationFrame(() => {
         setTimeout(() => {
           programmaticScrollRef.current = false
-          const md = wrapperRef.current
           if (md) {
             setIsOnBottom(isNearBottom(md))
           }
         }, 0)
       })
-    }, 500)
+    }, 400)
   }, [isNearBottom])
 
   // 手动滚动到底部并启用自动滚动
@@ -232,6 +268,7 @@ const ChatContent = React.memo(function ChatContent() {
   const shouldShowLoading = useMemo(() => {
     if (!loading) return false
     if (agentState.isRunning) return false
+    if (chats.length === 0) return false
 
     const lastChat = chats[chats.length - 1]
     // 如果最后一个消息是 system 角色且有内容或思考内容，说明 AI 已经开始输出了
@@ -255,7 +292,7 @@ const ChatContent = React.memo(function ChatContent() {
         <div className="flex w-full min-w-0 -mt-6">
           <div className='text-sm leading-6 flex-1 flex items-center gap-2 text-muted-foreground'>
             <Loader2 className="size-4 animate-spin" />
-            <span>正在思考...</span>
+            <span>{tContent('thinking')}</span>
           </div>
         </div>
       )}
@@ -273,53 +310,21 @@ const ChatContent = React.memo(function ChatContent() {
 ChatContent.displayName = 'ChatContent'
 
 const MessageWrapper = React.memo(function MessageWrapper({ chat, children }: { chat: Chat, children: React.ReactNode }) {
-  const { deleteChat } = useChatStore()
-  const [showDelete, setShowDelete] = useState(false)
-  const isMobile = useIsMobile()
-
-  const handleDelete = useCallback(() => {
-    deleteChat(chat.id)
-  }, [chat.id, deleteChat])
-  const shouldShowDelete = showDelete
-
-  // 用户消息：右对齐，带边框和背景
+  // 用户消息：右对齐，内容气泡和操作栏分离，避免工具栏被卡片包裹。
   if (chat.role === 'user') {
     return (
       <div className="flex w-full justify-end" data-chat-id={chat.id}>
-        <div
-          className="group relative max-w-[85%] rounded-lg border px-3 py-2"
-          onMouseEnter={() => {
-            if (!isMobile) setShowDelete(true)
-          }}
-          onMouseLeave={() => {
-            if (!isMobile) setShowDelete(false)
-          }}
-          onClick={() => {
-            if (isMobile) setShowDelete((prev) => !prev)
-          }}
-        >
-          <div className='text-sm leading-6 wrap-break-word text-primary-foreground'>
-            {children}
+        <div className="flex max-w-[85%] flex-col items-end">
+          <div className="rounded-lg bg-muted/35 px-3 py-2 text-foreground/90 ring-1 ring-border/35 dark:bg-muted/20">
+            <div className='whitespace-pre-wrap break-words text-sm leading-6 max-w-[75ch]'>
+              {children}
+            </div>
           </div>
-          <div className="mt-1">
+          <div className="max-w-full">
             <MessageControl chat={chat}>
               <></>
             </MessageControl>
           </div>
-          {shouldShowDelete && (
-            <Button
-              onClick={(event) => {
-                event.stopPropagation()
-                handleDelete()
-              }}
-              size="icon"
-              variant="ghost"
-              className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-background border shadow-sm"
-              aria-label="Delete message"
-            >
-              <X className="h-3 w-3" />
-            </Button>
-          )}
         </div>
       </div>
     )
@@ -338,13 +343,25 @@ MessageWrapper.displayName = 'MessageWrapper'
 
 const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat; searchQuery?: string }) {
   const t = useTranslations()
-  const { deleteChat, getMcpToolCallsByChatId, loading, agentState } = useChatStore()
+  const { chats, deleteChat, getMcpToolCallsByChatId, loading, agentState } = useChatStore()
   const content = chat.content
   const displayContent = useMemo(
     () => chat.role === 'system' ? cleanAssistantGeneratedContent(content || '') : content,
     [chat.role, content]
   )
   const isActiveAgentMessage = chat.role === 'system' && agentState.activeChatId === chat.id
+  const isLatestSystemMessage = useMemo(() => {
+    if (chat.role !== 'system') return false
+
+    for (let index = chats.length - 1; index >= 0; index -= 1) {
+      if (chats[index].role === 'system') {
+        return chats[index].id === chat.id
+      }
+    }
+
+    return false
+  }, [chat.id, chat.role, chats])
+  const isResponseStreaming = chat.role === 'system' && loading && (isActiveAgentMessage || isLatestSystemMessage)
   const isLiveAgentVisible = isActiveAgentMessage && (agentState.isRunning || agentState.isFinalAnswerMode)
   const liveFinalAnswerContent = useMemo(
     () => cleanAssistantGeneratedContent(agentState.finalAnswerContent || ''),
@@ -450,10 +467,10 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
             <div className='flex justify-between'>
               <p>{t('record.chat.content.organize')}</p>
             </div>
-            <ChatThinking chat={chat} />
+            <ChatThinking chat={chat} isStreaming={isResponseStreaming} />
             {
               <div className={`${content ? 'note-wrapper border w-full overflow-y-auto overflow-x-hidden my-2 p-4 rounded-lg' : ''}`}>
-                <ChatPreview text={content || ''} streaming={loading && chat.role === 'system'} />
+                <ChatPreview text={content || ''} streaming={isResponseStreaming} />
               </div>
             }
             <MessageControl chat={chat}>
@@ -482,10 +499,14 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
 
       return <MessageWrapper chat={chat}>
         {chat.role === 'system' ? (
-          // AI 消息：所有内容放在一个容器中
-          <div className="w-full space-y-4">
-            {/* 合并的 RAG 和 Agent 面板 - 只在有 agentHistory 时显示（历史模式） */}
-            {/* 实时执行时，RAG 和 Agent 步骤在 AgentExecutionStatusWrapper 中统一显示 */}
+          // AI 消息：优化后的布局结构
+          <motion.div
+            initial={false}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2 }}
+            className="w-full space-y-3"
+          >
+            {/* 1. 合并的 RAG 和 Agent 面板 - 只在有 agentHistory 时显示 */}
             {chat.agentHistory && (
               <AgentPanelWithRag
                 ragSources={[]}
@@ -494,6 +515,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
               />
             )}
 
+            {/* 2. Agent 实时执行状态 */}
             {isLiveAgentVisible && (
               <div className="space-y-2">
                 {!agentState.isFinalAnswerMode && (agentState.isRunning || agentState.completedSteps?.length > 0 || agentState.thoughtHistory?.length > 0) && (
@@ -502,40 +524,45 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
                 {agentState.isFinalAnswerMode && liveFinalAnswerContent && (
                   <ChatPreview
                     text={liveFinalAnswerContent}
-                    streaming={loading && isActiveAgentMessage}
+                    streaming={isResponseStreaming}
                   />
                 )}
               </div>
             )}
 
-            {/* MCP 工具调用展示 */}
+            {/* 3. MCP 工具调用展示 */}
             {mcpToolCalls.length > 0 && (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {mcpToolCalls.map(toolCall => (
                   <McpToolCallCard key={toolCall.id} toolCall={toolCall} />
                 ))}
               </div>
             )}
 
-            <ChatThinking chat={chat} />
+            {/* 4. 思考内容 - 流式模式下自动展开，完成后自动折叠 */}
+            <ChatThinking
+              chat={chat}
+              isStreaming={isResponseStreaming}
+              citationDetails={citationDetails}
+              ragSources={ragSources}
+            />
+
+            {/* 5. 正式回复内容 */}
             {researchProgress ? (
               <TaskPlanProgress content={content || ''} compact={false} className="max-w-2xl" />
             ) : (
-              <ChatPreview text={displayContent || ''} streaming={loading && isActiveAgentMessage} highlightQuery={searchQuery} />
+              <ChatPreview text={displayContent || ''} streaming={isResponseStreaming} highlightQuery={searchQuery} />
             )}
-            <MessageCitations
-              sources={ragSources}
-              details={citationDetails}
-              content={content || ''}
-            />
+
+            {/* 6. 统一操作栏：笔记、复制、翻译、朗读、重试、删除 */}
             <MessageControl chat={chat}>
               <NoteOutput chat={chat} />
               <MarkText chat={chat} />
             </MessageControl>
-          </div>
+          </motion.div>
         ) : (
           // 用户消息
-          <div className="w-full space-y-3 text-primary">
+          <div className="w-full space-y-3">
             {/* 显示用户消息中的图片 */}
             {images.length > 0 && <ChatImages images={images} />}
             {/* 显示用户消息中的引用 */}

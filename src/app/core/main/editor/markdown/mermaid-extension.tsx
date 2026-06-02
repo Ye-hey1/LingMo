@@ -5,7 +5,7 @@ import { ReactNodeViewRenderer, NodeViewWrapper, ReactNodeViewProps } from '@tip
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import type mermaidType from 'mermaid'
-import { Code, Check } from 'lucide-react'
+import { Check, Code, Maximize2, ZoomIn, ZoomOut } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -65,7 +65,27 @@ function MermaidDiagramView({ node, updateAttributes }: ReactNodeViewProps) {
   const [diagramType, setDiagramType] = useState(node.attrs.type || 'flowchart')
   const [svg, setSvg] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [scale, setScale] = useState(1)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewerScale, setViewerScale] = useState(1)
+  const [viewerOffset, setViewerOffset] = useState({ x: 0, y: 0 })
   const containerRef = useRef<HTMLDivElement>(null)
+  const previewDragRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    originX: number
+    originY: number
+    moved: boolean
+  } | null>(null)
+  const viewerDragRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    originX: number
+    originY: number
+  } | null>(null)
 
   const renderDiagram = useCallback(async () => {
     if (!code.trim()) {
@@ -82,6 +102,7 @@ function MermaidDiagramView({ node, updateAttributes }: ReactNodeViewProps) {
       const id = `mermaid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
       const { svg: renderedSvg } = await mermaid.render(id, code)
       setSvg(renderedSvg)
+      setScale(1)
     } catch (err) {
       const message = err instanceof Error ? err.message : t('renderError')
       setError(message)
@@ -112,6 +133,93 @@ function MermaidDiagramView({ node, updateAttributes }: ReactNodeViewProps) {
     setIsEditing(false)
   }
 
+  const stopPreviewAction = (event: React.SyntheticEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const resetViewer = useCallback(() => {
+    setViewerScale(1)
+    setViewerOffset({ x: 0, y: 0 })
+  }, [])
+
+  const openViewer = useCallback((event: React.MouseEvent) => {
+    stopPreviewAction(event)
+    resetViewer()
+    setViewerOpen(true)
+  }, [resetViewer])
+
+  const handleViewerWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const delta = event.deltaY > 0 ? -0.12 : 0.12
+    setViewerScale((current) => Math.min(6, Math.max(0.2, current + delta)))
+  }, [])
+
+  const handlePreviewPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    previewDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: offset.x,
+      originY: offset.y,
+      moved: false,
+    }
+  }, [offset.x, offset.y])
+
+  const handlePreviewPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = previewDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+
+    const dx = event.clientX - drag.startX
+    const dy = event.clientY - drag.startY
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      drag.moved = true
+    }
+
+    event.stopPropagation()
+    setOffset({
+      x: drag.originX + dx,
+      y: drag.originY + dy,
+    })
+  }, [])
+
+  const handlePreviewPointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (previewDragRef.current?.pointerId === event.pointerId) {
+      previewDragRef.current = null
+    }
+  }, [])
+
+  const handleViewerPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId)
+    viewerDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: viewerOffset.x,
+      originY: viewerOffset.y,
+    }
+  }, [viewerOffset.x, viewerOffset.y])
+
+  const handleViewerPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = viewerDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+
+    setViewerOffset({
+      x: drag.originX + event.clientX - drag.startX,
+      y: drag.originY + event.clientY - drag.startY,
+    })
+  }, [])
+
+  const handleViewerPointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (viewerDragRef.current?.pointerId === event.pointerId) {
+      viewerDragRef.current = null
+    }
+  }, [])
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
@@ -127,13 +235,23 @@ function MermaidDiagramView({ node, updateAttributes }: ReactNodeViewProps) {
     return t(`diagramTypes.${key}`)
   }
 
+  const handlePreviewClick = useCallback((event: React.MouseEvent) => {
+    if (previewDragRef.current?.moved) {
+      event.preventDefault()
+      event.stopPropagation()
+      previewDragRef.current.moved = false
+      return
+    }
+    setIsEditing(true)
+  }, [])
+
   return (
     <NodeViewWrapper className="mermaid-diagram-wrapper my-4">
       {/* Preview Mode */}
       {!isEditing && (
         <div
-          className="mermaid-preview rounded-lg border border-border bg-card overflow-x-auto cursor-pointer"
-          onClick={() => setIsEditing(true)}
+          className="mermaid-preview rounded-lg border border-border bg-card"
+          onClick={handlePreviewClick}
         >
           {error ? (
             <div className="p-4 text-red-500 text-sm">
@@ -144,16 +262,72 @@ function MermaidDiagramView({ node, updateAttributes }: ReactNodeViewProps) {
           ) : svg ? (
             <div
               ref={containerRef}
-              className="mermaid-svg p-4 flex justify-center"
-              dangerouslySetInnerHTML={{ __html: svg }}
-            />
+              className="mermaid-svg p-4"
+              onClick={(event) => event.stopPropagation()}
+              onPointerDown={handlePreviewPointerDown}
+              onPointerMove={handlePreviewPointerMove}
+              onPointerUp={handlePreviewPointerEnd}
+              onPointerCancel={handlePreviewPointerEnd}
+            >
+              <div
+                className="mermaid-svg-inner"
+                style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}
+                dangerouslySetInnerHTML={{ __html: svg }}
+              />
+            </div>
           ) : (
             <div className="p-8 text-center text-muted-foreground">
               <span>{t('clickToAdd')}</span>
             </div>
           )}
 
-          <div className="mermaid-overlay opacity-0 hover:opacity-100 transition-opacity absolute top-2 right-2">
+          {svg ? (
+            <div className="mermaid-view-toolbar">
+              <button
+                type="button"
+                title="放大"
+                className="mermaid-toolbar-btn"
+                onClick={(event) => {
+                  stopPreviewAction(event)
+                  setScale((current) => Math.min(3, current + 0.15))
+                }}
+              >
+                <ZoomIn />
+              </button>
+              <button
+                type="button"
+                title="缩小"
+                className="mermaid-toolbar-btn"
+                onClick={(event) => {
+                  stopPreviewAction(event)
+                  setScale((current) => Math.max(0.35, current - 0.15))
+                }}
+              >
+                <ZoomOut />
+              </button>
+              <div className="mermaid-toolbar-sep" />
+              <button
+                type="button"
+                title="展开查看"
+                className="mermaid-toolbar-btn"
+                onClick={openViewer}
+              >
+                <Maximize2 />
+              </button>
+              <button
+                type="button"
+                title="编辑源码"
+                className="mermaid-toolbar-btn"
+                onClick={(event) => {
+                  stopPreviewAction(event)
+                  setIsEditing(true)
+                }}
+              >
+                <Code />
+              </button>
+            </div>
+          ) : (
+            <div className="mermaid-overlay opacity-0 hover:opacity-100 transition-opacity absolute top-2 right-2">
             <Button
               variant="ghost"
               size="icon"
@@ -164,7 +338,8 @@ function MermaidDiagramView({ node, updateAttributes }: ReactNodeViewProps) {
             >
               <Code className="size-4" />
             </Button>
-          </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -213,6 +388,28 @@ function MermaidDiagramView({ node, updateAttributes }: ReactNodeViewProps) {
           )}
         </div>
       )}
+
+      {viewerOpen && svg ? (
+        <div className="mermaid-fullscreen-viewer" contentEditable={false}>
+          <div
+            className="mermaid-fullscreen-stage"
+            onWheel={handleViewerWheel}
+            onPointerDown={handleViewerPointerDown}
+            onPointerMove={handleViewerPointerMove}
+            onPointerUp={handleViewerPointerEnd}
+            onPointerCancel={handleViewerPointerEnd}
+            onDoubleClick={() => setViewerOpen(false)}
+          >
+            <div
+              className="mermaid-fullscreen-content"
+              style={{
+                transform: `translate(calc(-50% + ${viewerOffset.x}px), calc(-50% + ${viewerOffset.y}px)) scale(${viewerScale})`,
+              }}
+              dangerouslySetInnerHTML={{ __html: svg }}
+            />
+          </div>
+        </div>
+      ) : null}
     </NodeViewWrapper>
   )
 }

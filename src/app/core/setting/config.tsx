@@ -114,6 +114,7 @@ export interface ModelConfig {
   supportsImageInput?: boolean
   temperature?: number
   topP?: number
+  contextWindow?: number
   voice?: string
   enableStream?: boolean
 }
@@ -135,6 +136,7 @@ export interface AiConfig {
   supportsImageInput?: boolean
   temperature?: number
   topP?: number
+  contextWindow?: number
   modelType?: ModelType
   voice?: string
   speed?: number

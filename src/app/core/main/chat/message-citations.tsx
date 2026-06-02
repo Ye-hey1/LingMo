@@ -5,6 +5,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { toast } from '@/hooks/use-toast'
 import { getToolByName } from '@/lib/agent/tools'
 import type { MessageCitationDetail } from '@/lib/ai/citations'
+import { cn } from '@/lib/utils'
 import emitter from '@/lib/emitter'
 import useArticleStore from '@/stores/article'
 import { ChevronRight, Download, ExternalLink, Link2, Loader2, LocateFixed } from 'lucide-react'
@@ -13,6 +14,7 @@ interface MessageCitationsProps {
   sources?: string[]
   details: MessageCitationDetail[]
   content?: string
+  embedded?: boolean
 }
 
 function getCitationLabel(detail: MessageCitationDetail, index: number) {
@@ -61,7 +63,7 @@ function getCitationSearchText(detail: MessageCitationDetail) {
   return (line || detail.content.trim()).slice(0, 180)
 }
 
-export function MessageCitations({ details }: MessageCitationsProps) {
+export function MessageCitations({ details, embedded = false }: MessageCitationsProps) {
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
 
@@ -173,7 +175,12 @@ export function MessageCitations({ details }: MessageCitationsProps) {
     <Collapsible
       open={expanded}
       onOpenChange={setExpanded}
-      className="rounded-md border border-border/45 bg-muted/5"
+      className={cn(
+        "rounded-md border",
+        embedded
+          ? "border-border/25 bg-background/35"
+          : "border-border/45 bg-muted/5",
+      )}
     >
       <div className="flex items-center justify-between gap-1.5 px-2 py-1">
         <CollapsibleTrigger asChild>
@@ -190,7 +197,7 @@ export function MessageCitations({ details }: MessageCitationsProps) {
         <span className="max-w-[58%] truncate text-[10px] text-muted-foreground">{summary}</span>
       </div>
 
-      <CollapsibleContent className="border-t border-border/45 px-2 pb-1.5 pt-1">
+      <CollapsibleContent className="border-t border-border/35 px-2 pb-1.5 pt-1">
         <div className="max-h-[118px] space-y-1 overflow-y-auto pr-0.5">
           {details.map((detail, index) => {
             const label = getCitationLabel(detail, index)

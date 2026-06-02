@@ -25,11 +25,12 @@ import useMarkStore from "@/stores/mark"
 import useChatStore from "@/stores/chat"
 import { MarkLoading } from './mark-loading'
 import { ImageGallery } from './image-gallery'
-import { filterMarks } from './mark-filters'
+import { filterMarks, getEffectiveRecordFilters } from './mark-filters'
 import { MarkListDefaultView } from './mark-list-default-view'
 import { MarkListCompactView } from './mark-list-compact-view'
 import { MarkListCardView } from './mark-list-card-view'
 import { MARK_TYPE_OPTIONS } from './mark-type-meta'
+import { RecordFilterChips } from './record-filter-chips'
 import emitter from '@/lib/emitter'
 import { EmitterRecordEvents } from '@/config/emitters'
 import {
@@ -173,6 +174,7 @@ export function TagManage() {
     queues,
     fetchMarks,
     recordFilters,
+    setRecordTagId,
     recordViewMode,
     hasActiveRecordFilters,
     resetRecordFilters,
@@ -249,13 +251,28 @@ export function TagManage() {
   }
 
   const filtersActive = hasActiveRecordFilters()
+  const effectiveFilters = React.useMemo(() => (
+    getEffectiveRecordFilters(recordFilters)
+  ), [recordFilters])
 
   const getFilteredTagMarks = React.useCallback((tagId: number) => {
     return filterMarks(getTagMarks(tagId), {
-      ...recordFilters,
+      ...effectiveFilters,
       tagId: 'all',
     })
-  }, [recordMarks, recordFilters])
+  }, [effectiveFilters, recordMarks])
+
+  const queueMatchesFilters = React.useCallback((queue: { tagId: number; type: Mark['type'] }) => {
+    if (effectiveFilters.tagId !== 'all' && effectiveFilters.tagId !== queue.tagId) {
+      return false
+    }
+
+    if (effectiveFilters.selectedTypes.length > 0 && !effectiveFilters.selectedTypes.includes(queue.type)) {
+      return false
+    }
+
+    return true
+  }, [effectiveFilters])
 
   const getRenderableTagMarks = React.useCallback((tagId: number) => {
     return getFilteredTagMarks(tagId).filter((mark: Mark) => {
@@ -284,6 +301,16 @@ export function TagManage() {
     return orderedTags.filter((tag) => tag.id === recordFilters.tagId)
   }, [recordFilters.tagId, tags])
 
+  React.useEffect(() => {
+    if (recordFilters.tagId === 'all') {
+      return
+    }
+
+    if (!tags.some((tag) => tag.id === recordFilters.tagId)) {
+      setRecordTagId('all')
+    }
+  }, [recordFilters.tagId, setRecordTagId, tags])
+
   const getTagTypeStats = React.useCallback((tagId: number) => {
     const tagMarks = getTagMarks(tagId)
     return MARK_TYPE_OPTIONS
@@ -298,6 +325,8 @@ export function TagManage() {
   const visibleMarkIds = React.useMemo(() => {
     return visibleTags.flatMap((tag) => getRenderableTagMarks(tag.id).map((mark: Mark) => mark.id))
   }, [getRenderableTagMarks, visibleTags])
+
+  const visibleFilteredCount = visibleMarkIds.length
 
   // 处理拖拽结束
   async function handleDragEnd(event: DragEndEvent) {
@@ -416,8 +445,9 @@ export function TagManage() {
 
   const renderTagRecords = React.useCallback((tagId: number) => {
     const filteredMarks = getRenderableTagMarks(tagId)
+    const visibleQueues = queues.filter(queue => queue.tagId === tagId && queueMatchesFilters(queue))
 
-    if (filteredMarks.length === 0 && queues.filter(queue => queue.tagId === tagId).length === 0) {
+    if (filteredMarks.length === 0 && visibleQueues.length === 0) {
       const hasRawRecords = getTagMarks(tagId).length > 0
       return (
         <Empty className="border-0 py-8">
@@ -450,7 +480,7 @@ export function TagManage() {
     default:
       return <MarkListDefaultView marks={filteredMarks} />
     }
-  }, [filtersActive, getRenderableTagMarks, queues, recordViewMode, resetRecordFilters, t])
+  }, [filtersActive, getRenderableTagMarks, queueMatchesFilters, queues, recordViewMode, resetRecordFilters, t])
 
   return (
     <div className="w-full">
@@ -464,6 +494,7 @@ export function TagManage() {
           strategy={verticalListSortingStrategy}
         >
           {/* 标签列表 */}
+          <RecordFilterChips count={visibleFilteredCount} />
           <Accordion
             type="multiple"
             value={expandedRecordTagIds}
@@ -541,7 +572,10 @@ export function TagManage() {
                               <TooltipProvider>
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <span className="shrink-0 text-muted-foreground">
+                                    <span
+                                      className="file-manager-count-badge shrink-0 tabular-nums"
+                                      aria-label={`共 ${displayCount || 0} 条记录`}
+                                    >
                                       {displayCount}
                                     </span>
                                   </TooltipTrigger>
@@ -618,7 +652,7 @@ export function TagManage() {
                   <AccordionContent className="px-0 pb-0">
 
                     {/* 显示当前标签的队列（正在处理中的记录） */}
-                    {queues.filter(queue => queue.tagId === tag.id).map((queue) => (
+                    {queues.filter(queue => queue.tagId === tag.id && queueMatchesFilters(queue)).map((queue) => (
                       <MarkLoading key={queue.queueId} mark={queue} />
                     ))}
 

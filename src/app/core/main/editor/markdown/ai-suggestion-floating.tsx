@@ -207,15 +207,6 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
       setIsStreaming(false)
       setAbortController(null)
 
-      const current = latestSuggestionRef.current
-      if (current) {
-        editor.chain()
-          .focus()
-          .deleteSelection()
-          .insertContent(current.originalText)
-          .run()
-      }
-
       anchorPositionRef.current = null
       setThinkingText('')
       setIsVisible(false)

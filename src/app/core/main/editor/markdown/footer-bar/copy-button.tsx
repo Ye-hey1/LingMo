@@ -62,7 +62,7 @@ export function CopyButton({ editor }: CopyButtonProps) {
       <DropdownMenuTrigger asChild>
         <button
           title="复制"
-          className="p-1 rounded hover:bg-accent focus-visible:outline-none focus-visible:ring-0"
+          className="p-1 rounded hover:bg-accent focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring/30"
         >
           <Copy className="size-3" />
         </button>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useNoteIndexStore, type UnlinkedMention } from '@/stores/note-index'
+import { useNoteIndexStore } from '@/stores/note-index'
 import useArticleStore from '@/stores/article'
 import { useTranslations } from 'next-intl'
 import { ChevronDown, ChevronRight, FileText, Link, ArrowRight, Sparkles, Loader2, Check } from 'lucide-react'
@@ -40,7 +40,7 @@ export function BacklinksPanel() {
       if (suggestions.length === 0) {
         setAiLinkError('未发现可创建的双链，当前笔记已良好链接。')
       }
-    } catch (e) {
+    } catch {
       setAiLinkError('分析失败，请重试。')
       setAiLinkState('idle')
     }

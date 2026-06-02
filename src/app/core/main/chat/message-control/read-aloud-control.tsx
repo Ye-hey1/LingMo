@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl"
 import { useState } from "react"
 import { textToSpeechAndPlay, stopCurrentAudio } from "@/lib/audio"
 import useSettingStore from "@/stores/setting"
+import { getActionButtonClass } from "./styles"
 
 interface ReadAloudControlProps {
   chat: Chat
@@ -16,9 +17,7 @@ export function ReadAloudControl({ chat, translatedContent, compact = false }: R
   const t = useTranslations()
   const [isPlaying, setIsPlaying] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const actionButtonClass = compact
-    ? "size-6 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
-    : "size-6.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+  const actionButtonClass = getActionButtonClass(compact)
   
   // 处理朗读/停止
   async function handleTextToSpeech() {

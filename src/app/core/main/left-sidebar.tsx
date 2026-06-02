@@ -1,9 +1,9 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, Brain, Files, Highlighter, Network, Settings, Star, WalletCards } from 'lucide-react'
+import { ArrowLeft, Brain, Files, Github, Highlighter, LayoutTemplate, Network, Settings, Star, WalletCards } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -14,9 +14,12 @@ import useFavoritesStore from '@/stores/favorites'
 import { useSettingsDialogStore } from '@/stores/settings-dialog'
 import { useSidebarStore } from '@/stores/sidebar'
 import useUpdateStore from '@/stores/update'
+import { OutputWorkshopModal } from '@/components/output-workshop-modal'
+import emitter from '@/lib/emitter'
 
 import { FileActions } from './file/file-actions'
 import { FLASHCARD_TAB_PATH } from './flashcard/flashcard-constants'
+import { GITHUB_STARS_TAB_PATH } from './github-stars/github-stars-constants'
 import { KNOWLEDGE_GRAPH_TAB_PATH } from './knowledge/knowledge-graph-constants'
 import { MarkActions } from './mark/mark-actions'
 import { MEMORY_TAB_PATH } from './memory/memory-constants'
@@ -76,13 +79,35 @@ function SidebarRailButton({
 
 export function LeftSidebarRail() {
   const { leftSidebarTab, leftSidebarVisible, centerPanelVisible, setLeftSidebarTab, toggleLeftSidebar, toggleCenterPanel } = useSidebarStore()
-  const { activeFilePath, setActiveFilePath } = useArticleStore()
+  const { activeFilePath, currentArticle, setActiveFilePath } = useArticleStore()
   const { hasUpdate } = useUpdateStore()
   const isSettingsOpen = useSettingsDialogStore((state) => state.isOpen)
   const closeSettingsDialog = useSettingsDialogStore((state) => state.close)
   const openSettingsDialog = useSettingsDialogStore((state) => state.open)
   const t = useTranslations()
   const tCommon = useTranslations('common')
+  const [outputWorkshopOpen, setOutputWorkshopOpen] = useState(false)
+  const [workshopInitialPath, setWorkshopInitialPath] = useState<string | null>(null)
+  const [workshopInitialContent, setWorkshopInitialContent] = useState<string | null>(null)
+
+  useEffect(() => {
+    const handleOpenWorkshop = (event: any) => {
+      setWorkshopInitialPath(event.filePath || null)
+      setWorkshopInitialContent(event.fileContent)
+      setOutputWorkshopOpen(true)
+    }
+
+    emitter.on('open-output-workshop', handleOpenWorkshop)
+    return () => {
+      emitter.off('open-output-workshop', handleOpenWorkshop)
+    }
+  }, [])
+
+  const canLoadActiveFile = Boolean(
+    activeFilePath &&
+    !activeFilePath.startsWith('lingmo://') &&
+    (activeFilePath.split('/').pop() || '').includes('.')
+  )
 
   const openFavorites = async () => {
     if (!leftSidebarVisible) {
@@ -107,6 +132,13 @@ export function LeftSidebarRail() {
 
   const openMemoryManager = async () => {
     setActiveFilePath(MEMORY_TAB_PATH)
+    if (!centerPanelVisible) {
+      await toggleCenterPanel()
+    }
+  }
+
+  const openGithubStars = async () => {
+    setActiveFilePath(GITHUB_STARS_TAB_PATH)
     if (!centerPanelVisible) {
       await toggleCenterPanel()
     }
@@ -148,6 +180,22 @@ export function LeftSidebarRail() {
               void openMemoryManager()
             }}
           />
+          <SidebarRailButton
+            active={activeFilePath === GITHUB_STARS_TAB_PATH}
+            icon={<Github className="size-4" />}
+            label="GitHub 星标"
+            onClick={() => {
+              void openGithubStars()
+            }}
+          />
+          <SidebarRailButton
+            active={outputWorkshopOpen}
+            icon={<LayoutTemplate className="size-4" />}
+            label="输出工坊"
+            onClick={() => {
+              setOutputWorkshopOpen(true)
+            }}
+          />
         </div>
         <div className="mt-auto flex flex-col items-center gap-2 pb-1">
           <SidebarRailButton
@@ -172,6 +220,18 @@ export function LeftSidebarRail() {
           />
         </div>
       </aside>
+
+      {/* 输出工坊弹窗 */}
+      <OutputWorkshopModal
+        open={outputWorkshopOpen}
+        onClose={() => {
+          setOutputWorkshopOpen(false)
+          setWorkshopInitialPath(null)
+          setWorkshopInitialContent(null)
+        }}
+        linkedFilePath={workshopInitialPath || (canLoadActiveFile ? activeFilePath : null)}
+        linkedFileContent={workshopInitialContent || (canLoadActiveFile ? currentArticle : null)}
+      />
     </TooltipProvider>
   )
 }

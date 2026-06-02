@@ -1,6 +1,6 @@
 'use client'
 import React from "react"
-import { delMark, delMarkForever, Mark, pinMark, unpinMark, restoreMark, restoreMarks, updateMark, TRASH_RETENTION_DAYS } from "@/db/marks";
+import { deleteMarks, deleteMarksForever, Mark, pinMark, unpinMark, restoreMark, restoreMarks, updateMark } from "@/db/marks";
 import { useTranslations } from 'next-intl';
 import {
   ContextMenu,
@@ -17,11 +17,10 @@ import relativeTime from 'dayjs/plugin/relativeTime'
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useMarkStore from "@/stores/mark";
 import useTagStore from "@/stores/tag";
-import { LocalImage } from "@/components/local-image";
 import { fetchAiDesc } from "@/lib/ai/description";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { appDataDir } from "@tauri-apps/api/path";
-import { CheckSquare, Code2, ExternalLink, FileIcon, GitFork, ImageIcon, ImageUp, LinkIcon, ListTree, Loader2, Mic, NotebookText, Pencil, Pin, PinOff, RefreshCw, Save, Settings2, Sparkles, Square, Star, TextIcon } from "lucide-react";
+import { CheckSquare, Code2, ExternalLink, FileIcon, GitFork, ImageIcon, ImageUp, LinkIcon, ListTree, Loader2, Mic, NotebookText, Pencil, Pin, PinOff, RefreshCw, Save, Settings2, Sparkles, Square, Star, TextIcon, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -62,18 +61,6 @@ const getLineHeight = (textSize: string): string => {
     'xl': 'leading-7'
   }
   return heightMap[textSize] || 'leading-4'
-}
-
-// Memoize image size mapping function
-const getImageSize = (textSize: string): string => {
-  const sizeMap: Record<string, string> = {
-    'xs': 'max-h-16',
-    'sm': 'max-h-20',
-    'md': 'max-h-24',
-    'lg': 'max-h-32',
-    'xl': 'max-h-40'
-  }
-  return sizeMap[textSize] || 'max-h-24'
 }
 
 // Memoize word count function
@@ -330,7 +317,6 @@ const DetailViewer = React.memo(({
   const messageControlT = useTranslations('record.mark.mark.chat.messageControl');
 
   const lineHeight = useMemo(() => getLineHeight(recordTextSize), [recordTextSize])
-  const imageSize = useMemo(() => getImageSize(recordTextSize), [recordTextSize])
 
   const isTextType = mark.type === 'text'
   const isGitHubProject = isGitHubProjectMark(mark)
@@ -461,7 +447,7 @@ DetailViewer.displayName = 'DetailViewer'
 
 export type MarkItemVariant = 'list' | 'compact' | 'cards'
 
-function MarkProcessedChip({ processed }: { processed: boolean }) {
+function MarkProcessedChip({ processed: _processed }: { processed: boolean }) {
   return null
 }
 
@@ -554,9 +540,15 @@ function ProjectNameDialog({
 export const MarkWrapper = React.memo(({
   mark,
   variant = 'list',
+  trashState = false,
+  onRestore,
+  onDeleteForever,
 }: {
   mark: Mark
   variant?: MarkItemVariant
+  trashState?: boolean
+  onRestore?: () => void
+  onDeleteForever?: () => void
 }) => {
   const t = useTranslations('record.mark.type');
   const todoT = useTranslations('record.mark.todo');
@@ -662,7 +654,10 @@ export const MarkWrapper = React.memo(({
         {mark.type === 'todo' && itemContent.todo ? (
           <span className={`size-2 shrink-0 rounded-full ${todoPriorityDotClass}`} />
         ) : null}
-        <div className="min-w-0 flex-1">
+        <div
+          className="min-w-0 flex-1"
+          title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
+        >
           {mark.type === 'todo' ? (
             <TodoEditTrigger mark={mark} className={`block truncate text-${recordTextSize} font-medium hover:underline`}>
               {itemContent.title || itemContent.preview || t(mark.type)}
@@ -680,7 +675,28 @@ export const MarkWrapper = React.memo(({
         {mark.type === 'recording' && mark.url ? (
           <AudioPlayer audioPath={mark.url} compact />
         ) : null}
-        <span className="shrink-0 text-xs text-zinc-500">{dayjs(mark.createdAt).format('HH:mm')}</span>
+        {trashState ? (
+          <div className="flex items-center gap-1 shrink-0 ml-auto mr-1">
+            <button
+              type="button"
+              className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={(e) => { e.stopPropagation(); onRestore?.() }}
+              title={`还原记录 (创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `, 删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''})`}
+            >
+              <RotateCcw className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              className="inline-flex size-6 items-center justify-center rounded-md text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-950/30"
+              onClick={(e) => { e.stopPropagation(); onDeleteForever?.() }}
+              title={`彻底删除 (创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `, 删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''})`}
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          </div>
+        ) : (
+          <span className="shrink-0 text-xs text-zinc-500">{dayjs(mark.createdAt).format('HH:mm')}</span>
+        )}
       </div>
     )
   }
@@ -689,14 +705,38 @@ export const MarkWrapper = React.memo(({
     const isImageCard = mark.type === 'image' || mark.type === 'scan'
 
     return (
-      <div className="space-y-2.5">
+      <div
+        className="space-y-2.5"
+        title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
+      >
         <div className="flex items-center gap-2 text-zinc-500">
           <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
           <MarkProcessedChip processed={isProcessed} />
           {mark.type === 'todo' && itemContent.todo ? (
             <span className={`size-2 shrink-0 rounded-full ${todoPriorityDotClass}`} />
           ) : null}
-          <span className="ml-auto text-xs">{dayjs(mark.createdAt).format('MM-DD HH:mm')}</span>
+          {trashState ? (
+            <div className="flex items-center gap-1 ml-auto">
+              <button
+                type="button"
+                className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                onClick={(e) => { e.stopPropagation(); onRestore?.() }}
+                title={`还原记录 (创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `, 删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''})`}
+              >
+                <RotateCcw className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                className="inline-flex size-6 items-center justify-center rounded-md text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-950/30"
+                onClick={(e) => { e.stopPropagation(); onDeleteForever?.() }}
+                title={`彻底删除 (创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `, 删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''})`}
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </div>
+          ) : (
+            <span className="ml-auto text-xs">{dayjs(mark.createdAt).format('MM-DD HH:mm')}</span>
+          )}
         </div>
         {isImageCard && mark.url ? (
           <div className="overflow-hidden rounded-md bg-zinc-100">
@@ -754,44 +794,79 @@ export const MarkWrapper = React.memo(({
     )
   }
 
+  const renderTimeOrTrashActions = () => {
+    if (trashState) {
+      return (
+        <div className="flex items-center gap-1 ml-auto shrink-0">
+          <button
+            type="button"
+            className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            onClick={(e) => { e.stopPropagation(); onRestore?.() }}
+            title={`还原记录 (创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `, 删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''})`}
+          >
+            <RotateCcw className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            className="inline-flex size-6 items-center justify-center rounded-md text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-950/30"
+            onClick={(e) => { e.stopPropagation(); onDeleteForever?.() }}
+            title={`彻底删除 (创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `, 删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''})`}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
+      )
+    }
+    return <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
+  }
+
   const renderContent = () => {
     switch (mark.type) {
     case 'scan':
     return (
-        <div className={`flex-1 overflow-hidden text-${recordTextSize} ${lineHeight} pr-10 md:pr-2`}>
+        <div
+          className={`flex-1 overflow-hidden text-${recordTextSize} ${lineHeight} pr-10 md:pr-2`}
+          title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
+        >
           <div className="flex w-full items-center gap-2 text-zinc-500">
             <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
-            <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
+            {renderTimeOrTrashActions()}
           </div>
           <DetailViewer mark={mark} content={mark.desc || ''} path="screenshot" />
         </div>
     )
     case 'image':
     return (
-        <div className={`flex-1 overflow-hidden text-${recordTextSize} ${lineHeight} pr-10 md:pr-2`}>
+        <div
+          className={`flex-1 overflow-hidden text-${recordTextSize} ${lineHeight} pr-10 md:pr-2`}
+          title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
+        >
           <div className="flex w-full items-center gap-2 text-zinc-500">
             <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
             {mark.url.includes('http') ? <ImageUp className="size-3 text-zinc-400" /> : null}
-            <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
+            {renderTimeOrTrashActions()}
           </div>
           <DetailViewer mark={mark} content={mark.desc || ''} path="image" />
         </div>
     )
     case 'link':
     return (
-        <div className="flex-1 pr-10 md:pr-0">
+        <div
+          className="flex-1 pr-10 md:pr-0"
+          title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
+        >
           <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
             <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
-            <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
+            {renderTimeOrTrashActions()}
           </div>
           <DetailViewer mark={mark} content={itemContent.title || mark.desc || ''} tooltipText={gitHubProjectIntro || undefined} />
           <div className="mt-1">
-            <a 
-              href={mark.url} 
-              target="_blank" 
+            <a
+              href={mark.url}
+              target="_blank"
               rel="noopener noreferrer"
               className={`text-${recordTextSize} text-blue-500 hover:underline truncate block`}
             >
@@ -802,18 +877,24 @@ export const MarkWrapper = React.memo(({
     )
     case 'text':
       return (
-          <div className="flex-1 pr-10 md:pr-0">
+          <div
+            className="flex-1 pr-10 md:pr-0"
+            title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
+          >
             <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
               <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
               <MarkProcessedChip processed={isProcessed} />
-              <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
+              {renderTimeOrTrashActions()}
             </div>
             <DetailViewer mark={mark} content={mark.content || ''} />
           </div>
       )
     case 'recording':
       return (
-          <div className="flex-1 pr-10 md:pr-0">
+          <div
+            className="flex-1 pr-10 md:pr-0"
+            title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
+          >
             <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
               <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
               <MarkProcessedChip processed={isProcessed} />
@@ -834,8 +915,14 @@ export const MarkWrapper = React.memo(({
                   )}
                 </button>
               )}
-              <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
+              {renderTimeOrTrashActions()}
             </div>
+            {/* 新增：如果存在音频文件名，则在转译文本前进行展示 */}
+            {mark.desc && (
+              <div className="mt-1.5 mb-1 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                {mark.desc}
+              </div>
+            )}
             <DetailViewer mark={mark} content={mark.content || ''} />
             {mark.url && (
               <div className="mt-2">
@@ -846,11 +933,14 @@ export const MarkWrapper = React.memo(({
       )
     case 'file':
       return (
-          <div className="flex-1 pr-10 md:pr-0">
+          <div
+            className="flex-1 pr-10 md:pr-0"
+            title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
+          >
             <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
               <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
               <MarkProcessedChip processed={isProcessed} />
-              <span className={`ml-auto text-${recordTextSize}`}>{dayjs(mark.createdAt).fromNow()}</span>
+              {renderTimeOrTrashActions()}
             </div>
             <DetailViewer mark={mark} content={mark.content || ''} />
             {mark.url && (
@@ -863,7 +953,14 @@ export const MarkWrapper = React.memo(({
           </div>
       )
     case 'todo':
-      return <TodoItemContent mark={mark} />
+      return (
+        <TodoItemContent
+          mark={mark}
+          trashState={trashState}
+          onRestore={onRestore}
+          onDeleteForever={onDeleteForever}
+        />
+      )
     default:
       return null
     }
@@ -900,6 +997,8 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
     fetchMarks,
     trashState,
     fetchAllTrashMarks,
+    refreshVisibleMarks,
+    allMarks,
     isMultiSelectMode,
     selectedMarkIds,
     clearSelection,
@@ -927,11 +1026,12 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
 
   const getActionMarks = useCallback(() => {
     if (isMultiSelectMode && selectedMarkIds.size > 0) {
-      return marks.filter((item: Mark) => selectedMarkIds.has(item.id))
+      const sourceMarks = allMarks.length > 0 ? allMarks : marks
+      return sourceMarks.filter((item: Mark) => selectedMarkIds.has(item.id))
     }
 
     return [mark]
-  }, [isMultiSelectMode, mark, marks, selectedMarkIds])
+  }, [allMarks, isMultiSelectMode, mark, marks, selectedMarkIds])
 
   const getActionTagName = useCallback((targetMarks: Mark[]) => {
     const tagId = targetMarks.length === 1 ? targetMarks[0].tagId : currentTagId
@@ -1014,14 +1114,12 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
     }
 
     if (isMultiSelectMode && selectedMarkIds.size > 0) {
-      for (const markId of ids) {
-        await delMark(markId)
-      }
+      await deleteMarks(ids)
       clearSelection()
     } else {
-      await delMark(mark.id)
+      await deleteMarks([mark.id])
     }
-    await fetchMarks()
+    await refreshVisibleMarks()
     await fetchTags()
     getCurrentTag()
     toast({
@@ -1033,7 +1131,7 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
           onClick={() => {
             void (async () => {
               await restoreMarks(ids)
-              await fetchMarks()
+              await refreshVisibleMarks()
               await fetchTags()
               getCurrentTag()
             })()
@@ -1043,23 +1141,18 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
         </ToastAction>
       ),
     })
-  }, [clearSelection, fetchMarks, fetchTags, getActionMarks, getCurrentTag, isMultiSelectMode, mark.id, selectedMarkIds.size])
+  }, [clearSelection, fetchTags, getActionMarks, getCurrentTag, isMultiSelectMode, mark.id, refreshVisibleMarks, selectedMarkIds.size])
 
   const handleDelForever = useCallback(async (e?: React.MouseEvent) => {
     e?.stopPropagation()
     if (isMultiSelectMode && selectedMarkIds.size > 0) {
-      // 多选永久删除
-      const selectedMarks = Array.from(selectedMarkIds)
-      for (const markId of selectedMarks) {
-        await delMarkForever(markId)
-      }
+      await deleteMarksForever(Array.from(selectedMarkIds))
       clearSelection()
     } else {
-      // 单个永久删除
-      await delMarkForever(mark.id)
+      await deleteMarksForever([mark.id])
     }
-    await fetchAllTrashMarks()
-  }, [isMultiSelectMode, selectedMarkIds, clearSelection, fetchAllTrashMarks, mark.id])
+    await refreshVisibleMarks()
+  }, [isMultiSelectMode, selectedMarkIds, clearSelection, mark.id, refreshVisibleMarks])
 
   const handleRestore = useCallback(async (e?: React.MouseEvent) => {
     e?.stopPropagation()
@@ -1271,6 +1364,7 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
       draggable={!isMultiSelectMode && !isMobile}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
     >
       {!trashState && mark.pinned === 1 ? (
         <div className="flex items-center gap-1 px-2.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
@@ -1278,21 +1372,13 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
           <span>已置顶</span>
         </div>
       ) : null}
-      {trashState && mark.deletedAt ? (
-        <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] text-muted-foreground border-b border-border/50">
-          <span>
-            {(() => {
-              const elapsed = Date.now() - mark.deletedAt
-              const remaining = Math.max(0, Math.ceil((TRASH_RETENTION_DAYS * 86400000 - elapsed) / 86400000))
-              return remaining > 0
-                ? `${remaining} 天后自动删除`
-                : '即将自动删除'
-            })()}
-          </span>
-          <span className="ml-auto">{dayjs(mark.deletedAt).format('MM-DD HH:mm')} 删除</span>
-        </div>
-      ) : null}
-      <MarkWrapper mark={mark} variant={variant} />
+      <MarkWrapper
+        mark={mark}
+        variant={variant}
+        trashState={trashState}
+        onRestore={handleRestore}
+        onDeleteForever={handleDelForever}
+      />
       <div className="absolute top-2 right-2">
         <MarkMobileActions
           mark={mark}
@@ -1414,14 +1500,14 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
           {t('record.mark.toolbar.viewFile')}
         </ContextMenuItem>
         {
-          trashState ? 
+          trashState ?
           <>
             <ContextMenuItem inset disabled={isMultiSelectMode} onClick={handleRestore} menuType="record">
               {t('record.mark.toolbar.restore')}
             </ContextMenuItem>
             <ContextMenuItem inset onClick={handleDelForever} menuType="record">
               <span className="text-red-900">
-                {isMultiSelectMode && selectedMarkIds.size > 0 
+                {isMultiSelectMode && selectedMarkIds.size > 0
                   ? t('record.mark.toolbar.deleteSelectedForever', { count: selectedMarkIds.size })
                   : t('record.mark.toolbar.deleteForever')
                 }
@@ -1430,7 +1516,7 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
           </> :
           <ContextMenuItem inset onClick={handleDelMark} menuType="record">
             <span className="text-red-900">
-              {isMultiSelectMode && selectedMarkIds.size > 0 
+              {isMultiSelectMode && selectedMarkIds.size > 0
                 ? t('record.mark.toolbar.deleteSelected', { count: selectedMarkIds.size })
                 : t('record.mark.toolbar.delete')
               }

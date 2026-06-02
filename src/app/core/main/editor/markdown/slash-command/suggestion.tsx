@@ -20,6 +20,7 @@ import {
   Database,
   Map,
   Image as ImageIcon,
+  Info,
 } from 'lucide-react'
 import { SuggestionProps } from '@tiptap/suggestion'
 import { type Editor, type Range } from '@tiptap/core'
@@ -93,6 +94,8 @@ export interface SlashCommandTranslations {
     tableDesc: string
     blockquote: string
     blockquoteDesc: string
+    callout: string
+    calloutDesc: string
     codeBlock: string
     codeBlockDesc: string
     divider: string
@@ -174,6 +177,8 @@ export const suggestionItems = (t?: SlashCommandTranslations): SlashCommandItem[
       tableDesc: '插入表格',
       blockquote: '引用',
       blockquoteDesc: '捕获引用内容',
+      callout: '提示卡片',
+      calloutDesc: '插入 Notion 风格的彩色提示框',
       codeBlock: '代码块',
       codeBlockDesc: '捕获代码片段',
       divider: '分割线',
@@ -381,6 +386,30 @@ export const suggestionItems = (t?: SlashCommandTranslations): SlashCommandItem[
       searchTerms: ['blockquote', 'quote', 'citation'],
       command: ({ editor, range }: { editor: Editor; range: Range }) => {
         editor.chain().focus().deleteRange(range).toggleBlockquote().run()
+      },
+    },
+    {
+      title: tr.items.callout,
+      description: tr.items.calloutDesc,
+      icon: <Info className="w-4 h-4" />,
+      group: tr.groups.block,
+      searchTerms: ['callout', 'note', 'info', 'warning', 'success', 'danger', 'hint', 'tishi', 'tip'],
+      command: ({ editor, range }: { editor: Editor; range: Range }) => {
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .insertContent({
+            type: 'callout',
+            attrs: { type: 'note', emoji: '💡' },
+            content: [
+              {
+                type: 'paragraph',
+                content: []
+              }
+            ]
+          })
+          .run()
       },
     },
     {

@@ -14,6 +14,41 @@
   background: hsl(var(--primary) / 0.18);
 }
 
+/* WikiLink 图表专属样式 */
+.tiptap-editor .ProseMirror .wikilink-diagram {
+  color: hsl(var(--primary));
+  background: linear-gradient(135deg, hsl(180 80% 50% / 0.08), hsl(270 80% 50% / 0.08));
+  border: 1px dashed hsl(var(--primary) / 0.3);
+  border-radius: 4px;
+  padding: 2px 6px 2px 6px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.03);
+}
+
+.tiptap-editor .ProseMirror .wikilink-diagram::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke-width='1.5' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M18 18.75a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z' /%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M18 9.75a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z' /%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M6 14.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z' /%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M7.5 12h3M13.5 16.5h2.25M13.5 7.5h2.25' /%3E%3C/svg%3E") no-repeat center;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke-width='1.5' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M18 18.75a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z' /%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M18 9.75a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z' /%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M6 14.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z' /%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M7.5 12h3M13.5 16.5h2.25M13.5 7.5h2.25' /%3E%3C/svg%3E") no-repeat center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.tiptap-editor .ProseMirror .wikilink-diagram:hover {
+  background: linear-gradient(135deg, hsl(180 80% 50% / 0.15), hsl(270 80% 50% / 0.15));
+  border-color: hsl(var(--primary) / 0.6);
+  box-shadow: 0 2px 4px rgb(0 0 0 / 0.08);
+  transform: translateY(-0.5px);
+}
+
 /* ========================
    Tiptap 编辑器核心样式
    ======================== */
@@ -27,9 +62,10 @@
 .tiptap-editor .ProseMirror {
   outline: none;
   min-height: 100%;
-  padding: 24px 16px;
+  padding: 32px 24px 64px;
   font-size: 16px;
   line-height: 1.7;
+  max-width: 75ch;
   color: hsl(var(--foreground));
 }
 
@@ -1117,12 +1153,13 @@
 .mermaid-diagram-wrapper {
   position: relative;
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .mermaid-diagram-wrapper .mermaid-preview {
   min-height: 60px;
   position: relative;
+  overflow: hidden;
 }
 
 .mermaid-diagram-wrapper .mermaid-overlay {
@@ -1133,16 +1170,150 @@
 }
 
 .mermaid-diagram-wrapper .mermaid-svg {
-  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+  min-height: 180px;
+  max-height: min(70vh, 720px);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.mermaid-diagram-wrapper .mermaid-svg:active {
+  cursor: grabbing;
+}
+
+.mermaid-diagram-wrapper .mermaid-svg-inner {
+  transform-origin: top center;
+  transition: transform 160ms ease;
+  width: max-content;
+  min-width: 100%;
+  display: flex;
+  justify-content: center;
+  padding-bottom: 24px;
 }
 
 .mermaid-diagram-wrapper .mermaid-svg svg {
-  max-width: 100%;
+  max-width: none;
   height: auto;
+}
+
+.mermaid-diagram-wrapper .mermaid-view-toolbar {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 2px;
+  border: none;
+  border-radius: 6px;
+  background: hsl(var(--muted) / 0.6);
+  opacity: 0;
+  transition: opacity 150ms ease;
+  backdrop-filter: blur(8px);
+}
+
+.mermaid-diagram-wrapper .mermaid-preview:hover .mermaid-view-toolbar {
+  opacity: 1;
+}
+
+.mermaid-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: hsl(var(--muted-foreground) / 0.8);
+  cursor: pointer;
+  padding: 0;
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.mermaid-toolbar-btn:hover {
+  background: hsl(var(--background) / 0.7);
+  color: hsl(var(--foreground));
+}
+
+.mermaid-toolbar-btn:active {
+  background: hsl(var(--background) / 0.5);
+}
+
+.mermaid-toolbar-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.mermaid-toolbar-sep {
+  width: 1px;
+  height: 10px;
+  margin: 0 1px;
+  background: hsl(var(--border) / 0.4);
+  flex-shrink: 0;
 }
 
 .mermaid-diagram-wrapper .mermaid-editor {
   box-shadow: 0 4px 6px -1px hsl(var(--foreground) / 0.1);
+}
+
+.mermaid-fullscreen-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  background: hsl(var(--background));
+}
+
+.mermaid-fullscreen-stage {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  background:
+    linear-gradient(hsl(var(--border) / 0.28) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--border) / 0.28) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.mermaid-fullscreen-stage:active {
+  cursor: grabbing;
+}
+
+.mermaid-fullscreen-content {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max-content;
+  max-width: none;
+  padding: 40px;
+  transform-origin: center center;
+  border-radius: 8px;
+  background: hsl(var(--background));
+  box-shadow: 0 16px 48px hsl(var(--foreground) / 0.12);
+  user-select: none;
+  pointer-events: none;
+}
+
+.mermaid-fullscreen-content svg {
+  max-width: none;
+  height: auto;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+.mermaid-fullscreen-content svg * {
+  pointer-events: none !important;
+  user-select: none !important;
 }
 
 .mermaid-diagram-wrapper textarea {
@@ -1180,6 +1351,11 @@
 .mermaid-diagram-wrapper .mermaid-svg .titleText {
   fill: hsl(var(--foreground));
   font-weight: 600;
+}
+
+.mermaid-diagram-wrapper .mermaid-svg svg * {
+  pointer-events: none !important;
+  user-select: none !important;
 }
 
 /* 甘特图样式 */

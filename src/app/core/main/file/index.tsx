@@ -15,6 +15,7 @@ import {
   applyFileBrowserFilters,
   collectFileBrowserStats,
   filterTreeByCloudVisibility,
+  filterTreeByWorkspaceVisibility,
   type FileBrowserFilter,
 } from "./file-browser-utils"
 
@@ -250,9 +251,14 @@ export function FileSidebar() {
     initShowCloudFiles()
   }, [initCollapsibleList, initSortSettings, initShowCloudFiles])
 
+  const workspaceVisibleTree = useMemo(
+    () => filterTreeByWorkspaceVisibility(fileTree),
+    [fileTree],
+  )
+
   const cloudVisibleTree = useMemo(
-    () => filterTreeByCloudVisibility(fileTree, showCloudFiles),
-    [fileTree, showCloudFiles],
+    () => filterTreeByCloudVisibility(workspaceVisibleTree, showCloudFiles),
+    [showCloudFiles, workspaceVisibleTree],
   )
 
   const filteredTree = useMemo(

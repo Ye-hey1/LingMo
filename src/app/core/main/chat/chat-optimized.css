@@ -1,0 +1,173 @@
+/* ============================================================
+   优化后的聊天界面样式
+   ============================================================ */
+
+/* 消息容器 - 更宽松的间距 */
+.chat-container {
+  @apply flex flex-col gap-6 p-4;
+}
+
+/* 用户消息 - 右对齐，主色调 */
+.chat-user-message {
+  @apply flex justify-end;
+}
+
+.chat-user-bubble {
+  @apply max-w-[85%] rounded-2xl rounded-br-md px-4 py-3;
+  @apply bg-primary text-primary-foreground;
+  @apply shadow-sm;
+}
+
+/* AI 消息 - 左对齐，柔和背景 */
+.chat-ai-message {
+  @apply flex justify-start;
+}
+
+.chat-ai-bubble {
+  @apply max-w-[85%] rounded-2xl rounded-bl-md px-4 py-3;
+  @apply bg-muted/50 backdrop-blur-sm;
+  @apply border border-border/30;
+  @apply shadow-sm;
+}
+
+/* 思考状态指示器 */
+.chat-thinking-indicator {
+  @apply flex items-center gap-3 px-4 py-3;
+  @apply bg-muted/30 rounded-xl;
+  @apply border border-border/20;
+}
+
+/* 引用来源卡片 */
+.chat-citation-card {
+  @apply flex items-start gap-3 p-3;
+  @apply bg-background rounded-xl;
+  @apply border border-border/50;
+  @apply hover:border-primary/30 hover:shadow-sm;
+  @apply transition-all duration-200;
+}
+
+/* 操作按钮 */
+.chat-action-button {
+  @apply flex items-center gap-1 px-2 py-1 rounded-lg;
+  @apply text-xs text-muted-foreground;
+  @apply hover:bg-muted hover:text-foreground;
+  @apply transition-colors duration-150;
+}
+
+/* 加载动画 */
+@keyframes chat-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.chat-loading-pulse {
+  animation: chat-pulse 1.5s ease-in-out infinite;
+}
+
+/* 流式文本动画 */
+@keyframes chat-stream {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.chat-stream-text {
+  animation: chat-stream 0.2s ease-out;
+}
+
+/* 响应时间显示 */
+.chat-response-time {
+  @apply flex items-center gap-1 text-xs text-muted-foreground/60;
+  @apply tabular-nums;
+}
+
+/* 进度步骤 */
+.chat-progress-step {
+  @apply flex items-center gap-1.5;
+}
+
+.chat-progress-step.active {
+  @apply text-primary;
+}
+
+.chat-progress-step.done {
+  @apply text-muted-foreground;
+}
+
+.chat-progress-step.pending {
+  @apply text-muted-foreground/50;
+}
+
+/* 进度连接线 */
+.chat-progress-line {
+  @apply flex-1 h-px;
+}
+
+.chat-progress-line.done {
+  @apply bg-muted-foreground/30;
+}
+
+.chat-progress-line.pending {
+  @apply bg-muted-foreground/10;
+}
+
+/* 输入区域优化 */
+.chat-input-container {
+  @apply relative;
+  @apply rounded-2xl border border-border/50;
+  @apply bg-background;
+  @apply shadow-sm;
+  @apply transition-all duration-200;
+}
+
+.chat-input-container:focus-within {
+  @apply border-primary/50 shadow-md;
+  @apply ring-2 ring-primary/10;
+}
+
+/* 工具栏优化 */
+.chat-toolbar {
+  @apply flex items-center gap-1 px-2 py-1;
+  @apply bg-muted/30 rounded-xl;
+  @apply border border-border/20;
+}
+
+.chat-toolbar-button {
+  @apply p-1.5 rounded-lg;
+  @apply text-muted-foreground;
+  @apply hover:bg-muted hover:text-foreground;
+  @apply transition-colors duration-150;
+}
+
+.chat-toolbar-button.active {
+  @apply bg-primary/10 text-primary;
+}
+
+/* 引用来源列表 */
+.chat-citations-list {
+  @apply flex flex-wrap gap-2 mt-3;
+}
+
+/* 知识库检索结果 */
+.chat-rag-results {
+  @apply space-y-2 mt-3;
+  @apply p-3 rounded-xl;
+  @apply bg-muted/20 border border-border/20;
+}
+
+.chat-rag-item {
+  @apply flex items-start gap-2 p-2 rounded-lg;
+  @apply hover:bg-muted/30;
+  @apply transition-colors duration-150;
+}
+
+/* 响应式优化 */
+@media (max-width: 640px) {
+  .chat-user-bubble,
+  .chat-ai-bubble {
+    @apply max-w-[95%];
+  }
+  
+  .chat-citations-list {
+    @apply flex-col;
+  }
+}

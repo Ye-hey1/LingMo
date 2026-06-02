@@ -1,10 +1,11 @@
-﻿'use client'
+'use client'
 
 import '@excalidraw/excalidraw/index.css'
 import './diagram-canvas.css'
 
 import type { ExcalidrawInitialDataState } from '@excalidraw/excalidraw/types'
 import { Loader2, MessageSquareQuote } from 'lucide-react'
+import { useTheme } from 'next-themes'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { createEmptyDiagramContent } from '@/lib/diagram'
@@ -111,6 +112,7 @@ function parseDiagramContent(content: string, excalidraw: ExcalidrawModule): Exc
 }
 
 export function DiagramCanvas({ filePath, isActive = true }: DiagramCanvasProps) {
+  const { resolvedTheme } = useTheme()
   const [excalidraw, setExcalidraw] = useState<ExcalidrawModule | null>(null)
   const [initialData, setInitialData] = useState<ExcalidrawInitialDataState | null>(null)
   const [loading, setLoading] = useState(true)
@@ -258,9 +260,46 @@ export function DiagramCanvas({ filePath, isActive = true }: DiagramCanvasProps)
 
   if (loading || !excalidraw || !initialData) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        <Loader2 className="mr-2 size-4 animate-spin" />
-        正在加载图表...
+      <div className="flex flex-1 flex-col items-center justify-center bg-background relative overflow-hidden select-none">
+        {/* 模拟 Excalidraw 的顶部工具栏骨架 */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 border bg-card px-4 py-2 rounded-lg shadow-sm w-[400px] h-12 max-w-[90%] animate-pulse z-10">
+          <div className="h-6 w-6 bg-muted rounded-md" />
+          <div className="h-4 w-[1px] bg-muted mx-1" />
+          <div className="flex-1 flex gap-2 justify-between">
+            <div className="h-6 w-8 bg-muted rounded-sm" />
+            <div className="h-6 w-8 bg-muted rounded-sm" />
+            <div className="h-6 w-8 bg-muted rounded-sm" />
+            <div className="h-6 w-8 bg-muted rounded-sm" />
+            <div className="h-6 w-8 bg-muted rounded-sm" />
+            <div className="h-6 w-8 bg-muted rounded-sm" />
+          </div>
+        </div>
+
+        {/* 模拟 Excalidraw 的左侧侧边栏骨架 */}
+        <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col gap-2 border bg-card p-2 rounded-lg shadow-sm w-12 h-[200px] animate-pulse z-10 hidden sm:flex">
+          <div className="h-8 w-8 bg-muted rounded-md" />
+          <div className="h-8 w-8 bg-muted rounded-md" />
+          <div className="h-8 w-8 bg-muted rounded-md" />
+          <div className="h-8 w-8 bg-muted rounded-md" />
+        </div>
+
+        {/* 模拟几何网格背景 */}
+        <div 
+          className="absolute inset-0 z-0 opacity-10 pointer-events-none"
+          style={{
+            backgroundImage: `
+              linear-gradient(to right, currentColor 1px, transparent 1px),
+              linear-gradient(to bottom, currentColor 1px, transparent 1px)
+            `,
+            backgroundSize: '20px 20px',
+          }}
+        />
+
+        {/* 居中加载提示 */}
+        <div className="relative z-10 flex flex-col items-center gap-2 px-6 py-4 rounded-xl border bg-card/90 backdrop-blur-xs shadow-md">
+          <Loader2 className="size-5 animate-spin text-indigo-500" />
+          <span className="text-xs font-medium text-foreground/75">正在载入白板画布...</span>
+        </div>
       </div>
     )
   }
@@ -290,6 +329,7 @@ export function DiagramCanvas({ filePath, isActive = true }: DiagramCanvasProps)
             <Excalidraw
               key={filePath}
               langCode="zh-CN"
+              theme={resolvedTheme as 'light' | 'dark'}
               initialData={initialData}
               onChange={(elements, appState, files) => {
                 const serialized = excalidraw.serializeAsJSON(elements, appState, files, 'local')

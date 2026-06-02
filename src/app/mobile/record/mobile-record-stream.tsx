@@ -18,7 +18,7 @@ import { filterMarks, getTrashRecordFilters } from '@/app/core/main/mark/mark-fi
 import { getMarkTypeChipClasses, MARK_TYPE_OPTIONS } from '@/app/core/main/mark/mark-type-meta'
 import useMarkStore, { RecordTimePreset } from '@/stores/mark'
 import useTagStore from '@/stores/tag'
-import { clearTrash, delMark, delMarkForever, initMarksDb, Mark, restoreMark, restoreMarks, updateMark as updateMarkDb } from '@/db/marks'
+import { clearTrash, deleteMarks, deleteMarksForever, initMarksDb, Mark, restoreMark, restoreMarks, updateMark as updateMarkDb } from '@/db/marks'
 import { insertTag } from '@/db/tags'
 import { cn } from '@/lib/utils'
 
@@ -40,6 +40,7 @@ export function MobileRecordStream() {
     queues,
     fetchMarks,
     fetchAllTrashMarks,
+    refreshVisibleMarks,
     recordFilters,
     setRecordSearch,
     toggleRecordType,
@@ -181,11 +182,7 @@ export function MobileRecordStream() {
   }
 
   async function refreshRecords() {
-    if (trashState) {
-      await fetchAllTrashMarks()
-    } else {
-      await fetchMarks()
-    }
+    await refreshVisibleMarks()
   }
 
   function toggleSelect(id: number) {
@@ -199,9 +196,9 @@ export function MobileRecordStream() {
 
   async function handleDelete(mark: Mark) {
     if (trashState) {
-      await delMarkForever(mark.id)
+      await deleteMarksForever([mark.id])
     } else {
-      await delMark(mark.id)
+      await deleteMarks([mark.id])
     }
     await refreshRecords()
   }
@@ -218,13 +215,13 @@ export function MobileRecordStream() {
     })
     if (!accepted) return
     await clearTrash()
-    await fetchAllTrashMarks()
+    await refreshRecords()
   }
 
   async function handleRestoreAll() {
     if (marks.length === 0) return
     await restoreMarks(marks.map((item) => item.id))
-    await fetchAllTrashMarks()
+    await refreshRecords()
   }
 
   async function handleMove(mark: Mark, targetTagId: number) {
@@ -286,12 +283,11 @@ export function MobileRecordStream() {
 
   async function handleDeleteSelected() {
     const targets = filteredRecords.filter((item: Mark) => selectedIds.has(item.id))
-    for (const item of targets) {
-      if (trashState) {
-        await delMarkForever(item.id)
-      } else {
-        await delMark(item.id)
-      }
+    const ids = targets.map((item) => item.id)
+    if (trashState) {
+      await deleteMarksForever(ids)
+    } else {
+      await deleteMarks(ids)
     }
     setSelectedIds(new Set())
     await refreshRecords()

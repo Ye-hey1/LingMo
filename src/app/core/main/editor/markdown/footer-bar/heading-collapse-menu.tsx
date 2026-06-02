@@ -62,7 +62,7 @@ export function HeadingCollapseMenu({ editor }: HeadingCollapseMenuProps) {
         <button
           type="button"
           title="标题折叠"
-          className="rounded-md p-1 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-0"
+          className="rounded-md p-1 transition-colors hover:bg-accent focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring/30"
         >
           <ListCollapse className="size-3.5" />
         </button>

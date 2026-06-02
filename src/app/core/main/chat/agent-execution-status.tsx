@@ -100,6 +100,7 @@ export function AgentExecutionStatus() {
       completedSteps={agentState.completedSteps}
       currentAction={agentState.currentAction}
       currentObservation={agentState.currentObservation}
+      agentEvents={agentState.agentEvents}
       toolCalls={agentState.toolCalls}
       pendingConfirmation={agentState.pendingConfirmation}
       confirmationHistory={agentState.confirmationHistory}

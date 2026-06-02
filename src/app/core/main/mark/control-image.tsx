@@ -47,7 +47,7 @@ export function ControlImage() {
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = () => resolve(reader.result as string)
-      reader.onerror = reject
+      reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
       reader.readAsDataURL(file)
     })
   }

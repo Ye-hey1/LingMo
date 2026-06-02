@@ -1,17 +1,19 @@
 'use client'
 
 import { Editor } from '@tiptap/react'
-import { FileText, Network } from 'lucide-react'
+import { FileText, Network, Keyboard, Feather } from 'lucide-react'
 import { WordCount } from './word-count'
 import { FileCreatedAt } from './file-created-at'
 import { CopyButton } from './copy-button'
 import { ExportButton } from './export-button'
 import { HeadingCollapseMenu } from './heading-collapse-menu'
+import { VectorCalc } from './vector-calc'
 import { SyncTools } from '../sync/sync-tools'
 import { SyncButton } from '../sync/sync-button'
 import { PullButton } from '../sync/pull-button'
 import { HistorySheet } from '../sync/history-sheet'
 import useArticleStore from '@/stores/article'
+import useSettingStore from '@/stores/setting'
 import { isMobileDevice } from '@/lib/check'
 import { KNOWLEDGE_GRAPH_TAB_PATH } from '@/app/core/main/knowledge/knowledge-graph-constants'
 import emitter from '@/lib/emitter'
@@ -26,6 +28,14 @@ export function FooterBar({
   editor,
 }: FooterBarProps) {
   const activeFilePath = useArticleStore((state) => state.activeFilePath)
+  const {
+    aiCompletionEnabled,
+    setAiCompletionEnabled,
+    typewriterMode,
+    setTypewriterMode,
+    zenMode,
+    setZenMode,
+  } = useSettingStore()
   const isMobile = isMobileDevice()
   const fileName = activeFilePath
     ? activeFilePath.split('/').pop() || activeFilePath
@@ -53,9 +63,9 @@ export function FooterBar({
   }
 
   return (
-    <div className="h-6 flex items-center justify-between px-3 border-t border-border bg-background text-xs text-muted-foreground">
+    <div className="h-6 flex items-center justify-between px-3 border-t border-border bg-background text-xs text-muted-foreground select-none">
       {/* Left side: Word count, Copy, Export, Graph locate */}
-      <div className="flex min-w-0 items-center gap-0.5">
+      <div className="flex min-w-0 items-center gap-1">
         <WordCount editor={editor} />
         <FileCreatedAt />
         <HeadingCollapseMenu editor={editor} />
@@ -78,8 +88,38 @@ export function FooterBar({
         )}
       </div>
 
-      {/* Right side: Sync tools */}
-      <SyncTools editor={editor} />
+      {/* Right side: Sync tools & Mode toggles */}
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          type="button"
+          onClick={() => setTypewriterMode(!typewriterMode)}
+          className={`inline-flex h-5 items-center gap-1 rounded px-1.5 text-[11px] transition-colors hover:bg-muted/80
+            ${typewriterMode ? 'text-[#1677ff] bg-[#1677ff]/10 hover:bg-[#1677ff]/20 font-medium' : 'text-muted-foreground hover:text-foreground'}
+          `}
+          title={typewriterMode ? "关闭打字机模式" : "开启打字机模式"}
+        >
+          <Keyboard className="h-3 w-3" />
+          <span>打字机</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setZenMode(!zenMode)}
+          className={`inline-flex h-5 items-center gap-1 rounded px-1.5 text-[11px] transition-colors hover:bg-muted/80
+            ${zenMode ? 'text-[#1677ff] bg-[#1677ff]/10 hover:bg-[#1677ff]/20 font-medium' : 'text-muted-foreground hover:text-foreground'}
+          `}
+          title={zenMode ? "关闭禅模式" : "开启禅模式"}
+        >
+          <Feather className="h-3 w-3" />
+          <span>专注</span>
+        </button>
+        <div className="h-3 w-px bg-border/80 mx-1" />
+        <VectorCalc
+          aiCompletionEnabled={aiCompletionEnabled}
+          onToggleAICompletion={setAiCompletionEnabled}
+        />
+        <SyncTools editor={editor} />
+      </div>
     </div>
   )
 }

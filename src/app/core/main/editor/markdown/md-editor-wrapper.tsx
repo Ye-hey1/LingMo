@@ -51,7 +51,6 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
   // AI streaming state
   const [aiStreaming, setAiStreaming] = useState(false)
   const terminateRef = useRef<(() => void) | undefined>()
-  const loadPromiseRef = useRef<Promise<void> | null>(null)
   const outlineHoverCloseTimerRef = useRef<number | null>(null)
 
   // Bug fix: Listen for file close events to clean up loaded state

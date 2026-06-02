@@ -1,6 +1,6 @@
 "use client"
 
-import { Brain, PenLine, Workflow } from "lucide-react"
+import { Brain, FileChartColumn, PenLine, Workflow } from "lucide-react"
 import type { ReactNode } from "react"
 
 import {
@@ -34,6 +34,13 @@ export const DIAGRAM_TYPE_OPTIONS: Array<{
     meta: "Draw.io",
     description: "脑图模板",
     icon: <Brain className="h-4 w-4" />,
+  },
+  {
+    kind: "mermaid",
+    title: "Mermaid 图表",
+    meta: "MMD",
+    description: "文本即图表",
+    icon: <FileChartColumn className="h-4 w-4" />,
   },
   {
     kind: "excalidraw",

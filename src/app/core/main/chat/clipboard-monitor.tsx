@@ -1,11 +1,18 @@
 "use client"
+import * as React from 'react'
 import { useTranslations } from 'next-intl'
 import { Clipboard, ClipboardX } from 'lucide-react'
 import { TooltipButton } from '@/components/tooltip-button'
 import { useState, useEffect } from 'react'
 import { Store } from '@tauri-apps/plugin-store'
+import { cn } from '@/lib/utils'
 
-export function ClipboardMonitor() {
+interface ClipboardMonitorProps {
+  variant?: 'icon' | 'menu-item'
+  trigger?: React.ReactNode
+}
+
+export function ClipboardMonitor({ variant = 'icon', trigger }: ClipboardMonitorProps) {
   const t = useTranslations('record.chat.input.clipboardMonitor')
   const [isEnabled, setIsEnabled] = useState(true)
 
@@ -33,6 +40,25 @@ export function ClipboardMonitor() {
     setIsEnabled(newState)
     const store = await Store.load('store.json')
     await store.set('clipboardMonitor', newState)
+  }
+
+  if (variant === 'menu-item') {
+    return (
+      <button
+        type="button"
+        className="w-full"
+        onClick={toggleClipboardMonitor}
+      >
+        <span className={cn("block", isEnabled && "text-primary")}>
+          {trigger || (
+            <span className="flex items-center gap-2 px-2.5 py-2 text-sm">
+              {isEnabled ? <Clipboard className="size-4" /> : <ClipboardX className="size-4" />}
+              <span>{isEnabled ? t('enable') : t('disable')}</span>
+            </span>
+          )}
+        </span>
+      </button>
+    )
   }
 
   return (

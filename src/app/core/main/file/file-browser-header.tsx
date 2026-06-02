@@ -9,45 +9,15 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import {
-  Braces,
-  DraftingCompass,
-  FileText,
-  FolderTree,
   ListFilter,
-  Sparkles,
   Search,
-  Clock3,
   X,
-  FileType2,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import type { FileBrowserFilter, FileBrowserStats } from "./file-browser-utils"
-
-const FILTER_ITEMS: Array<{
-  value: FileBrowserFilter
-  icon: typeof FileText
-}> = [
-  { value: "all", icon: FileType2 },
-  { value: "markdown", icon: FileText },
-  { value: "pdf", icon: FileType2 },
-  { value: "drawio", icon: DraftingCompass },
-  { value: "json", icon: Braces },
-  { value: "folder", icon: FolderTree },
-  { value: "recent-created", icon: Clock3 },
-  { value: "generated", icon: Sparkles },
-]
-
-const FILTER_LABELS: Record<FileBrowserFilter, string> = {
-  all: "全部",
-  markdown: "Markdown",
-  pdf: "PDF",
-  drawio: "Draw.io",
-  json: "JSON",
-  folder: "文件夹",
-  "recent-created": "最近创建",
-  generated: "生成文件",
-}
+import { FILTER_ITEMS, FILTER_LABELS } from "./file-type-visuals"
+import { FileTrashDialog } from "./file-trash-dialog"
 
 interface FileBrowserHeaderProps {
   searchQuery: string
@@ -108,14 +78,15 @@ export function FileBrowserHeader({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-40">
-            {FILTER_ITEMS.map(({ value, icon: Icon }) => (
+            {FILTER_ITEMS.map(({ value, icon: Icon, className }) => (
               <DropdownMenuItem key={value} onClick={() => onFilterChange(value)} className={activeFilter === value ? "bg-accent" : ""}>
-                <Icon className="mr-2 h-4 w-4" />
+                <Icon className={`mr-2 h-4 w-4 ${className}`} />
                 {FILTER_LABELS[value]}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        <FileTrashDialog />
         {searchQuery || activeFilter !== "all" ? (
           <Button
             type="button"

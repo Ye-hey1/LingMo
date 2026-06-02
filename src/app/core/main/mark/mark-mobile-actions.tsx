@@ -128,10 +128,7 @@ export function MarkMobileActions({
         
         {trashState ? (
           <>
-            <DropdownMenuItem 
-              disabled={isMultiSelectMode}
-              onClick={(e) => onRestore(e)}
-            >
+            <DropdownMenuItem onClick={(e) => onRestore(e)}>
               <RotateCcw className="mr-2 h-4 w-4" />
               {t('record.mark.toolbar.restore')}
             </DropdownMenuItem>

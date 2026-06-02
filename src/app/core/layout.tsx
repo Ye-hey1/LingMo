@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic'
 import { ThemeProvider } from "@/components/theme-provider"
 import useSettingStore from "@/stores/setting"
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState } from "react";
 import { initAllDatabases } from "@/db"
 import dayjs from "dayjs"
 import zh from "dayjs/locale/zh-cn";

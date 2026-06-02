@@ -7,6 +7,7 @@ import useTagStore from "@/stores/tag"
 import { CheckCircle, Highlighter } from "lucide-react"
 import {useEffect, useState} from "react";
 import { useTranslations } from 'next-intl';
+import { getActionButtonClass } from "./styles"
 
 export function MarkText({chat, compact = false}: {chat: Chat, compact?: boolean}) {
 
@@ -15,9 +16,7 @@ export function MarkText({chat, compact = false}: {chat: Chat, compact?: boolean
   const { updateInsert, chats } = useChatStore()
   const [isRecorded, setIsRecorded] = useState(chat.inserted)
   const t = useTranslations('record.queue')
-  const actionButtonClass = compact
-    ? "size-6 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
-    : "size-6.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+  const actionButtonClass = getActionButtonClass(compact)
 
   useEffect(() => {
     const currentIndex = chats.findIndex(item => item.id === chat.id)

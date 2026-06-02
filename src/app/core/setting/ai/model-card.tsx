@@ -15,6 +15,7 @@ import { Trash2 } from "lucide-react"
 import { ModelConfig, ModelType, AiConfig } from "../config"
 import { useTranslations } from 'next-intl'
 import ModelSelect from "./modelSelect"
+import { inferModelContextWindow } from "@/lib/ai/context-window"
 
 interface ModelCardProps {
   modelConfig: ModelConfig
@@ -25,6 +26,19 @@ interface ModelCardProps {
 
 export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }: ModelCardProps) {
   const t = useTranslations('settings.ai')
+  const inferredContextWindow = inferModelContextWindow(modelConfig.model)
+
+  const handleContextWindowChange = (value: string) => {
+    if (!value.trim()) {
+      onUpdate(modelConfig.id, 'contextWindow', undefined)
+      return
+    }
+
+    const parsed = Number.parseInt(value, 10)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      onUpdate(modelConfig.id, 'contextWindow', parsed)
+    }
+  }
 
   return (
     <AccordionItem value={modelConfig.id} className="rounded-lg border text-sm">
@@ -125,6 +139,25 @@ export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }:
                   {(modelConfig.topP || 1.0).toFixed(2)}
                 </span>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="space-y-0.5">
+                <Label htmlFor={`context-window-${modelConfig.id}`}>{t('contextWindow')}</Label>
+                <div className="text-sm text-muted-foreground">
+                  {t('contextWindowDesc')}
+                </div>
+              </div>
+              <Input
+                id={`context-window-${modelConfig.id}`}
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                value={modelConfig.contextWindow ?? ''}
+                onChange={(e) => handleContextWindowChange(e.target.value)}
+                placeholder={`${t('contextWindowPlaceholder')} ${inferredContextWindow}`}
+              />
             </div>
 
             <div className="flex items-center justify-between">

@@ -1,5 +1,7 @@
 'use client'
 
+export const dynamic = 'force-dynamic'
+
 import { SettingPrompt } from './setting-prompt'
 import { Drama } from 'lucide-react'
 

@@ -9,6 +9,7 @@ import relativeTime from "dayjs/plugin/relativeTime"
 import { checkSyncRepoState, createSyncRepo, getUserInfo } from "@/lib/sync/github"
 import { RepoNames, SyncStateEnum } from "@/lib/sync/github.types"
 import { Avatar, AvatarImage } from "@/components/ui/avatar"
+import { useState } from "react"
 
 dayjs.extend(relativeTime)
 
@@ -23,6 +24,7 @@ const GITHUB_CONFIG = {
 
 export function GithubSync() {
   const t = useTranslations()
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const {
     accessToken,
     setAccessToken,
@@ -40,6 +42,7 @@ export function GithubSync() {
 
   async function checkGithubRepos() {
     try {
+      setErrorMessage(null)
       setSyncRepoState(SyncStateEnum.checking)
       setSyncRepoInfo(undefined)
 
@@ -53,16 +56,19 @@ export function GithubSync() {
       } else {
         setSyncRepoInfo(undefined)
         setSyncRepoState(SyncStateEnum.fail)
+        setErrorMessage(`未找到 GitHub 同步仓库 "${repoName}"，可以点击创建仓库。`)
       }
     } catch (err) {
       console.error('Failed to check GitHub repos:', err)
       setSyncRepoInfo(undefined)
       setSyncRepoState(SyncStateEnum.fail)
+      setErrorMessage(err instanceof Error ? err.message : String(err))
     }
   }
 
   async function createGithubRepo() {
     try {
+      setErrorMessage(null)
       setSyncRepoState(SyncStateEnum.creating)
       const repoName = getRepoName()
       const info = await createSyncRepo(repoName, true)
@@ -71,10 +77,12 @@ export function GithubSync() {
         setSyncRepoState(SyncStateEnum.success)
       } else {
         setSyncRepoState(SyncStateEnum.fail)
+        setErrorMessage('创建 GitHub 同步仓库失败')
       }
     } catch (err) {
       console.error('Failed to create GitHub repo:', err)
       setSyncRepoState(SyncStateEnum.fail)
+      setErrorMessage(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -91,6 +99,7 @@ export function GithubSync() {
         defaultRepoName={RepoNames.sync}
         onCheckRepo={checkGithubRepos}
         onCreateRepo={createGithubRepo}
+        errorMessage={errorMessage}
       >
         {/* 自定义仓库信息展示 */}
         <div className="flex items-center gap-4">

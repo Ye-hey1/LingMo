@@ -29,12 +29,13 @@ import useSettingStore from "@/stores/setting"
 
 import { BotMessageSquare, Eye, EyeOff, LoaderCircle, Minus, Plus, Search, Trash2, X } from "lucide-react"
 import { OpenBroswer } from "@/components/open-broswer"
-import DefaultModelsSection from "./default-models"
 import ModelCard from "./model-card"
 import CreateConfig from "./create"
 import { getCachedProviderTemplates, getProviderTemplateMatch, loadProviderTemplates } from "@/lib/ai/provider-templates-runtime"
 import { cn } from "@/lib/utils"
 import { createOpenAIClient } from "@/lib/ai/utils"
+import { inferModelContextWindow } from "@/lib/ai/context-window"
+import { isOpenLessAsrPresetConfig } from "@/lib/speech/asr-presets"
 
 export default function AiPage() {
   const t = useTranslations('settings.ai')
@@ -42,7 +43,7 @@ export default function AiPage() {
 
   type ActionFeedback = { type: 'success' | 'error'; message: string } | null
 
-  const allModelConfigs = aiModelList
+  const allModelConfigs = aiModelList.filter((item) => !isOpenLessAsrPresetConfig(item))
   const [apiKeyVisible, setApiKeyVisible] = useState(false)
   const [testingConnection, setTestingConnection] = useState(false)
   const [fetchingModelList, setFetchingModelList] = useState(false)
@@ -384,14 +385,16 @@ export default function AiPage() {
     if (!value) return
     setModelDraftList((prev) => {
       if (hasModelInDraft(prev, value)) return prev
+      const modelType = inferModelTypeFromId(value)
       return [
         ...prev,
         {
           id: v4(),
           model: value,
-          modelType: inferModelTypeFromId(value),
+          modelType,
           temperature: 0.7,
           topP: 1,
+          contextWindow: modelType === 'chat' ? inferModelContextWindow(value) : undefined,
           enableStream: true,
         },
       ]
@@ -561,7 +564,7 @@ export default function AiPage() {
       key: id,
       templateKey: template.templateKey || template.key,
       templateSource: template.templateSource === 'remote' ? 'remote' : 'builtin',
-      modelType: 'chat',
+      modelType: template.modelType,
       enabled: template.enabled !== false,
     }
 
@@ -908,7 +911,7 @@ export default function AiPage() {
         }
       }
 
-      const allModels = aiModelListFromStore || []
+      const allModels = (aiModelListFromStore || []).filter((item) => !isOpenLessAsrPresetConfig(item))
       if (selectedAiConfig && allModels.find((item) => item.key === selectedAiConfig)) {
         return
       }
@@ -927,7 +930,6 @@ export default function AiPage() {
     <div id="ai" className="flex flex-col space-y-4">
       {allModelConfigs.length === 0 && (
         <>
-          <DefaultModelsSection />
           <CreateConfig
             hasCustomModels={false}
             onConfigCreated={(configId) => {
@@ -1093,7 +1095,7 @@ export default function AiPage() {
 
                     <div className="flex items-center gap-1.5 rounded-md border bg-background p-1">
                       <Input
-                        className="h-9 min-w-0 border-0 bg-transparent shadow-none focus-visible:ring-0"
+                        className="h-9 min-w-0 border-0 bg-transparent shadow-none focus-visible:ring-1 focus-visible:ring-ring/30"
                         value={currentConfig.apiKey || ''}
                         type={apiKeyVisible ? 'text' : 'password'}
                         onChange={(e) => updateAiConfig({ ...currentConfig, apiKey: e.target.value })}
@@ -1128,8 +1130,8 @@ export default function AiPage() {
                         className={cn(
                           'rounded-md border px-3 py-2 text-xs',
                           apiTestFeedback.type === 'success'
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                            : 'border-red-200 bg-red-50 text-red-700'
+                            ? 'border-primary/30 bg-primary/10 text-foreground'
+                            : 'border-destructive/30 bg-destructive/10 text-destructive'
                         )}
                       >
                         {apiTestFeedback.message}
@@ -1242,8 +1244,8 @@ export default function AiPage() {
                           className={cn(
                             'rounded-md border px-3 py-2 text-xs',
                             modelFetchFeedback.type === 'success'
-                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                              : 'border-red-200 bg-red-50 text-red-700'
+                              ? 'border-primary/30 bg-primary/10 text-foreground'
+                              : 'border-destructive/30 bg-destructive/10 text-destructive'
                           )}
                         >
                           {modelFetchFeedback.message}
@@ -1370,8 +1372,8 @@ export default function AiPage() {
                           className={cn(
                             'h-12 w-12 shrink-0 rounded-md',
                             selected
-                              ? 'border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700'
-                              : 'border-blue-200 text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                              ? 'border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive'
+                              : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                           )}
                           onClick={() => {
                             if (selected) {

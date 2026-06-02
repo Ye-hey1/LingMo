@@ -65,7 +65,7 @@ export default function Updater() {
     }
 
     function openRelease() {
-      open('https://github.com/Ye-hey1/note-gen/releases');
+      open('https://github.com/Ye-hey1/LingMo/releases');
     }
 
     async function handleIgnoreVersion() {
@@ -102,7 +102,7 @@ export default function Updater() {
                   update ? (
                     <>
                       <ArrowBigRightDash className="size-4" />
-                      <Badge className="bg-green-500 text-white" variant="outline">v{update.version}</Badge>
+                      <Badge className="bg-primary text-primary-foreground" variant="outline">v{update.version}</Badge>
                     </>
                   ) : null
                 }

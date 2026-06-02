@@ -1,11 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ChevronDown, Target } from 'lucide-react'
+import { Target } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
 import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 import {
@@ -168,7 +167,7 @@ export function GoalPanel({ className }: GoalPanelProps) {
               type="number"
               min={0}
               value={settings[field.key]}
-              className="h-6 w-12 border-0 bg-transparent p-0 text-center text-xs shadow-none focus-visible:ring-0"
+              className="h-6 w-12 border-0 bg-transparent p-0 text-center text-xs shadow-none focus-visible:ring-1 focus-visible:ring-ring/30"
               onChange={(event) => {
                 const value = Math.max(0, Number(event.target.value) || 0)
                 setSettings((prev) => ({ ...prev, [field.key]: value }))

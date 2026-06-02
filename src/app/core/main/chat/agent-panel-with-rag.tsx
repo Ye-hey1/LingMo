@@ -5,7 +5,7 @@ import { FileText, ChevronRight, Database, ExternalLink } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useState } from "react"
 import useArticleStore from "@/stores/article"
-import type { AgentApprovalScope } from "@/lib/agent/types"
+import type { AgentApprovalScope, AgentEvent } from "@/lib/agent/types"
 
 interface RagSourceDetail {
   filepath: string
@@ -34,6 +34,7 @@ interface AgentPanelWithRagProps {
   }>
   currentAction?: string
   currentObservation?: string
+  agentEvents?: AgentEvent[]
   toolCalls?: Array<{
     id: string
     toolName: string
@@ -81,6 +82,7 @@ export function AgentPanelWithRag({
   completedSteps = [],
   currentAction = "",
   currentObservation = "",
+  agentEvents = [],
   toolCalls = [],
   pendingConfirmation,
   confirmationHistory = [],
@@ -235,6 +237,7 @@ export function AgentPanelWithRag({
               completedSteps={completedSteps}
               currentAction={currentAction}
               currentObservation={currentObservation}
+              agentEvents={agentEvents}
               toolCalls={toolCalls}
               pendingConfirmation={pendingConfirmation}
               confirmationHistory={confirmationHistory}

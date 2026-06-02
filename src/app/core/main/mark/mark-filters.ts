@@ -96,6 +96,25 @@ export function getTrashRecordFilters(): RecordFiltersLike {
   }
 }
 
+export function getEffectiveRecordFilters(
+  filters?: Partial<RecordFiltersLike>,
+  options?: { trashState?: boolean }
+): RecordFiltersLike {
+  const normalized = normalizeRecordFilters(filters)
+
+  if (!options?.trashState) {
+    return normalized
+  }
+
+  return {
+    search: normalized.search,
+    selectedTypes: normalized.selectedTypes,
+    timePreset: normalized.timePreset,
+    tagId: 'all',
+    processState: 'all',
+  }
+}
+
 export function buildRecordFilterSummary(filters?: Partial<RecordFiltersLike>) {
   const normalized = normalizeRecordFilters(filters)
 
@@ -118,9 +137,9 @@ export function buildRecordFilterSummary(filters?: Partial<RecordFiltersLike>) {
 
 export function filterMarks(
   marks: Mark[],
-  filters?: Partial<RecordFiltersLike> & { now?: string | Date }
+  filters?: Partial<RecordFiltersLike> & { now?: string | Date; trashState?: boolean }
 ) {
-  const normalizedFilters = normalizeRecordFilters(filters)
+  const normalizedFilters = getEffectiveRecordFilters(filters, { trashState: filters?.trashState })
   const search = normalizeText(normalizedFilters.search)
   const selectedTypes = new Set(normalizedFilters.selectedTypes)
   const timePreset = normalizedFilters.timePreset
@@ -145,7 +164,8 @@ export function filterMarks(
       return false
     }
 
-    if (!matchesTimePreset(mark.createdAt, timePreset, now)) {
+    const timeValue = filters?.trashState ? (mark.deletedAt || mark.createdAt) : mark.createdAt
+    if (!matchesTimePreset(timeValue, timePreset, now)) {
       return false
     }
 

@@ -9,10 +9,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import html2canvas from 'html2canvas'
-import jsPDF from 'jspdf'
 import useArticleStore from '@/stores/article'
 import { recordFileActivity } from '@/lib/file-activity'
+import { exportMarkdownToPdf } from '@/lib/md-to-pdf'
 
 interface ExportButtonProps {
   editor: Editor
@@ -48,72 +47,23 @@ export function ExportButton({ editor }: ExportButtonProps) {
   // Export as PDF
   const exportPdf = useCallback(async () => {
     const activeFilePath = useArticleStore.getState().activeFilePath
-    const fileName = activeFilePath?.replace(/\.md$/, '') || 'document'
-
-    const editorElement = document.querySelector('.tiptap') || document.querySelector('.ProseMirror')
-    if (!editorElement) {
-      console.error('Editor element not found')
-      setIsOpen(false)
-      return
-    }
+    const fileName = activeFilePath?.replace(/\.(md|markdown)$/i, '') || 'document'
 
     try {
-      const container = document.createElement('div')
-      container.innerHTML = editorElement.innerHTML
-      container.style.width = '595px'
-      container.style.padding = '40px'
-      container.style.background = 'white'
-      container.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-      container.style.fontSize = '12px'
-      container.style.lineHeight = '1.6'
-      container.style.color = '#333'
-
-      const styles = container.querySelectorAll('style, link[rel="stylesheet"]')
-      styles.forEach(s => s.remove())
-
-      document.body.appendChild(container)
-
-      const canvas = await html2canvas(container as HTMLElement, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
+      const result = await exportMarkdownToPdf(editor.getMarkdown(), {
+        defaultFileName: `${fileName}.pdf`,
+        markdownPath: activeFilePath || undefined,
+        title: fileName,
       })
-
-      document.body.removeChild(container)
-
-      const imgData = canvas.toDataURL('image/png')
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'pt',
-        format: 'a4',
-      })
-
-      const imgWidth = 595
-      const pageHeight = 842
-      const imgHeight = (canvas.height * imgWidth) / canvas.width
-      let heightLeft = imgHeight
-      let position = 0
-
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight)
-      heightLeft -= pageHeight
-
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight
-        pdf.addPage()
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight)
-        heightLeft -= pageHeight
+      if (result) {
+        recordExport('PDF', `${result.outputPath} · ${result.pageCount} 页`)
       }
-
-      const outputName = `${fileName}.pdf`
-      pdf.save(outputName)
-      recordExport('PDF', outputName)
     } catch (error) {
       console.error('PDF export failed:', error)
     }
 
     setIsOpen(false)
-  }, [recordExport])
+  }, [editor, recordExport])
 
   const handleExportMarkdown = useCallback(() => {
     const content = editor.getMarkdown()
@@ -150,7 +100,7 @@ export function ExportButton({ editor }: ExportButtonProps) {
       <DropdownMenuTrigger asChild>
         <button
           title="导出"
-          className="p-1 rounded hover:bg-accent focus-visible:outline-none focus-visible:ring-0"
+          className="p-1 rounded hover:bg-accent focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring/30"
         >
           <Download className="size-3" />
         </button>

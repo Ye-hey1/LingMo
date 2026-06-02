@@ -1,7 +1,7 @@
 import type { Mark } from "@/db/marks"
 import type { Priority } from "./todo-form"
 import type { Subtask } from "./todo-form"
-import { getGitHubProjectDisplayName, isGitHubProjectMark } from "@/lib/github-project"
+import { getGitHubProjectDisplayName } from "@/lib/github-project"
 import { isVideoTranscriptMark, parseVideoTranscriptRecord } from "@/lib/video-transcript-record"
 
 export type ParsedTodoMark = {
@@ -70,6 +70,29 @@ function splitTitleAndPreview(value?: string) {
   return { title, preview }
 }
 
+function splitLinkDesc(value?: string) {
+  const lines = (value || '')
+    .split(/\r?\n/)
+    .map(compactText)
+    .filter(Boolean)
+
+  return {
+    title: lines[0] || '',
+    preview: lines.slice(1).join(' '),
+  }
+}
+
+function getMarkdownPreview(value?: string) {
+  const text = value || ''
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => compactText(line.replace(/^#{1,6}\s*/, '').replace(/^[-*+]\s*/, '')))
+    .filter(Boolean)
+    .filter((line) => !/^https?:\/\//i.test(line))
+
+  return lines.slice(0, 3).join(' ')
+}
+
 export function parseTodoMarkContent(mark: Mark): ParsedTodoMark {
   try {
     const parsed = JSON.parse(mark.content || '{}')
@@ -128,10 +151,12 @@ export function getMarkListItemContent(mark: Mark): MarkListItemContent {
       }
     }
 
-    const title = getGitHubProjectDisplayName(mark) || compactText(mark.desc) || compactText(mark.url)
+    const descParts = splitLinkDesc(mark.desc)
+    const contentPreview = getMarkdownPreview(mark.content)
+    const title = getGitHubProjectDisplayName(mark) || descParts.title || compactText(mark.url)
     return {
       title,
-      preview: compactText(mark.url),
+      preview: descParts.preview || contentPreview || compactText(mark.url),
       linkUrl: mark.url,
     }
   }

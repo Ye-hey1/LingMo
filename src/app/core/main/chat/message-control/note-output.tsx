@@ -16,6 +16,7 @@ import { useTranslations } from "next-intl"
 import useArticleStore from "@/stores/article"
 import { useSidebarStore } from "@/stores/sidebar"
 import { getMarks, deleteMarks, TRASH_RETENTION_DAYS } from "@/db/marks"
+import { getActionButtonClass } from "./styles"
 
 export function NoteOutput({chat, compact = false}: {chat: Chat, compact?: boolean}) {
   const { deleteTag, currentTagId, tags } = useTagStore()
@@ -30,9 +31,7 @@ export function NoteOutput({chat, compact = false}: {chat: Chat, compact?: boole
   const t = useTranslations('record.chat')
   const chatTag = tags.find(tag => tag.id === chat?.tagId)
   const isChatTagLocked = Boolean(chatTag?.isLocked)
-  const actionButtonClass = compact
-    ? "inline-flex size-6 cursor-pointer items-center justify-center rounded-none p-0 text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground"
-    : "inline-flex size-6.5 cursor-pointer items-center justify-center rounded-none p-0 text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground"
+  const actionButtonClass = getActionButtonClass(compact)
 
   async function handleTransform() {
     setTransforming(true)
@@ -116,7 +115,7 @@ export function NoteOutput({chat, compact = false}: {chat: Chat, compact?: boole
             </Select>
             <div className="h-4 w-px bg-border" />
             <Input
-              className="h-8 border-0 text-xs shadow-none focus-visible:ring-0"
+              className="h-8 border-0 text-xs shadow-none focus-visible:ring-1 focus-visible:ring-ring/30"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />

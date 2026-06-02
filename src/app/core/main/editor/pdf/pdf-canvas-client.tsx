@@ -581,7 +581,7 @@ export function PdfCanvas({
   })
 
   return (
-    <div className={`flex h-full min-h-0 bg-[#f1f1f1] ${className || ''}`} aria-label={filePath}>
+    <div className={`flex h-full min-h-0 bg-muted ${className || ''}`} aria-label={filePath}>
       {thumbnailsOpen ? (
         <aside className="w-40 shrink-0 overflow-auto border-r bg-background/95 px-3 py-3">
           <div className="space-y-3">

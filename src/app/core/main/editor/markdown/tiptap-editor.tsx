@@ -45,6 +45,7 @@ import { replaceLinesInRange } from '@/lib/agent/react-diff-helpers'
 import { BubbleMenu as BubbleMenuComponent } from './bubble-menu'
 import { EmptyLineBlockMenu } from './empty-line-block-menu'
 import { ImageBubbleMenu } from './image-bubble-menu'
+import { WikiLinkDiagramBubbleMenu } from './wikilink-diagram-bubble-menu'
 import { toast } from '@/hooks/use-toast'
 import { FloatingTableMenu } from './floating-table-menu'
 import { FooterBar } from './footer-bar/index'
@@ -75,6 +76,12 @@ import { getEditorContentContainerClass } from '@/lib/editor-layout-styles'
 import { getResultIndexToFocus } from './search-navigation'
 import { type OutlinePosition } from '@/lib/outline-preferences'
 import { FlashcardCreateDialog } from '@/components/flashcard-create-dialog'
+import { CalloutExtension } from './callout-extension'
+import { GhostTextExtension, getGhostTextStorage, ghostTextPluginKey } from './ghost-text-extension'
+import { InlineAIPanel } from './inline-ai-panel'
+import { DiffReviewUI, createDiffPlugin, diffPluginKey, type DiffSession } from './diff-review-ui'
+import { BookmarkExtension } from './bookmark-extension'
+import { FilePreviewExtension } from './file-preview-extension'
 import './style.css'
 
 const lowlight = createLowlight(common)
@@ -625,7 +632,7 @@ export function TipTapEditor({
   autoScrollRef.current = autoScroll
 
   // 获取正文缩放设置
-  const { contentTextScale } = useSettingStore()
+  const { contentTextScale, typewriterMode, aiCompletionEnabled } = useSettingStore()
 
   // 居中内容设置
   const [centeredContent, setCenteredContent] = useState(false)
@@ -647,6 +654,9 @@ export function TipTapEditor({
   const [flashcardSelectionContext, setFlashcardSelectionContext] = useState<FlashcardSelectionContext | null>(null)
   const [imageSrcDraft, setImageSrcDraft] = useState('')
   const [imageAltDraft, setImageAltDraft] = useState('')
+  const [isInlineAIOpen, setIsInlineAIOpen] = useState(false)
+  const [diffSession, setDiffSession] = useState<DiffSession | null>(null)
+
   const aiActionHandlersRef = useRef({
     polish: async () => {},
     concise: async () => {},
@@ -710,6 +720,7 @@ export function TipTapEditor({
         underline: false,
       }),
       MarkdownParagraph,
+      CalloutExtension,
       EmptyBlockBackspace,
       Placeholder.configure({
         placeholder: placeholderText,
@@ -889,6 +900,17 @@ export function TipTapEditor({
       }),
       // 自定义粘贴 Markdown 扩展
       PasteMarkdown,
+      GhostTextExtension.configure({
+        enabled: aiCompletionEnabled,
+      }),
+      Extension.create({
+        name: 'diffReview',
+        addProseMirrorPlugins() {
+          return [createDiffPlugin(null)]
+        }
+      }),
+      BookmarkExtension,
+      FilePreviewExtension,
     ],
     content: initialContent,
     contentType: 'markdown',
@@ -910,6 +932,50 @@ export function TipTapEditor({
       }
     },
   })
+
+  useEffect(() => {
+    if (!editor) return
+
+    getGhostTextStorage(editor).enabled = aiCompletionEnabled
+    if (!aiCompletionEnabled) {
+      editor.view.dispatch(editor.state.tr.setMeta(ghostTextPluginKey, { type: 'CLEAR' }))
+    }
+  }, [aiCompletionEnabled, editor])
+
+  // AI可视化Diff的三个核心操作回调
+  const handleAcceptDiff = useCallback(() => {
+    if (!editor || !diffSession) return
+    editor.view.dispatch(editor.state.tr.setMeta(diffPluginKey, 'clear'))
+    setDiffSession(null)
+  }, [editor, diffSession])
+
+  const handleRejectDiff = useCallback(() => {
+    if (!editor || !diffSession) return
+    editor.chain().focus().insertContentAt({ from: diffSession.from, to: diffSession.to }, diffSession.originalText).run()
+    editor.view.dispatch(editor.state.tr.setMeta(diffPluginKey, 'clear'))
+    setDiffSession(null)
+  }, [editor, diffSession])
+
+  const handleDiffSessionStart = useCallback((originalText: string, newText: string, from: number, to: number) => {
+    if (!editor) return
+    const session = { originalText, newText, from, to }
+    setDiffSession(session)
+    editor.view.dispatch(editor.state.tr.setMeta(diffPluginKey, session))
+  }, [editor])
+
+  // 绑定全局 Ctrl+J 键盘快捷键唤起行内 AI 面板
+  useEffect(() => {
+    if (!editor) return
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // 快捷键 Ctrl+J (Windows) / Cmd+J (Mac)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
+        e.preventDefault()
+        setIsInlineAIOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [editor])
 
   const persistEditorViewState = useCallback(() => {
     if (!editor || !activeFilePath || !scrollContainerRef.current) {
@@ -1683,6 +1749,47 @@ export function TipTapEditor({
     applyFontSize()
   }, [contentTextScale, editor])
 
+  // 打字机模式居中锁定滚动逻辑
+  useEffect(() => {
+    if (!editor || !typewriterMode || !activeFilePath) return
+
+    const handleSelectionUpdate = () => {
+      // 只有当编辑器真正获得焦点时才进行居中滚动，防止由于外界内容加载造成闪烁或强行滚动
+      if (!editor.view.hasFocus()) return
+
+      const { from } = editor.state.selection
+      try {
+        const coords = editor.view.coordsAtPos(from)
+        const scrollContainer = scrollContainerRef.current
+        if (!coords || !scrollContainer) return
+
+        const containerRect = scrollContainer.getBoundingClientRect()
+        // 获取光标相对于滚动容器顶部的当前相对位置
+        const cursorY = coords.top - containerRect.top
+        
+        // 设定的垂直目标中心位置为视口高度的 42% - 46% 左右（打字黄金视角）
+        const targetCenter = containerRect.height * 0.45
+        const offset = cursorY - targetCenter
+
+        // 仅当偏离中心点超过 10px 时进行微调平滑滚动，防止高频震荡
+        if (Math.abs(offset) > 10) {
+          scrollContainer.scrollBy({
+            top: offset,
+            behavior: 'smooth'
+          })
+        }
+      } catch (e) {
+        console.warn('[Typewriter Mode] Failed to calculate scroll coordinates:', e)
+      }
+    }
+
+    // 监听选区变化与文本变动
+    editor.on('selectionUpdate', handleSelectionUpdate)
+    return () => {
+      editor.off('selectionUpdate', handleSelectionUpdate)
+    }
+  }, [editor, typewriterMode, activeFilePath])
+
   // Track active file path for image uploads (ref to avoid re-initializing editor)
   const activeFilePathRef = useRef(activeFilePath)
   useEffect(() => {
@@ -1876,8 +1983,15 @@ export function TipTapEditor({
     }
   }, [editor])
 
-  // Handle AI Polish - improve selected text (with streaming and suggestion mode)
-  const handleAIPolish = useCallback(async () => {
+  const runSelectionAiRewrite = useCallback(async (
+    type: 'polish' | 'concise' | 'expand' | 'translate',
+    stream: (
+      text: string,
+      onChunk: (chunk: string, isFirst: boolean) => void,
+      signal: AbortSignal,
+      onThinkingUpdate?: (thinking: string) => void,
+    ) => Promise<void>,
+  ) => {
     if (!editor) return
 
     const { from, to } = editor.state.selection
@@ -1887,41 +2001,42 @@ export function TipTapEditor({
       return
     }
 
-    // Create abort controller for this request
     const controller = new AbortController()
 
-    // Delete original text and start streaming
     editor.chain()
       .focus()
       .deleteSelection()
       .run()
 
-    // Get initial position and start streaming immediately
     const initialCoords = editor.view.coordsAtPos(editor.state.selection.from)
     emitter.emit('start-ai-streaming', {
       originalText: selectedText,
-      type: 'polish',
+      type,
       position: initialCoords,
       controller,
     })
 
-    // Track accumulated result
     let accumulatedResult = ''
     const startPosition = editor.state.selection.from
 
+    const restoreOriginalText = () => {
+      editor.chain()
+        .focus()
+        .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
+        .insertContent(selectedText)
+        .run()
+    }
+
     try {
-      await fetchAiPolishStream(
+      await stream(
         selectedText,
         (chunk) => {
-          // Insert chunk as plain text during streaming
           editor.chain()
             .insertContentAt(startPosition + accumulatedResult.length, chunk)
             .run()
 
-          // Update tracking
           accumulatedResult += chunk
 
-          // Update floating menu with streaming content and position
           const coords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
           emitter.emit('update-ai-streaming-content', {
             suggestedText: accumulatedResult,
@@ -1937,293 +2052,60 @@ export function TipTapEditor({
         },
       )
 
-      // Streaming complete - replace all content with proper Markdown parsing
+      if (!accumulatedResult) {
+        restoreOriginalText()
+        emitter.emit('ai-streaming-complete')
+        return
+      }
+
       editor.chain()
         .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
         .insertContent(accumulatedResult, { contentType: 'markdown' })
         .run()
 
-      // Send completion event
       const finalCoords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
       emitter.emit('ai-streaming-complete', {
         originalText: selectedText,
         suggestedText: accumulatedResult,
-        type: 'polish',
+        type,
         position: finalCoords,
         generatedRange: { from: startPosition, to: startPosition + accumulatedResult.length },
       })
       emitter.emit('onboarding-step-complete', { step: 'ai-polish' })
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        return
-      }
-      // Restore original text on error
-      editor.chain()
-        .focus()
-        .insertContent(selectedText)
-        .run()
+      restoreOriginalText()
       emitter.emit('ai-streaming-complete')
+      if (error instanceof Error && error.name === 'AbortError') return
+      toast({
+        title: 'AI 处理失败',
+        description: error instanceof Error ? error.message : '网络错误',
+        variant: 'destructive',
+      })
     }
   }, [editor])
+
+  // Handle AI Polish - improve selected text (with streaming and suggestion mode)
+  const handleAIPolish = useCallback(async () => {
+    await runSelectionAiRewrite('polish', fetchAiPolishStream)
+  }, [runSelectionAiRewrite])
 
   // Handle AI Concise - simplify selected text (with streaming and suggestion mode)
   const handleAIConcise = useCallback(async () => {
-    if (!editor) return
-
-    const { from, to } = editor.state.selection
-    const selectedText = editor.state.doc.textBetween(from, to)
-
-    if (!selectedText.trim()) {
-      return
-    }
-
-    // Create abort controller for this request
-    const controller = new AbortController()
-
-    // Delete original text and start streaming
-    editor.chain()
-      .focus()
-      .deleteSelection()
-      .run()
-
-    // Get initial position and start streaming immediately
-    const initialCoords = editor.view.coordsAtPos(editor.state.selection.from)
-    emitter.emit('start-ai-streaming', {
-      originalText: selectedText,
-      type: 'concise',
-      position: initialCoords,
-      controller,
-    })
-
-    // Track accumulated result
-    let accumulatedResult = ''
-    const startPosition = editor.state.selection.from
-
-    try {
-      await fetchAiConciseStream(
-        selectedText,
-        (chunk) => {
-          // Insert chunk as plain text during streaming
-          editor.chain()
-            .insertContentAt(startPosition + accumulatedResult.length, chunk)
-            .run()
-
-          // Update tracking
-          accumulatedResult += chunk
-
-          // Update floating menu with streaming content and position
-          const coords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
-          emitter.emit('update-ai-streaming-content', {
-            suggestedText: accumulatedResult,
-            position: coords,
-          })
-        },
-        controller.signal,
-        (thinkingText) => {
-          emitter.emit('update-ai-thinking-content', {
-            thinkingText,
-            position: initialCoords,
-          })
-        },
-      )
-
-      // Streaming complete - replace all content with proper Markdown parsing
-      editor.chain()
-        .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
-        .insertContent(accumulatedResult, { contentType: 'markdown' })
-        .run()
-
-      // Send completion event
-      const finalCoords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
-      emitter.emit('ai-streaming-complete', {
-        originalText: selectedText,
-        suggestedText: accumulatedResult,
-        type: 'concise',
-        position: finalCoords,
-        generatedRange: { from: startPosition, to: startPosition + accumulatedResult.length },
-      })
-      emitter.emit('onboarding-step-complete', { step: 'ai-polish' })
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        return
-      }
-      // Restore original text on error
-      editor.chain()
-        .focus()
-        .insertContent(selectedText)
-        .run()
-      emitter.emit('ai-streaming-complete')
-    }
-  }, [editor])
+    await runSelectionAiRewrite('concise', fetchAiConciseStream)
+  }, [runSelectionAiRewrite])
 
   // Handle AI Expand - expand selected text (with streaming and suggestion mode)
   const handleAIExpand = useCallback(async () => {
-    if (!editor) return
-
-    const { from, to } = editor.state.selection
-    const selectedText = editor.state.doc.textBetween(from, to)
-
-    if (!selectedText.trim()) {
-      return
-    }
-
-    // Create abort controller for this request
-    const controller = new AbortController()
-
-    // Delete original text and start streaming
-    editor.chain()
-      .focus()
-      .deleteSelection()
-      .run()
-
-    // Get initial position and start streaming immediately
-    const initialCoords = editor.view.coordsAtPos(editor.state.selection.from)
-    emitter.emit('start-ai-streaming', {
-      originalText: selectedText,
-      type: 'expand',
-      position: initialCoords,
-      controller,
-    })
-
-    // Track accumulated result
-    let accumulatedResult = ''
-    const startPosition = editor.state.selection.from
-
-    try {
-      await fetchAiExpandStream(
-        selectedText,
-        (chunk) => {
-          // Insert chunk as plain text during streaming
-          editor.chain()
-            .insertContentAt(startPosition + accumulatedResult.length, chunk)
-            .run()
-
-          // Update tracking
-          accumulatedResult += chunk
-
-          // Update floating menu with streaming content and position
-          const coords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
-          emitter.emit('update-ai-streaming-content', {
-            suggestedText: accumulatedResult,
-            position: coords,
-          })
-        },
-        controller.signal,
-        (thinkingText) => {
-          emitter.emit('update-ai-thinking-content', {
-            thinkingText,
-            position: initialCoords,
-          })
-        },
-      )
-
-      // Streaming complete - replace all content with proper Markdown parsing
-      editor.chain()
-        .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
-        .insertContent(accumulatedResult, { contentType: 'markdown' })
-        .run()
-
-      // Send completion event
-      const finalCoords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
-      emitter.emit('ai-streaming-complete', {
-        originalText: selectedText,
-        suggestedText: accumulatedResult,
-        type: 'expand',
-        position: finalCoords,
-        generatedRange: { from: startPosition, to: startPosition + accumulatedResult.length },
-      })
-      emitter.emit('onboarding-step-complete', { step: 'ai-polish' })
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        return
-      }
-      // Restore original text on error
-      editor.chain()
-        .focus()
-        .insertContent(selectedText)
-        .run()
-      emitter.emit('ai-streaming-complete')
-    }
-  }, [editor])
+    await runSelectionAiRewrite('expand', fetchAiExpandStream)
+  }, [runSelectionAiRewrite])
 
   const handleAITranslate = useCallback(async (targetLanguage: string) => {
-    if (!editor) return
-
-    const { from, to } = editor.state.selection
-    const selectedText = editor.state.doc.textBetween(from, to)
-
-    if (!selectedText.trim()) {
-      return
-    }
-
-    const controller = new AbortController()
-
-    editor.chain()
-      .focus()
-      .deleteSelection()
-      .run()
-
-    const initialCoords = editor.view.coordsAtPos(editor.state.selection.from)
-    emitter.emit('start-ai-streaming', {
-      originalText: selectedText,
-      type: 'translate',
-      position: initialCoords,
-      controller,
-    })
-
-    let accumulatedResult = ''
-    const startPosition = editor.state.selection.from
-
-    try {
-      await fetchAiTranslateStream(
-        selectedText,
-        targetLanguage,
-        (chunk) => {
-          editor.chain()
-            .insertContentAt(startPosition + accumulatedResult.length, chunk)
-            .run()
-
-          accumulatedResult += chunk
-
-          const coords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
-          emitter.emit('update-ai-streaming-content', {
-            suggestedText: accumulatedResult,
-            position: coords,
-          })
-        },
-        controller.signal,
-        (thinkingText) => {
-          emitter.emit('update-ai-thinking-content', {
-            thinkingText,
-            position: initialCoords,
-          })
-        },
-      )
-
-      editor.chain()
-        .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
-        .insertContent(accumulatedResult, { contentType: 'markdown' })
-        .run()
-
-      const finalCoords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
-      emitter.emit('ai-streaming-complete', {
-        originalText: selectedText,
-        suggestedText: accumulatedResult,
-        type: 'translate',
-        position: finalCoords,
-        generatedRange: { from: startPosition, to: startPosition + accumulatedResult.length },
-      })
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        return
-      }
-      editor.chain()
-        .focus()
-        .insertContent(selectedText)
-        .run()
-      emitter.emit('ai-streaming-complete')
-    }
-  }, [editor])
+    await runSelectionAiRewrite(
+      'translate',
+      (text, onChunk, signal, onThinkingUpdate) =>
+        fetchAiTranslateStream(text, targetLanguage, onChunk, signal, onThinkingUpdate),
+    )
+  }, [runSelectionAiRewrite])
 
   useEffect(() => {
     aiActionHandlersRef.current = {
@@ -2585,51 +2467,51 @@ export function TipTapEditor({
         return
       }
 
-      // Create new AbortController for this request
       abortController = new AbortController()
 
-      // Insert loading indicator at cursor position
-      const loadingMark = editor.state.schema.marks.strong
-      if (!loadingMark) {
-        // If no strong mark available, insert simple text
-        editor.chain().focus().insertContent('...').run()
-      } else {
-        editor.chain().focus().insertContent('···').run()
-      }
+      const loadingText = '···'
+      editor.chain().focus().insertContent(loadingText).run()
 
-      // Track accumulated result for streaming
       let accumulatedResult = ''
       const startPosition = from
+      let loadingRemoved = false
+
+      const removeLoadingIndicator = () => {
+        if (loadingRemoved) return
+        editor.chain()
+          .focus()
+          .deleteRange({ from: startPosition, to: startPosition + loadingText.length })
+          .run()
+        loadingRemoved = true
+      }
 
       try {
         await fetchCompletionStream(
           context,
           (chunk, isFirst) => {
             if (isFirst) {
-              // Delete the loading indicator before inserting first chunk
-              const { to } = editor.state.selection
-              editor.chain().focus().deleteRange({ from: to - 3, to }).run()
+              removeLoadingIndicator()
             }
-            // Insert chunk as plain text during streaming
             editor.chain().focus().insertContent(chunk).run()
             accumulatedResult += chunk
           },
           abortController.signal
         )
 
-        // Streaming complete - replace content with proper Markdown parsing
-        if (accumulatedResult) {
-          editor.chain()
-            .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
-            .insertContent(accumulatedResult, { contentType: 'markdown' })
-            .run()
+        if (!accumulatedResult) {
+          removeLoadingIndicator()
+          return
         }
-      } catch (error) {
-        // Delete loading indicator on error
-        const { to } = editor.state.selection
-        editor.chain().focus().deleteRange({ from: to - 3, to }).run()
 
-        // Show error toast (but not for aborted requests)
+        editor.chain()
+          .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
+          .insertContent(accumulatedResult, { contentType: 'markdown' })
+          .run()
+      } catch (error) {
+        if (!accumulatedResult) {
+          removeLoadingIndicator()
+        }
+
         if (error instanceof Error && error.message !== 'Request was aborted.') {
           toast({
             title: '续写失败',
@@ -2649,7 +2531,7 @@ export function TipTapEditor({
 
   // Handle drag and drop from marks
   const handleEditorDrop = useCallback((e: React.DragEvent) => {
-    const fileDragData = e.dataTransfer.getData('application/x-note-gen-file')
+    const fileDragData = e.dataTransfer.getData('application/x-lingmo-file')
     const fileText = e.dataTransfer.getData('text/plain')
     const draggedFile = fileDragData || fileText
 
@@ -3305,9 +3187,26 @@ export function TipTapEditor({
 
           <AISuggestionFloating editor={editor} />
 
+          <InlineAIPanel
+            editor={editor}
+            isOpen={isInlineAIOpen}
+            onClose={() => setIsInlineAIOpen(false)}
+            onDiffSessionStart={handleDiffSessionStart}
+          />
+
+          <DiffReviewUI
+            editor={editor}
+            session={diffSession}
+            onAccept={handleAcceptDiff}
+            onReject={handleRejectDiff}
+          />
+
+
           {!isMobile && <EmptyLineBlockMenu editor={editor} />}
 
           {!isMobile && <FloatingTableMenu editor={editor} />}
+
+          {!isMobile && <WikiLinkDiagramBubbleMenu editor={editor} />}
 
           {!isMobile && (
             <BubbleMenuComponent

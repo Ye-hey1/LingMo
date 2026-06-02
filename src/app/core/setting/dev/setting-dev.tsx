@@ -7,14 +7,12 @@ import { BaseDirectory, exists, remove } from "@tauri-apps/plugin-fs";
 import { confirm, message } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Store } from "@tauri-apps/plugin-store";
-import { Input } from "@/components/ui/input";
-import { useEffect, useState } from "react";
 import SetConfig from "./set-config";
-import { Network, Database, FolderX } from "lucide-react";
+import { Database, FolderX } from "lucide-react";
+import { ProxySettingItem } from "../components/proxy-setting-item";
 
 export function SettingDev({id, icon}: {id: string, icon?: React.ReactNode}) {
   const t = useTranslations();
-  const [proxy, setProxy] = useState('');
   const { toast } = useToast()
 
   async function handleClearData() {
@@ -53,36 +51,10 @@ export function SettingDev({id, icon}: {id: string, icon?: React.ReactNode}) {
     }
   }
 
-  async function proxyChangeHandler(e: React.ChangeEvent<HTMLInputElement>) {
-    setProxy(e.target.value)
-    const store = await Store.load('store.json');
-    await store.set('proxy', e.target.value)
-  }
-
-  useEffect(() => {
-    async function init() {
-      const store = await Store.load('store.json');
-      const proxy = await store.get<string>('proxy')
-      if (proxy) {
-        setProxy(proxy)
-      }
-    }
-    init()
-  }, [])
-
   return (
     <SettingType id={id} icon={icon} title={t('settings.dev.title')} desc={t('settings.dev.desc')}>
       <ItemGroup className="gap-4">
-        <Item variant="outline" className="max-md:flex-col max-md:items-start">
-          <ItemMedia variant="icon"><Network className="size-4" /></ItemMedia>
-          <ItemContent>
-            <ItemTitle>{t('settings.dev.proxyTitle')}</ItemTitle>
-            <ItemDescription>{t('settings.dev.proxy')}</ItemDescription>
-          </ItemContent>
-          <ItemActions>
-            <Input className="w-[300px]" placeholder={t('settings.dev.proxyPlaceholder')} value={proxy} onChange={proxyChangeHandler} />
-          </ItemActions>
-        </Item>
+        <ProxySettingItem className="max-md:flex-col max-md:items-start" />
         
         <Item variant="outline">
           <ItemMedia variant="icon"><Database className="size-4" /></ItemMedia>

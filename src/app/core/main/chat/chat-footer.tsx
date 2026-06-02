@@ -44,7 +44,7 @@ export function ChatFooter() {
 
   return (
     <TooltipProvider>
-      <footer className="flex h-6 w-full items-center justify-between border-t border-border bg-background px-2 text-xs text-muted-foreground">
+      <footer className="flex h-6 w-full shrink-0 items-center justify-between border-t border-border bg-background px-2 text-xs text-muted-foreground">
         <PromptSelect
           triggerClassName="flex min-w-0 max-w-[40%] items-center gap-1 truncate rounded-sm px-1 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           trigger={(

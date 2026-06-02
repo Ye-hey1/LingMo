@@ -10,7 +10,15 @@ import useArticleStore, { DirTree } from "@/stores/article"
 
 import { FileItem } from "./file-item"
 import { FolderItem } from "./folder-item"
-import { writeDroppedFileToRoot } from "./root-drop"
+import { writeDroppedFileToFolder, writeDroppedFileToRoot } from "./root-drop"
+
+function isInternalFileDragActive() {
+  if (typeof window === "undefined") {
+    return false
+  }
+
+  return Boolean((window as unknown as { __lingMoDraggingFilePath?: string }).__lingMoDraggingFilePath)
+}
 
 function Tree({
   item,
@@ -72,6 +80,7 @@ export function FileManager({
   const [isDragging, setIsDragging] = useState(false)
   const { fileTree, loadFileTree } = useArticleStore()
   const containerRef = useRef<HTMLDivElement>(null)
+  const dropTargetFolderRef = useRef<string>("")
 
   useEffect(() => {
     if (fileTree.length === 0) {
@@ -84,10 +93,30 @@ export function FileManager({
   // 支持的二进制文件扩展名
   const BINARY_EXTENSIONS = /\.(jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i
 
+  const resolveDropTargetFolder = useCallback((position?: { x: number; y: number }) => {
+    const el = containerRef.current
+    if (!el || !position) {
+      return ""
+    }
+
+    const target = document.elementFromPoint(position.x, position.y)
+    if (!target || !el.contains(target)) {
+      return ""
+    }
+
+    const folderEl = (target as HTMLElement).closest<HTMLElement>("[data-file-manager-folder-path]")
+    if (!folderEl || !el.contains(folderEl)) {
+      return ""
+    }
+
+    return folderEl.dataset.fileManagerFolderPath || ""
+  }, [])
+
   // 处理外部文件拖入（通过 Tauri 的 onDragDropEvent）
-  const handleExternalDrop = useCallback(async (paths: string[]) => {
+  const handleExternalDrop = useCallback(async (paths: string[], targetFolder = "") => {
     const { getFilePathOptions } = await import("@/lib/workspace")
     const store = useArticleStore.getState()
+    const importedPaths: string[] = []
 
     for (const filePath of paths) {
       const fileName = filePath.split(/[/\\]/).pop() || filePath
@@ -95,46 +124,43 @@ export function FileManager({
       if (TEXT_EXTENSIONS.test(fileName)) {
         // 文本类文件：md, txt, html, js, ts, json, yaml, drawio 等
         const content = await readTextFile(filePath)
-        const sanitizedFileName = await writeDroppedFileToRoot(
+        const relativePath = targetFolder
+          ? await writeDroppedFileToFolder(
+            { fileName, getFilePathOptions, writeTextFile },
+            { kind: "text", content },
+            targetFolder,
+          )
+          : await writeDroppedFileToRoot(
           { fileName, getFilePathOptions, writeTextFile },
           { kind: "text", content },
         )
-        // 检查文件是否已在文件树中
-        const existsInTree = store.fileTree.some(item => item.name === sanitizedFileName && item.isFile)
-        if (!existsInTree) {
-          store.addFile({
-            name: sanitizedFileName,
-            isEditing: false,
-            isLocale: true,
-            isDirectory: false,
-            isFile: true,
-            isSymlink: false,
-          })
-        }
-        // 自动在编辑器中打开
-        store.setActiveFilePath(sanitizedFileName)
+        store.upsertLocalEntry(relativePath, false)
+        importedPaths.push(relativePath)
       } else if (BINARY_EXTENSIONS.test(fileName)) {
         // 二进制文件：图片、PDF 等
         const content = await readFile(filePath)
-        const sanitizedFileName = await writeDroppedFileToRoot(
+        const relativePath = targetFolder
+          ? await writeDroppedFileToFolder(
+            { fileName, getFilePathOptions, writeFile },
+            { kind: "binary", content },
+            targetFolder,
+          )
+          : await writeDroppedFileToRoot(
           { fileName, getFilePathOptions, writeFile },
           { kind: "binary", content },
         )
-        // 检查文件是否已在文件树中
-        const existsInTree = store.fileTree.some(item => item.name === sanitizedFileName && item.isFile)
-        if (!existsInTree) {
-          store.addFile({
-            name: sanitizedFileName,
-            isEditing: false,
-            isLocale: true,
-            isDirectory: false,
-            isFile: true,
-            isSymlink: false,
-          })
-        }
-        // 自动在编辑器中打开
-        store.setActiveFilePath(sanitizedFileName)
+        store.upsertLocalEntry(relativePath, false)
+        importedPaths.push(relativePath)
       }
+    }
+
+    if (targetFolder) {
+      await store.ensurePathExpanded(targetFolder)
+    }
+
+    const lastImportedPath = importedPaths[importedPaths.length - 1]
+    if (lastImportedPath) {
+      store.setActiveFilePath(lastImportedPath)
     }
   }, [])
 
@@ -149,10 +175,18 @@ export function FileManager({
       const { type } = event.payload
 
       if (type === 'enter' || type === 'over') {
+        if (isInternalFileDragActive()) {
+          setIsDragging(false)
+          isOverContainer = false
+          dropTargetFolderRef.current = ""
+          return
+        }
+
         // 检查鼠标是否在文件树容器内
         const { x, y } = event.payload.position
         const rect = el.getBoundingClientRect()
         isOverContainer = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+        dropTargetFolderRef.current = isOverContainer ? resolveDropTargetFolder(event.payload.position) : ""
         setIsDragging(isOverContainer)
         return
       }
@@ -160,23 +194,31 @@ export function FileManager({
       if (type === 'leave') {
         setIsDragging(false)
         isOverContainer = false
+        dropTargetFolderRef.current = ""
         return
       }
 
       if (type === 'drop') {
         setIsDragging(false)
         isOverContainer = false
+        if (isInternalFileDragActive()) {
+          dropTargetFolderRef.current = ""
+          return
+        }
+
         const { paths } = event.payload
         if (paths && paths.length > 0) {
-          void handleExternalDrop(paths)
+          const targetFolder = resolveDropTargetFolder(event.payload.position) || dropTargetFolderRef.current
+          void handleExternalDrop(paths, targetFolder)
         }
+        dropTargetFolderRef.current = ""
       }
     })
 
     return () => {
       void unlisten.then(fn => fn())
     }
-  }, [handleExternalDrop])
+  }, [handleExternalDrop, resolveDropTargetFolder])
 
   // 内部文件拖拽（文件树内移动到根目录）仍使用 DOM 事件
   useEffect(() => {
@@ -188,7 +230,7 @@ export function FileManager({
       if (!dt) return
 
       // 只处理内部拖拽（外部文件由 Tauri 事件处理）
-      const renamePath = dt.getData("application/x-note-gen-file") || dt.getData("text")
+      const renamePath = dt.getData("application/x-lingmo-file") || dt.getData("text")
       if (!renamePath) return
 
       event.preventDefault()
@@ -205,10 +247,12 @@ export function FileManager({
 
         const filename = actualPath.slice(actualPath.lastIndexOf("/") + 1)
         const { getFilePathOptions, getWorkspacePath } = await import("@/lib/workspace")
+        const { generateCopyFilename } = await import("@/lib/default-filename")
         const workspace = await getWorkspacePath()
+        const targetName = await generateCopyFilename("", filename)
 
         const oldPathOptions = await getFilePathOptions(actualPath)
-        const newPathOptions = await getFilePathOptions(filename)
+        const newPathOptions = await getFilePathOptions(targetName)
         if (workspace.isCustom) {
           await rename(oldPathOptions.path, newPathOptions.path)
         } else {
@@ -218,10 +262,15 @@ export function FileManager({
           })
         }
 
-        await useArticleStore.getState().loadFileTree()
-        const { activeFilePath, setActiveFilePath } = useArticleStore.getState()
+        const { activeFilePath, loadFileTree, moveLocalEntry, setActiveFilePath, syncOpenTabsForPathChange } = useArticleStore.getState()
+        const movedInTree = moveLocalEntry(actualPath, targetName)
+        if (!movedInTree) {
+          await loadFileTree({ skipRemoteSync: true })
+        }
+        await syncOpenTabsForPathChange(actualPath, targetName)
+
         if (actualPath === activeFilePath) {
-          setActiveFilePath(filename)
+          setActiveFilePath(targetName)
         }
       })()
     }

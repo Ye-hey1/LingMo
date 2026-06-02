@@ -15,7 +15,7 @@ export function MarkHealthButton() {
   const {
     allMarks,
     fetchAllMarks,
-    fetchMarks,
+    refreshVisibleMarks,
     trashState,
   } = useMarkStore()
   const { tags, fetchTags, getCurrentTag } = useTagStore()
@@ -43,7 +43,7 @@ export function MarkHealthButton() {
     if (health.trashIds.length === 0) return
     await restoreMarks(health.trashIds)
     await fetchAllMarks()
-    await fetchMarks()
+    await refreshVisibleMarks()
     await fetchTags()
     getCurrentTag()
     toast({

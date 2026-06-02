@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { scrollToBottom } from '@/lib/utils'
 import { TooltipButton } from "@/components/tooltip-button"
+import { getActionButtonClass } from "./styles"
 
 interface TranslateControlProps {
   chat: Chat
@@ -22,9 +23,7 @@ export function TranslateControl({ chat, onTranslatedContent, compact = false }:
   const translateT = useTranslations('record.chat.input.translate')
   const [isTranslating, setIsTranslating] = useState(false)
   const [selectedLanguage, setSelectedLanguage] = useState<string>('')
-  const actionButtonClass = compact
-    ? "size-6 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
-    : "size-6.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+  const actionButtonClass = getActionButtonClass(compact)
   
   // 可翻译的语言列表
   const languageOptions = [

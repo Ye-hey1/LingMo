@@ -3,15 +3,15 @@
 import React from "react"
 import { useTranslations } from "next-intl";
 import type { Mark } from "@/db/marks";
-import { Badge } from "@/components/ui/badge";
 import useMarkStore from "@/stores/mark";
 import { MarkLoading } from "./mark-loading";
 import MarkEmpty from "./mark-empty";
-import { buildRecordFilterSummary, filterMarks, getTrashRecordFilters } from "./mark-filters";
+import { filterMarks, getEffectiveRecordFilters } from "./mark-filters";
 import { MarkListDefaultView } from "./mark-list-default-view";
 import { MarkListCompactView } from "./mark-list-compact-view";
 import { MarkListCardView } from "./mark-list-card-view";
 import { TodoStats } from "./todo-stats";
+import { RecordFilterChips } from "./record-filter-chips";
 
 export const MarkList = React.memo(function MarkList() {
   const t = useTranslations('record.mark.list')
@@ -21,19 +21,26 @@ export const MarkList = React.memo(function MarkList() {
     trashState,
     recordFilters,
     recordViewMode,
-    hasActiveRecordFilters,
     setVisibleMarkIds,
   } = useMarkStore()
 
   const effectiveFilters = React.useMemo(() => (
-    trashState ? getTrashRecordFilters() : recordFilters
+    getEffectiveRecordFilters(recordFilters, { trashState })
   ), [trashState, recordFilters])
 
-  const filteredMarks = React.useMemo(() => (
-    filterMarks(marks, effectiveFilters)
-  ), [marks, effectiveFilters])
+  const filtersActive = React.useMemo(() => {
+    return Boolean(
+      effectiveFilters.search.trim() ||
+      effectiveFilters.selectedTypes.length > 0 ||
+      effectiveFilters.timePreset !== 'all' ||
+      effectiveFilters.tagId !== 'all' ||
+      effectiveFilters.processState !== 'all'
+    )
+  }, [effectiveFilters])
 
-  const filterSummary = React.useMemo(() => buildRecordFilterSummary(effectiveFilters), [effectiveFilters])
+  const filteredMarks = React.useMemo(() => (
+    filterMarks(marks, { ...effectiveFilters, trashState })
+  ), [marks, effectiveFilters, trashState])
 
   const hasTodoVisible = React.useMemo(() => {
     const types = effectiveFilters.selectedTypes
@@ -61,40 +68,7 @@ export const MarkList = React.memo(function MarkList() {
     <div className="flex-1 overflow-y-auto">
       <div className="px-0">
         <div>
-          {!trashState && hasActiveRecordFilters() ? (
-            <div className="border-b bg-muted/20 px-3 py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary" className="rounded-full px-2 py-0 text-[11px]">
-                  {t('filteredLabel', { count: filteredMarks.length })}
-                </Badge>
-                {filterSummary.search ? (
-                  <Badge variant="outline" className="rounded-full px-2 py-0 text-[11px] font-normal">
-                    {t('searchChip', { value: filterSummary.search })}
-                  </Badge>
-                ) : null}
-                {filterSummary.timePreset !== 'all' ? (
-                  <Badge variant="outline" className="rounded-full px-2 py-0 text-[11px] font-normal">
-                    {t(`time.${filterSummary.timePreset}`)}
-                  </Badge>
-                ) : null}
-                {filterSummary.typeCount > 0 ? (
-                  <Badge variant="outline" className="rounded-full px-2 py-0 text-[11px] font-normal">
-                    {t('filteredByType', { count: filterSummary.typeCount })}
-                  </Badge>
-                ) : null}
-                {filterSummary.hasProcessState ? (
-                  <Badge variant="outline" className="rounded-full px-2 py-0 text-[11px] font-normal">
-                    {filterSummary.processState === 'processed' ? '已处理' : '未处理'}
-                  </Badge>
-                ) : null}
-                {filterSummary.hasTag ? (
-                  <Badge variant="outline" className="rounded-full px-2 py-0 text-[11px] font-normal">
-                    {t('filteredByTag')}
-                  </Badge>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
+          <RecordFilterChips count={filteredMarks.length} trashState={trashState} />
           {!trashState && hasTodoVisible && <TodoStats marks={filteredMarks} />}
           {
             queues.map(mark => {
@@ -106,7 +80,7 @@ export const MarkList = React.memo(function MarkList() {
           {
             filteredMarks.length ? (
               view
-            ) : !trashState && hasActiveRecordFilters() ? (
+            ) : filtersActive ? (
               <div className="flex flex-col justify-center items-center flex-1 w-full pt-32 text-center">
                 <p className="text-sm text-zinc-500">{t('emptyFiltered')}</p>
                 <p className="mt-1 text-xs text-zinc-400">{t('emptyFilteredHint')}</p>

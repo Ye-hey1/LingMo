@@ -63,7 +63,7 @@ export function ChatSearch() {
           }
         }}
         placeholder="搜索会话内消息..."
-        className="h-7 flex-1 border-0 bg-transparent text-xs shadow-none focus-visible:ring-0"
+        className="h-7 flex-1 border-0 bg-transparent text-xs shadow-none focus-visible:ring-1 focus-visible:ring-ring/30"
       />
       <span className="shrink-0 text-xs tabular-nums text-muted-foreground min-w-[60px] text-center">
         {resultCount > 0 ? `${currentIndex}/${resultCount}` : '无结果'}

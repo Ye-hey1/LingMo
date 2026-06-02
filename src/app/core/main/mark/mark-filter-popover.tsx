@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import useMarkStore, { type RecordProcessState, type RecordTimePreset } from "@/stores/mark"
 import { cn } from "@/lib/utils"
 import { getMarkTypeChipClasses, MARK_TYPE_OPTIONS } from "./mark-type-meta"
+import { buildRecordFilterSummary, getEffectiveRecordFilters } from "./mark-filters"
 const TIME_OPTIONS: RecordTimePreset[] = ['all', 'today', 'last7Days', 'last30Days']
 const PROCESS_OPTIONS: Array<{ value: RecordProcessState; label: string }> = [
   { value: 'all', label: '全部' },
@@ -24,6 +25,7 @@ export function MarkFilterPopover() {
   const [open, setOpen] = useState(false)
   const t = useTranslations('record.mark')
   const {
+    trashState,
     recordFilters,
     setRecordSearch,
     toggleRecordType,
@@ -33,7 +35,9 @@ export function MarkFilterPopover() {
     hasActiveRecordFilters,
   } = useMarkStore()
 
-  const isActive = hasActiveRecordFilters()
+  const isActive = trashState
+    ? buildRecordFilterSummary(getEffectiveRecordFilters(recordFilters, { trashState })).hasFilters
+    : hasActiveRecordFilters()
 
   const handleClear = () => {
     resetRecordFilters()
@@ -90,6 +94,9 @@ export function MarkFilterPopover() {
 
           <div className="space-y-2">
             <Label className="text-xs uppercase tracking-wide text-muted-foreground">处理状态</Label>
+            {trashState ? (
+              <p className="text-xs text-muted-foreground">回收站仅按搜索、类型和删除时间筛选。</p>
+            ) : null}
             <div className="grid grid-cols-3 gap-2">
               {PROCESS_OPTIONS.map((option) => (
                 <Toggle
@@ -97,6 +104,7 @@ export function MarkFilterPopover() {
                   pressed={recordFilters.processState === option.value}
                   size="sm"
                   onPressedChange={() => setRecordProcessState(option.value)}
+                  disabled={trashState}
                   className={cn(
                     "h-8 rounded-full border px-3 text-xs font-medium shadow-none",
                     recordFilters.processState === option.value

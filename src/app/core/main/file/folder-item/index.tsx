@@ -9,7 +9,8 @@ import { toast } from "@/hooks/use-toast";
 import { cloneDeep } from "lodash-es";
 import { computedParentPath, getCurrentFolder } from "@/lib/path";
 import useSettingStore from '@/stores/setting'
-import { isSkillsFolder } from "@/lib/skills/utils"
+import { isSkillsFolder, isInSkillsFolder } from "@/lib/skills/utils"
+import { getFileManagerIconSize, stopRenameInputPropagation } from '../file-browser-utils'
 import SyncFolder from './sync-folder'
 import { NewFile } from './new-file'
 import { NewDiagram } from './new-diagram'
@@ -28,12 +29,9 @@ import { useTranslations } from "next-intl"
 import { FolderVectorMenu } from './folder-vector-menu'
 import { pasteIntoFolder } from './paste-into-folder'
 import emitter from '@/lib/emitter'
-import { LinkedFolder } from '@/lib/files'
+import { collectMarkdownFiles, LinkedFolder } from '@/lib/files'
 import { sanitizeFileName } from "@/lib/sync/filename-utils"
-
-function stopRenameInputPropagation(event: React.SyntheticEvent) {
-  event.stopPropagation()
-}
+import { clearFileKnowledgeIndexes, moveWorkspaceEntryToTrash } from '@/lib/file-trash'
 
 export function FolderItem({
   item,
@@ -54,25 +52,7 @@ export function FolderItem({
   const isMobile = useIsMobile()
   const t = useTranslations('article.file')
 
-  // 检查路径是否在 skills 文件夹下
-  const isInSkillsFolder = (itemPath: string): boolean => {
-    const parts = itemPath.split('/')
-    return parts.some(part => isSkillsFolder(part))
-  }
-
-  // 根据文字大小映射图标大小
-  const getIconSize = (textSize: string) => {
-    const sizeMap = {
-      'xs': 'size-3',
-      'sm': 'size-3.5', 
-      'md': 'size-4',
-      'lg': 'size-5',
-      'xl': 'size-6'
-    }
-    return sizeMap[textSize as keyof typeof sizeMap] || 'size-4'
-  }
-
-  const iconSize = getIconSize(fileManagerTextSize)
+  const iconSize = getFileManagerIconSize(fileManagerTextSize)
 
   const {
     activeFilePath,
@@ -83,15 +63,21 @@ export function FolderItem({
     loadCollapsibleFiles,
     fileTree,
     setFileTree,
-    vectorIndexedFiles
+    moveLocalEntry,
+    syncOpenTabsForPathChange,
+    vectorIndexedFiles,
+    cleanTabsByDeletedFolder,
+    flushPendingSaveForPath,
   } = useArticleStore()
   const { setClipboardItem, clipboardItem, clipboardOperation } = useClipboardStore()
 
   const path = computedParentPath(item)
-  const cacheTree = cloneDeep(fileTree)
-  const currentFolder = getCurrentFolder(path, cacheTree)
+  const currentFolder = getCurrentFolder(path, fileTree)
   const parentFolder = currentFolder?.parent
   const visibleChildCount = item.children?.length || 0
+  const folderExpanded = forceExpanded || collapsibleList.includes(path)
+  const isSpecialAssetsFolder = assetsPath === item.name
+  const isSkillFolder = isSkillsFolder(item.name)
 
   // 检查文件夹是否被剪切
   const isCut = clipboardOperation === 'cut' && clipboardItem?.path === path
@@ -151,6 +137,33 @@ export function FolderItem({
       )
     }
     return null
+  }
+
+  const renderFolderIcon = () => {
+    if (item.loading) {
+      return <Loader2 className={`${iconSize} animate-spin text-primary`} />
+    }
+
+    if (isSkillFolder) {
+      return <Sparkles className={`${iconSize} text-violet-600 dark:text-violet-400`} />
+    }
+
+    if (!item.isLocale) {
+      return <FolderDown className={`${iconSize} text-sky-600 dark:text-sky-400`} />
+    }
+
+    if (item.sha) {
+      const SyncIcon = folderExpanded ? FolderUp : FolderDown
+      return <SyncIcon className={`${iconSize} text-cyan-600 dark:text-cyan-400`} />
+    }
+
+    if (isSpecialAssetsFolder) {
+      const AssetsIcon = folderExpanded ? FolderOpenDot : FolderDot
+      return <AssetsIcon className={`${iconSize} text-emerald-600 dark:text-emerald-400`} />
+    }
+
+    const FolderIcon = folderExpanded ? FolderOpen : Folder
+    return <FolderIcon className={`${iconSize} text-amber-600 dark:text-amber-400`} />
   }
 
   // 移动端处理函数
@@ -255,11 +268,7 @@ export function FolderItem({
   // 删除文件夹
   async function handleDeleteFolder() {
     try {
-      // 获取工作区路径信息
-      const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
-      const workspace = await getWorkspacePath()
       const { ask } = await import('@tauri-apps/plugin-dialog')
-      const { remove } = await import('@tauri-apps/plugin-fs')
 
       // 确认删除操作
       const confirmed = await ask(t('context.confirmDelete', { name: item.name }), {
@@ -269,23 +278,19 @@ export function FolderItem({
 
       if (!confirmed) return
 
-      // 根据工作区类型确定正确的路径
-      const pathOptions = await getFilePathOptions(path)
+      const markdownFiles = await collectMarkdownFiles(path)
 
-      if (workspace.isCustom) {
-        await remove(pathOptions.path, { recursive: true })
-      } else {
-        await remove(pathOptions.path, { baseDir: pathOptions.baseDir, recursive: true })
+      if (activeFilePath && (activeFilePath === path || activeFilePath.startsWith(`${path}/`))) {
+        await flushPendingSaveForPath(activeFilePath)
       }
 
-      // 如果删除的文件夹包含当前活动文件，清除活动文件路径
-      if (activeFilePath && activeFilePath.startsWith(path)) {
-        setActiveFilePath('')
-      }
+      await moveWorkspaceEntryToTrash({ relativePath: path, kind: 'directory' })
+      await cleanTabsByDeletedFolder(path)
 
       // 从文件树中移除该文件夹
       const cacheTree = cloneDeep(fileTree)
-      const parentFolder = currentFolder?.parent
+      const deletedFolder = getCurrentFolder(path, cacheTree)
+      const parentFolder = deletedFolder?.parent
 
       if (parentFolder && parentFolder.children) {
         const index = parentFolder.children.findIndex(child => child.name === item.name)
@@ -301,30 +306,14 @@ export function FolderItem({
 
       setFileTree(cacheTree)
 
-      // 删除向量数据库中该文件夹下所有文件的记录
+      // 删除索引数据库中该文件夹下所有 Markdown 文件的记录
       try {
-        const { getAllMarkdownFiles } = await import('@/lib/files')
-        const { deleteVectorDocumentsByFilename } = await import('@/db/vector')
-        const allFiles = await getAllMarkdownFiles()
-
-        // 找出该文件夹下的所有 Markdown 文件
-        const folderPrefix = path.endsWith('/') ? path : path + '/'
-        const filesInFolder = allFiles.filter(file => file.relativePath.startsWith(folderPrefix))
-
-        // 删除这些文件的向量数据
-        for (const file of filesInFolder) {
-          const filename = file.relativePath
-          try {
-            await deleteVectorDocumentsByFilename(filename)
-          } catch (error) {
-            console.error(`删除文件 ${filename} 的向量数据失败:`, error)
-          }
-        }
+        await clearFileKnowledgeIndexes(markdownFiles.map(file => file.path))
       } catch (error) {
-        console.error('删除文件夹向量数据失败:', error)
+        console.error('删除文件夹索引数据失败:', error)
       }
 
-      toast({ title: t('context.deleteSuccess') })
+      toast({ title: '已移入回收站' })
     } catch (error) {
       console.error('Delete folder failed:', error)
       toast({
@@ -395,6 +384,8 @@ export function FolderItem({
     // 统一处理：将空格替换为下划线，确保本地和远程文件名一致
     const sanitizedName = sanitizeFileName(name.replace(/\s+/g, '_'))
     setName(sanitizedName)
+
+    const cacheTree = cloneDeep(fileTree)
 
     // 获取工作区路径信息
     const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
@@ -493,10 +484,11 @@ export function FolderItem({
 
   async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
+    e.stopPropagation()
     setIsDragging(false)
 
     // 内部文件拖拽（文件树内移动）
-    const renamePath = e.dataTransfer?.getData('application/x-note-gen-file') || e.dataTransfer?.getData('text')
+    const renamePath = e.dataTransfer?.getData('application/x-lingmo-file') || e.dataTransfer?.getData('text')
     if (renamePath) {
       let actualPath = renamePath
       try {
@@ -507,12 +499,20 @@ export function FolderItem({
       }
 
       const filename = actualPath.slice(actualPath.lastIndexOf('/') + 1)
+      const sourceFolderPath = actualPath.includes('/') ? actualPath.split('/').slice(0, -1).join('/') : ''
+
+      if (sourceFolderPath === path) {
+        return
+      }
 
       const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
+      const { generateCopyFilename } = await import('@/lib/default-filename')
       const workspace = await getWorkspacePath()
+      const targetName = await generateCopyFilename(path, filename)
+      const targetPath = `${path}/${targetName}`
 
       const oldPathOptions = await getFilePathOptions(actualPath)
-      const newPathOptions = await getFilePathOptions(`${path}/${filename}`)
+      const newPathOptions = await getFilePathOptions(targetPath)
 
       if (workspace.isCustom) {
         await rename(oldPathOptions.path, newPathOptions.path)
@@ -523,11 +523,15 @@ export function FolderItem({
         })
       }
 
-      loadFileTree()
+      const movedInTree = moveLocalEntry(actualPath, targetPath)
+      if (!movedInTree) {
+        await loadFileTree({ skipRemoteSync: true })
+      }
+      await syncOpenTabsForPathChange(actualPath, targetPath)
 
-      if (actualPath === activeFilePath && !collapsibleList.includes(item.name)) {
-        setCollapsibleList(item.name, true)
-        setActiveFilePath(`${path}/${filename}`)
+      if (actualPath === activeFilePath && !collapsibleList.includes(path)) {
+        setCollapsibleList(path, true)
+        setActiveFilePath(targetPath)
       }
     }
   }
@@ -604,12 +608,16 @@ export function FolderItem({
         currentFolder.parent?.children?.splice(index, 1)
       }
     } else {
+      const cacheTree = cloneDeep(fileTree)
       const index = cacheTree.findIndex(item => item.name === '')
       if (index !== -1) {
         cacheTree.splice(index, 1)
       }
+      setFileTree(cacheTree)
+      setIsEditing(false)
+      return
     }
-    setFileTree(cacheTree)
+    setFileTree([...fileTree])
     setIsEditing(false)
   }
 
@@ -689,6 +697,7 @@ export function FolderItem({
         <ContextMenuTrigger asChild>
           <div
             className={`${isDragging ? 'file-on-drop' : ''} ${path === activeFilePath ? 'active' : ''} group file-manange-item flex select-none`}
+            data-file-manager-folder-path={path}
             title={path}
             onClick={() => handleSelectFolder()}
             onContextMenu={(e) => {
@@ -755,16 +764,11 @@ export function FolderItem({
                   className={`${!item.isLocale || isCut ? 'opacity-50' : ''} flex min-w-0 flex-1 items-center gap-1.5 select-none`}
                 >
                   <div className="relative flex min-w-0 flex-1 select-none items-center gap-1.5">
-                    {item.loading ? (
-                      <Loader2 className={`${iconSize} animate-spin text-primary`} />
-                    ) : isSkillsFolder(item.name) ? (
-                      <Sparkles className={`${iconSize} text-primary`} />
-                    ) : collapsibleList.includes(path) ? (
-                      assetsPath === item.name ? <FolderOpenDot className={iconSize} /> : (!item.isLocale ? <FolderDown className={iconSize} /> : (item.sha ? <FolderUp className={iconSize} /> : <FolderOpen className={iconSize} />))
-                    ) : (
-                      assetsPath === item.name ? <FolderDot className={iconSize} /> : (!item.isLocale ? <FolderDown className={iconSize} /> : (item.sha ? <FolderUp className={iconSize} /> : <Folder className={iconSize} />))
-                    )}
+                    {renderFolderIcon()}
                     <span className={`min-w-0 flex-1 text-${fileManagerTextSize} line-clamp-1 ${item.loading ? 'text-muted-foreground' : ''}`}>{item.name}</span>
+                    {isSkillFolder ? (
+                      <Sparkles className="size-3 shrink-0 text-muted-foreground" aria-label="技能目录" />
+                    ) : null}
                     {visibleChildCount > 0 ? (
                       <span className="file-manager-count-badge">
                         {visibleChildCount}

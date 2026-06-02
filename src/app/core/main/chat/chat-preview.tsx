@@ -1,6 +1,6 @@
 'use client'
 import useSettingStore from "@/stores/setting";
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useTheme } from 'next-themes'
 import MarkdownIt from 'markdown-it';
 import katex from '@traptitech/markdown-it-katex';
@@ -15,6 +15,258 @@ import css from 'highlight.js/lib/languages/css';
 import 'highlight.js/styles/github.min.css';
 import './chat.css';
 import { advanceStreamingSmoother } from './streaming-smoother';
+import { getMermaidRenderer } from '@/lib/mermaid';
+
+function preprocessMarkdown(text: string): string {
+  let processed = text;
+
+  const codeBlockCount = (processed.match(/```/g) || []).length;
+  if (codeBlockCount % 2 !== 0) {
+    processed += '\n```\n';
+  }
+
+  const katexBlockCount = (processed.match(/\$\$/g) || []).length;
+  if (katexBlockCount % 2 !== 0) {
+    processed += '\n$$\n';
+  }
+
+  const inlineKatexCount = (processed.match(/\$/g) || []).length;
+  const singleDollarCount = inlineKatexCount - (katexBlockCount * 2);
+  if (singleDollarCount % 2 !== 0) {
+    processed += '$';
+  }
+
+  return processed;
+}
+
+function getFenceLanguage(info: string): string {
+  return info.trim().split(/\s+/)[0]?.replace(/^language-/, '').toLowerCase() || '';
+}
+
+type MermaidRenderCacheEntry = {
+  svg?: string;
+  error?: string;
+}
+
+type MermaidRenderResult = {
+  svg: string;
+  repaired: boolean;
+}
+
+const MERMAID_RENDER_CACHE_PREFIX = 'lingmo:chat:mermaid:';
+const MAX_STORED_MERMAID_SVG_LENGTH = 500_000;
+const MERMAID_STATEMENT_START = /([)\]}"])\s+([A-Za-z_][\w-]*\s*(?:-->|---|-.->|==>|--o|--x|o--|x--))/g;
+const MERMAID_SEPARATOR_LINE = /^\s*[-–—_=]{3,}\s*;?\s*$/;
+const MERMAID_DASH_TARGET_EDGE = /^\s*[A-Za-z_][\w-]*\s*(?:-->|---|-.->|==>|--o|--x)\s*[-–—_]{3,}\s*;?\s*$/;
+const MERMAID_SIMPLE_LABEL = /\b([A-Za-z_][\w-]*)\[([^\]\n"]*?[<>()（）:：,，;；/][^\]\n"]*?)\]/g;
+const MERMAID_ELLIPSIS_PREFIX_LABEL = /\[\s*(?:\.{3}|…)\s*([^\]\n]+?)\s*\]/g;
+
+type MermaidViewState = {
+  scale: number;
+  translateX: number;
+  translateY: number;
+  isDragging: boolean;
+  pointerId: number | null;
+  startX: number;
+  startY: number;
+  lastTranslateX: number;
+  lastTranslateY: number;
+}
+
+type MermaidViewerState = {
+  svg: string;
+  scale: number;
+  translateX: number;
+  translateY: number;
+  isDragging: boolean;
+  pointerId: number | null;
+  startX: number;
+  startY: number;
+  lastTranslateX: number;
+  lastTranslateY: number;
+}
+
+function getMermaidCacheKey(source: string, theme: 'light' | 'dark'): string {
+  return `${theme}:${source}`;
+}
+
+function hashMermaidCacheKey(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function getStoredMermaidCacheEntry(source: string, theme: 'light' | 'dark'): MermaidRenderCacheEntry | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  try {
+    const cacheKey = getMermaidCacheKey(source, theme);
+    const storageKey = MERMAID_RENDER_CACHE_PREFIX + hashMermaidCacheKey(cacheKey);
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return undefined;
+
+    const parsed = JSON.parse(raw) as {
+      source?: string;
+      theme?: 'light' | 'dark';
+      svg?: string;
+    };
+
+    if (parsed.source !== source || parsed.theme !== theme || !parsed.svg) {
+      return undefined;
+    }
+
+    return { svg: parsed.svg };
+  } catch {
+    return undefined;
+  }
+}
+
+function storeMermaidCacheEntry(source: string, theme: 'light' | 'dark', entry: MermaidRenderCacheEntry) {
+  if (typeof window === 'undefined' || !entry.svg || entry.svg.length > MAX_STORED_MERMAID_SVG_LENGTH) {
+    return;
+  }
+
+  try {
+    const cacheKey = getMermaidCacheKey(source, theme);
+    const storageKey = MERMAID_RENDER_CACHE_PREFIX + hashMermaidCacheKey(cacheKey);
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      source,
+      theme,
+      svg: entry.svg,
+    }));
+  } catch {
+    // localStorage quota or privacy mode should not block live rendering.
+  }
+}
+
+function wrapMermaidSvg(svg: string): string {
+  return `<div class="mermaid-canvas-viewport">${svg}</div>`;
+}
+
+function getMermaidDiagramSvg(container: HTMLDivElement): SVGSVGElement | null {
+  return (
+    container.querySelector<SVGSVGElement>('.mermaid-canvas-viewport > svg') ||
+    container.querySelector<SVGSVGElement>('.mermaid-canvas-render > svg') ||
+    container.querySelector<SVGSVGElement>('.mermaid-canvas-render svg')
+  );
+}
+
+function normalizeMermaidSource(source: string): string {
+  return source
+    .replace(/^\uFEFF/, '')
+    .replace(/^\s*```(?:mermaid|mmd)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .replace(/<br\s*\/?>/gi, '<br/>')
+    .split('\n')
+    .flatMap((line) => line.replace(MERMAID_STATEMENT_START, '$1\n$2').split('\n'))
+    .map((line) => line.trimEnd())
+    .filter((line) => !MERMAID_SEPARATOR_LINE.test(line))
+    .filter((line) => !MERMAID_DASH_TARGET_EDGE.test(line))
+    .map((line) => line.replace(MERMAID_ELLIPSIS_PREFIX_LABEL, '[$1]'))
+    .join('\n')
+    .trim();
+}
+
+function quoteMermaidLabels(source: string): string {
+  return source.replace(MERMAID_SIMPLE_LABEL, (_match, id: string, label: string) => {
+    const escapedLabel = label
+      .replace(/"/g, '&quot;')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `${id}["${escapedLabel}"]`;
+  });
+}
+
+function getMermaidRenderCandidates(source: string): string[] {
+  const normalized = normalizeMermaidSource(source);
+  const quoted = quoteMermaidLabels(normalized);
+  return Array.from(new Set([source.trim(), normalized, quoted].filter(Boolean)));
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function renderMermaidSvg(
+  mermaid: Awaited<ReturnType<typeof getMermaidRenderer>>,
+  source: string,
+  idBase: string,
+): Promise<MermaidRenderResult> {
+  const candidates = getMermaidRenderCandidates(source);
+  let lastError = '';
+
+  for (const [index, candidate] of candidates.entries()) {
+    try {
+      await mermaid.parse(candidate);
+      const { svg } = await mermaid.render(`${idBase}-${index}`, candidate);
+      return {
+        svg,
+        repaired: candidate !== source.trim(),
+      };
+    } catch (error) {
+      lastError = getErrorMessage(error);
+    }
+  }
+
+  throw new Error(lastError || 'Mermaid 图表语法无效，无法渲染。');
+}
+
+function renderMermaidFence(
+  source: string,
+  cacheEntry: MermaidRenderCacheEntry | undefined,
+  escapeHtml: (value: string) => string,
+  theme: 'light' | 'dark',
+): string {
+  const resolvedCacheEntry = cacheEntry ?? getStoredMermaidCacheEntry(source, theme);
+  const encoded = encodeURIComponent(source);
+  const renderStateAttrs = resolvedCacheEntry?.svg ? ' data-mermaid-rendered="true"' : '';
+  const renderContent = resolvedCacheEntry?.svg
+    ? resolvedCacheEntry.svg
+    : resolvedCacheEntry?.error
+      ? `<div class="chat-mermaid-error">${escapeHtml(resolvedCacheEntry.error)}</div>`
+      : '<div class="mermaid-canvas-loading">正在渲染图表...</div>';
+
+  return [
+    '<div class="mermaid-canvas-container" data-mermaid-encoded="' + encoded + '">',
+    '<div class="mermaid-canvas-render" data-mermaid-source="' + encoded + '"' + renderStateAttrs + '>',
+    renderContent,
+    '</div>',
+    '<div class="mermaid-canvas-controls">',
+    '<button class="mermaid-canvas-btn mermaid-canvas-zoom-in" title="放大">',
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>',
+    '</button>',
+    '<button class="mermaid-canvas-btn mermaid-canvas-zoom-out" title="缩小">',
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>',
+    '</button>',
+    '<button class="mermaid-canvas-btn mermaid-canvas-reset" title="重置视图">',
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>',
+    '</button>',
+    '<div class="mermaid-canvas-divider"></div>',
+    '<button class="mermaid-canvas-btn mermaid-canvas-open" title="展开查看">',
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>',
+    '</button>',
+    '<button class="mermaid-canvas-btn mermaid-canvas-copy" title="复制 SVG">',
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+    '</button>',
+    '<button class="mermaid-canvas-btn mermaid-canvas-export" title="导出 PNG">',
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    '</button>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
+function decodeMermaidSource(area: HTMLElement): string {
+  const encoded = area.getAttribute('data-mermaid-source') || '';
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return '';
+  }
+}
 
 type ThemeType = 'light' | 'dark' | 'system';
 
@@ -26,6 +278,13 @@ type ChatPreviewProps = {
 };
 
 const MIN_RENDER_INTERVAL_MS = 33;
+const MIN_CONTENT_TEXT_SCALE = 75;
+const MAX_CONTENT_TEXT_SCALE = 150;
+
+function getContentTextScaleRatio(scale: number): number {
+  if (!Number.isFinite(scale)) return 1;
+  return Math.min(MAX_CONTENT_TEXT_SCALE, Math.max(MIN_CONTENT_TEXT_SCALE, scale)) / 100;
+}
 
 export default function ChatPreview({text, streaming = false, highlightQuery, className}: ChatPreviewProps) {
   const previewRef = useRef<HTMLDivElement>(null);
@@ -41,6 +300,24 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
   const lastFrameTimeRef = useRef<number | null>(null);
   const lastRenderTimeRef = useRef(0);
   const md = useRef<MarkdownIt | null>(null);
+  const mermaidRenderCacheRef = useRef<Map<string, MermaidRenderCacheEntry>>(new Map());
+  const mermaidViewStateRef = useRef<WeakMap<HTMLDivElement, MermaidViewState>>(new WeakMap());
+  const [mermaidViewer, setMermaidViewer] = useState<MermaidViewerState | null>(null);
+  const contentTextScaleRatio = useMemo(
+    () => getContentTextScaleRatio(contentTextScale),
+    [contentTextScale],
+  );
+  const chatContentFontSize = useMemo(
+    () => `calc(0.875rem * ${contentTextScaleRatio})`,
+    [contentTextScaleRatio],
+  );
+  const previewStyle = useMemo<React.CSSProperties & Record<'--chat-content-font-size', string>>(
+    () => ({
+      fontSize: chatContentFontSize,
+      '--chat-content-font-size': chatContentFontSize,
+    }),
+    [chatContentFontSize],
+  );
 
   useEffect(() => {
     hljs.registerLanguage('javascript', javascript);
@@ -52,7 +329,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
   }, []);
   
   useEffect(() => {
-    md.current = new MarkdownIt({
+    const markdown = new MarkdownIt({
       html: true,
       linkify: true,
       typographer: true,
@@ -67,7 +344,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
         }
         const themeClass = mdTheme === 'dark' ? 'hljs-dark' : 'hljs-light';
         return `<pre class="hljs ${themeClass}"><code>` +
-          (md.current ? md.current.utils.escapeHtml(str) : str) +
+          markdown.utils.escapeHtml(str) +
           '</code></pre>';
       }
     }).use(katex, {
@@ -75,18 +352,38 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       errorColor: '#cc0000'
     });
 
-    md.current.renderer.rules.link_open = function (tokens, idx, options, _env, self) {
+    const defaultFence = markdown.renderer.rules.fence!;
+    markdown.renderer.rules.fence = function (tokens, idx, options, env, self) {
+      const token = tokens[idx];
+      const lang = getFenceLanguage(token.info);
+
+      if (!streaming && (lang === 'mermaid' || lang === 'mmd')) {
+        const mermaidTheme = mdTheme === 'dark' ? 'dark' : 'light';
+        return renderMermaidFence(
+          token.content,
+          mermaidRenderCacheRef.current.get(getMermaidCacheKey(token.content, mermaidTheme)),
+          markdown.utils.escapeHtml,
+          mermaidTheme,
+        );
+      }
+
+      return defaultFence(tokens, idx, options, env, self);
+    };
+
+    markdown.renderer.rules.link_open = function (tokens, idx, options, _env, self) {
       tokens[idx].attrSet('target', '_blank');
       tokens[idx].attrSet('rel', 'noopener noreferrer');
       return self.renderToken(tokens, idx, options);
     }
 
+    md.current = markdown;
+
     if (displayedTextRef.current) {
-      setHtmlContent(md.current.render(displayedTextRef.current));
+      setHtmlContent(md.current.render(preprocessMarkdown(displayedTextRef.current)));
     } else {
       setHtmlContent('');
     }
-  }, [mdTheme]);
+  }, [mdTheme, streaming]);
 
   const renderDisplayedText = useCallback((nextText: string, force = false) => {
     displayedTextRef.current = nextText;
@@ -103,7 +400,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
 
     setDisplayedText(nextText);
     if (md.current) {
-      setHtmlContent(md.current.render(nextText));
+      setHtmlContent(md.current.render(preprocessMarkdown(nextText)));
     } else {
       setHtmlContent(nextText);
     }
@@ -244,15 +541,6 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     }
   }, [theme])
   
-  // 应用正文文字大小缩放
-  useEffect(() => {
-    if (previewRef.current) {
-      const baseFontSize = (16 * contentTextScale) / 100
-      previewRef.current.style.fontSize = `${baseFontSize}px`
-      previewRef.current.style.setProperty('--chat-content-font-size', `${baseFontSize}px`)
-    }
-  }, [contentTextScale])
-
   // 搜索关键词高亮（基于 DOM TreeWalker）
   useEffect(() => {
     const el = previewRef.current
@@ -303,6 +591,381 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       parent.removeChild(node)
     }
   }, [htmlContent, highlightQuery])
+
+  const getMermaidContainer = useCallback((target: EventTarget | null) => {
+    if (!(target instanceof Element)) return null
+    return target.closest<HTMLDivElement>('.mermaid-canvas-container')
+  }, [])
+
+  const getMermaidViewState = useCallback((container: HTMLDivElement): MermaidViewState => {
+    const existing = mermaidViewStateRef.current.get(container)
+    if (existing) return existing
+
+    const nextState: MermaidViewState = {
+      scale: 1,
+      translateX: 0,
+      translateY: 0,
+      isDragging: false,
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      lastTranslateX: 0,
+      lastTranslateY: 0,
+    }
+    mermaidViewStateRef.current.set(container, nextState)
+    return nextState
+  }, [])
+
+  const applyMermaidTransform = useCallback((container: HTMLDivElement) => {
+    const state = getMermaidViewState(container)
+    const viewport = container.querySelector<HTMLDivElement>('.mermaid-canvas-viewport')
+    if (!viewport) return
+    viewport.style.transform = `translate(${state.translateX}px, ${state.translateY}px) scale(${state.scale})`
+  }, [getMermaidViewState])
+
+  const handleMermaidToolbarClick = useCallback(async (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+
+    const button = target.closest<HTMLButtonElement>('.mermaid-canvas-btn')
+    if (!button) return
+
+    const container = getMermaidContainer(button)
+    if (!container) return
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    const state = getMermaidViewState(container)
+    const svg = getMermaidDiagramSvg(container)
+
+    if (button.classList.contains('mermaid-canvas-zoom-in')) {
+      state.scale = Math.min(4, state.scale + 0.2)
+      applyMermaidTransform(container)
+      return
+    }
+
+    if (button.classList.contains('mermaid-canvas-zoom-out')) {
+      state.scale = Math.max(0.25, state.scale - 0.2)
+      applyMermaidTransform(container)
+      return
+    }
+
+    if (button.classList.contains('mermaid-canvas-reset')) {
+      state.scale = 1
+      state.translateX = 0
+      state.translateY = 0
+      applyMermaidTransform(container)
+      return
+    }
+
+    if (button.classList.contains('mermaid-canvas-open')) {
+      if (!svg) return
+      setMermaidViewer({
+        svg: svg.outerHTML,
+        scale: 1,
+        translateX: 0,
+        translateY: 0,
+        isDragging: false,
+        pointerId: null,
+        startX: 0,
+        startY: 0,
+        lastTranslateX: 0,
+        lastTranslateY: 0,
+      })
+      return
+    }
+
+    if (button.classList.contains('mermaid-canvas-copy')) {
+      if (!svg) return
+      try {
+        await navigator.clipboard.writeText(svg.outerHTML)
+        button.classList.add('copied')
+        setTimeout(() => button.classList.remove('copied'), 1500)
+      } catch (err) {
+        console.error('复制失败:', err)
+      }
+      return
+    }
+
+    if (button.classList.contains('mermaid-canvas-export')) {
+      if (!svg) return
+      try {
+        const svgData = new XMLSerializer().serializeToString(svg)
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+        const img = new Image()
+
+        img.onload = () => {
+          canvas.width = img.width * 2
+          canvas.height = img.height * 2
+          ctx?.scale(2, 2)
+          ctx?.drawImage(img, 0, 0)
+          const url = canvas.toDataURL('image/png')
+          const link = document.createElement('a')
+          link.href = url
+          link.download = 'mermaid-chart.png'
+          link.click()
+          URL.revokeObjectURL(url)
+          button.classList.add('exported')
+          setTimeout(() => button.classList.remove('exported'), 1500)
+        }
+
+        img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)))
+      } catch (err) {
+        console.error('导出失败:', err)
+      }
+    }
+  }, [applyMermaidTransform, getMermaidContainer, getMermaidViewState])
+
+  useEffect(() => {
+    const el = previewRef.current
+    if (!el) return
+
+    const handleWheel = (event: WheelEvent) => {
+      const container = getMermaidContainer(event.target)
+      if (!container) return
+
+      event.preventDefault()
+      const state = getMermaidViewState(container)
+      const delta = event.deltaY > 0 ? -0.1 : 0.1
+      state.scale = Math.min(4, Math.max(0.25, state.scale + delta))
+      applyMermaidTransform(container)
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Element && target.closest('.mermaid-canvas-controls')) return
+
+      const container = getMermaidContainer(target)
+      if (!container || event.button !== 0) return
+
+      const renderArea = container.querySelector<HTMLDivElement>('.mermaid-canvas-render')
+      if (!renderArea) return
+
+      const state = getMermaidViewState(container)
+      state.isDragging = true
+      state.pointerId = event.pointerId
+      state.startX = event.clientX
+      state.startY = event.clientY
+      state.lastTranslateX = state.translateX
+      state.lastTranslateY = state.translateY
+      renderArea.setPointerCapture?.(event.pointerId)
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const container = getMermaidContainer(event.target)
+      if (!container) return
+
+      const state = getMermaidViewState(container)
+      if (!state.isDragging || state.pointerId !== event.pointerId) return
+
+      state.translateX = state.lastTranslateX + (event.clientX - state.startX)
+      state.translateY = state.lastTranslateY + (event.clientY - state.startY)
+      applyMermaidTransform(container)
+    }
+
+    const endPointerDrag = (event: PointerEvent) => {
+      const container = getMermaidContainer(event.target)
+      if (!container) return
+
+      const state = getMermaidViewState(container)
+      if (state.pointerId !== event.pointerId) return
+
+      state.isDragging = false
+      state.pointerId = null
+      const renderArea = container.querySelector<HTMLDivElement>('.mermaid-canvas-render')
+      renderArea?.releasePointerCapture?.(event.pointerId)
+    }
+
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    el.addEventListener('pointerdown', handlePointerDown)
+    el.addEventListener('pointermove', handlePointerMove)
+    el.addEventListener('pointerup', endPointerDrag)
+    el.addEventListener('pointercancel', endPointerDrag)
+
+    return () => {
+      el.removeEventListener('wheel', handleWheel)
+      el.removeEventListener('pointerdown', handlePointerDown)
+      el.removeEventListener('pointermove', handlePointerMove)
+      el.removeEventListener('pointerup', endPointerDrag)
+      el.removeEventListener('pointercancel', endPointerDrag)
+    }
+  }, [
+    applyMermaidTransform,
+    getMermaidContainer,
+    getMermaidViewState,
+  ])
+
+  // 渲染 Mermaid 图表并添加交互控制
+  useLayoutEffect(() => {
+    if (streaming) return
+
+    const el = previewRef.current
+    if (!el) return
+
+    const containers = el.querySelectorAll<HTMLDivElement>('.mermaid-canvas-container')
+    if (containers.length === 0) return
+
+    let cancelled = false
+    const currentTheme = mdTheme === 'dark' ? 'dark' : 'light';
+    let renderedFreshDiagram = false;
+
+    function setupInteraction(container: HTMLDivElement) {
+      getMermaidViewState(container)
+      applyMermaidTransform(container)
+    }
+
+    (async () => {
+      try {
+        const mermaid = await getMermaidRenderer(currentTheme)
+        if (cancelled) return
+
+        for (const container of Array.from(containers)) {
+          if (cancelled) return
+          const renderArea = container.querySelector('.mermaid-canvas-render') as HTMLDivElement;
+          if (!renderArea) continue;
+          const source = decodeMermaidSource(renderArea)
+          if (!source.trim()) {
+            renderArea.innerHTML = '<div class="chat-mermaid-error">Mermaid 源码为空，无法渲染图表。</div>'
+            continue
+          }
+          const cacheKey = getMermaidCacheKey(source, currentTheme)
+          const cached = mermaidRenderCacheRef.current.get(cacheKey) ?? getStoredMermaidCacheEntry(source, currentTheme)
+
+          if (cached?.svg) {
+            mermaidRenderCacheRef.current.set(cacheKey, cached)
+            renderArea.innerHTML = wrapMermaidSvg(cached.svg)
+            renderArea.dataset.mermaidRendered = 'true'
+            setupInteraction(container)
+            continue
+          }
+
+          if (cached?.error) {
+            renderArea.innerHTML = `<div class="chat-mermaid-error">${md.current ? md.current.utils.escapeHtml(cached.error) : cached.error}</div>`
+            continue
+          }
+
+          if (renderArea.dataset.mermaidRendered === 'true' && renderArea.querySelector('svg')) {
+            setupInteraction(container)
+            continue
+          }
+
+          try {
+            renderArea.removeAttribute('data-mermaid-rendered')
+            renderArea.innerHTML = '<div class="mermaid-canvas-loading">正在渲染图表...</div>'
+            const id = `chat-mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+            const { svg, repaired } = await renderMermaidSvg(mermaid, source, id)
+            const cacheEntry = { svg }
+            mermaidRenderCacheRef.current.set(cacheKey, cacheEntry)
+            storeMermaidCacheEntry(source, currentTheme, cacheEntry)
+            if (cancelled) return
+            renderArea.innerHTML = wrapMermaidSvg(svg)
+            renderArea.dataset.mermaidRendered = 'true'
+            if (repaired) {
+              renderArea.dataset.mermaidRepaired = 'true'
+            }
+            setupInteraction(container);
+            renderedFreshDiagram = true;
+          } catch (err) {
+            const msg = getErrorMessage(err)
+            mermaidRenderCacheRef.current.set(cacheKey, { error: msg })
+            if (cancelled) return
+            renderArea.innerHTML = `<div class="chat-mermaid-error">${md.current ? md.current.utils.escapeHtml(msg) : msg}</div>`
+          }
+        }
+        if (renderedFreshDiagram && !cancelled && md.current) {
+          setHtmlContent(md.current.render(preprocessMarkdown(displayedTextRef.current)));
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        containers.forEach((container) => {
+          const renderArea = container.querySelector('.mermaid-canvas-render') as HTMLDivElement;
+          if (renderArea) {
+            renderArea.innerHTML = `<div class="chat-mermaid-error">${md.current ? md.current.utils.escapeHtml(msg) : msg}</div>`
+          }
+        })
+      }
+    })()
+
+    return () => {
+      cancelled = true;
+    }
+  }, [applyMermaidTransform, getMermaidViewState, htmlContent, mdTheme, streaming])
+
+  useEffect(() => {
+    if (!mermaidViewer) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMermaidViewer(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [mermaidViewer])
+
+  const updateMermaidViewer = useCallback((updater: (state: MermaidViewerState) => MermaidViewerState) => {
+    setMermaidViewer((state) => state ? updater(state) : state)
+  }, [])
+
+  const handleMermaidViewerWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const delta = event.deltaY > 0 ? -0.12 : 0.12
+    updateMermaidViewer((state) => ({
+      ...state,
+      scale: Math.min(6, Math.max(0.15, state.scale + delta)),
+    }))
+  }, [updateMermaidViewer])
+
+  const handleMermaidViewerPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    updateMermaidViewer((state) => ({
+      ...state,
+      isDragging: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastTranslateX: state.translateX,
+      lastTranslateY: state.translateY,
+    }))
+  }, [updateMermaidViewer])
+
+  const handleMermaidViewerPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    updateMermaidViewer((state) => {
+      if (!state.isDragging || state.pointerId !== event.pointerId) return state
+      return {
+        ...state,
+        translateX: state.lastTranslateX + event.clientX - state.startX,
+        translateY: state.lastTranslateY + event.clientY - state.startY,
+      }
+    })
+  }, [updateMermaidViewer])
+
+  const handleMermaidViewerPointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+    updateMermaidViewer((state) => {
+      if (state.pointerId !== event.pointerId) return state
+      return {
+        ...state,
+        isDragging: false,
+        pointerId: null,
+      }
+    })
+  }, [updateMermaidViewer])
+
+  const resetMermaidViewer = useCallback(() => {
+    updateMermaidViewer((state) => ({
+      ...state,
+      scale: 1,
+      translateX: 0,
+      translateY: 0,
+      isDragging: false,
+      pointerId: null,
+    }))
+  }, [updateMermaidViewer])
 
   // 根据主题选择样式
   const getThemeClass = () => {
@@ -375,11 +1038,77 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       <div 
         ref={previewRef}
         className={getThemeClass()}
+        style={previewStyle}
         dangerouslySetInnerHTML={{ __html: htmlContent }}
         data-highlight-style={getHighlightStyle()}
         draggable={isMacOS()}
+        onClickCapture={handleMermaidToolbarClick}
         onDragStart={handleDragStart}
       />
+      {mermaidViewer && (
+        <div
+          className="mermaid-viewer-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Mermaid 图表查看器"
+        >
+          <div className="mermaid-viewer-header">
+            <div className="mermaid-viewer-title">Mermaid 图表</div>
+            <div className="mermaid-viewer-toolbar">
+              <button
+                type="button"
+                className="mermaid-viewer-btn"
+                onClick={() => updateMermaidViewer((state) => ({ ...state, scale: Math.min(6, state.scale + 0.2) }))}
+                title="放大"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="mermaid-viewer-btn"
+                onClick={() => updateMermaidViewer((state) => ({ ...state, scale: Math.max(0.15, state.scale - 0.2) }))}
+                title="缩小"
+              >
+                -
+              </button>
+              <button
+                type="button"
+                className="mermaid-viewer-btn"
+                onClick={resetMermaidViewer}
+                title="重置"
+              >
+                1:1
+              </button>
+              <button
+                type="button"
+                className="mermaid-viewer-btn mermaid-viewer-close"
+                onClick={() => setMermaidViewer(null)}
+                title="关闭"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+          <div className="mermaid-viewer-shell">
+            <div
+              className="mermaid-viewer-stage"
+              onWheel={handleMermaidViewerWheel}
+              onPointerDown={handleMermaidViewerPointerDown}
+              onPointerMove={handleMermaidViewerPointerMove}
+              onPointerUp={handleMermaidViewerPointerEnd}
+              onPointerCancel={handleMermaidViewerPointerEnd}
+            >
+              <div
+                className="mermaid-viewer-content"
+                style={{
+                  transform: `translate(calc(-50% + ${mermaidViewer.translateX}px), calc(-50% + ${mermaidViewer.translateY}px)) scale(${mermaidViewer.scale})`,
+                }}
+                dangerouslySetInnerHTML={{ __html: mermaidViewer.svg }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

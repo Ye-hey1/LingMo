@@ -93,15 +93,6 @@ function getTableCells(row: Element | null) {
   return Array.from(row.children).filter((child) => child.matches('td, th')) as HTMLTableCellElement[]
 }
 
-function getColumnIndex(cell: HTMLTableCellElement) {
-  return getTableCells(cell.parentElement).indexOf(cell)
-}
-
-function getColumnCount(table: HTMLTableElement) {
-  const firstRow = table.rows.item(0)
-  return getTableCells(firstRow).length
-}
-
 function getCellFocusPos(editor: Editor, cell: HTMLTableCellElement) {
   const textBlock = cell.querySelector('p, h1, h2, h3, h4, h5, h6, pre') as HTMLElement | null
   const target = textBlock || cell
@@ -383,7 +374,7 @@ function InsertDotButton({
     <button
       type="button"
       data-floating-table-control="true"
-      className="group fixed z-[9998] flex items-center justify-center"
+      className="group fixed z-50 flex items-center justify-center"
       style={{
         top: marker.buttonTop,
         left: marker.buttonLeft,
@@ -577,7 +568,7 @@ export function FloatingTableMenu({ editor }: FloatingTableMenuProps) {
         <>
           <div
             data-floating-table-control="true"
-            className="fixed z-[9996] cursor-pointer rounded-sm transition-colors hover:ring-1 hover:ring-blue-400/35"
+            className="fixed z-50 cursor-pointer rounded-sm transition-colors hover:ring-1 hover:ring-blue-400/35"
             style={{
               ...position.tableGuide,
               background: getGuideBackground(position.tableGuide, columnGuideMarker, 'column', selectedMarker?.id === columnGuideMarker?.id),
@@ -595,7 +586,7 @@ export function FloatingTableMenu({ editor }: FloatingTableMenuProps) {
           />
           <div
             data-floating-table-control="true"
-            className="fixed z-[9996] cursor-pointer rounded-sm transition-colors hover:ring-1 hover:ring-blue-400/35"
+            className="fixed z-50 cursor-pointer rounded-sm transition-colors hover:ring-1 hover:ring-blue-400/35"
             style={{
               ...position.leftGuide,
               background: getGuideBackground(position.leftGuide, rowGuideMarker, 'row', selectedMarker?.id === rowGuideMarker?.id),
@@ -616,7 +607,7 @@ export function FloatingTableMenu({ editor }: FloatingTableMenuProps) {
       {previewMarker && (
         <div
           className={[
-            'pointer-events-none fixed z-[9995] rounded-sm',
+            'pointer-events-none fixed z-50 rounded-sm',
             selectedMarker?.id === previewMarker.id
               ? 'bg-blue-500/18 ring-1 ring-blue-500/50'
               : 'bg-slate-300/35 ring-1 ring-slate-300/50',
@@ -626,7 +617,7 @@ export function FloatingTableMenu({ editor }: FloatingTableMenuProps) {
       )}
       {activeMarker?.type === 'row' && (
         <div
-          className="pointer-events-none fixed z-[9997] h-0.5 rounded-full bg-blue-500"
+          className="pointer-events-none fixed z-50 h-0.5 rounded-full bg-blue-500"
           style={{
             top: activeMarker.lineTop,
             left: activeMarker.lineLeft,
@@ -636,7 +627,7 @@ export function FloatingTableMenu({ editor }: FloatingTableMenuProps) {
       )}
       {activeMarker?.type === 'column' && (
         <div
-          className="pointer-events-none fixed z-[9997] w-0.5 rounded-full bg-blue-500"
+          className="pointer-events-none fixed z-50 w-0.5 rounded-full bg-blue-500"
           style={{
             top: activeMarker.lineTop,
             left: activeMarker.lineLeft,

@@ -131,14 +131,14 @@ export function GithubImageHosting() {
   const getStatusIcon = () => {
     switch (imageRepoState) {
       case SyncStateEnum.success:
-        return <CheckCircle className="size-4 text-green-500" />;
+        return <CheckCircle className="size-4 text-foreground" />;
       case SyncStateEnum.checking:
-        return <Loader2 className="size-4 animate-spin text-blue-500" />;
+        return <Loader2 className="size-4 animate-spin text-muted-foreground" />;
       case SyncStateEnum.creating:
-        return <Loader2 className="size-4 animate-spin text-yellow-500" />;
+        return <Loader2 className="size-4 animate-spin text-muted-foreground" />;
       case SyncStateEnum.fail:
       default:
-        return <XCircle className="size-4 text-red-500" />;
+        return <XCircle className="size-4 text-destructive" />;
     }
   };
 
@@ -225,7 +225,7 @@ export function GithubImageHosting() {
               {accessTokenVisible ? <Eye /> : <EyeOff />}
             </Button>
           </div>
-          <OpenBroswer url="https://github.com/settings/tokens/new" title={t('settings.sync.newToken')} className="text-sm text-blue-500 hover:underline" />
+          <OpenBroswer url="https://github.com/settings/tokens/new" title={t('settings.sync.newToken')} className="text-sm text-muted-foreground hover:underline" />
         </div>
 
         {/* 仓库信息 */}

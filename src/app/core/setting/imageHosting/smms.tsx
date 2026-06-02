@@ -56,13 +56,13 @@ export default function SMMSImageHosting() {
 
   const getStatusIcon = () => {
     if (loading) {
-      return <LoaderCircle className="size-4 animate-spin text-blue-500" />;
+      return <LoaderCircle className="size-4 animate-spin text-muted-foreground" />;
     }
     if (token && isConnected) {
-      return <CheckCircle className="size-4 text-green-500" />;
+      return <CheckCircle className="size-4 text-foreground" />;
     }
     if (token && !isConnected) {
-      return <XCircle className="size-4 text-red-500" />;
+      return <XCircle className="size-4 text-destructive" />;
     }
     return <XCircle className="size-4 text-gray-500" />;
   };
@@ -118,7 +118,7 @@ export default function SMMSImageHosting() {
               {tokenVisible ? <Eye /> : <EyeOff />}
             </Button>
           </div>
-          <OpenBroswer url={CREATE_TOKEN_URL} title={t('token.createToken')} className="text-sm text-blue-500 hover:underline" />
+          <OpenBroswer url={CREATE_TOKEN_URL} title={t('token.createToken')} className="text-sm text-muted-foreground hover:underline" />
         </div>
       </CardContent>
     </Card>
