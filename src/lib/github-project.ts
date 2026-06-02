@@ -1,7 +1,7 @@
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { Store } from '@tauri-apps/plugin-store'
 import { createOpenAIClient, getAISettings, handleAIError, prepareMessages } from '@/lib/ai/utils'
 import type { Mark } from '@/db/marks'
+import { fetchWithProxy } from '@/lib/network-proxy'
 
 export const GITHUB_PROJECT_TAG_NAME = '开源项目'
 const GITHUB_API_BASE = 'https://api.github.com'
@@ -204,19 +204,6 @@ function sectionToList(value: string, fallback: string[]) {
   return lines.length > 0 ? lines : fallback
 }
 
-function compactReadmeExcerpt(value: string, maxLength = 2600) {
-  const text = value.trim()
-  if (!text) return ''
-  if (text.length <= maxLength) return text
-
-  const next = text.slice(0, maxLength)
-  const safeEnd = next.lastIndexOf('\n')
-  const clipped = (safeEnd > 800 ? next.slice(0, safeEnd) : next).trimEnd()
-  const fenceCount = (clipped.match(/```/g) || []).length
-
-  return `${clipped}${fenceCount % 2 === 1 ? '\n```' : ''}\n\n...`
-}
-
 function cleanupLegacyGitHubProjectContent(content: string) {
   return content
     .replace(/^## README 结构$/gm, '## 文档结构')
@@ -311,7 +298,7 @@ async function githubJson<T>(path: string, token: string): Promise<T> {
     headers.Authorization = `Bearer ${token}`
   }
 
-  const response = await tauriFetch(`${GITHUB_API_BASE}${path}`, {
+  const response = await fetchWithProxy(`${GITHUB_API_BASE}${path}`, {
     method: 'GET',
     connectTimeout: 15000,
     headers,
