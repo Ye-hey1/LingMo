@@ -152,7 +152,7 @@ export function ChatHeader() {
                   return (
                     <>
                       <BotMessageSquare className="size-3 shrink-0" />
-                      <span className="truncate max-w-28">{targetModel.model}</span>
+                      <span className="truncate max-w-48">{targetModel.model}</span>
                     </>
                   )
                 }
@@ -161,7 +161,7 @@ export function ChatHeader() {
                   return (
                     <>
                       <BotMessageSquare className="size-3 shrink-0" />
-                      <span className="truncate max-w-28">{config.model}</span>
+                      <span className="truncate max-w-48">{config.model}</span>
                     </>
                   )
                 }

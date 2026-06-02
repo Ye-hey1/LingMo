@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState, useEffect, memo } from 'react'
-import { X, FileText, Folder, Plus, Undo2, Redo2, Network, WalletCards, Brain, Code2 } from 'lucide-react'
+import { X, FileText, Folder, Plus, Undo2, Redo2, Network, WalletCards, Brain, Code2, Github } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import emitter from '@/lib/emitter'
@@ -35,6 +35,7 @@ import useSettingStore from '@/stores/setting'
 import { isKnowledgeGraphTabPath } from '../knowledge/knowledge-graph-constants'
 import { isFlashcardTabPath } from '../flashcard/flashcard-constants'
 import { isMemoryTabPath } from '../memory/memory-constants'
+import { isGithubStarsTabPath } from '../github-stars/github-stars-constants'
 
 export interface TabInfo {
   id: string
@@ -141,6 +142,8 @@ function SortableTabWithMenu({
         >
           {isKnowledgeGraphTabPath(tab.path) ? (
             <Network className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
+          ) : isGithubStarsTabPath(tab.path) ? (
+            <Github className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
           ) : isFlashcardTabPath(tab.path) ? (
             <WalletCards className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
           ) : isMemoryTabPath(tab.path) ? (

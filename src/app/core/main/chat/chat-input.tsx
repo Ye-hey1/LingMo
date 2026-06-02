@@ -1536,20 +1536,6 @@ ${exec.prompt}`
             <span>拖到这里附加为上下文</span>
           </div>
         ) : null}
-        {aiQuickPrompts.length > 0 && !text.trim() && !isResearchActive ? (
-          <div className="flex w-full min-w-0 gap-1 overflow-x-auto px-1 pt-0.5 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {aiQuickPrompts.map((prompt) => (
-              <button
-                key={prompt.id}
-                type="button"
-                className="inline-flex h-7 shrink-0 items-center rounded-lg border border-border/60 bg-muted/30 px-2.5 text-xs text-muted-foreground transition-colors hover:border-primary/35 hover:bg-primary/10 hover:text-primary"
-                onClick={() => applyQuickPrompt(prompt.text)}
-              >
-                <span className="max-w-[12rem] truncate">{prompt.text}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
         <div className="relative flex w-full items-start rounded-lg bg-muted/15 transition-colors group-focus-within:bg-muted/10">
           <AiDocCommandPopover
             open={slashOpen}

@@ -70,8 +70,10 @@ function ViewPill({
     <button
       type="button"
       className={cn(
-        'inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors',
-        active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
+        'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-all duration-150',
+        active
+          ? 'bg-foreground text-background shadow-sm'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
       onClick={onClick}
       title={label}
@@ -94,15 +96,23 @@ export function GithubStarsWorkspace() {
     isSyncing,
     isAnalyzing,
     isAiSearching,
+    isRefreshingReleases,
+    isRefreshingForks,
     analyzingRepoId,
     analyzingRepoIds,
     analysisProgress,
     syncProgress,
     aiSearchInfo,
+    discoveryChannel,
+    discoveryIsLoading,
+    discoveryIsLoadingMore,
     error,
     setView,
     load,
     syncStarred,
+    refreshReleases,
+    refreshForks,
+    refreshDiscoveryChannel,
     forceResetSyncState,
     aiSearch,
     analyzeRepositories,
@@ -346,41 +356,71 @@ export function GithubStarsWorkspace() {
     }
   }
 
+  const headerRefreshTitle = view === 'repositories'
+    ? '同步星标'
+    : view === 'releases'
+      ? '刷新发布'
+      : view === 'forks'
+        ? '刷新复刻'
+        : '刷新趋势'
+  const headerStatusText = view === 'repositories'
+    ? `上次同步 ${formatRelativeTime(stats.lastSyncAt)}`
+    : headerRefreshTitle
+  const isHeaderRefreshing = view === 'repositories'
+    ? isSyncing
+    : view === 'releases'
+      ? isRefreshingReleases
+      : view === 'forks'
+        ? isRefreshingForks
+        : Boolean(discoveryIsLoading[discoveryChannel] || discoveryIsLoadingMore[discoveryChannel])
+  const isHeaderRefreshDisabled = isHeaderRefreshing || (view === 'repositories' && isAnalyzing)
+
+  const handleHeaderRefresh = () => {
+    if (view === 'repositories') {
+      void syncStarred()
+    } else if (view === 'releases') {
+      void refreshReleases()
+    } else if (view === 'forks') {
+      void refreshForks()
+    } else {
+      void refreshDiscoveryChannel(discoveryChannel, 1, false)
+    }
+  }
+
   return (
     <TooltipProvider>
       <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
         {/* Header */}
-        <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-background px-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground">
-              <Github className="size-4" />
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold leading-5">GitHub 星标</div>
-              <div className="hidden truncate text-[11px] text-muted-foreground sm:block">同步、整理和 AI 分析 Star 仓库</div>
-            </div>
+        <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
+          {/* Left: Logo + Title */}
+          <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
+            <Github className="size-4" />
+          </div>
+          <span className="text-sm font-semibold tracking-tight">GitHub 管理</span>
+
+          {/* Center: Nav pills */}
+          <div className="ml-3 hidden items-center gap-0.5 md:flex">
+            <ViewPill active={view === 'repositories'} icon={<Search className="size-3" />} label="仓库" onClick={() => setView('repositories')} />
+            <ViewPill active={view === 'releases'} icon={<BookOpen className="size-3" />} label="发布" onClick={() => setView('releases')} />
+            <ViewPill active={view === 'forks'} icon={<GitFork className="size-3" />} label="复刻" onClick={() => setView('forks')} />
+            <ViewPill active={view === 'trending'} icon={<TrendingUp className="size-3" />} label="趋势" onClick={() => setView('trending')} />
           </div>
 
-          <div className="hidden items-center gap-1 rounded-md bg-muted/50 p-0.5 md:flex">
-            <ViewPill active={view === 'repositories'} icon={<Search className="size-3.5" />} label="仓库" onClick={() => setView('repositories')} />
-            <ViewPill active={view === 'releases'} icon={<BookOpen className="size-3.5" />} label="发布" onClick={() => setView('releases')} />
-            <ViewPill active={view === 'forks'} icon={<GitFork className="size-3.5" />} label="复刻" onClick={() => setView('forks')} />
-            <ViewPill active={view === 'trending'} icon={<TrendingUp className="size-3.5" />} label="趋势" onClick={() => setView('trending')} />
-          </div>
-
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="hidden sm:inline">上次同步 {formatRelativeTime(stats.lastSyncAt)}</span>
-            <Button variant="ghost" size="icon" className="size-7" onClick={() => void syncStarred()} disabled={isSyncing || isAnalyzing} title="同步星标">
-              {isSyncing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
+          {/* Right: Status + Refresh */}
+          <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span className="hidden sm:inline">{headerStatusText}</span>
+            <Button variant="ghost" size="icon" className="size-7" onClick={handleHeaderRefresh} disabled={isHeaderRefreshDisabled} title={headerRefreshTitle}>
+              {isHeaderRefreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
             </Button>
           </div>
         </header>
 
-        <div className="flex shrink-0 gap-1 overflow-x-auto border-b bg-background px-2 py-1 md:hidden">
-          <ViewPill active={view === 'repositories'} icon={<Search className="size-3.5" />} label="仓库" onClick={() => setView('repositories')} />
-          <ViewPill active={view === 'releases'} icon={<BookOpen className="size-3.5" />} label="发布" onClick={() => setView('releases')} />
-          <ViewPill active={view === 'forks'} icon={<GitFork className="size-3.5" />} label="复刻" onClick={() => setView('forks')} />
-          <ViewPill active={view === 'trending'} icon={<TrendingUp className="size-3.5" />} label="趋势" onClick={() => setView('trending')} />
+        {/* Mobile nav */}
+        <div className="flex shrink-0 gap-0.5 overflow-x-auto border-b bg-background px-2 py-1 md:hidden">
+          <ViewPill active={view === 'repositories'} icon={<Search className="size-3" />} label="仓库" onClick={() => setView('repositories')} />
+          <ViewPill active={view === 'releases'} icon={<BookOpen className="size-3" />} label="发布" onClick={() => setView('releases')} />
+          <ViewPill active={view === 'forks'} icon={<GitFork className="size-3" />} label="复刻" onClick={() => setView('forks')} />
+          <ViewPill active={view === 'trending'} icon={<TrendingUp className="size-3" />} label="趋势" onClick={() => setView('trending')} />
         </div>
 
         {view !== 'repositories' && error ? (

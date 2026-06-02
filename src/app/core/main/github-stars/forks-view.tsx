@@ -6,7 +6,6 @@ import {
   ExternalLink,
   GitFork,
   Loader2,
-  RefreshCcw,
   Search,
   Star,
 } from 'lucide-react'
@@ -96,15 +95,14 @@ function ForkCard({ fork }: { fork: GithubStarForkRepository }) {
 }
 
 export function ForksView() {
-  const { forks, isRefreshingForks, refreshForks } = useGithubStarsStore()
+  const { forks, isRefreshingForks } = useGithubStarsStore()
   const [query, setQuery] = useState('')
 
   const filteredForks = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
-    const actualForks = forks.filter(fork => Boolean(fork.source || fork.parent))
-    if (!normalizedQuery) return actualForks
+    if (!normalizedQuery) return forks
 
-    return actualForks.filter(fork => [
+    return forks.filter(fork => [
       fork.name,
       fork.fullName,
       fork.description || '',
@@ -127,10 +125,6 @@ export function ForksView() {
               管理当前 GitHub 账号下的 Fork 仓库，快速查看上游信息和更新时间
             </p>
           </div>
-          <Button className="h-8 gap-1.5 self-start lg:self-auto" size="sm" onClick={() => void refreshForks()} disabled={isRefreshingForks}>
-            {isRefreshingForks ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
-            刷新复刻
-          </Button>
         </div>
         <div className="relative mt-3">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -153,9 +147,11 @@ export function ForksView() {
           ) : filteredForks.length === 0 ? (
             <div className="flex h-[320px] flex-col items-center justify-center rounded-md border bg-background text-center">
               <GitFork className="mb-3 size-10 text-muted-foreground" />
-              <div className="text-sm font-medium">没有 Fork 数据</div>
+              <div className="text-sm font-medium">{forks.length > 0 ? '没有匹配的 Fork' : '没有 Fork 数据'}</div>
               <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                点击“刷新复刻”后，LingMo 会读取当前 GitHub 账号下的 Fork 仓库。
+                {forks.length > 0
+                  ? '请调整搜索关键词，或清空搜索后查看全部 Fork。'
+                  : '点击“刷新复刻”后，LingMo 会读取当前 GitHub 账号下的 Fork 仓库。'}
               </p>
             </div>
           ) : (

@@ -3,23 +3,12 @@ import { useEffect, useState } from "react"
 import { ModelConfig } from "../../setting/config"
 import { Store } from "@tauri-apps/plugin-store"
 import useSettingStore from "@/stores/setting"
-import { BotMessageSquare, BotOff } from "lucide-react"
+import { BotMessageSquare, BotOff, Check } from "lucide-react"
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command"
-import {
-  Check,
-} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTranslations } from "next-intl"
 import { TooltipButton } from "@/components/tooltip-button"
@@ -52,19 +41,15 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
     setOpen(isOpen)
   }
 
-  // 监听 aiModelList 变化，处理新的模型配置结构
   useEffect(() => {
     if (aiModelList && aiModelList.length > 0) {
       const models: GroupedModel[] = []
-      
+
       aiModelList.forEach(config => {
-        // 检查配置是否有效
         if (!config.baseURL) return
-        
-        // 处理新的 models 数组结构
+
         if (config.models && config.models.length > 0) {
           config.models.forEach(model => {
-            // 只显示 chat 类型的模型
             if (model.modelType === 'chat' && model.model) {
               models.push({
                 configKey: config.key,
@@ -74,7 +59,6 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
             }
           })
         } else {
-          // 向后兼容：处理旧的单模型结构
           if ((config.modelType === 'chat' || !config.modelType) && config.model) {
             models.push({
               configKey: config.key,
@@ -92,12 +76,11 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
           }
         }
       })
-      
+
       setGroupedModels(models)
     }
   }, [aiModelList])
 
-  // 按配置分组模型
   const groupedByConfig = groupedModels.reduce((acc, item) => {
     if (!acc[item.configTitle]) {
       acc[item.configTitle] = []
@@ -127,37 +110,39 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
           </div>
         )}
       </PopoverTrigger>
-      <PopoverContent className="w-[400px] p-0">
-        <Command>
-          <CommandInput placeholder={t('placeholder')} className="h-9" />
-          <CommandList>
-            <CommandEmpty>{t('noModel')}</CommandEmpty>
-            {Object.entries(groupedByConfig).map(([configTitle, models]) => (
-              <CommandGroup key={configTitle} heading={configTitle}>
+      <PopoverContent className="w-52 p-1" side="bottom" align="start">
+        <div className="max-h-60 overflow-y-auto">
+          {groupedModels.length === 0 ? (
+            <div className="px-2 py-3 text-xs text-muted-foreground">{t('noModel')}</div>
+          ) : (
+            Object.entries(groupedByConfig).map(([configTitle, models]) => (
+              <div key={configTitle}>
+                <div className="px-2 pt-2 pb-1 text-[10px] font-medium text-muted-foreground/60">{configTitle}</div>
                 {models.map((item) => (
-                  <CommandItem
+                  <button
                     key={item.model.id}
-                    value={item.model.id}
-                    onSelect={(currentValue) => {
-                      modelSelectChangeHandler(currentValue)
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-left transition-colors",
+                      primaryModel === item.model.id
+                        ? "text-primary bg-primary/10"
+                        : "hover:bg-muted/60"
+                    )}
+                    onClick={() => {
+                      modelSelectChangeHandler(item.model.id)
                       setOpen(false)
                     }}
                   >
-                    <div className="flex flex-col">
-                      <span className="font-medium">{item.model.model}</span>
-                    </div>
-                    <Check
-                      className={cn(
-                        "ml-auto size-4",
-                        primaryModel === item.model.id ? "opacity-100" : "opacity-0"
-                      )}
-                    />
-                  </CommandItem>
+                    <span className="min-w-0 flex-1 truncate">{item.model.model}</span>
+                    {primaryModel === item.model.id && (
+                      <Check className="size-3.5 shrink-0" />
+                    )}
+                  </button>
                 ))}
-              </CommandGroup>
-            ))}
-          </CommandList>
-        </Command>
+              </div>
+            ))
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   )

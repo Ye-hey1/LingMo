@@ -24,6 +24,7 @@ const PER_PAGE = 100
 const REQUEST_TIMEOUT_MS = 18000
 const RESPONSE_BODY_TIMEOUT_MS = 10000
 const MAX_REQUEST_RETRIES = 2
+const FORK_DETAIL_CONCURRENCY = 4
 
 interface GitHubOwnerResponse {
   login: string
@@ -443,6 +444,63 @@ function toForkRepository(item: GitHubForkRepositoryResponse, syncedAt = Date.no
   }
 }
 
+async function fetchForkRepositoryDetails(item: GitHubForkRepositoryResponse) {
+  const owner = item.owner?.login || item.full_name.split('/')[0]
+  const repo = item.name || item.full_name.split('/').slice(1).join('/')
+  if (!owner || !repo) return null
+
+  try {
+    return await requestGitHub<GitHubForkRepositoryResponse>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      { requireToken: true },
+    )
+  } catch (error) {
+    console.warn(`[GitHubStars] Failed to hydrate fork upstream metadata for ${item.full_name}:`, error)
+    return null
+  }
+}
+
+async function hydrateForkRepositories(items: GitHubForkRepositoryResponse[], syncedAt: number) {
+  const hydrated = new Array<GithubStarForkRepository | null>(items.length).fill(null)
+  let nextIndex = 0
+
+  const runWorker = async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      const item = items[index]
+
+      if (item.source || item.parent) {
+        hydrated[index] = toForkRepository(item, syncedAt)
+        continue
+      }
+
+      const details = await fetchForkRepositoryDetails(item)
+      hydrated[index] = toForkRepository(
+        details
+          ? {
+              ...item,
+              ...details,
+              owner: details.owner || item.owner,
+              source: details.source ?? item.source,
+              parent: details.parent ?? item.parent,
+            }
+          : item,
+        syncedAt,
+      )
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(FORK_DETAIL_CONCURRENCY, Math.max(items.length, 1)) },
+      () => runWorker(),
+    ),
+  )
+
+  return hydrated.filter((fork): fork is GithubStarForkRepository => Boolean(fork))
+}
+
 function toDiscoveryRepository(
   item: GitHubRepositoryResponse,
   rank: number,
@@ -683,7 +741,8 @@ export async function fetchUserForks() {
       { requireToken: true },
     )
 
-    forks.push(...batch.filter(repo => repo.fork !== false).map(repo => toForkRepository(repo, syncedAt)))
+    const forkItems = batch.filter(repo => repo.fork !== false)
+    forks.push(...await hydrateForkRepositories(forkItems, syncedAt))
 
     if (batch.length < PER_PAGE) break
     page += 1

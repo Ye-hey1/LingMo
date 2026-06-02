@@ -11,7 +11,6 @@ import {
   Globe,
   Loader2,
   Monitor,
-  RefreshCcw,
   Search,
   Star,
   StarOff,
@@ -345,10 +344,10 @@ export function TrendingView() {
     discoverySortOrder,
     discoverySearchQuery,
     discoverySelectedTopic,
-  discoveryRepos,
-  discoveryIsLoading,
-  discoveryIsLoadingMore,
-  discoveryHasMore,
+    discoveryRepos,
+    discoveryIsLoading,
+    discoveryIsLoadingMore,
+    discoveryHasMore,
     discoveryNextPage,
     discoveryTotalCount,
     discoveryLoadMoreError,
@@ -358,11 +357,11 @@ export function TrendingView() {
     setDiscoveryPlatform,
     setDiscoveryLanguage,
     setDiscoverySortBy,
-  setDiscoverySortOrder,
-  setDiscoverySearchQuery,
-  setDiscoverySelectedTopic,
-  refreshDiscoveryChannel,
-} = useGithubStarsStore()
+    setDiscoverySortOrder,
+    setDiscoverySearchQuery,
+    setDiscoverySelectedTopic,
+    refreshDiscoveryChannel,
+  } = useGithubStarsStore()
 
   const [query, setQuery] = useState(discoverySearchQuery)
   const [platformOpen, setPlatformOpen] = useState(false)
@@ -639,7 +638,7 @@ export function TrendingView() {
               <TrendingUp className="mb-3 size-10 text-muted-foreground" />
               <div className="text-sm font-medium">暂无数据</div>
               <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                点击“刷新”获取最新数据。
+                切换频道或搜索后会自动获取最新数据。
               </p>
             </div>
           ) : (
