@@ -45,6 +45,11 @@
     "defaultModels": {
       "title": "デフォルトモデル"
     },
+    "networkProxy": {
+      "title": "ネットワークプロキシ",
+      "desc": "GitHub 同期、GitHub プロジェクト取得、YouTube 動画文字起こしなどのネットワークリクエストに使用します。例：http://127.0.0.1:7890 または socks5://127.0.0.1:7890",
+      "placeholder": "プロキシ URL を入力してください。例：http://127.0.0.1:7890"
+    },
     "others": "その他",
     "general": {
       "title": "一般設定",
@@ -1195,6 +1200,9 @@
       "modelDesc": "一部モデルはリスト取得に対応しています。未対応の場合は手動で設定してください。",
       "temperatureDesc": "サンプリング温度は0から2の間で設定します。高い値（例:0.8）は出力をよりランダムに、低い値（例:0.2）はより決定的にします。通常、この値かtop_pのみを調整してください。",
       "topPDesc": "top_p（核サンプリング）は温度の代替手法です。top_p=0.1なら上位10%確率のトークンのみ考慮します。通常、この値かtemperatureのみを調整してください。",
+      "contextWindow": "コンテキストウィンドウ",
+      "contextWindowDesc": "入力欄のコンテキストリングと Agent のメッセージ切り詰めに使用します。空欄の場合はモデル名から自動推定します。",
+      "contextWindowPlaceholder": "自動推定:",
       "customHeaders": "カスタムヘッダー",
       "customHeadersDesc": "キーと値のペアでカスタムHTTPヘッダーを追加します。",
       "connectionSuccess": "AI接続テストが成功しました",
@@ -1204,31 +1212,6 @@
       "voice": "音声タイプ",
       "voiceDesc": "音声モデルで使用する音声タイプを指定します（例：'alloy'、'echo'、'fable'など）。",
       "voicePlaceholder": "音声タイプを入力してください（例：alloy）",
-      "defaultModels": {
-        "title": "デフォルト無料モデル",
-        "desc": "LingMoはユーザーに無料のAIモデルサービスを提供し、設定なしで基本機能を使用できます。",
-        "chatModel": {
-          "name": "Qwen/Qwen3-8B",
-          "type": "チャットモデル",
-          "desc": "日常会話やテキスト生成に適用"
-        },
-        "embeddingModel": {
-          "name": "BAAI/bge-m3",
-          "type": "埋め込みモデル",
-          "desc": "テキストベクトル化や意味検索に使用"
-        },
-        "visionModel": {
-          "name": "OpenGVLab/InternVL2-8B",
-          "type": "ビジョンモデル",
-          "desc": "画像理解とビジュアルQ&Aをサポート"
-        },
-        "completionModel": {
-          "name": "高速補完",
-          "type": "補完モデル",
-          "desc": "Markdownエディタ用のAIインライン補完、GitHub Copilotに類似、素早く続きの内容を生成"
-        },
-        "poweredBy": "SiliconFlowによる技術サポート"
-      },
       "connectionFailed": "接続に失敗しました",
       "enableStream": "ストリーミングレスポンス",
       "enableStreamDesc": "ストリーミングレスポンスを有効にすると、生成中のコンテンツをリアルタイムで表示できますが、一部のモデルではこの機能がサポートされていない場合があります。",
@@ -1845,7 +1828,19 @@
             "cancel": "キャンセル",
             "confirm": "確認",
             "confirmed": "確認済み",
-            "cancelled": "キャンセル済み"
+            "cancelled": "キャンセル済み",
+            "params": {
+              "reportType": "レポート種別",
+              "sourceLabel": "ソース",
+              "contentPreview": "内容プレビュー",
+              "openAfterCreate": "作成後に開く"
+            },
+            "tools": {
+              "create_visual_report": {
+                "title": "ビジュアルレポートを作成",
+                "description": "ワークスペースに自己完結型 HTML ビジュアルレポートを作成します。"
+              }
+            }
           }
         },
         "imageSelector": {
@@ -1915,7 +1910,8 @@
         "deleteConfirm": "本当に削除しますか？"
       },
       "content": {
-        "organize": "あなたの記録を記事に整理："
+        "organize": "あなたの記録を記事に整理：",
+        "thinking": "思考中..."
       },
       "quote": {
         "lineSingle": "{fileName} の {line} 行目から引用",
@@ -2959,5 +2955,17 @@
     "closeAll": "すべて閉じる",
     "closeLeft": "左を閉じる",
     "closeRight": "右を閉じる"
+  },
+  "flashcard": {
+    "title": "フラッシュカード",
+    "workspaceTitle": "フラッシュカードワークスペース",
+    "workspaceDesc": "ノートをドロップ、AIがスマートに学習カードを生成",
+    "config": "設定",
+    "addSource": "ノートを追加",
+    "addSourceDesc": "Markdown / TXT対応、複数ファイルを同時に追加できます",
+    "sourceTitle": "資料ソース",
+    "sourceDesc": "複数のノートをドロップ、AIが統合して知識ポイントを抽出します",
+    "addToSource": "現在追加",
+    "clear": "クリア"
   }
 }

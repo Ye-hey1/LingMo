@@ -50,6 +50,11 @@
     "defaultModels": {
       "title": "Default Models"
     },
+    "networkProxy": {
+      "title": "Network Proxy",
+      "desc": "Used by GitHub sync, GitHub project capture, YouTube video transcription, and related network requests. Example: http://127.0.0.1:7890 or socks5://127.0.0.1:7890",
+      "placeholder": "Enter proxy URL, e.g. http://127.0.0.1:7890"
+    },
     "others": "Advanced",
     "general": {
       "title": "General Settings",
@@ -1363,6 +1368,9 @@
       "modelDesc": "Some models support getting model list, if not supported please manually configure.",
       "temperatureDesc": "Controls randomness of output. Lower values make generated content more deterministic.",
       "topPDesc": "A nucleus sampling method, where the model considers the results of tokens with top_p probability mass. So 0.1 means only consider the top 10% probability mass. Usually we suggest to change this or temperature but not both.",
+      "contextWindow": "Context Window",
+      "contextWindowDesc": "Used by the input context ring and Agent message trimming. Leave empty to infer from the model name.",
+      "contextWindowPlaceholder": "Auto inferred:",
       "customHeaders": "Custom Headers",
       "customHeadersDesc": "Add custom HTTP headers with key-value pairs.",
       "headerKey": "Key",
@@ -1372,31 +1380,6 @@
       "voice": "Voice Type",
       "voiceDesc": "Specify the voice type for audio models, such as 'alloy', 'echo', 'fable', etc.",
       "voicePlaceholder": "Enter voice type, e.g.: alloy",
-      "defaultModels": {
-        "title": "Default Free Models",
-        "desc": "LingMo provides free AI model services for users, enabling basic functionality without configuration.",
-        "chatModel": {
-          "name": "Qwen/Qwen3-8B",
-          "type": "Chat Model",
-          "desc": "Suitable for daily conversations and text generation"
-        },
-        "embeddingModel": {
-          "name": "BAAI/bge-m3",
-          "type": "Embedding Model",
-          "desc": "Used for text vectorization and semantic search"
-        },
-        "visionModel": {
-          "name": "OpenGVLab/InternVL2-8B",
-          "type": "Vision Model",
-          "desc": "Supports image understanding and visual Q&A"
-        },
-        "completionModel": {
-          "name": "Fast Completion",
-          "type": "Completion Model",
-          "desc": "AI inline completion for Markdown editor, similar to GitHub Copilot, quickly generates continuation content"
-        },
-        "poweredBy": "Powered by SiliconFlow"
-      },
       "connectionFailed": "Connection Failed",
       "enableStream": "Stream Response",
       "enableStreamDesc": "Enable streaming response to display generated content in real-time, but some models may not support this feature.",
@@ -1896,7 +1879,8 @@
       "confirmRemove": "Delete Tag",
       "confirmRemoveDescription": "Please note that deleting this tag will also delete all records within it. Please confirm again.",
       "content": {
-        "organize": "Organize your records into an article:"
+        "organize": "Organize your records into an article:",
+        "thinking": "Thinking..."
       },
       "quote": {
         "lineSingle": "Quoted from {fileName} line {line}",
@@ -2047,7 +2031,11 @@
               "files": "Files",
               "newName": "New name",
               "scriptName": "Script name",
-              "command": "Command"
+              "command": "Command",
+              "reportType": "Report type",
+              "sourceLabel": "Source",
+              "contentPreview": "Content preview",
+              "openAfterCreate": "Open after create"
             },
             "tools": {
               "create_file": {
@@ -2077,6 +2065,10 @@
               "insert_at_cursor": {
                 "title": "Insert at cursor",
                 "description": "Content will be inserted at the current cursor position."
+              },
+              "create_visual_report": {
+                "title": "Create visual report",
+                "description": "A self-contained HTML visual report will be created in the workspace."
               },
               "delete_markdown_file": {
                 "title": "Delete file",
@@ -3009,6 +3001,10 @@
       "confirm": "Confirm",
       "cancel": "Cancel"
     },
+    "html": {
+      "code": "Code",
+      "preview": "Preview"
+    },
     "mermaid": {
       "rendering": "Rendering...",
       "renderError": "Render error",
@@ -3109,5 +3105,137 @@
     "closeAll": "Close All",
     "closeLeft": "Close Left",
     "closeRight": "Close Right"
+  },
+  "flashcard": {
+    "title": "Flashcards",
+    "workspaceTitle": "Flashcard Studio",
+    "workspaceDesc": "Drop notes, AI generates smart flashcards",
+    "config": "Config",
+    "addSource": "Add Notes",
+    "addSourceDesc": "Supports Markdown / TXT. Add multiple files at once.",
+    "sourceTitle": "Source Material",
+    "sourceDesc": "Drop multiple notes, AI will merge and extract key points.",
+    "addToSource": "Add Current",
+    "clear": "Clear",
+    "create": "New",
+    "generate": "Generate Cards",
+    "generating": "Generating...",
+    "review": "Review",
+    "reviewAll": "Review All",
+    "manageDecks": "Manage Decks",
+    "weakCards": "Weak Cards",
+    "stats": "Statistics",
+    "back": "Back",
+    "save": "Save",
+    "saving": "Saving...",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "loading": "Loading...",
+    "noContent": "No content available",
+    "reviewComplete": "Review Complete",
+    "answerReveal": "Show Answer",
+    "submitAnswer": "Submit",
+    "rating": {
+      "again": "Again",
+      "againHint": "Add to weak",
+      "hard": "Hard",
+      "hardHint": "Keep practicing",
+      "good": "Good",
+      "goodHint": "Normal review",
+      "easy": "Easy",
+      "easyHint": "Delay review"
+    },
+    "difficulty": {
+      "weak": "Weak",
+      "consolidate": "Consolidate",
+      "normal": "Normal",
+      "proficient": "Proficient"
+    },
+    "cardType": {
+      "basic": "Basic Q&A",
+      "basicReversed": "Bidirectional Q&A",
+      "cloze": "Fill-in-the-blank",
+      "choice": "Multiple Choice",
+      "shortAnswer": "Short Answer"
+    },
+    "status": {
+      "new": "New",
+      "learning": "Learning",
+      "review": "Reviewing",
+      "suspended": "Suspended"
+    },
+    "empty": {
+      "noDecks": "No decks yet",
+      "noDecksDesc": "Create your first deck to start learning",
+      "noDrafts": "No drafts",
+      "noDraftsDesc": "Drag notes into the area above, AI will generate flashcards for you",
+      "noDue": "No cards to review",
+      "noDueDesc": "All cards reviewed, check back later",
+      "noWeak": "No weak cards",
+      "noWeakDesc": "Great performance, keep it up"
+    },
+    "batch": {
+      "title": "Batch Generate Flashcards from Notes",
+      "description": "Generate reviewable drafts first, then save to a deck. Avoids uncontrolled AI content.",
+      "noContent": "No note content available",
+      "noContentDesc": "Please open a note first before batch generating.",
+      "generateDraft": "Generate Drafts",
+      "results": "Results",
+      "noDrafts": "No drafts generated yet.",
+      "saveCards": "Save Cards",
+      "saved": "Batch flashcards saved",
+      "failed": "Batch generation failed",
+      "question": "Question",
+      "answer": "Answer",
+      "clozeContent": "Cloze Content",
+      "options": "Options",
+      "tags": "Tags (comma separated)"
+    },
+    "statsPanel": {
+      "title": "Learning Statistics",
+      "streak": "Day Streak",
+      "toLearn": "To Learn",
+      "mastered": "Mastered",
+      "totalCards": "Total Cards",
+      "statusDistribution": "Card Status Distribution",
+      "reviewTrend": "-Day Review Trend",
+      "accuracyTrend": "Accuracy Trend",
+      "noData": "No review records yet. Start reviewing to see statistics."
+    },
+    "reviewPanel": {
+      "dueCount": "Due",
+      "weakCount": "Weak",
+      "todayDone": "Today",
+      "progress": "Progress",
+      "choiceCorrect": "Correct",
+      "choiceWrong": "Wrong",
+      "answerAnalysis": "Answer Analysis",
+      "answerArea": "Your Answer",
+      "answerPlaceholder": "Write your answer first, then check the reference.",
+      "clozePlaceholder": "Type your answer...",
+      "skip": "Skip",
+      "next": "Next",
+      "finish": "Finish",
+      "summaryTitle": "Review Summary",
+      "summaryGood": "Well mastered this round. Focus on weak cards next.",
+      "summaryOk": "Round complete. Try reviewing weak cards to consolidate.",
+      "summaryBad": "Many weak spots found. Start with weak cards.",
+      "summaryWeakHint": "{count} cards need reinforcement. Try the weak card queue first.",
+      "summaryNoWeak": "No weak cards this round. Add more cards or manage decks.",
+      "backToHome": "Back to Flashcard Studio",
+      "reviewWeak": "Review Weak Cards",
+      "manageDeck": "Manage Decks"
+    },
+    "deckManager": {
+      "title": "Deck Manager",
+      "createDeck": "New Deck",
+      "deckName": "Deck Name",
+      "defaultDeck": "Default Deck",
+      "cards": "cards",
+      "reviewDeck": "Review This Deck",
+      "deleteDeck": "Delete Deck",
+      "deleteConfirm": "Deleting a deck will also delete all cards in it. Are you sure?"
+    }
   }
 }

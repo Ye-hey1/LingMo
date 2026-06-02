@@ -360,6 +360,38 @@ html, body {
   transform: translateY(-1px);
 }
 
+.main-layout-panel {
+  overflow: hidden;
+  transition:
+    flex-grow 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    flex-basis 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    width 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.18s ease;
+  will-change: flex-grow, flex-basis, width, opacity;
+}
+
+.main-layout-panel-collapsed {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.main-layout-panel-group:has([data-resize-handle-active]) .main-layout-panel {
+  transition: none;
+}
+
+.main-layout-resize-handle {
+  transition:
+    background-color 0.18s ease,
+    opacity 0.18s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-layout-panel,
+  .main-layout-resize-handle {
+    transition: none;
+  }
+}
+
 .left-sidebar-toolbar-content,
 .left-sidebar-panel-body {
   opacity: 1;
@@ -414,6 +446,11 @@ html, body {
   background-color: hsl(var(--muted) / 0.72);
 }
 
+.file-manange-item:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+
 .file-manange-item.is-draggable-file {
   cursor: pointer;
 }
@@ -425,8 +462,7 @@ html, body {
 .file-manange-item.active {
   background-color: hsl(var(--muted) / 0.86);
   color: hsl(var(--foreground));
-  font-weight: 600;
-  box-shadow: inset 1px 0 0 hsl(var(--foreground) / 0.24);
+  box-shadow: inset 2px 0 0 hsl(var(--primary));
 }
 
 .dark .file-manange-item.active {
@@ -453,19 +489,14 @@ html, body {
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  border-radius: 0.25rem;
+  border-radius: 9999px;
   border: 1px solid hsl(var(--border) / 0.5);
   background-color: transparent;
-  padding: 0 0.3rem;
+  padding: 0 0.35rem;
   font-size: 0.625rem;
   font-weight: 500;
   line-height: 1;
   color: hsl(var(--muted-foreground) / 0.86);
-}
-
-.file-manager-count-badge {
-  border-radius: 9999px;
-  padding: 0 0.35rem;
 }
 
 .file-manager-name {
@@ -476,6 +507,12 @@ html, body {
 
 .file-manager-row-main {
   padding-right: 0;
+}
+
+.file-manager-icon-anchor {
+  width: 1.1rem;
+  min-width: 1.1rem;
+  justify-content: center;
 }
 
 .file-manager-name-text {
@@ -584,6 +621,18 @@ html, body {
   margin-left: 0.25rem;
   color: hsl(var(--muted-foreground));
   opacity: 0.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-manange-item {
+    transition: none;
+  }
+  .file-manange-item:hover .file-manager-name.is-scrollable .file-manager-name-text {
+    animation: none;
+  }
+  .favorite-file-row:hover .favorite-file-name.is-scrollable .favorite-file-name-text {
+    animation: none;
+  }
 }
 
 :not(table)::-webkit-scrollbar {
@@ -712,6 +761,18 @@ ol {
   }
 }
 
+/* Global reduced-motion: disable all transitions and animations for users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Keep Radix popper portals above custom dialog overlays. */
 [data-radix-popper-content-wrapper] {
   z-index: 10020 !important;
@@ -738,8 +799,8 @@ ol {
 
 /* Tiptap 搜索替换高亮样式 */
 .search-result {
-  background-color: #ffeb3b !important;
-  color: #000 !important;
+  background-color: hsl(50 93% 55%) !important;
+  color: hsl(30 20% 12%) !important;
   padding: 0 2px !important;
   border-radius: 2px !important;
   text-decoration: none !important;
@@ -747,19 +808,19 @@ ol {
 
 .search-result.search-result-current,
 .search-result.is-current {
-  background-color: #ff9800 !important;
+  background-color: hsl(30 93% 50%) !important;
   color: #fff !important;
 }
 
 /* 暗色模式适配 */
 .dark .search-result {
-  background-color: #f59e0b !important;
-  color: #000 !important;
+  background-color: hsl(45 93% 47%) !important;
+  color: hsl(30 20% 8%) !important;
 }
 
 .dark .search-result.search-result-current,
 .dark .search-result.is-current {
-  background-color: #ea580c !important;
+  background-color: hsl(24 93% 45%) !important;
   color: #fff !important;
 }
 
@@ -787,4 +848,37 @@ ol {
 
 .pdf-text-layer .endOfContent {
   display: none;
+}
+
+/* Snapshot action buttons: icon hidden by default, shown on card hover */
+.snapshot-card .snapshot-btn-icon {
+  visibility: hidden;
+}
+
+.snapshot-card:hover .snapshot-btn-icon {
+  visibility: visible;
+}
+
+/* Flashcard workspace utilities */
+.flashcard-card {
+  @apply rounded-2xl border border-border bg-card shadow-sm;
+}
+
+.flashcard-section {
+  @apply rounded-xl border border-border bg-card shadow-sm;
+}
+
+.flashcard-primary-btn {
+  @apply bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.97];
+}
+
+/* Flashcard: reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .flashcard-choice-option,
+  .flashcard-rating-btn {
+    transition: none !important;
+  }
+  .flashcard-progress-bar {
+    transition-duration: 0.01ms !important;
+  }
 }

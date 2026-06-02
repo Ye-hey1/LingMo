@@ -48,6 +48,11 @@
     "defaultModels": {
       "title": "默认模型"
     },
+    "networkProxy": {
+      "title": "网络代理",
+      "desc": "用于 GitHub 同步、GitHub 项目识别和 YouTube 视频转写等网络请求。示例：http://127.0.0.1:7890 或 socks5://127.0.0.1:7890",
+      "placeholder": "请输入代理地址，例如 http://127.0.0.1:7890"
+    },
     "others": "高级",
     "general": {
       "title": "常规设置",
@@ -1337,6 +1342,9 @@
       "modelDesc": "部分模型支持获取模型列表，如果不支持请手动配置。",
       "temperatureDesc": "使用什么采样温度，介于 0 和 2 之间。较高的值（如 0.8）将使输出更加随机，而较低的值（如 0.2）将使输出更加集中和确定。 我们通常建议改变这个或top_p但不是两者。",
       "topPDesc": "一种替代温度采样的方法，称为核采样，其中模型考虑具有 top_p 概率质量的标记的结果。所以 0.1 意味着只考虑构成前 10% 概率质量的标记。 我们通常建议改变这个或temperature但不是两者。",
+      "contextWindow": "上下文窗口",
+      "contextWindowDesc": "用于输入框上下文占用圆环和 Agent 消息裁剪；留空时按模型名自动推断。",
+      "contextWindowPlaceholder": "自动推断：",
       "customHeaders": "自定义请求头",
       "customHeadersDesc": "添加自定义 HTTP 请求头，支持多个键值对配置。",
       "headerKey": "键",
@@ -1355,32 +1363,7 @@
       "addModel": "添加模型",
       "newModel": "新模型",
       "checkConnection": "检测连接",
-      "model": "模型",
-      "defaultModels": {
-        "title": "默认免费模型",
-        "desc": "灵墨 为用户提供免费的 AI 模型服务，由硅基流动提供支持，无需配置即可使用基础功能。",
-        "chatModel": {
-          "name": "Qwen/Qwen3-8B",
-          "type": "对话模型",
-          "desc": "适用于日常对话、文本生成等场景"
-        },
-        "embeddingModel": {
-          "name": "BAAI/bge-m3",
-          "type": "嵌入模型",
-          "desc": "用于文本向量化、语义搜索等功能"
-        },
-        "visionModel": {
-          "name": "OpenGVLab/InternVL2-8B",
-          "type": "视觉模型",
-          "desc": "支持图像理解、视觉问答等功能"
-        },
-        "completionModel": {
-          "name": "快速补全",
-          "type": "补全模型",
-          "desc": "用于 Markdown 编辑器的 AI 内联补全，类似 GitHub Copilot，快速生成续写内容"
-        },
-        "poweredBy": "由 SiliconFlow 提供技术支持"
-      }
+      "model": "模型"
     },
     "imageMethod": {
       "title": "图像识别",
@@ -1949,7 +1932,11 @@
               "files": "文件列表",
               "newName": "新名称",
               "scriptName": "脚本名称",
-              "command": "命令"
+              "command": "命令",
+              "reportType": "报告类型",
+              "sourceLabel": "来源",
+              "contentPreview": "内容预览",
+              "openAfterCreate": "创建后打开"
             },
             "tools": {
               "create_file": {
@@ -1979,6 +1966,10 @@
               "insert_at_cursor": {
                 "title": "在光标处插入内容",
                 "description": "会把内容插入到当前光标位置。"
+              },
+              "create_visual_report": {
+                "title": "创建可视化报告",
+                "description": "将在工作区中新建一个自包含 HTML 视觉报告。"
               },
               "delete_markdown_file": {
                 "title": "删除文件",
@@ -2047,7 +2038,8 @@
         "deleteConfirm": "确定要删除这条消息吗？"
       },
       "content": {
-        "organize": "将你的记录整理为文章："
+        "organize": "将你的记录整理为文章：",
+        "thinking": "正在思考..."
       },
       "quote": {
         "lineSingle": "引用自 {fileName} 第 {line} 行",
@@ -2883,6 +2875,10 @@
       "confirm": "确认",
       "cancel": "取消"
     },
+    "html": {
+      "code": "代码",
+      "preview": "预览"
+    },
     "mermaid": {
       "rendering": "渲染中...",
       "renderError": "渲染错误",
@@ -2983,5 +2979,137 @@
     "closeAll": "关闭全部",
     "closeLeft": "关闭左侧",
     "closeRight": "关闭右侧"
+  },
+  "flashcard": {
+    "title": "闪卡",
+    "workspaceTitle": "闪卡工作台",
+    "workspaceDesc": "拖入笔记，AI 智能生成学习卡片",
+    "config": "配置",
+    "addSource": "添加笔记",
+    "addSourceDesc": "支持 Markdown / TXT，可一次加入多篇。",
+    "sourceTitle": "资料来源",
+    "sourceDesc": "拖入多篇笔记，AI 会合并提炼知识点。",
+    "addToSource": "加入当前",
+    "clear": "清空",
+    "create": "新建",
+    "generate": "生成卡片",
+    "generating": "生成中...",
+    "review": "复习",
+    "reviewAll": "复习全部",
+    "manageDecks": "管理牌组",
+    "weakCards": "错题",
+    "stats": "统计",
+    "back": "返回",
+    "save": "保存",
+    "saving": "保存中...",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "loading": "加载中...",
+    "noContent": "暂无内容",
+    "reviewComplete": "复习完成",
+    "answerReveal": "显示答案",
+    "submitAnswer": "提交",
+    "rating": {
+      "again": "不会",
+      "againHint": "加入薄弱",
+      "hard": "困难",
+      "hardHint": "还要练",
+      "good": "记住",
+      "goodHint": "正常复习",
+      "easy": "轻松",
+      "easyHint": "延后复习"
+    },
+    "difficulty": {
+      "weak": "薄弱",
+      "consolidate": "待巩固",
+      "normal": "正常",
+      "proficient": "熟练"
+    },
+    "cardType": {
+      "basic": "基础问答",
+      "basicReversed": "双向问答",
+      "cloze": "填空题",
+      "choice": "选择题",
+      "shortAnswer": "简答题"
+    },
+    "status": {
+      "new": "新卡",
+      "learning": "学习中",
+      "review": "复习中",
+      "suspended": "暂停"
+    },
+    "empty": {
+      "noDecks": "还没有牌组",
+      "noDecksDesc": "创建第一个牌组开始记忆之旅",
+      "noDrafts": "没有草稿",
+      "noDraftsDesc": "将笔记拖入上方区域，AI 会帮你生成闪卡",
+      "noDue": "没有待复习的卡片",
+      "noDueDesc": "所有卡片都复习完了，稍后再来看看",
+      "noWeak": "没有薄弱卡片",
+      "noWeakDesc": "目前掌握良好，继续保持"
+    },
+    "batch": {
+      "title": "从当前笔记批量生成闪卡",
+      "description": "先生成可检查的草稿，再保存到指定牌组，避免 AI 直接写入不可控内容。",
+      "noContent": "当前没有可用的笔记内容",
+      "noContentDesc": "请先打开一篇笔记，再使用批量生成。",
+      "generateDraft": "生成草稿",
+      "results": "生成结果",
+      "noDrafts": "还没有生成草稿。",
+      "saveCards": "保存闪卡",
+      "saved": "批量闪卡已保存",
+      "failed": "批量生成闪卡失败",
+      "question": "题目",
+      "answer": "答案",
+      "clozeContent": "填空内容",
+      "options": "选项",
+      "tags": "标签（逗号分隔）"
+    },
+    "statsPanel": {
+      "title": "学习统计",
+      "streak": "连续学习天数",
+      "toLearn": "待学习",
+      "mastered": "已掌握",
+      "totalCards": "总卡片数",
+      "statusDistribution": "卡片状态分布",
+      "reviewTrend": "天复习趋势",
+      "accuracyTrend": "掌握率趋势",
+      "noData": "暂无复习记录，开始复习后即可查看统计数据。"
+    },
+    "reviewPanel": {
+      "dueCount": "待复习",
+      "weakCount": "薄弱",
+      "todayDone": "今日完成",
+      "progress": "进度",
+      "choiceCorrect": "回答正确",
+      "choiceWrong": "回答错误",
+      "answerAnalysis": "答案解析",
+      "answerArea": "作答区",
+      "answerPlaceholder": "先写下自己的答案，再查看参考答案。",
+      "clozePlaceholder": "输入填空答案...",
+      "skip": "跳过",
+      "next": "下一张",
+      "finish": "完成",
+      "summaryTitle": "复习总结",
+      "summaryGood": "这一轮掌握得很稳，可以把精力转向薄弱卡片。",
+      "summaryOk": "已经完成一轮复习，建议再补一轮错题巩固。",
+      "summaryBad": "这轮暴露了不少薄弱点，先从错题开始回收。",
+      "summaryWeakHint": "有 {count} 张卡片需要加固，建议先进入错题队列，再回到牌组继续复习。",
+      "summaryNoWeak": "这一轮没有薄弱卡片，可以回到闪卡生成台继续添加新材料或管理牌组。",
+      "backToHome": "返回闪卡生成台",
+      "reviewWeak": "复习错题",
+      "manageDeck": "管理牌组"
+    },
+    "deckManager": {
+      "title": "牌组管理",
+      "createDeck": "新建牌组",
+      "deckName": "牌组名称",
+      "defaultDeck": "默认牌组",
+      "cards": "张卡片",
+      "reviewDeck": "复习此牌组",
+      "deleteDeck": "删除牌组",
+      "deleteConfirm": "删除牌组将同时删除其中所有卡片，确定要删除吗？"
+    }
   }
 }

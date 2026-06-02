@@ -45,6 +45,11 @@
     "defaultModels": {
       "title": "預設模型"
     },
+    "networkProxy": {
+      "title": "網路代理",
+      "desc": "用於 GitHub 同步、GitHub 專案識別和 YouTube 影片轉寫等網路請求。範例：http://127.0.0.1:7890 或 socks5://127.0.0.1:7890",
+      "placeholder": "請輸入代理地址，例如 http://127.0.0.1:7890"
+    },
     "others": "高級",
     "general": {
       "title": "常規設置",
@@ -1172,6 +1177,9 @@
       "modelDesc": "部分模型支持獲取模型列表，如果不支持請手動配置。",
       "temperatureDesc": "使用什麼採樣溫度，介於 0 和 2 之間。較高的值（如 0.8）將使輸出更加隨機，而較低的值（如 0.2）將使輸出更加集中和確定。 我們通常建議改變這個或top_p但不是兩者。",
       "topPDesc": "一種替代溫度採樣的方法，稱為核採樣，其中模型考慮具有 top_p 機率質量的標記的結果。所以 0.1 意味著只考慮構成前 10% 機率質量的標記。 我們通常建議改變這個或temperature但不是兩者。",
+      "contextWindow": "上下文視窗",
+      "contextWindowDesc": "用於輸入框上下文占用圓環和 Agent 訊息裁剪；留空時按模型名自動推斷。",
+      "contextWindowPlaceholder": "自動推斷：",
       "customHeaders": "自訂請求頭",
       "customHeadersDesc": "添加自訂 HTTP 請求頭，支持多個鍵值對配置。",
       "headerKey": "鍵",
@@ -1190,32 +1198,7 @@
       "addModel": "添加模型",
       "newModel": "新模型",
       "checkConnection": "檢測連接",
-      "model": "模型",
-      "defaultModels": {
-        "title": "默認免費模型",
-        "desc": "靈墨 為用戶提供免費的 AI 模型服務，由矽基流動提供支持，無需配置即可使用基礎功能。",
-        "chatModel": {
-          "name": "Qwen/Qwen3-8B",
-          "type": "對話模型",
-          "desc": "適用於日常對話、文本生成等場景"
-        },
-        "embeddingModel": {
-          "name": "BAAI/bge-m3",
-          "type": "嵌入模型",
-          "desc": "用於文本向量化、語義搜索等功能"
-        },
-        "visionModel": {
-          "name": "OpenGVLab/InternVL2-8B",
-          "type": "視覺模型",
-          "desc": "支持圖像理解、視覺問答等功能"
-        },
-        "completionModel": {
-          "name": "快速補全",
-          "type": "補全模型",
-          "desc": "用於 Markdown 編輯器的 AI 內聯補全，類似 GitHub Copilot，快速生成續寫內容"
-        },
-        "poweredBy": "由 SiliconFlow 提供技術支援"
-      }
+      "model": "模型"
     },
     "imageMethod": {
       "title": "圖像識別",
@@ -1842,7 +1825,19 @@
             "cancel": "取消",
             "confirm": "確認",
             "confirmed": "已確認",
-            "cancelled": "已取消"
+            "cancelled": "已取消",
+            "params": {
+              "reportType": "報告類型",
+              "sourceLabel": "來源",
+              "contentPreview": "內容預覽",
+              "openAfterCreate": "建立後打開"
+            },
+            "tools": {
+              "create_visual_report": {
+                "title": "建立可視化報告",
+                "description": "將在工作區中新建一個自包含 HTML 視覺報告。"
+              }
+            }
           }
         },
         "fileLink": {
@@ -1906,7 +1901,8 @@
         "deleteConfirm": "確定要刪除這條消息嗎？"
       },
       "content": {
-        "organize": "將你的紀錄整理為文章："
+        "organize": "將你的紀錄整理為文章：",
+        "thinking": "正在思考..."
       },
       "quote": {
         "lineSingle": "引用自 {fileName} 第 {line} 行",
@@ -2823,5 +2819,17 @@
     "closeAll": "關閉全部",
     "closeLeft": "關閉左側",
     "closeRight": "關閉右側"
+  },
+  "flashcard": {
+    "title": "閃卡",
+    "workspaceTitle": "閃卡工作台",
+    "workspaceDesc": "拖入筆記，AI 智慧生成學習卡片",
+    "config": "設定",
+    "addSource": "新增筆記",
+    "addSourceDesc": "支援 Markdown / TXT，可一次加入多篇。",
+    "sourceTitle": "資料來源",
+    "sourceDesc": "拖入多篇筆記，AI 會合併提煉知識點。",
+    "addToSource": "加入當前",
+    "clear": "清空"
   }
 }

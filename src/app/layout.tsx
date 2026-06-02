@@ -1,66 +1,13 @@
-'use client'
-import { Toaster } from "@/components/ui/toaster"
 import "./globals.css";
 import 'react-photo-view/dist/react-photo-view.css';
-import { Suspense, useEffect } from "react";
-import { NextIntlProvider } from "@/components/providers/NextIntlProvider";
 import Script from "next/script";
-import { getSyncPushQueue } from "@/lib/sync/sync-push-queue";
-import { ConsoleFilter } from "@/components/console-filter";
+import { AppProviders } from "@/components/providers/AppProviders";
 
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  useEffect(() => {
-    const shouldReloadForChunkError = (value: unknown) => {
-      const message = value instanceof Error
-        ? `${value.name} ${value.message}`
-        : typeof value === 'string'
-          ? value
-          : String(value ?? '')
-
-      return /ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module|importing a module script failed/i.test(message)
-    }
-
-    const reloadOnce = () => {
-      const key = 'chunk-error-reload'
-      const now = Date.now()
-      const lastReload = Number(sessionStorage.getItem(key) || 0)
-      if (now - lastReload < 3000) {
-        return
-      }
-      sessionStorage.setItem(key, String(now))
-      window.location.reload()
-    }
-
-    const handleError = (event: ErrorEvent) => {
-      if (shouldReloadForChunkError(event.error || event.message)) {
-        event.preventDefault()
-        reloadOnce()
-      }
-    }
-
-    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-      if (shouldReloadForChunkError(event.reason)) {
-        event.preventDefault()
-        reloadOnce()
-      }
-    }
-
-    window.addEventListener('error', handleError)
-    window.addEventListener('unhandledrejection', handleUnhandledRejection)
-    return () => {
-      window.removeEventListener('error', handleError)
-      window.removeEventListener('unhandledrejection', handleUnhandledRejection)
-    }
-  }, [])
-  // 初始化同步推送队列
-  useEffect(() => {
-    getSyncPushQueue()
-  }, [])
-
   return (
     <>
       <html lang="en" suppressHydrationWarning>
@@ -85,15 +32,48 @@ export default function RootLayout({
               }
             `}
           </Script>
+          <Script id="chunk-error-recovery" strategy="beforeInteractive">
+            {`
+              (function () {
+                var pattern = /ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module|importing a module script failed/i;
+                function messageFrom(value) {
+                  if (!value) return '';
+                  if (typeof value === 'string') return value;
+                  if (value.message) return String(value.name || '') + ' ' + String(value.message);
+                  if (value.reason) return messageFrom(value.reason);
+                  if (value.error) return messageFrom(value.error);
+                  return String(value);
+                }
+                function reloadOnce() {
+                  try {
+                    var key = 'chunk-error-reload';
+                    var now = Date.now();
+                    var lastReload = Number(sessionStorage.getItem(key) || 0);
+                    if (now - lastReload < 3000) return;
+                    sessionStorage.setItem(key, String(now));
+                  } catch (_) {}
+                  window.location.reload();
+                }
+                window.addEventListener('error', function (event) {
+                  var target = event && event.target;
+                  var src = target && (target.src || target.href);
+                  if ((src && /\\/_next\\/static\\/chunks\\//.test(String(src))) || pattern.test(messageFrom(event.error || event.message || event))) {
+                    event.preventDefault();
+                    reloadOnce();
+                  }
+                }, true);
+                window.addEventListener('unhandledrejection', function (event) {
+                  if (pattern.test(messageFrom(event.reason || event))) {
+                    event.preventDefault();
+                    reloadOnce();
+                  }
+                });
+              })();
+            `}
+          </Script>
         </head>
         <body suppressHydrationWarning>
-          <ConsoleFilter />
-          <Suspense>
-            <NextIntlProvider>
-              {children}
-            </NextIntlProvider>
-          </Suspense>
-          <Toaster />
+          <AppProviders>{children}</AppProviders>
         </body>
       </html>
     </>

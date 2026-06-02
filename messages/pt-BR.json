@@ -47,6 +47,11 @@
     "defaultModels": {
       "title": "Modelos Padrão"
     },
+    "networkProxy": {
+      "title": "Proxy de Rede",
+      "desc": "Usado pela sincronização do GitHub, captura de projetos do GitHub, transcrição de vídeos do YouTube e solicitações de rede relacionadas. Exemplo: http://127.0.0.1:7890 ou socks5://127.0.0.1:7890",
+      "placeholder": "Insira a URL do proxy, ex.: http://127.0.0.1:7890"
+    },
     "others": "Avançado",
     "general": {
       "title": "Configurações Gerais",
@@ -1235,6 +1240,9 @@
       "modelDesc": "Alguns modelos suportam a obtenção da lista de modelos, se não for suportado, por favor, configure manualmente.",
       "temperatureDesc": "Controla a aleatoriedade da saída. Valores mais baixos tornam o conteúdo gerado mais determinístico.",
       "topPDesc": "Um método de amostragem nucleus, onde o modelo considera os resultados dos tokens com massa de probabilidade top_p. Então, 0.1 significa considerar apenas os 10% superiores da massa de probabilidade. Geralmente, sugerimos alterar este ou a temperatura, mas não ambos.",
+      "contextWindow": "Janela de contexto",
+      "contextWindowDesc": "Usado pelo anel de contexto da entrada e pelo corte de mensagens do Agent. Deixe vazio para inferir pelo nome do modelo.",
+      "contextWindowPlaceholder": "Inferido automaticamente:",
       "customHeaders": "Cabeçalhos Personalizados",
       "customHeadersDesc": "Adicione cabeçalhos HTTP personalizados com pares chave-valor.",
       "headerKey": "Chave",
@@ -1244,35 +1252,6 @@
       "voice": "Tipo de Voz",
       "voiceDesc": "Especifique o tipo de voz para modelos de áudio, como 'alloy', 'echo', 'fable', etc.",
       "voicePlaceholder": "Insira o tipo de voz, ex: alloy",
-      "defaultModels": {
-        "title": "Modelos Gratuitos Padrão",
-        "desc": "O LingMo fornece serviços de modelo de IA gratuitos para usuários, permitindo funcionalidade básica sem configuração.",
-        "chatModel": {
-          "name": "Qwen/Qwen3-8B",
-          "type": "Modelo de Chat",
-          "desc": "Adequado para conversas diárias e geração de texto"
-        },
-        "embeddingModel": {
-          "name": "BAAI/bge-m3",
-          "type": "Modelo de Embedding",
-          "desc": "Usado para vetorização de texto e busca semântica"
-        },
-        "visionModel": {
-          "name": "OpenGVLab/InternVL2-8B",
-          "type": "Modelo de Visão",
-          "desc": "Suporta compreensão de imagens e perguntas visuais"
-        },
-        "completionModel": {
-          "name": "Conclusão Rápida",
-          "type": "Modelo de Conclusão",
-          "desc": "Conclusão inline de IA para editor Markdown, semelhante ao GitHub Copilot, gera rapidamente conteúdo de continuação"
-        },
-        "commit": {
-          "title": "Mensagem de Commit",
-          "desc": "Usado para gerar automaticamente mensagens de commit Git, gerando inteligentemente mensagens de commit descritivas com base nas alterações do conteúdo do arquivo."
-        },
-        "poweredBy": "Fornecido por SiliconFlow"
-      },
       "connectionFailed": "Falha na conexão",
       "enableStream": "Resposta em streaming",
       "enableStreamDesc": "Ativar resposta em streaming permite mostrar o conteúdo gerado em tempo real, mas alguns modelos podem não oferecer suporte a este recurso.",
@@ -1790,7 +1769,8 @@
       "confirmRemove": "Excluir Tag",
       "confirmRemoveDescription": "Note que excluir esta tag também removerá todos os registros contidos nela. Confirme a ação para continuar.",
       "content": {
-        "organize": "Organize seus registros em um artigo:"
+        "organize": "Organize seus registros em um artigo:",
+        "thinking": "Pensando..."
       },
       "note": {
         "organize": "Organizar",
@@ -1903,7 +1883,19 @@
             "cancel": "Cancelar",
             "confirm": "Confirmar",
             "confirmed": "Confirmado",
-            "cancelled": "Cancelado"
+            "cancelled": "Cancelado",
+            "params": {
+              "reportType": "Tipo de relatório",
+              "sourceLabel": "Fonte",
+              "contentPreview": "Prévia do conteúdo",
+              "openAfterCreate": "Abrir após criar"
+            },
+            "tools": {
+              "create_visual_report": {
+                "title": "Criar relatório visual",
+                "description": "Um relatório visual HTML autocontido será criado no workspace."
+              }
+            }
           }
         },
         "imageSelector": {
@@ -2907,5 +2899,17 @@
     "closeAll": "Fechar Tudo",
     "closeLeft": "Fechar à Esquerda",
     "closeRight": "Fechar à Direita"
+  },
+  "flashcard": {
+    "title": "Flashcards",
+    "workspaceTitle": "Estúdio de Flashcards",
+    "workspaceDesc": "Arraste notas, a IA gera flashcards inteligentes",
+    "config": "Configurar",
+    "addSource": "Adicionar Notas",
+    "addSourceDesc": "Suporta Markdown / TXT. Adicione vários arquivos.",
+    "sourceTitle": "Fonte de Material",
+    "sourceDesc": "Arraste várias notas, a IA irá mesclar e extrair pontos-chave.",
+    "addToSource": "Adicionar Atual",
+    "clear": "Limpar"
   }
 }
