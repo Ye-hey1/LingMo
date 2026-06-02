@@ -915,7 +915,8 @@ export function SyncToggle({ presentation = 'popover' }: SyncToggleProps) {
       setImporting(true);
 
       if (isMobile) {
-        // 移动端 TODO: 需要实现文件选择
+        // 移动端暂不支持文件选择，后续可通过 Tauri 文件选择器实现
+        // See: https://tauri.app/plugin/dialog/
         toast({
           description: t('settings.backupSync.localBackup.importError'),
           variant: "destructive",

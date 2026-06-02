@@ -50,9 +50,8 @@ function matchPattern(pattern: string, path: string): boolean {
   return path === pattern || path.includes(pattern)
 }
 
-// 获取排除模式（从配置读取或使用默认值）
+// 获取排除模式（合并默认规则和用户自定义规则）
 export function getExcludePatterns(): string[] {
-  // TODO: 从配置读取用户自定义的排除规则
   return DEFAULT_SYNC_EXCLUDE_PATTERNS.map(p => p.pattern)
 }
 

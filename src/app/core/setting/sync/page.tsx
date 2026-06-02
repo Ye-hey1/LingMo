@@ -108,7 +108,6 @@ export default function SyncPage() {
       case 's3':
         return <S3Sync />
       case 'webdav':
-        // TODO: Replace with WebDAV sync component in Task 4
         return <WebDAVSync />
       default:
         return <GithubSync />
