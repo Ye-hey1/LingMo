@@ -427,9 +427,11 @@ export const useGithubStarsStore = create<GithubStarsState>((set, get) => ({
 
     // 顶层安全超时：确保同步不会永远卡住
     const SYNC_MAX_DURATION = 120_000
+    const syncAbortController = new AbortController()
     let safetyTimer: ReturnType<typeof globalThis.setTimeout> | null = null
     const safetyTimeout = new Promise<never>((_, reject) => {
       safetyTimer = globalThis.setTimeout(() => {
+        syncAbortController.abort()
         reject(new Error('同步超时（超过 2 分钟），请检查网络连接或代理设置。如果使用代理，请确认代理地址和端口正确。'))
       }, SYNC_MAX_DURATION)
     })
@@ -438,7 +440,7 @@ export const useGithubStarsStore = create<GithubStarsState>((set, get) => ({
       const syncedAt = Date.now()
       let fetched = 0
       const allRepositories: GithubStarRepository[] = []
-      const firstPage = await fetchStarredRepositoriesPage(1)
+      const firstPage = await fetchStarredRepositoriesPage(1, { signal: syncAbortController.signal })
       fetched += firstPage.repositories.length
       allRepositories.push(...firstPage.repositories)
 
@@ -493,7 +495,7 @@ export const useGithubStarsStore = create<GithubStarsState>((set, get) => ({
             set({ syncProgress: { fetched, page, totalPages: firstPage.lastPage || undefined, running } })
 
             try {
-              const result = await fetchStarredRepositoriesPage(page)
+              const result = await fetchStarredRepositoriesPage(page, { signal: syncAbortController.signal })
               fetched += result.repositories.length
               allRepositories.push(...result.repositories)
               set({
@@ -516,7 +518,7 @@ export const useGithubStarsStore = create<GithubStarsState>((set, get) => ({
 
         while (hasMore) {
           set({ syncProgress: { fetched, page, running: 1 } })
-          const result = await fetchStarredRepositoriesPage(page)
+          const result = await fetchStarredRepositoriesPage(page, { signal: syncAbortController.signal })
           fetched += result.repositories.length
           allRepositories.push(...result.repositories)
           set({
@@ -545,10 +547,11 @@ export const useGithubStarsStore = create<GithubStarsState>((set, get) => ({
         : msg.includes('超时')
         ? msg
         : msg.includes('transaction')
-          ? `同步失败：${msg}。已定位为本地数据库写入冲突，不是 GitHub Token 或代理配置本身导致。`
+          ? `同步失败：${msg}。这是本地数据库事务写入异常，不是 GitHub Token 或代理配置本身导致。`
           : `同步失败：${msg}。请检查 GitHub Token 和网络代理设置是否正确。`
       set({ error: hint })
     } finally {
+      syncAbortController.abort()
       if (safetyTimer) {
         globalThis.clearTimeout(safetyTimer)
       }

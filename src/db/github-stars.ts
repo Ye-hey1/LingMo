@@ -1,4 +1,4 @@
-import { getDb, runDbTransaction, serializedWrite } from './index'
+import { getDb, serializedWrite } from './index'
 import type {
   GithubStarAnalysisResult,
   GithubStarCustomCategory,
@@ -92,6 +92,17 @@ interface GithubStarForkRow {
 
 const GITHUB_STAR_REPOSITORY_UPSERT_COLUMN_COUNT = 18
 const GITHUB_STAR_REPOSITORY_UPSERT_BATCH_SIZE = 50
+
+// tauri-plugin-sql executes through a connection pool, so raw BEGIN/COMMIT
+// statements are not reliable across multiple execute calls in this hot path.
+async function serializedGithubStarsWrite<T>(
+  fn: (db: Awaited<ReturnType<typeof getDb>>) => Promise<T>,
+): Promise<T> {
+  return serializedWrite(async () => {
+    const db = await getDb()
+    return fn(db)
+  })
+}
 
 async function addColumnIfMissing(table: string, column: string, definition: string) {
   const db = await getDb()
@@ -423,12 +434,9 @@ export async function getGithubStarForkRepositories() {
 export async function upsertGithubStarRepositories(repositories: GithubStarRepository[]) {
   const syncedAt = Date.now()
 
-  await serializedWrite(async () => {
-    const db = await getDb()
-    await runDbTransaction(db, async () => {
-      await upsertGithubStarRepositoriesWithDb(db, repositories, syncedAt)
-      await db.execute('update github_star_repositories set is_starred = 0 where synced_at <> $1', [syncedAt])
-    })
+  await serializedGithubStarsWrite(async (db) => {
+    await upsertGithubStarRepositoriesWithDb(db, repositories, syncedAt)
+    await db.execute('update github_star_repositories set is_starred = 0 where synced_at <> $1', [syncedAt])
   })
 }
 
@@ -439,28 +447,23 @@ export async function upsertGithubStarRepositoriesBatch(
 ) {
   if (repositories.length === 0 && !options.finishSync) return
 
-  await serializedWrite(async () => {
-    const db = await getDb()
-    await runDbTransaction(db, async () => {
-      if (repositories.length > 0) {
-        await upsertGithubStarRepositoriesWithDb(db, repositories, syncedAt)
-      }
-      if (options.finishSync) {
-        await db.execute('update github_star_repositories set is_starred = 0 where synced_at <> $1', [syncedAt])
-      }
-    })
+  await serializedGithubStarsWrite(async (db) => {
+    if (repositories.length > 0) {
+      await upsertGithubStarRepositoriesWithDb(db, repositories, syncedAt)
+    }
+    if (options.finishSync) {
+      await db.execute('update github_star_repositories set is_starred = 0 where synced_at <> $1', [syncedAt])
+    }
   })
 }
 
 export async function upsertGithubStarReleases(releases: GithubStarRelease[]) {
   if (releases.length === 0) return
 
-  await serializedWrite(async () => {
-    const db = await getDb()
-    await runDbTransaction(db, async () => {
-      for (const release of releases) {
-        await db.execute(
-          `insert into github_star_releases
+  await serializedGithubStarsWrite(async (db) => {
+    for (const release of releases) {
+      await db.execute(
+        `insert into github_star_releases
             (id, repo_id, repo_full_name, repo_name, tag_name, name, body, published_at, html_url,
              assets, zipball_url, tarball_url, prerelease, is_read, fetched_at)
            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
@@ -478,38 +481,35 @@ export async function upsertGithubStarReleases(releases: GithubStarRelease[]) {
              tarball_url = excluded.tarball_url,
              prerelease = excluded.prerelease,
              fetched_at = excluded.fetched_at`,
-          [
-            release.id,
-            release.repository.id,
-            release.repository.fullName,
-            release.repository.name,
-            release.tagName,
-            release.name,
-            release.body,
-            release.publishedAt,
-            release.htmlUrl,
-            stringifyJson(release.assets),
-            release.zipballUrl,
-            release.tarballUrl,
-            Number(release.prerelease),
-            Number(release.isRead),
-            release.fetchedAt,
-          ],
-        )
-      }
-    })
+        [
+          release.id,
+          release.repository.id,
+          release.repository.fullName,
+          release.repository.name,
+          release.tagName,
+          release.name,
+          release.body,
+          release.publishedAt,
+          release.htmlUrl,
+          stringifyJson(release.assets),
+          release.zipballUrl,
+          release.tarballUrl,
+          Number(release.prerelease),
+          Number(release.isRead),
+          release.fetchedAt,
+        ],
+      )
+    }
   })
 }
 
 export async function upsertGithubStarForkRepositories(forks: GithubStarForkRepository[]) {
   const syncedAt = Date.now()
 
-  await serializedWrite(async () => {
-    const db = await getDb()
-    await runDbTransaction(db, async () => {
-      for (const fork of forks) {
-        await db.execute(
-          `insert into github_star_forks
+  await serializedGithubStarsWrite(async (db) => {
+    for (const fork of forks) {
+      await db.execute(
+        `insert into github_star_forks
             (id, name, full_name, description, html_url, stargazers_count, forks_count, language,
              created_at, updated_at, pushed_at, default_branch, owner_login, owner_avatar_url,
              source_json, parent_json, synced_at)
@@ -531,30 +531,29 @@ export async function upsertGithubStarForkRepositories(forks: GithubStarForkRepo
              source_json = excluded.source_json,
              parent_json = excluded.parent_json,
              synced_at = excluded.synced_at`,
-          [
-            fork.id,
-            fork.name,
-            fork.fullName,
-            fork.description,
-            fork.htmlUrl,
-            fork.stargazersCount,
-            fork.forksCount,
-            fork.language,
-            fork.createdAt,
-            fork.updatedAt,
-            fork.pushedAt,
-            fork.defaultBranch,
-            fork.ownerLogin,
-            fork.ownerAvatarUrl,
-            stringifyJson(fork.source),
-            stringifyJson(fork.parent),
-            syncedAt,
-          ],
-        )
-      }
+        [
+          fork.id,
+          fork.name,
+          fork.fullName,
+          fork.description,
+          fork.htmlUrl,
+          fork.stargazersCount,
+          fork.forksCount,
+          fork.language,
+          fork.createdAt,
+          fork.updatedAt,
+          fork.pushedAt,
+          fork.defaultBranch,
+          fork.ownerLogin,
+          fork.ownerAvatarUrl,
+          stringifyJson(fork.source),
+          stringifyJson(fork.parent),
+          syncedAt,
+        ],
+      )
+    }
 
-      await db.execute('delete from github_star_forks where synced_at <> $1', [syncedAt])
-    })
+    await db.execute('delete from github_star_forks where synced_at <> $1', [syncedAt])
   })
 }
 

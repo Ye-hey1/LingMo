@@ -127,6 +127,7 @@ interface GithubRequestOptions {
   requireToken?: boolean
   method?: 'GET' | 'DELETE' | 'PUT' | 'POST'
   body?: string
+  signal?: AbortSignal
 }
 
 async function getGitHubToken() {
@@ -216,8 +217,19 @@ async function requestGitHubDetailedOnce<T>(endpoint: string, options: GithubReq
   const controller = new AbortController()
   let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null
   let bodyTimeoutId: ReturnType<typeof globalThis.setTimeout> | null = null
+  let removeParentAbortListener: (() => void) | null = null
 
   try {
+    if (options.signal?.aborted) {
+      throw new Error('GitHub API 请求已取消')
+    }
+
+    if (options.signal) {
+      const abortFromParent = () => controller.abort()
+      options.signal.addEventListener('abort', abortFromParent, { once: true })
+      removeParentAbortListener = () => options.signal?.removeEventListener('abort', abortFromParent)
+    }
+
     const proxyConfig = await getProxyConfig()
     const request = tauriFetch(`${GITHUB_API_BASE}${endpoint}`, {
       method: options.method || 'GET',
@@ -276,7 +288,7 @@ async function requestGitHubDetailedOnce<T>(endpoint: string, options: GithubReq
       headers: response.headers,
     }
   } catch (error) {
-    if (controller.signal.aborted || (error instanceof Error && error.message.includes('Request canceled'))) {
+    if (controller.signal.aborted || options.signal?.aborted || (error instanceof Error && error.message.includes('Request canceled'))) {
       throw new Error('GitHub API 请求超时，请检查网络连接和代理设置是否正确')
     }
     throw error
@@ -287,6 +299,7 @@ async function requestGitHubDetailedOnce<T>(endpoint: string, options: GithubReq
     if (bodyTimeoutId) {
       globalThis.clearTimeout(bodyTimeoutId)
     }
+    removeParentAbortListener?.()
   }
 }
 
@@ -581,12 +594,13 @@ export async function fetchAllStarredRepositories(
   return repositories
 }
 
-export async function fetchStarredRepositoriesPage(page = 1) {
+export async function fetchStarredRepositoriesPage(page = 1, options: { signal?: AbortSignal } = {}) {
   const result = await requestGitHubDetailed<Array<GitHubStarredResponse | GitHubRepositoryResponse>>(
     `/user/starred?sort=created&direction=desc&per_page=${PER_PAGE}&page=${page}`,
     {
       accept: 'application/vnd.github.star+json',
       requireToken: true,
+      signal: options.signal,
     },
   )
   const batch = Array.isArray(result.data) ? result.data : []

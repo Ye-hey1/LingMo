@@ -747,6 +747,63 @@ const MarkdownImage: React.FC<{ src?: string; alt?: string; baseUrl?: string }> 
   );
 };
 
+type MarkdownAstNode = {
+  type?: string;
+  tagName?: string;
+  value?: string;
+  children?: MarkdownAstNode[];
+};
+
+function isWhitespaceMarkdownNode(node: MarkdownAstNode) {
+  return node.type === 'text' && (!node.value || node.value.trim() === '');
+}
+
+function isImageLikeMarkdownNode(node: MarkdownAstNode): boolean {
+  if (node.type !== 'element') return false;
+  if (node.tagName === 'img') return true;
+  if (node.tagName === 'a') {
+    return Boolean(node.children?.length) && node.children.every(child => (
+      isWhitespaceMarkdownNode(child) || isImageLikeMarkdownNode(child)
+    ));
+  }
+  return false;
+}
+
+function isWhitespaceReactChild(child: React.ReactNode) {
+  return typeof child === 'string' && child.trim() === '';
+}
+
+function isImageLikeReactChild(child: React.ReactNode): boolean {
+  if (!React.isValidElement(child)) return false;
+
+  const props = child.props as {
+    src?: unknown;
+    children?: React.ReactNode;
+  };
+
+  if (child.type === MarkdownImage || child.type === 'img' || typeof props.src === 'string') {
+    return true;
+  }
+
+  const nestedChildren = React.Children.toArray(props.children);
+  return nestedChildren.length > 0 && nestedChildren.every(nestedChild => (
+    isWhitespaceReactChild(nestedChild) || isImageLikeReactChild(nestedChild)
+  ));
+}
+
+function isImageOnlyParagraph(node: MarkdownAstNode | undefined, children: React.ReactNode) {
+  if (Array.isArray(node?.children) && node.children.length > 0) {
+    return node.children.every(child => (
+      isWhitespaceMarkdownNode(child) || isImageLikeMarkdownNode(child)
+    ));
+  }
+
+  const childArray = React.Children.toArray(children);
+  return childArray.length > 0 && childArray.every(child => (
+    isWhitespaceReactChild(child) || isImageLikeReactChild(child)
+  ));
+}
+
 const extractTextFromChildren = (children: React.ReactNode): string => {
   const inner = (children: React.ReactNode): string => {
     if (typeof children === 'string') return children;
@@ -830,27 +887,19 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
       const id = getHeadingId(children);
       return <h6 id={id} className="text-sm font-medium text-muted-foreground mt-1 mb-1">{children}</h6>;
     },
-    p: ({ children }: any) => {
-      const childArray = React.Children.toArray(children);
-      const hasImagesOnly = childArray.every(
-        (child: any) => {
-          if (React.isValidElement(child)) {
-            if (child.type === MarkdownImage) return true;
-            if (child.type === 'img') return true;
-          }
-          if (typeof child === 'string' && child.trim() === '') return true;
-          return false;
-        }
-      );
-      return (
-        <p className={`text-foreground mb-2 leading-relaxed ${
-          hasImagesOnly
-            ? 'flex flex-wrap items-center justify-center gap-3'
-            : ''
-        }`}>
-          {children}
-        </p>
-      );
+    p: ({ children, node }: any) => {
+      const hasImagesOnly = isImageOnlyParagraph(node, children);
+      const className = `text-foreground mb-2 leading-relaxed ${
+        hasImagesOnly
+          ? 'flex flex-wrap items-center justify-center gap-3'
+          : ''
+      }`;
+
+      if (hasImagesOnly) {
+        return <div className={className}>{children}</div>;
+      }
+
+      return <p className={className}>{children}</p>;
     },
     ul: ({ children }: any) => <ul className="list-disc list-inside text-foreground mb-2 space-y-1">{children}</ul>,
     ol: ({ children }: any) => <ol className="list-decimal list-inside text-foreground mb-2 space-y-1">{children}</ol>,
