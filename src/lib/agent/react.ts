@@ -1,6 +1,6 @@
 import { AgentEvent, ReActStep, ToolCall, ToolResult } from './types'
+import { BaseAgent, type BaseAgentConfig } from './base-agent'
 import { getToolByName, getToolDescriptions } from './tools'
-import { createAgentEventBus, AgentEventBus } from './event-bus'
 import { buildAgentHistoryContext } from './context-compression'
 import { skillManager } from '@/lib/skills'
 import useChatStore from '@/stores/chat'
@@ -19,14 +19,14 @@ import {
   parseBatchActionJson,
 } from './parse-action-input'
 import {
-  IntentPolicy,
-  deriveIntentPolicy,
   evaluateIntentAwareToolPolicy,
-  formatIntentPolicyForPrompt,
   READ_ONLY_TOOLS,
 } from './tool-policy'
-import { ToolResultCache } from './tool-cache'
 import { generateTaskPlan, isTaskLikelyComplex, formatTaskPlanForPrompt, type TaskPlan } from './task-planner'
+import { detectAgentLoop } from './loop-detection'
+import { MetricsCollector } from './metrics-collector'
+import { buildAgentSystemPrompt } from './prompt-assembler'
+import type { SkillMatchSummary } from '@/lib/skills/types'
 import OpenAI from 'openai'
 
 const WEB_ACCESS_TOOL_NAMES = new Set([
@@ -252,7 +252,7 @@ function shouldBlockRepeatedNoteExploration(
   )
 }
 
-export interface ReActConfig {
+export interface ReActConfig extends BaseAgentConfig {
   maxIterations: number
   webSearchEnabled?: boolean
   onThought?: (thought: string) => void
@@ -271,6 +271,7 @@ export interface ReActConfig {
     filePath?: string
   }) => Promise<boolean>
   activeSkills?: string[]  // 当前激活的 Skills
+  activeSkillMatches?: SkillMatchSummary[]
   currentQuote?: {
     fileName: string
     startLine: number
@@ -281,77 +282,16 @@ export interface ReActConfig {
   }
 }
 
-export class ReActAgent {
-  private config: ReActConfig
-  private steps: ReActStep[] = []
-  private eventBus: AgentEventBus = createAgentEventBus()
-  private currentIteration = 0
-  private toolCallCounter = 0
-  private stopped = false
-  private abortController: AbortController | null = null
+export class ReActAgent extends BaseAgent {
   private selectedSkills: Set<string> = new Set() // 记录 AI 选择的 Skills
-  private currentUserInput = ''
-  private toolCache = new ToolResultCache()
   private taskPlan: TaskPlan | null = null
   private cachedStaticPrompt: string | null = null
   private _cachedMemoryPrompt: string = ''
-  private intentPolicy: IntentPolicy = {
-    allowWrite: false,
-    allowDestructive: false,
-    allowExecute: false,
-  }
+  private metricsCollector: MetricsCollector
 
   constructor(config: ReActConfig) {
-    this.config = config
-    if (!this.config.maxIterations) {
-      this.config.maxIterations = 15
-    }
-  }
-
-  private emitEvent(type: AgentEvent['type'], payload?: Record<string, any>) {
-    const event = this.eventBus.emit(type, payload, {
-      iteration: this.currentIteration || undefined,
-      level: type === 'error' ? 'error' : undefined,
-    })
-    this.config.onEvent?.(event)
-  }
-
-  private emitToolCall(toolCall: ToolCall) {
-    this.config.onToolCall?.(toolCall)
-    this.emitEvent('tool', {
-      toolCall: {
-        ...toolCall,
-        params: { ...toolCall.params },
-        result: toolCall.result ? { ...toolCall.result } : undefined,
-      },
-    })
-    this.emitEvent('tool.updated', {
-      toolCall: {
-        ...toolCall,
-        params: { ...toolCall.params },
-        result: toolCall.result ? { ...toolCall.result } : undefined,
-      },
-    })
-  }
-
-  private emitObservation(observation: string) {
-    this.config.onObservation?.(observation)
-    this.emitEvent('observation', { observation })
-    this.emitEvent('observation.created', { observation })
-  }
-
-  stop() {
-    this.stopped = true
-    this.emitEvent('agent.stopped')
-    // 终止所有正在进行的异步操作
-    if (this.abortController) {
-      this.abortController.abort()
-      this.abortController = null
-    }
-  }
-
-  isStopped(): boolean {
-    return this.stopped
+    super(config)
+    this.metricsCollector = new MetricsCollector('')
   }
 
   async run(
@@ -359,24 +299,17 @@ export class ReActAgent {
     contextOrMessages?: string | OpenAI.Chat.ChatCompletionMessageParam[],
     imageUrls?: string[]
   ): Promise<string> {
-    this.steps = []
-    this.currentIteration = 0
-    this.toolCallCounter = 0
-    this.stopped = false
-    this.eventBus.reset()
+    this.resetForNewRun(userInput)
     this.selectedSkills.clear()
-    this.toolCache.invalidateAll()
     this.cachedStaticPrompt = null
-    this.currentUserInput = userInput
-    this.intentPolicy = deriveIntentPolicy(userInput)
     this.taskPlan = null
+    this.metricsCollector = new MetricsCollector(this.eventBus.getRunId())
+
     this.emitEvent('agent.started', {
       runId: this.eventBus.getRunId(),
       userInput,
       intentPolicy: this.intentPolicy,
     })
-    // 创建新的 AbortController
-    this.abortController = new AbortController()
 
     let finalAnswer = ''
 
@@ -408,30 +341,38 @@ export class ReActAgent {
     while (this.currentIteration < this.config.maxIterations) {
       // 检查是否已停止
       if (this.stopped) {
-        // 返回特殊标记表示被用户终止，但保留已产生的步骤
         throw new Error('USER_STOPPED')
+      }
+
+      // ---- 增强循环检测 ----
+      if (this.currentIteration > 3) {
+        const loopResult = detectAgentLoop(this.steps)
+        if (loopResult.isLoop) {
+          console.warn(`[Agent] Loop detected: ${loopResult.reason}`)
+          // 尝试从已有步骤中提取有用信息作为最终答案
+          const successfulSteps = this.steps.filter(s =>
+            s.action && s.observation &&
+            !s.observation.includes('失败') &&
+            !s.observation.includes('无法解析') &&
+            !s.observation.includes('你只输出')
+          )
+          if (successfulSteps.length > 0) {
+            const lastSuccess = successfulSteps[successfulSteps.length - 1]
+            finalAnswer = loopResult.suggestion
+              ? `${loopResult.suggestion}\n\n基于已完成的分析：\n\n${lastSuccess.observation}`
+              : `基于已完成的分析：\n\n${lastSuccess.observation}`
+          } else {
+            finalAnswer = loopResult.suggestion || '抱歉，执行过程中遇到了格式问题，请重试。'
+          }
+          break
+        }
       }
 
       this.currentIteration++
       this.emitEvent('iteration.started')
 
-      // 语义循环检测：防止 Agent 陷入无效循环（只在 5 次迭代后才检测）
-      if (this.currentIteration > 5) {
-        const { detectSemanticLoop } = await import('./safety-guards')
-        const loopResult = detectSemanticLoop(this.steps)
-        if (loopResult.isLoop) {
-          console.warn(`[Agent] Loop detected: ${loopResult.reason}`)
-          // 尝试从已有步骤中提取有用信息作为最终答案
-          const successfulSteps = this.steps.filter(s => s.action && s.observation && !s.observation.includes('失败') && !s.observation.includes('无法解析') && !s.observation.includes('你只输出'))
-          if (successfulSteps.length > 0) {
-            const lastSuccess = successfulSteps[successfulSteps.length - 1]
-            finalAnswer = `基于已完成的分析：\n\n${lastSuccess.observation}`
-          } else {
-            finalAnswer = '抱歉，执行过程中遇到了格式问题，请重试。'
-          }
-          break
-        }
-      }
+      // 记录迭代指标
+      this.metricsCollector.recordIteration(true)
 
       // 在新迭代开始时，通知保存上一次的思考到历史
       if (this.currentIteration > 1) {
@@ -457,7 +398,7 @@ export class ReActAgent {
           observation: lastCompletedStep.observation || '',
         })
         if (descriptor) {
-          finalAnswer = this.config.formatAutoFinalAnswer?.(descriptor.key, descriptor.values) || descriptor.fallback
+          finalAnswer = (this.config as ReActConfig).formatAutoFinalAnswer?.(descriptor.key, descriptor.values) || descriptor.fallback
           break
         }
       }
@@ -610,7 +551,6 @@ export class ReActAgent {
 
             // 如果能推断出参数，直接执行；否则提示 AI 重新格式化
             if (Object.keys(autoParams).length > 0) {
-              const observation = `检测到你想使用 ${mentionedTool}，已自动执行。请根据结果继续。`
               this.config.onAction?.(mentionedTool, autoParams)
               this.emitEvent('action.parsed', { tool: mentionedTool, params: autoParams })
               const toolResult = await this.act(mentionedTool, autoParams, thought)
@@ -780,10 +720,6 @@ export class ReActAgent {
   private async buildSystemPrompt(): Promise<string> {
     // Dynamic parts that change per iteration
     const skillsInstructions = this.formatSkillsInstructions()
-    const intentPolicyPrompt = formatIntentPolicyForPrompt(this.intentPolicy)
-    const webSearchControl = this.config.webSearchEnabled
-      ? '- Current request web access: ENABLED. Use `web_search` for current external facts, `web_extract` for readable page bodies, and `web_fetch` only when you need raw page contents from a specific URL.'
-      : '- Current request web access: DISABLED. Do not call `web_search`, `web_extract`, `web_fetch`, or other web tools; if current web data is required, ask the user to enable the web-search button in the chat input.'
 
     // Load unified memory/graph context — only on first iteration, cache for subsequent iterations
     let memoryPrompt = ''
@@ -808,11 +744,10 @@ export class ReActAgent {
     // Build or reuse cached static prompt portion (tool descriptions, rules, examples)
     if (!this.cachedStaticPrompt) {
       const toolDescriptions = getToolDescriptions()
-      this.cachedStaticPrompt = `## Core Rules
+      this.cachedStaticPrompt = `## ReAct Tooling Guide
 
-**Intent First**: Analyze intent before acting. Question → \`{"final_answer":"..."}\` directly. Action → tools. Uncertain → ask. If context/RAG/quoted content already answers → Final Answer immediately.
-**Skills ≠ Tools**: Skills are guidance docs. Use real tools (create_file etc.) to execute, never \`Action: skill_name\`.
-**Efficiency**: Minimum steps. One WRITE tool per iteration, batch up to 3 independent READ tools. No unnecessary tool calls.
+Use the ReAct loop internally: understand the previous observation, choose the next minimal action, then stop with a final answer once the task is complete.
+One WRITE tool per iteration. Batch up to 3 independent READ tools.
 
 ## Core Concepts (Notes vs Tags vs Marks)
 
@@ -838,14 +773,13 @@ ${toolDescriptions}
 
 RAG results appear in context automatically. If insufficient: \`search_markdown_files\` (keyword/rag), \`search_marks\` (records). Only use when user explicitly requests search.
 
-## Output Format (JSON only)
+## Math Formula Guide
 
-- **Tool call**: \`{"thought":"reason","action":"tool_name","action_input":{"param":"value"}}\`
-- **Batch reads** (max 3, all read-only): \`{"thought":"reason","actions":[{"action":"...","action_input":{...}},...]}\`
-- **Final answer**: \`{"thought":"reason","final_answer":"answer"}\`
-- **Direct answer** (no tools): \`{"final_answer":"answer"}\`
+When outputting mathematical formulas, use proper LaTeX delimiters:
+- Inline formula: $E = mc^2$ or \(E = mc^2\)
+- Block formula: $$\text{结果} = \text{初始值} \times (1 + \text{增长率})^{\text{时间}}$$ or \[\text{结果} = \text{初始值} \times (1 + \text{增长率})^{\text{时间}}\]
 
-No source boilerplate in Final Answer (no "> 基于笔记", "Sources:", etc.). UI handles citations.
+Do NOT use square brackets [ ] as delimiters. Use $ or $$ for proper rendering.
 
 ## Critical Rules
 
@@ -855,44 +789,32 @@ No source boilerplate in Final Answer (no "> 基于笔记", "Sources:", etc.). U
 4. **Task completion**: After tool success, if done → Final Answer immediately. If next step needed → continue. Never repeat same action.
 5. **State-based reasoning**: Base next action on PREVIOUS observation, not original request. Build on results.
 6. **Checkbox edits**: "已完成/勾选" → \`- [x]\`, "未完成/取消勾选" → \`- [ ]\`. "改回/还是/恢复为" = target state, not current.
-7. **Don't repeat**: After modify → Final Answer. After search → act on results. After create → confirm and stop.
-
-## Runtime Tool Policy
-
-${intentPolicyPrompt}
-
-Now start executing the task!`
+7. **Don't repeat**: After modify → Final Answer. After search → act on results. After create → confirm and stop.`
     }
 
-    // Assemble: header + dynamic memory + static cached body + dynamic skills/plan/web
-    let prompt = `You are an efficient AI agent that uses tools to help users complete tasks. Follow the ReAct framework: Thought → Action → Observation.
-
-${memoryPrompt ? `## Unified Context\n\n${memoryPrompt}\n` : ''}
-${this.cachedStaticPrompt}`
+    const extraSections: string[] = [this.cachedStaticPrompt]
 
     // Dynamic: Skills instructions
     if (skillsInstructions) {
-      prompt += `
-
-## Available Skills
-
-${skillsInstructions}`
+      extraSections.push(skillsInstructions)
     }
 
     // Dynamic: Task plan
     const planPrompt = this.taskPlan?.isComplex ? formatTaskPlanForPrompt(this.taskPlan) : ''
     if (planPrompt) {
-      prompt += `
-
-${planPrompt}`
+      extraSections.push(planPrompt)
     }
 
-    // Dynamic: Web search control
-    prompt += `
-
-${webSearchControl}`
-
-    return prompt
+    return buildAgentSystemPrompt({
+      mode: 'react',
+      userInput: this.currentUserInput,
+      webSearchEnabled: this.config.webSearchEnabled,
+      memoryPrompt,
+      intentPolicy: this.intentPolicy,
+      activeSkills: this.config.activeSkills,
+      activeSkillMatches: this.config.activeSkillMatches,
+      extraSections,
+    })
   }
 
   private async think(
@@ -975,20 +897,23 @@ ${webSearchControl}`
 
           response = content
 
+          // 清洗 Thought 流，过滤掉 Action 协议字符和 JSON
+          const cleanThought = this.cleanThoughtStream(content)
+
           // 自适应节流：最小 30 字符增长 + 150ms 间隔，关键词立即触发
           const now = Date.now()
           const hasKeyword = content.includes('Action:') || content.includes('Final Answer:')
-          const charsGrown = content.length - lastUpdateLength
+          const charsGrown = cleanThought.length - lastUpdateLength
           const timeSinceUpdate = now - lastUpdateTime
 
           if (hasKeyword || (charsGrown > 30 && timeSinceUpdate > 150)) {
-            this.config.onThought?.(content)
-            this.emitEvent('thought', { content })
-            this.emitEvent('thought.updated', { content })
-            lastUpdateLength = content.length
+            this.config.onThought?.(cleanThought)
+            this.emitEvent('thought', { content: cleanThought })
+            this.emitEvent('thought.updated', { content: cleanThought })
+            lastUpdateLength = cleanThought.length
             lastUpdateTime = now
           }
-        }, this.abortController?.signal, undefined, undefined, undefined, imagesForThisIteration, undefined, messagesForAI)
+        }, this.abortController?.signal, undefined, undefined, undefined, imagesForThisIteration, undefined, this.validateAndFixMessages(messagesForAI))
 
         // 检查是否已终止
         if (this.stopped) {
@@ -996,16 +921,17 @@ ${webSearchControl}`
         }
 
         // 确保最终内容被更新
-        if (response.length !== lastUpdateLength) {
-          this.config.onThought?.(response)
-          this.emitEvent('thought', { content: response })
-          this.emitEvent('thought.updated', { content: response })
+        const finalCleanThought = this.cleanThoughtStream(response)
+        if (finalCleanThought.length !== lastUpdateLength) {
+          this.config.onThought?.(finalCleanThought)
+          this.emitEvent('thought', { content: finalCleanThought })
+          this.emitEvent('thought.updated', { content: finalCleanThought })
         }
 
         // 第一次迭代后，不再根据文本提及自动选择 Skills。
         // 只有显式调用 select_skill 工具才会生效，避免误命中无关 Skill。
         if (this.currentIteration === 1) {
-          this.config.onSkillsSelected?.([])
+          (this.config as ReActConfig).onSkillsSelected?.([])
         }
 
         return response
@@ -1068,12 +994,15 @@ ${buildIterationUserMessage(this.currentIteration, userInput, lastObservation)}`
 
         response = content
 
+        // 清洗 Thought 流，过滤掉 Action 协议字符和 JSON
+        const cleanThought = this.cleanThoughtStream(content)
+
         // 实时更新，但只在内容有实质性增长时更新（避免频繁更新）
-        if (content.length - lastUpdateLength > 10 || content.includes('Action:') || content.includes('Final Answer:')) {
-          this.config.onThought?.(content)
-          this.emitEvent('thought', { content })
-          this.emitEvent('thought.updated', { content })
-          lastUpdateLength = content.length
+        if (cleanThought.length - lastUpdateLength > 10 || content.includes('Action:') || content.includes('Final Answer:')) {
+          this.config.onThought?.(cleanThought)
+          this.emitEvent('thought', { content: cleanThought })
+          this.emitEvent('thought.updated', { content: cleanThought })
+          lastUpdateLength = cleanThought.length
         }
       }, this.abortController?.signal, undefined, undefined, undefined, imagesForThisIteration)
       
@@ -1083,16 +1012,17 @@ ${buildIterationUserMessage(this.currentIteration, userInput, lastObservation)}`
       }
       
       // 确保最终内容被更新
-      if (response.length !== lastUpdateLength) {
-        this.config.onThought?.(response)
-        this.emitEvent('thought', { content: response })
-        this.emitEvent('thought.updated', { content: response })
+      const finalCleanThought = this.cleanThoughtStream(response)
+      if (finalCleanThought.length !== lastUpdateLength) {
+        this.config.onThought?.(finalCleanThought)
+        this.emitEvent('thought', { content: finalCleanThought })
+        this.emitEvent('thought.updated', { content: finalCleanThought })
       }
 
       // 第一次迭代后，不再根据文本提及自动选择 Skills。
       // 只有显式调用 select_skill 工具才会生效，避免误命中无关 Skill。
       if (this.currentIteration === 1) {
-        this.config.onSkillsSelected?.([])
+        (this.config as ReActConfig).onSkillsSelected?.([])
       }
 
       return response
@@ -1111,6 +1041,40 @@ ${buildIterationUserMessage(this.currentIteration, userInput, lastObservation)}`
       return `Thought: 抱歉，AI 服务暂时不可用
 Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
     }
+  }
+
+  private cleanThoughtStream(rawContent: string): string {
+    if (!rawContent) return ''
+
+    let cleaned = rawContent
+
+    // 1. 过滤自带思考 R1 / MiniMax 模型输出的 <think>...</think> 标签及其内容
+    cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '')
+    cleaned = cleaned.replace(/<think>[\s\S]*$/, '') // 过滤流式接收中未闭合的 <think>
+
+    // 2. 过滤传统的 ReAct Action 标签及其之后的内容
+    const actionIndex = cleaned.search(/Action\s*[:：]/i)
+    if (actionIndex !== -1) {
+      cleaned = cleaned.slice(0, actionIndex)
+    }
+
+    // 3. 过滤结构化 JSON 格式：遇到 {"action" 时截断，或者匹配 "thought": "..."
+    if (cleaned.trim().startsWith('{') || cleaned.includes('"thought"')) {
+      const thoughtMatch = cleaned.match(/"thought"\s*:\s*"([^"]*)/)
+      if (thoughtMatch && thoughtMatch[1]) {
+        cleaned = thoughtMatch[1]
+      } else {
+        const bracketIndex = cleaned.indexOf('{')
+        if (bracketIndex !== -1) {
+          cleaned = cleaned.slice(0, bracketIndex)
+        }
+      }
+    }
+
+    // 4. 清理冗余的 Thought / 思考 前缀
+    cleaned = cleaned.replace(/^(Thought|思考)\s*[:：]\s*/i, '')
+
+    return cleaned.trim()
   }
 
   private parseAction(thought: string): ParseActionResult | null {
@@ -1224,6 +1188,12 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
   }
 
   private async act(toolName: string, params: Record<string, any>, thought?: string): Promise<string> {
+    const argsHash = this.hashArgs(params)
+    const shouldStop = this.checkConsecutiveFailures(toolName, argsHash)
+    if (shouldStop.shouldStop) {
+      return shouldStop.reason
+    }
+
     const tool = getToolByName(toolName)
 
     if (!tool) {
@@ -1424,6 +1394,21 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         }
       }
 
+      if (toolName === 'create_visual_report') {
+        const content = typeof params.content === 'string' ? params.content : ''
+        confirmContext.previewParams = {
+          title: params.title,
+          reportType: params.reportType || 'general',
+          templateId: params.templateId || 'article-report',
+          sourceFormat: params.sourceFormat || undefined,
+          fileName: params.fileName,
+          folderPath: params.folderPath,
+          sourceLabel: params.sourceLabel,
+          contentPreview: content ? truncatePreviewContent(content, 1600) : 'Structured sections only',
+          openAfterCreate: params.openAfterCreate !== false,
+        }
+      }
+
       if (toolName === 'update_diagram_file' && typeof params.filePath === 'string' && typeof params.content === 'string') {
         confirmContext.filePath = params.filePath
 
@@ -1604,6 +1589,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
 
       toolCall.status = result.success ? 'success' : 'error'
       toolCall.result = result
+      this.recordToolResult(toolName, argsHash, result.success)
       this.emitToolCall(toolCall)
 
         if (result.success) {
@@ -1616,8 +1602,8 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
             this.selectedSkills.add(skillId)
           }
 
-          // 通知外部选择的 Skills
-          this.config.onSkillsSelected?.(selectedSkillIds)
+           // 通知外部选择的 Skills
+          (this.config as ReActConfig).onSkillsSelected?.(selectedSkillIds)
           this.emitEvent('skills.selected', { skillIds: selectedSkillIds })
         }
 
@@ -1954,6 +1940,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
     if (!activeSkillIds || activeSkillIds.length === 0) {
       return ''
     }
+    const skillMatchesById = new Map((this.config.activeSkillMatches || []).map(match => [match.id, match]))
 
     // First iteration: only send brief info (name and description), let AI choose
     if (this.currentIteration === 1) {
@@ -1967,9 +1954,17 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         }
 
         // Only send brief information
+        const match = skillMatchesById.get(skill.metadata.id)
         let skillText = `### ${skill.metadata.name}\n\n`
         skillText += `- Description: ${skill.metadata.description}\n`
         skillText += `- ID: ${skill.metadata.id}\n\n`
+        if (match) {
+          skillText += `- Match confidence: ${match.confidence} (${match.score.toFixed(2)})\n`
+          if (match.reasons.length > 0) {
+            skillText += `- Match reasons: ${match.reasons.slice(0, 2).join('; ')}\n`
+          }
+          skillText += `\n`
+        }
 
         skillsList.push(skillText)
         skillsDebugInfo.push({

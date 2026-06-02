@@ -5,6 +5,9 @@ export interface TaskPlan {
     tools: string[]
   }>
   summary: string
+  currentStepIndex?: number
+  stepsStatus?: Array<'pending' | 'running' | 'completed' | 'failed'>
+  stepReflections?: string[]
 }
 
 const COMPLEXITY_INDICATORS = [
@@ -93,6 +96,9 @@ export async function generateTaskPlan(
         description: String(step.description || '').slice(0, 200),
         tools: Array.isArray(step.tools) ? step.tools.slice(0, 5).map(String) : [],
       }))
+      plan.currentStepIndex = 0
+      plan.stepsStatus = plan.steps.map((_, index) => index === 0 ? 'running' : 'pending')
+      plan.stepReflections = plan.steps.map(() => '')
     }
 
     return plan
@@ -106,13 +112,24 @@ export async function generateTaskPlan(
 export function formatTaskPlanForPrompt(plan: TaskPlan): string {
   if (!plan.isComplex || plan.steps.length === 0) return ''
 
+  const currentIndex = plan.currentStepIndex ?? 0
+  const statusList = plan.stepsStatus ?? plan.steps.map(() => 'pending')
+
   const steps = plan.steps
-    .map((step, i) => `${i + 1}. ${step.description}${step.tools.length > 0 ? ` (tools: ${step.tools.join(', ')})` : ''}`)
+    .map((step, i) => {
+      let prefix = '[ ]'
+      if (statusList[i] === 'completed') prefix = '[✓]'
+      else if (statusList[i] === 'running' || i === currentIndex) prefix = '[➔]'
+      else if (statusList[i] === 'failed') prefix = '[✗]'
+
+      const reflection = plan.stepReflections?.[i] ? `\n   - 反思: ${plan.stepReflections[i]}` : ''
+      return `${prefix} 步骤 ${i + 1}: ${step.description}${step.tools.length > 0 ? ` (推荐工具: ${step.tools.join(', ')})` : ''}${reflection}`
+    })
     .join('\n')
 
-  return `## Execution Plan
-${plan.summary ? `**Goal**: ${plan.summary}\n` : ''}Follow these steps:
+  return `## 任务执行进度 (显式任务追踪)
+${plan.summary ? `**总目标**: ${plan.summary}\n` : ''}步骤进度列表:
 ${steps}
 
-Complete each step, then give Final Answer. You may adjust the plan based on actual results.`
+请继续沿着当前执行中的步骤 [➔] 推进。在你的 Thought 中思考当前步骤是否已完成，完成后在 Thought 中用特殊的指令 \`【步骤完成: 当前完成步骤的反思】\` 宣告完成，系统会自动推进到下一步。`
 }

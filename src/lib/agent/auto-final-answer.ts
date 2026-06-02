@@ -28,6 +28,22 @@ export function getAutoFinalAnswerDescriptor(
 ): AutoFinalAnswerDescriptor | null {
   const { toolName, params, observation } = input
 
+  if (toolName === 'create_visual_report' && observation.startsWith('Created visual report:')) {
+    const rawFileName = typeof params.fileName === 'string' && params.fileName.trim()
+      ? params.fileName.trim().split('/').pop() || params.fileName.trim()
+      : typeof params.title === 'string' && params.title.trim()
+        ? `${params.title.trim()}.html`
+        : 'visual-report.html'
+
+    return {
+      key: 'record.chat.input.agent.autoFinal.createFile',
+      values: {
+        name: /\.html?$/i.test(rawFileName) ? rawFileName : `${rawFileName}.html`,
+      },
+      fallback: `Created visual report "${rawFileName}".`,
+    }
+  }
+
   if (toolName !== 'create_file' || !observation.startsWith('成功创建文件:')) {
     return null
   }

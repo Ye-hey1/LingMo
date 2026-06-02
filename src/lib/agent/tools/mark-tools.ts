@@ -1,6 +1,9 @@
 import { Tool, ToolResult } from '../types'
 import { getMarks, getAllMarks, insertMark, updateMark, delMark, restoreMark, Mark, insertMarks, updateMarks, deleteMarks, restoreMarks } from '@/db/marks'
 import useTagStore from '@/stores/tag'
+import useMarkStore from '@/stores/mark'
+import emitter from '@/lib/emitter'
+import { EmitterRecordEvents } from '@/config/emitters'
 
 /**
  * 获取当前选中的标签ID
@@ -13,6 +16,13 @@ function getCurrentTagId(tagId?: number): number {
   }
   // 否则使用当前选中的标签
   return useTagStore.getState().currentTagId
+}
+
+async function refreshRecordState() {
+  await useTagStore.getState().fetchTags()
+  useTagStore.getState().getCurrentTag()
+  await useMarkStore.getState().refreshVisibleMarks()
+  emitter.emit(EmitterRecordEvents.refreshMarks)
 }
 
 export const readMarksTool: Tool = {
@@ -94,6 +104,7 @@ export const createMarkTool: Tool = {
         desc: params.desc,
       }
       const result = await insertMark(mark)
+      await refreshRecordState()
       return {
         success: true,
         data: { id: result.lastInsertId },
@@ -141,24 +152,25 @@ export const updateMarkTool: Tool = {
   ],
   execute: async (params): Promise<ToolResult> => {
     try {
-      const marks = await getMarks(params.tagId || 1)
+      const marks = await getAllMarks()
       const mark = marks.find(m => m.id === params.id)
-      
+
       if (!mark) {
         return {
           success: false,
           error: `未找到ID为 ${params.id} 的记录`,
         }
       }
-      
+
       const updatedMark: Mark = {
         ...mark,
         content: params.content !== undefined ? params.content : mark.content,
         desc: params.desc !== undefined ? params.desc : mark.desc,
         tagId: params.tagId !== undefined ? params.tagId : mark.tagId,
       }
-      
+
       await updateMark(updatedMark)
+      await refreshRecordState()
       return {
         success: true,
         message: `成功更新记录 ID: ${params.id}`,
@@ -188,6 +200,7 @@ export const deleteMarkTool: Tool = {
   execute: async (params): Promise<ToolResult> => {
     try {
       await delMark(params.id)
+      await refreshRecordState()
       return {
         success: true,
         message: `成功删除记录 ID: ${params.id}`,
@@ -217,6 +230,7 @@ export const restoreMarkTool: Tool = {
   execute: async (params): Promise<ToolResult> => {
     try {
       await restoreMark(params.id)
+      await refreshRecordState()
       return {
         success: true,
         message: `成功恢复记录 ID: ${params.id}`,
@@ -377,7 +391,8 @@ export const createMarksBatchTool: Tool = {
       }))
 
       await insertMarks(marksToInsert)
-      
+      await refreshRecordState()
+
       return {
         success: true,
         data: { count: marksToInsert.length },
@@ -426,7 +441,8 @@ export const updateMarksBatchTool: Tool = {
       }))
 
       await updateMarks(marksToUpdate)
-      
+      await refreshRecordState()
+
       return {
         success: true,
         data: { count: marksToUpdate.length },
@@ -464,7 +480,8 @@ export const deleteMarksBatchTool: Tool = {
       }
 
       await deleteMarks(params.ids)
-      
+      await refreshRecordState()
+
       return {
         success: true,
         data: { count: params.ids.length },
@@ -502,7 +519,8 @@ export const restoreMarksBatchTool: Tool = {
       }
 
       await restoreMarks(params.ids)
-      
+      await refreshRecordState()
+
       return {
         success: true,
         data: { count: params.ids.length },

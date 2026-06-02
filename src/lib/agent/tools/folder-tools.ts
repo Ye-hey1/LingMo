@@ -1,39 +1,14 @@
 import { Tool, ToolResult } from '../types'
-import { mkdir, remove, exists, readDir } from '@tauri-apps/plugin-fs'
+import { mkdir, exists, readDir } from '@tauri-apps/plugin-fs'
 import { ensureSafeWorkspaceRelativePath, getWorkspacePath, getFilePathOptions } from '@/lib/workspace'
 import { join } from '@tauri-apps/api/path'
 import useArticleStore from '@/stores/article'
-import { getVectorDocumentKey } from '@/lib/vector-document-key'
+import { clearFileKnowledgeIndexes, moveWorkspaceEntryToTrash } from '@/lib/file-trash'
 
 async function getMarkdownFilesForFolder(folderPath: string): Promise<string[]> {
   const { collectMarkdownFiles } = await import('@/lib/files')
   const files = await collectMarkdownFiles(folderPath)
   return files.map(file => file.path)
-}
-
-async function deleteVectorDocumentsForFiles(filePaths: string[]): Promise<void> {
-  const { deleteVectorDocumentsByFilename } = await import('@/db/vector')
-
-  for (const filePath of filePaths) {
-    const vectorKey = getVectorDocumentKey(filePath)
-    const legacyFilename = filePath.split('/').pop() || filePath
-
-    try {
-      await deleteVectorDocumentsByFilename(vectorKey)
-      if (legacyFilename !== vectorKey) {
-        await deleteVectorDocumentsByFilename(legacyFilename)
-      }
-    } catch (error) {
-      console.error(`删除文件 ${filePath} 的向量数据失败:`, error)
-    }
-  }
-
-  const articleState = useArticleStore.getState()
-  const nextMap = new Map(articleState.vectorIndexedFiles)
-  for (const filePath of filePaths) {
-    nextMap.delete(getVectorDocumentKey(filePath))
-  }
-  useArticleStore.setState({ vectorIndexedFiles: nextMap })
 }
 
 export const checkFolderExistsTool: Tool = {
@@ -177,7 +152,7 @@ export const createFolderTool: Tool = {
 
 export const deleteFolderTool: Tool = {
   name: 'delete_folder',
-  description: 'Delete the specified folder (will delete all contents within the folder)',
+  description: 'Move the specified folder to the trash (all contents move with it)',
   category: 'note',
   requiresConfirmation: true,
   parameters: [
@@ -215,9 +190,6 @@ export const deleteFolderTool: Tool = {
             error: `文件夹不存在: ${normalizedFolderPath}`,
           }
         }
-
-        // 删除文件夹
-        await remove(fullPath, { recursive: true })
       } else {
         // 默认工作区：使用 baseDir
         const { path, baseDir } = await getFilePathOptions(normalizedFolderPath)
@@ -230,25 +202,22 @@ export const deleteFolderTool: Tool = {
             error: `文件夹不存在: ${normalizedFolderPath}`,
           }
         }
-
-        // 删除文件夹
-        await remove(path, { baseDir, recursive: true })
       }
 
       const articleStore = useArticleStore.getState()
+      if (articleStore.activeFilePath && (articleStore.activeFilePath === normalizedFolderPath || articleStore.activeFilePath.startsWith(`${normalizedFolderPath}/`))) {
+        await articleStore.flushPendingSaveForPath(articleStore.activeFilePath)
+      }
+
+      await moveWorkspaceEntryToTrash({ relativePath: normalizedFolderPath, kind: 'directory' })
+      await clearFileKnowledgeIndexes(filePathsInFolder)
+
       const removed = articleStore.removeLocalEntry(normalizedFolderPath)
       if (!removed) {
         await articleStore.loadFileTree()
       }
 
-      await deleteVectorDocumentsForFiles(filePathsInFolder)
-
       await articleStore.cleanTabsByDeletedFolder(normalizedFolderPath)
-
-      if (articleStore.activeFilePath && articleStore.activeFilePath.startsWith(`${normalizedFolderPath}/`)) {
-        await articleStore.setActiveFilePath('')
-        articleStore.setCurrentArticle('')
-      }
 
       return {
         success: true,
@@ -443,7 +412,7 @@ export const createFoldersBatchTool: Tool = {
 
 export const deleteFoldersBatchTool: Tool = {
   name: 'delete_folders_batch',
-  description: 'Batch delete multiple folders (will delete all contents within the folders) to avoid loop calls.',
+  description: 'Batch move multiple folders to the trash (all contents move with them) to avoid loop calls.',
   category: 'note',
   requiresConfirmation: true,
   parameters: [
@@ -472,7 +441,8 @@ export const deleteFoldersBatchTool: Tool = {
       for (const folderPath of params.folderPaths) {
         try {
           const normalizedFolderPath = await ensureSafeWorkspaceRelativePath(folderPath)
-          filePathsByFolder.set(normalizedFolderPath, await getMarkdownFilesForFolder(normalizedFolderPath))
+          const markdownFiles = await getMarkdownFilesForFolder(normalizedFolderPath)
+          filePathsByFolder.set(normalizedFolderPath, markdownFiles)
 
           if (workspace.isCustom) {
             const fullPath = await join(workspace.path, normalizedFolderPath)
@@ -481,7 +451,6 @@ export const deleteFoldersBatchTool: Tool = {
               errors.push({ path: normalizedFolderPath, error: '文件夹不存在' })
               continue
             }
-            await remove(fullPath, { recursive: true })
           } else {
             const { path, baseDir } = await getFilePathOptions(normalizedFolderPath)
             const folderExists = await exists(path, { baseDir })
@@ -489,8 +458,13 @@ export const deleteFoldersBatchTool: Tool = {
               errors.push({ path: normalizedFolderPath, error: '文件夹不存在' })
               continue
             }
-            await remove(path, { baseDir, recursive: true })
           }
+
+          if (articleStore.activeFilePath && (articleStore.activeFilePath === normalizedFolderPath || articleStore.activeFilePath.startsWith(`${normalizedFolderPath}/`))) {
+            await articleStore.flushPendingSaveForPath(articleStore.activeFilePath)
+          }
+
+          await moveWorkspaceEntryToTrash({ relativePath: normalizedFolderPath, kind: 'directory' })
           results.push(normalizedFolderPath)
         } catch (error) {
           errors.push({ path: folderPath, error: String(error) })
@@ -498,13 +472,8 @@ export const deleteFoldersBatchTool: Tool = {
       }
 
       for (const deletedFolderPath of results) {
-        await deleteVectorDocumentsForFiles(filePathsByFolder.get(deletedFolderPath) || [])
+        await clearFileKnowledgeIndexes(filePathsByFolder.get(deletedFolderPath) || [])
         await articleStore.cleanTabsByDeletedFolder(deletedFolderPath)
-
-        if (articleStore.activeFilePath && articleStore.activeFilePath.startsWith(`${deletedFolderPath}/`)) {
-          await articleStore.setActiveFilePath('')
-          articleStore.setCurrentArticle('')
-        }
       }
 
       await articleStore.loadFileTree()

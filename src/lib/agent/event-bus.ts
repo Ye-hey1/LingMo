@@ -13,6 +13,8 @@ export interface AgentReplayState {
   observations: Array<{ content: string; iteration?: number; timestamp: number }>
   toolCalls: ToolCall[]
   approvals: Array<{ status: string; toolName?: string; timestamp: number; payload?: Record<string, any> }>
+  modelRequests: Array<{ status: 'started' | 'received'; iteration?: number; timestamp: number; payload?: Record<string, any> }>
+  executionSteps: Array<{ status: string; title?: string; iteration?: number; timestamp: number; payload?: Record<string, any> }>
   finalAnswer?: string
   errors: string[]
 }
@@ -73,6 +75,18 @@ export class AgentEventBus {
     }
 
     this.events = appendAgentEvent(this.events, event, this.maxEvents)
+
+    // Tauri 异步广播事件
+    try {
+      if (typeof window !== 'undefined' && ((window as any).__TAURI__ || (window as any).__TAURI_INTERNALS__)) {
+        import('@tauri-apps/api/event').then(({ emit }) => {
+          emit('agent-event', event).catch(err => console.warn('Failed to emit Tauri event:', err))
+        }).catch(() => {})
+      }
+    } catch {
+      // 忽略
+    }
+
     return event
   }
 }
@@ -90,6 +104,8 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
     observations: [],
     toolCalls: [],
     approvals: [],
+    modelRequests: [],
+    executionSteps: [],
     errors: [],
   }
 
@@ -151,6 +167,50 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
         replay.approvals.push({
           status: typeof payload.status === 'string' ? payload.status : 'unknown',
           toolName: typeof payload.toolName === 'string' ? payload.toolName : undefined,
+          timestamp: event.timestamp,
+          payload,
+        })
+        break
+      case 'model.request.started':
+        replay.modelRequests.push({
+          status: 'started',
+          iteration: event.iteration,
+          timestamp: event.timestamp,
+          payload,
+        })
+        break
+      case 'model.response.received':
+        replay.modelRequests.push({
+          status: 'received',
+          iteration: event.iteration,
+          timestamp: event.timestamp,
+          payload,
+        })
+        break
+      case 'confirmation.waiting':
+        replay.status = 'waiting_approval'
+        replay.approvals.push({
+          status: 'requested',
+          toolName: typeof payload.toolName === 'string' ? payload.toolName : undefined,
+          timestamp: event.timestamp,
+          payload,
+        })
+        break
+      case 'confirmation.resolved':
+        replay.approvals.push({
+          status: typeof payload.status === 'string' ? payload.status : 'resolved',
+          toolName: typeof payload.toolName === 'string' ? payload.toolName : undefined,
+          timestamp: event.timestamp,
+          payload,
+        })
+        break
+      case 'tool.execution.started':
+      case 'tool.execution.finished':
+      case 'step.completed':
+        replay.executionSteps.push({
+          status: event.type,
+          title: typeof payload.title === 'string' ? payload.title : undefined,
+          iteration: event.iteration,
           timestamp: event.timestamp,
           payload,
         })

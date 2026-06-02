@@ -11,9 +11,6 @@ const MAX_OBSERVATION_CHARS = 8000
 const HEAD_RATIO = 0.7
 const TAIL_RATIO = 0.2
 
-/**
- * 截断过长的 Observation，保留头尾关键信息
- */
 export function truncateObservation(observation: string): string {
   if (observation.length <= MAX_OBSERVATION_CHARS) return observation
 
@@ -24,7 +21,19 @@ export function truncateObservation(observation: string): string {
   const head = observation.slice(0, headLen)
   const tail = observation.slice(-tailLen)
 
-  return `${head}\n\n... [truncated ${truncatedCount} chars for context efficiency] ...\n\n${tail}`
+  return `【系统提示：由于工具输出内容过长，为防止超出大模型上下文窗口，已由安全模块自动截断】
+--- 截断元数据 ---
+- 原始字符数：${observation.length} 字符
+- 当前展示：头部 ${headLen} 字符 + 尾部 ${tailLen} 字符
+- 隐藏字符数：${truncatedCount} 字符
+
+--- 分页与精细读取指南 ---
+- 如果你需要阅读隐藏的部分，请不要一次性尝试读取大文件。
+- 请在下一轮中使用具有精细参数的工具（例如在 safe_read_file 中指定 startLine 与 endLine 范围进行分片读取，或使用 safe_grep 对文件进行关键词过滤后读取）。
+----------------------------------------
+${head}
+... [已截断 ${truncatedCount} 字符] ...
+${tail}`
 }
 
 // ============ 语义循环检测 ============
@@ -53,28 +62,6 @@ export function detectSemanticLoop(steps: ReActStep[]): LoopDetectionResult {
   }
 
   return { isLoop: false }
-}
-
-/**
- * 简单的字符串相似度计算（Jaccard on bigrams）
- */
-function computeStringSimilarity(a: string, b: string): number {
-  if (!a || !b) return 0
-  if (a === b) return 1
-
-  const bigramsA = new Set<string>()
-  const bigramsB = new Set<string>()
-
-  for (let i = 0; i < a.length - 1; i++) bigramsA.add(a.slice(i, i + 2))
-  for (let i = 0; i < b.length - 1; i++) bigramsB.add(b.slice(i, i + 2))
-
-  let intersection = 0
-  for (const bg of bigramsA) {
-    if (bigramsB.has(bg)) intersection++
-  }
-
-  const union = bigramsA.size + bigramsB.size - intersection
-  return union === 0 ? 0 : intersection / union
 }
 
 // ============ LLM 响应格式降级策略 ============
@@ -130,7 +117,7 @@ interface IterationConfig {
  */
 export function computeAdaptiveIterationLimit(
   taskPlan?: { isComplex: boolean; steps: Array<{ tools: string[] }> },
-  userInput?: string
+  _userInput?: string
 ): IterationConfig {
   // 简单任务
   if (!taskPlan || !taskPlan.isComplex) {

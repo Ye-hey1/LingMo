@@ -394,7 +394,7 @@ export function parseStructuredActionJson(jsonStr: string): StructuredAction | n
   }
 
   const rawContentField = findLooseContentField(source)
-  if (/^(create_file|update_markdown_file|safe_write_file)$/i.test(tool) && rawContentField && !rawContentField.complete) {
+  if (/^(create_file|update_markdown_file|safe_write_file|create_visual_report)$/i.test(tool) && rawContentField && !rawContentField.complete) {
     return null
   }
 

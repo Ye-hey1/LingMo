@@ -58,6 +58,7 @@ export const MEDIUM_RISK_TOOLS = new Set([
   'create_diagram_file',
   'create_diagram_from_outline',
   'update_diagram_file',
+  'create_visual_report',
   'safe_write_file',
 ])
 
@@ -73,6 +74,8 @@ export const READ_ONLY_TOOLS = new Set([
   'read_markdown_file',
   'list_diagram_files',
   'read_diagram_file',
+  'list_visual_report_files',
+  'read_visual_report_file',
   'read_marks',
   'read_chats',
   'read_tags',

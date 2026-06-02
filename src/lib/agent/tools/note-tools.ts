@@ -1,5 +1,5 @@
 import { Tool, ToolResult } from '../types'
-import { BaseDirectory, readTextFile, writeTextFile, remove, rename, copyFile, stat } from '@tauri-apps/plugin-fs'
+import { BaseDirectory, readTextFile, writeTextFile, rename, copyFile, stat } from '@tauri-apps/plugin-fs'
 import { appDataDir } from '@tauri-apps/api/path'
 import { getAllMarkdownFiles, isLinkedFolder, type LinkedResource, type MarkdownFile } from '@/lib/files'
 import { ensureSafeWorkspaceRelativePath, getFilePathOptions } from '@/lib/workspace'
@@ -7,6 +7,7 @@ import useArticleStore from '@/stores/article'
 import useChatStore from '@/stores/chat'
 import emitter from '@/lib/emitter'
 import { getVectorDocumentKey } from '@/lib/vector-document-key'
+import { clearFileKnowledgeIndexes, moveWorkspaceEntryToTrash } from '@/lib/file-trash'
 
 function formatToolError(error: unknown): string {
   if (error instanceof Error && error.message) {
@@ -515,7 +516,7 @@ export const updateMarkdownFileTool: Tool = {
 
 export const deleteMarkdownFileTool: Tool = {
   name: 'delete_markdown_file',
-  description: 'Delete a Markdown file from the file system.',
+  description: 'Move a Markdown file to the trash.',
   category: 'note',
   requiresConfirmation: true,
   parameters: [
@@ -534,22 +535,19 @@ export const deleteMarkdownFileTool: Tool = {
       // 检查是否是当前打开的文件
       const isCurrentFile = articleStore.activeFilePath === normalizedFilePath
 
-      // 统一使用 getFilePathOptions 来处理路径
-      const { path, baseDir } = await getFilePathOptions(normalizedFilePath)
-
-      if (baseDir) {
-        await remove(path, { baseDir })
-      } else {
-        await remove(path)
+      if (isCurrentFile) {
+        await articleStore.flushPendingSaveForPath(normalizedFilePath)
       }
 
-      // 删除向量数据库中的记录
-      const filename = normalizedFilePath.split('/').pop() || normalizedFilePath
+      await moveWorkspaceEntryToTrash({
+        relativePath: normalizedFilePath,
+        kind: 'file',
+      })
+
       try {
-        const { deleteVectorDocumentsByFilename } = await import('@/db/vector')
-        await deleteVectorDocumentsByFilename(filename)
+        await clearFileKnowledgeIndexes([normalizedFilePath])
       } catch (error) {
-        console.error(`删除文件 ${filename} 的向量数据失败:`, error)
+        console.error(`删除文件 ${normalizedFilePath} 的索引数据失败:`, error)
       }
 
       const removed = articleStore.removeLocalEntry(normalizedFilePath)
@@ -558,12 +556,6 @@ export const deleteMarkdownFileTool: Tool = {
       }
 
       await articleStore.cleanTabsByDeletedFile(normalizedFilePath)
-
-      // 如果删除的是当前打开的文件，取消选择并清空内容
-      if (isCurrentFile) {
-        await articleStore.setActiveFilePath('')
-        articleStore.setCurrentArticle('')
-      }
 
       return {
         success: true,
@@ -888,7 +880,7 @@ export const readMarkdownFilesBatchTool: Tool = {
 
 export const deleteMarkdownFilesBatchTool: Tool = {
   name: 'delete_markdown_files_batch',
-  description: 'Batch delete multiple Markdown note files to avoid loop calls.',
+  description: 'Batch move multiple Markdown note files to the trash to avoid loop calls.',
   category: 'note',
   requiresConfirmation: true,
   risk: 'high',
@@ -914,7 +906,6 @@ export const deleteMarkdownFilesBatchTool: Tool = {
       const articleStore = useArticleStore.getState()
       const results = []
       const errors = []
-      let currentFileDeleted = false
 
       for (const filePath of params.filePaths) {
         assertNotAborted(context?.abortSignal)
@@ -922,17 +913,13 @@ export const deleteMarkdownFilesBatchTool: Tool = {
           const normalizedFilePath = await ensureSafeWorkspaceRelativePath(filePath)
 
           if (articleStore.activeFilePath === normalizedFilePath) {
-            currentFileDeleted = true
+            await articleStore.flushPendingSaveForPath(normalizedFilePath)
           }
 
-          // 统一使用 getFilePathOptions 来处理路径
-          const { path, baseDir } = await getFilePathOptions(normalizedFilePath)
-
-          if (baseDir) {
-            await remove(path, { baseDir })
-          } else {
-            await remove(path)
-          }
+          await moveWorkspaceEntryToTrash({
+            relativePath: normalizedFilePath,
+            kind: 'file',
+          })
 
           results.push(normalizedFilePath)
           assertNotAborted(context?.abortSignal)
@@ -941,23 +928,15 @@ export const deleteMarkdownFilesBatchTool: Tool = {
         }
       }
 
-      // 批量删除向量数据库中的记录（只删除成功的文件）
-      const { deleteVectorDocumentsByFilename } = await import('@/db/vector')
-      for (const filePath of results) {
-        assertNotAborted(context?.abortSignal)
-        const filename = filePath.split('/').pop() || filePath
-        try {
-          await deleteVectorDocumentsByFilename(filename)
-        } catch (error) {
-          console.error(`删除文件 ${filename} 的向量数据失败:`, error)
-        }
+      try {
+        await clearFileKnowledgeIndexes(results)
+      } catch (error) {
+        console.error('批量删除文件索引数据失败:', error)
       }
 
       await articleStore.loadFileTree()
-
-      if (currentFileDeleted) {
-        await articleStore.setActiveFilePath('')
-        articleStore.setCurrentArticle('')
+      for (const deletedPath of results) {
+        await articleStore.cleanTabsByDeletedFile(deletedPath)
       }
 
       // 只要有任何文件删除失败，就标记为失败状态

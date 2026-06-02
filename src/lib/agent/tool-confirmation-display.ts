@@ -71,6 +71,12 @@ const TOOL_CONFIRMATION_DISPLAY: Record<string, ToolConfirmationDisplayConfig> =
     summaryFields: ['title', 'kind', 'layout', 'fileName', 'folderPath', 'outline'],
     contentFields: ['outline'],
   },
+  create_visual_report: {
+    titleKey: 'record.chat.input.agent.confirmation.tools.create_visual_report.title',
+    descriptionKey: 'record.chat.input.agent.confirmation.tools.create_visual_report.description',
+    summaryFields: ['title', 'reportType', 'templateId', 'sourceFormat', 'fileName', 'folderPath', 'sourceLabel', 'contentPreview', 'openAfterCreate'],
+    contentFields: ['contentPreview'],
+  },
   update_diagram_file: {
     titleKey: 'record.chat.input.agent.confirmation.tools.update_diagram_file.title',
     descriptionKey: 'record.chat.input.agent.confirmation.tools.update_diagram_file.description',

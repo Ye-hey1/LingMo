@@ -6,6 +6,17 @@ import { skillManager } from '@/lib/skills'
 import { useSkillsStore } from '@/stores/skills'
 import { reloadMcpTools } from './tools'
 import OpenAI from 'openai'
+import { getModelCapabilityProfile } from '@/lib/ai/model-capabilities'
+import type { SkillMatchSummary } from '@/lib/skills/types'
+import {
+  SnapshotManager,
+  persistSnapshot,
+  loadPersistedSnapshots,
+  buildResumePrompt,
+  canResumeSnapshot,
+  getResumeSummary,
+} from './enhanced-resume'
+import { formatFriendlyError } from './friendly-errors'
 
 export interface AgentHandlerConfig {
   activeChatId?: number
@@ -127,9 +138,10 @@ export class AgentHandler {
     }
 
     // 获取与当前请求相关的 Skills 候选（让 AI 自己决定是否选择）
-    const activeSkills = await this.getAvailableSkills(userInput)
+    const skillMatches = await this.getAvailableSkills(userInput)
+    const activeSkills = skillMatches.map(skill => skill.id)
     // 获取 Skills 的详细信息用于 UI 显示
-    const skillsInfo = await this.getSkillsInfo(activeSkills)
+    const skillsInfo = await this.getSkillsInfo(skillMatches)
     // 将加载的 Skills 信息存储到状态中，用于 UI 显示
     store.setAgentState({ loadedSkills: skillsInfo })
 
@@ -137,6 +149,7 @@ export class AgentHandler {
       maxIterations: 15,
       webSearchEnabled: this.config.webSearchEnabled,
       activeSkills,
+      activeSkillMatches: skillMatches,
       onIterationStart: () => {
         // 在新迭代开始时，将完整的 ReAct 循环保存到历史，然后清空当前状态
         const currentState = useChatStore.getState()
@@ -282,6 +295,8 @@ export class AgentHandler {
         onEvent: reactConfig.onEvent,
         onFinalAnswerRender: reactConfig.onFinalAnswerRender,
         requestConfirmation: reactConfig.requestConfirmation,
+        activeSkills,
+        activeSkillMatches: skillMatches,
         currentQuote: this.config.currentQuote,
       }
       this.agent = new FunctionCallAgent(fcConfig)
@@ -309,23 +324,23 @@ export class AgentHandler {
       if (error instanceof Error && error.message === 'USER_STOPPED') {
         // 获取已产生的步骤
         const steps = this.agent.getSteps()
+        const toolCalls = store.agentState.toolCalls || []
+        const events = store.agentState.agentEvents || []
 
-        // 保存中断恢复上下文到 store
-        const agentSnapshot = store.agentState.agentContextSnapshot
-        if (agentSnapshot) {
-          try {
-            const { Store: TauriStore } = await import('@tauri-apps/plugin-store')
-            const resumeStore = await TauriStore.load('agent-resume.json')
-            await resumeStore.set('lastInterrupt', {
-              snapshot: agentSnapshot,
-              originalUserInput: userInput,
-              interruptReason: 'user_stop',
-              interruptedAt: Date.now(),
-            })
-            await (resumeStore as any).save?.()
-          } catch {
-            // 保存恢复上下文失败不影响主流程
-          }
+        // 使用增强的快照管理器保存中断状态
+        try {
+          const snapshot = new SnapshotManager().createSnapshot(
+            store.agentState.agentRunId || '',
+            userInput,
+            steps,
+            toolCalls,
+            events,
+            this.agent.getCurrentIteration(),
+            'user_stop'
+          )
+          await persistSnapshot(snapshot)
+        } catch {
+          // 保存恢复上下文失败不影响主流程
         }
 
         store.setAgentState({
@@ -343,14 +358,19 @@ export class AgentHandler {
       store.setAgentState({ isRunning: false })
       this.executing = false
 
-      const errorMessage = error instanceof Error ? error.message : String(error)
+      // 使用友好的错误消息
+      const rawError = error instanceof Error ? error.message : String(error)
+      const friendlyError = formatFriendlyError(rawError)
+      const errorMessage = `${friendlyError.title}: ${friendlyError.message}`
+
       this.handleAgentEvent({
         type: 'error',
         timestamp: Date.now(),
         level: 'error',
         payload: {
           source: 'handler',
-          error: errorMessage,
+          error: rawError,
+          friendlyMessage: errorMessage,
         },
       })
       this.config.onError?.(errorMessage)
@@ -393,29 +413,76 @@ export class AgentHandler {
    */
   async resume(): Promise<string> {
     try {
-      const { Store: TauriStore } = await import('@tauri-apps/plugin-store')
-      const resumeStore = await TauriStore.load('agent-resume.json')
-      const resumeData = await resumeStore.get<any>('lastInterrupt')
-
-      if (!resumeData?.snapshot || !resumeData?.originalUserInput) {
+      // 使用增强的快照管理器加载快照
+      const snapshots = await loadPersistedSnapshots()
+      if (snapshots.length === 0) {
         return ''
       }
 
-      const { canResumeFromSnapshot, buildResumePrompt } = await import('./resume')
-      if (!canResumeFromSnapshot(resumeData.snapshot)) {
+      // 获取最新的快照
+      const latestSnapshot = snapshots.sort((a, b) => b.updatedAt - a.updatedAt)[0]
+
+      // 检查是否可恢复
+      const { canResume, reason } = canResumeSnapshot(latestSnapshot)
+      if (!canResume) {
+        console.warn('[AgentHandler] Cannot resume:', reason)
         return ''
       }
 
-      const resumePrompt = buildResumePrompt(resumeData)
-
-      // 清除已使用的恢复数据
-      await resumeStore.delete('lastInterrupt')
-      await (resumeStore as any).save?.()
+      // 构建恢复提示
+      const resumePrompt = buildResumePrompt(latestSnapshot)
 
       // 使用恢复 prompt 作为上下文执行
-      return await this.execute(resumeData.originalUserInput, resumePrompt)
+      return await this.execute(latestSnapshot.originalUserInput, resumePrompt)
     } catch (error) {
       console.warn('[AgentHandler] Resume failed:', error)
+      return ''
+    }
+  }
+
+  /**
+   * 获取可恢复的快照列表
+   */
+  async getResumableSnapshots(): Promise<Array<{
+    id: string
+    title: string
+    description: string
+    stepCount: number
+    interruptedAt: string
+    canResume: boolean
+    reason?: string
+  }>> {
+    try {
+      const snapshots = await loadPersistedSnapshots()
+      return snapshots.map(snapshot => getResumeSummary(snapshot))
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * 从指定快照恢复执行
+   */
+  async resumeFromSnapshot(snapshotId: string): Promise<string> {
+    try {
+      const snapshots = await loadPersistedSnapshots()
+      const snapshot = snapshots.find(s => s.id === snapshotId)
+
+      if (!snapshot) {
+        console.warn('[AgentHandler] Snapshot not found:', snapshotId)
+        return ''
+      }
+
+      const { canResume, reason } = canResumeSnapshot(snapshot)
+      if (!canResume) {
+        console.warn('[AgentHandler] Cannot resume:', reason)
+        return ''
+      }
+
+      const resumePrompt = buildResumePrompt(snapshot)
+      return await this.execute(snapshot.originalUserInput, resumePrompt)
+    } catch (error) {
+      console.warn('[AgentHandler] Resume from snapshot failed:', error)
       return ''
     }
   }
@@ -430,26 +497,8 @@ export class AgentHandler {
       const aiConfig = await getAISettings()
       if (!aiConfig) return false
 
-      // 检查模型是否支持 function calling
-      // 大多数现代模型都支持：OpenAI GPT-4/3.5, DeepSeek, Qwen, Claude (via OpenAI compat), etc.
-      // 只有非常老的模型或特殊模型不支持
-      const model = (aiConfig.model || '').toLowerCase()
-      const baseUrl = (aiConfig.baseURL || '').toLowerCase()
-
-      // 已知不支持 function calling 的情况
-      const noFunctionCalling = [
-        model.includes('text-davinci'),
-        model.includes('gpt-3.5-turbo-instruct'),
-        // Ollama 的某些小模型可能不支持
-        baseUrl.includes('ollama') && (model.includes('phi-2') || model.includes('tinyllama')),
-      ]
-
-      if (noFunctionCalling.some(Boolean)) {
-        return false
-      }
-
-      // 默认使用 Function Calling 模式
-      return true
+      const capabilities = getModelCapabilityProfile(aiConfig)
+      return capabilities.supportsFunctionCalling && !capabilities.prefersTextReAct
     } catch {
       return false
     }
@@ -458,7 +507,7 @@ export class AgentHandler {
   /**
    * 获取所有可用的 Skills（只返回元数据，让 AI 先选择）
    */
-  private async getAvailableSkills(userInput: string): Promise<string[]> {
+  private async getAvailableSkills(userInput: string): Promise<SkillMatchSummary[]> {
     const skillsStore = useSkillsStore.getState()
 
     // 如果 Skills 功能未启用，返回空数组
@@ -476,12 +525,10 @@ export class AgentHandler {
       await skillsStore.initSkills()
 
       // 只保留最相关的 Skill 候选，避免简单问答被大量 Skill 元数据干扰。
-      const matchedSkills = await skillManager.matchRelevantSkills(userInput, 5)
+      const matchedSkills = await skillManager.matchRelevantSkillScores(userInput, 5)
 
-      // 返回候选 Skill 的 ID 列表
-      // 注意：这里只传递 ID，具体内容在 formatSkillsInstructions 中按需加载
-      const skillIds = matchedSkills.map(skill => skill.metadata.id)
-      return skillIds
+      // 返回候选 Skill 的可解释匹配结果，具体内容仍在提示词中按需加载
+      return matchedSkills.map(score => skillManager.toMatchSummary(score))
     } catch (error) {
       console.error('[Skills Debug] Failed to get skills:', error)
       return []
@@ -491,7 +538,14 @@ export class AgentHandler {
   /**
    * 获取 Skills 的详细信息用于 UI 显示
    */
-  private async getSkillsInfo(skillIds?: string[]): Promise<Array<{ id: string; name: string; description?: string }>> {
+  private async getSkillsInfo(skillMatches?: SkillMatchSummary[]): Promise<Array<{
+    id: string
+    name: string
+    description?: string
+    score?: number
+    confidence?: 'high' | 'medium' | 'low'
+    reasons?: string[]
+  }>> {
     const skillsStore = useSkillsStore.getState()
 
     // 如果 Skills 功能未启用，返回空数组
@@ -502,17 +556,16 @@ export class AgentHandler {
     try {
       // 确保 Skill 管理器已初始化
       await skillsStore.initSkills()
-      const candidateSkills = skillIds && skillIds.length > 0
-        ? skillIds
-            .map(id => skillManager.getSkill(id))
-            .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill))
-        : []
-
-      return candidateSkills.map(skill => ({
-        id: skill.metadata.id,
-        name: skill.metadata.name,
-        description: skill.metadata.description
-      }))
+      return (skillMatches || [])
+        .filter(match => Boolean(skillManager.getSkill(match.id)))
+        .map(match => ({
+          id: match.id,
+          name: match.name,
+          description: match.description,
+          score: match.score,
+          confidence: match.confidence,
+          reasons: match.reasons,
+        }))
     } catch (error) {
       console.error('[Skills Debug] Failed to get skills info:', error)
       return []

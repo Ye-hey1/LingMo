@@ -38,6 +38,7 @@ function isRecoverableWriteToolLocally(toolName: string, tool: Tool | undefined)
     'create_diagram_file',
     'create_diagram_from_outline',
     'update_diagram_file',
+    'create_visual_report',
     'safe_write_file',
   ].includes(toolName)
 }

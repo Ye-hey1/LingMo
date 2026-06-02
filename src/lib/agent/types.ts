@@ -69,6 +69,19 @@ export type AgentEventType =
   | 'final.answer.rendered'
   | 'skills.selected'
   | 'agent.planning'
+  | 'model.request.started'
+  | 'model.response.received'
+  | 'tool.execution.started'
+  | 'tool.execution.finished'
+  | 'confirmation.waiting'
+  | 'confirmation.resolved'
+  | 'step.completed'
+  | 'research.started'
+  | 'research.progress'
+  | 'research.source_added'
+  | 'research.evidence_added'
+  | 'research.completed'
+  | 'research.error'
 
 export interface AgentEvent {
   id?: string
@@ -145,6 +158,9 @@ export interface AgentState {
     id: string
     name: string
     description?: string
+    score?: number
+    confidence?: 'high' | 'medium' | 'low'
+    reasons?: string[]
   }>
   selectedSkills?: string[]
   currentStepStartTime?: number

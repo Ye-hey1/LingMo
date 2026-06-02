@@ -44,6 +44,9 @@ const TOOL_KEYWORD_MAP: Record<string, string[]> = {
   // 图表
   create_diagram_file: ['图表', '流程图', '思维导图', 'diagram', 'flowchart', 'mindmap', '白板'],
   create_diagram_from_outline: ['大纲', '生成图表', 'outline', 'generate diagram'],
+  create_visual_report: ['可视化', '解释页', '报告', '视觉', 'visual', 'explainer', 'report', 'html', '评审', '复盘', '输出', '交付物', 'artifact', '简报', 'deck', '海报', 'poster', '数据报告'],
+  list_visual_report_files: ['可视化报告', '视觉报告', 'visual report', 'html report'],
+  read_visual_report_file: ['读取可视化报告', '查看可视化报告', 'read visual report'],
 
   // 闪卡
   create_flashcard: ['闪卡', '卡片', '复习', 'flashcard', 'card', 'review'],
@@ -59,16 +62,6 @@ const TOOL_KEYWORD_MAP: Record<string, string[]> = {
   // 知识图谱
   get_connected_notes: ['关联', '相关笔记', '链接', 'connected', 'related', 'linked'],
   get_graph_overview: ['图谱', '概览', 'graph', 'overview'],
-}
-
-// 用户意图到工具类别的映射
-const INTENT_CATEGORY_MAP: Record<string, string[]> = {
-  writing: ['note', 'editor'],
-  reading: ['note', 'search', 'filesystem'],
-  organizing: ['note', 'tag', 'mark'],
-  searching: ['search', 'web', 'filesystem'],
-  managing: ['note', 'tag', 'system'],
-  learning: ['note', 'mark', 'system'],
 }
 
 /**

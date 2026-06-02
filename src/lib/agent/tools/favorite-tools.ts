@@ -12,7 +12,7 @@ export const listFavoritesTool: Tool = {
   capabilities: ['read'],
   execute: async () => {
     const { default: useFavoritesStore } = await import('@/stores/favorites')
-    const { favorites, initFavorites } = useFavoritesStore.getState()
+    const { initFavorites } = useFavoritesStore.getState()
     await initFavorites()
     const current = useFavoritesStore.getState().favorites
 
