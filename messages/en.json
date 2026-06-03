@@ -47,6 +47,14 @@
     "configureSync": "Configure Sync"
   },
   "settings": {
+    "sections": {
+      "overview": "Overview",
+      "workspace": "Workspace",
+      "aiKnowledge": "AI & Knowledge",
+      "mediaSearch": "Media & Search",
+      "syncData": "Sync & Data",
+      "advanced": "Advanced"
+    },
     "defaultModels": {
       "title": "Default Models"
     },

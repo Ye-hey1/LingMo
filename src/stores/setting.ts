@@ -9,6 +9,7 @@ import { applyThemeColors, removeThemeColors } from '@/lib/theme-utils'
 import { getNormalizedImageHosting } from '@/lib/image-hosting-config'
 import { normalizeSpeechMode } from '@/lib/speech/preferences'
 import type { SpeechMode } from '@/lib/speech/types'
+import { DEFAULT_OUTLINE_POSITION, normalizeOutlinePosition, type OutlinePosition } from '@/lib/outline-preferences'
 
 const REMOVED_BUILTIN_MODEL_KEYS = new Set([
   'note-gen-free',
@@ -271,7 +272,7 @@ interface SettingState {
   setAiModelList: (aiModelList: AiConfig[]) => void
 
   primaryModel: string
-  setPrimaryModel: (primaryModel: string) => void
+  setPrimaryModel: (primaryModel: string) => Promise<void>
 
   placeholderModel: string
   setPlaceholderModel: (placeholderModel: string) => Promise<void>
@@ -352,20 +353,20 @@ interface SettingState {
   setDarkMode: (darkMode: string) => void
 
   previewTheme: string
-  setPreviewTheme: (previewTheme: string) => void
+  setPreviewTheme: (previewTheme: string) => Promise<void>
 
   codeTheme: string
-  setCodeTheme: (codeTheme: string) => void
+  setCodeTheme: (codeTheme: string) => Promise<void>
 
   tesseractList: string
-  setTesseractList: (tesseractList: string) => void
+  setTesseractList: (tesseractList: string) => Promise<void>
 
   // Github 相关设置
   githubUsername: string
   setGithubUsername: (githubUsername: string) => Promise<void>
 
   accessToken: string
-  setAccessToken: (accessToken: string) => void
+  setAccessToken: (accessToken: string) => Promise<void>
 
   jsdelivr: boolean
   setJsdelivr: (jsdelivr: boolean) => void
@@ -504,6 +505,15 @@ interface SettingState {
   showEditorUndoRedo: boolean
   setShowEditorUndoRedo: (show: boolean) => Promise<void>
 
+  centeredContent: boolean
+  setCenteredContent: (enabled: boolean) => Promise<void>
+
+  enableOutline: boolean
+  setEnableOutline: (enabled: boolean) => Promise<void>
+
+  outlinePosition: OutlinePosition
+  setOutlinePosition: (position: OutlinePosition) => Promise<void>
+
   // 摘要设置
   enableCondense: boolean
   setEnableCondense: (enabled: boolean) => Promise<void>
@@ -640,6 +650,8 @@ const useSettingStore = create<SettingState>((set, get) => ({
           } else {
             set({ [key]: res as ChatToolbarItem[] })
           }
+        } else if (key === 'outlinePosition') {
+          set({ outlinePosition: normalizeOutlinePosition(res) })
         } else if (key !== 'aiModelList') {
           set({ [key]: res })
         }
@@ -668,7 +680,12 @@ const useSettingStore = create<SettingState>((set, get) => ({
   setAiModelList: (aiModelList) => set({ aiModelList }),
 
   primaryModel: '',
-  setPrimaryModel: (primaryModel) => set({ primaryModel }),
+  setPrimaryModel: async (primaryModel) => {
+    const store = await Store.load('store.json')
+    await store.set('primaryModel', primaryModel)
+    await store.save()
+    set({ primaryModel })
+  },
 
   placeholderModel: '',
   setPlaceholderModel: async (placeholderModel) => {
@@ -883,19 +900,35 @@ const useSettingStore = create<SettingState>((set, get) => ({
   setDarkMode: (darkMode) => set({ darkMode }),
 
   previewTheme: 'github',
-  setPreviewTheme: (previewTheme) => set({ previewTheme }),
+  setPreviewTheme: async (previewTheme) => {
+    const store = await Store.load('store.json')
+    await store.set('previewTheme', previewTheme)
+    await store.save()
+    set({ previewTheme })
+  },
 
   codeTheme: 'github',
-  setCodeTheme: (codeTheme) => set({ codeTheme }),
+  setCodeTheme: async (codeTheme) => {
+    const store = await Store.load('store.json')
+    await store.set('codeTheme', codeTheme)
+    await store.save()
+    set({ codeTheme })
+  },
 
   tesseractList: 'eng,chi_sim',
-  setTesseractList: (tesseractList) => set({ tesseractList }),
+  setTesseractList: async (tesseractList) => {
+    const store = await Store.load('store.json')
+    await store.set('tesseractList', tesseractList)
+    await store.save()
+    set({ tesseractList })
+  },
 
   githubUsername: '',
   setGithubUsername: async (githubUsername) => {
     set({ githubUsername })
     const store = await Store.load('store.json');
-    store.set('githubUsername', githubUsername)
+    await store.set('githubUsername', githubUsername)
+    await store.save()
   },
 
   accessToken: '',
@@ -906,6 +939,8 @@ const useSettingStore = create<SettingState>((set, get) => ({
       await get().setGithubUsername('')
     }
     set({ accessToken })
+    await store.set('accessToken', accessToken)
+    await store.save()
   },
 
   jsdelivr: true,
@@ -913,6 +948,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
     set({ jsdelivr })
     const store = await Store.load('store.json');
     await store.set('jsdelivr', jsdelivr)
+    await store.save()
   },
 
   useImageRepo: false,
@@ -934,6 +970,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
     set({ autoSync })
     const store = await Store.load('store.json');
     await store.set('autoSync', autoSync)
+    await store.save()
   },
 
   // 自动拉取相关设置 - 默认关闭
@@ -1407,6 +1444,31 @@ const useSettingStore = create<SettingState>((set, get) => ({
     set({ showEditorUndoRedo: show })
     const store = await Store.load('store.json');
     await store.set('showEditorUndoRedo', show)
+    await store.save()
+  },
+
+  centeredContent: false,
+  setCenteredContent: async (enabled: boolean) => {
+    set({ centeredContent: enabled })
+    const store = await Store.load('store.json')
+    await store.set('centeredContent', enabled)
+    await store.save()
+  },
+
+  enableOutline: false,
+  setEnableOutline: async (enabled: boolean) => {
+    set({ enableOutline: enabled })
+    const store = await Store.load('store.json')
+    await store.set('enableOutline', enabled)
+    await store.save()
+  },
+
+  outlinePosition: DEFAULT_OUTLINE_POSITION,
+  setOutlinePosition: async (position: OutlinePosition) => {
+    const normalizedPosition = normalizeOutlinePosition(position)
+    set({ outlinePosition: normalizedPosition })
+    const store = await Store.load('store.json')
+    await store.set('outlinePosition', normalizedPosition)
     await store.save()
   },
 

@@ -44,6 +44,14 @@
     "configureSync": "Configurar Sincronização"
   },
   "settings": {
+    "sections": {
+      "overview": "Visao geral",
+      "workspace": "Area de trabalho",
+      "aiKnowledge": "IA e conhecimento",
+      "mediaSearch": "Midia e pesquisa",
+      "syncData": "Sincronizacao e dados",
+      "advanced": "Avancado"
+    },
     "defaultModels": {
       "title": "Modelos Padrão"
     },

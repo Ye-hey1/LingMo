@@ -42,6 +42,14 @@
     "configureSync": "配置同步"
   },
   "settings": {
+    "sections": {
+      "overview": "概覽",
+      "workspace": "工作台",
+      "aiKnowledge": "AI 與知識",
+      "mediaSearch": "媒體與搜尋",
+      "syncData": "同步與資料",
+      "advanced": "高級"
+    },
     "defaultModels": {
       "title": "預設模型"
     },

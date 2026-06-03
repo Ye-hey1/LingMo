@@ -42,6 +42,14 @@
     "configureSync": "同期を構成"
   },
   "settings": {
+    "sections": {
+      "overview": "概要",
+      "workspace": "ワークスペース",
+      "aiKnowledge": "AI とナレッジ",
+      "mediaSearch": "メディアと検索",
+      "syncData": "同期とデータ",
+      "advanced": "詳細"
+    },
     "defaultModels": {
       "title": "デフォルトモデル"
     },

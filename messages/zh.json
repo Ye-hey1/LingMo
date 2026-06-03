@@ -47,6 +47,14 @@
     "prompt": "提示词"
   },
   "settings": {
+    "sections": {
+      "overview": "概览",
+      "workspace": "工作台",
+      "aiKnowledge": "AI 与知识",
+      "mediaSearch": "媒体与搜索",
+      "syncData": "同步与数据",
+      "advanced": "高级"
+    },
     "defaultModels": {
       "title": "默认模型"
     },

@@ -821,6 +821,13 @@ ol {
   }
 }
 
+@layer utilities {
+  .text-md {
+    font-size: 1rem;
+    line-height: 1.5rem;
+  }
+}
+
 /* Global reduced-motion: disable all transitions and animations for users who prefer reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *,

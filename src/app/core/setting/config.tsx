@@ -18,88 +18,109 @@ import {
   MessageSquare,
   PenTool,
   Globe2,
+  Brain,
 } from "lucide-react"
 
 const baseConfig = [
   {
     icon: <Store className="size-4 md:size-6" />,
     anchor: 'about',
+    group: 'overview',
   },
   {
     icon: <Settings className="size-4 md:size-6" />,
     anchor: 'general',
+    group: 'overview',
   },
   {
     icon: <MessageSquare className="size-4 md:size-6" />,
     anchor: 'chat',
+    group: 'workspace',
   },
   {
     icon: <FileCog className="size-4 md:size-6" />,
     anchor: 'editor',
+    group: 'workspace',
   },
   {
     icon: <PenTool className="size-4 md:size-6" />,
     anchor: 'record',
+    group: 'workspace',
   },
-  '-',
-  {
-    icon: <DatabaseBackup className="size-4 md:size-6" />,
-    anchor: 'sync',
-  },
-  {
-    icon: <ImageUp className="size-4 md:size-6" />,
-    anchor: 'imageHosting',
-  },
-  '-',
-  {
-    icon: <BotMessageSquare className="size-4 md:size-6" />,
-    anchor: 'ai',
-  },
-  {
-    icon: <Book className="size-4 md:size-6" />,
-    anchor: 'rag',
-  },
-  {
-    icon: <Puzzle className="size-4 md:size-6" />,
-    anchor: 'mcp',
-  },
-  {
-    icon: <Sparkles className="size-4 md:size-6" />,
-    anchor: 'skills',
-  },
-  {
-    icon: <Drama className="size-4 md:size-6" />,
-    anchor: 'prompt',
-  },
-  {
-    icon: <LayoutTemplate className="size-4 md:size-6" />,
-    anchor: 'template',
-  },
-  '-',
   {
     icon: <FolderOpen className="size-4 md:size-6" />,
     anchor: 'file',
+    group: 'workspace',
   },
   {
     icon: <KeyboardIcon className="size-4 md:size-6" />,
     anchor: 'shortcuts',
+    group: 'workspace',
+  },
+  {
+    icon: <BotMessageSquare className="size-4 md:size-6" />,
+    anchor: 'ai',
+    group: 'aiKnowledge',
+  },
+  {
+    icon: <Book className="size-4 md:size-6" />,
+    anchor: 'rag',
+    group: 'aiKnowledge',
+  },
+  {
+    icon: <Brain className="size-4 md:size-6" />,
+    anchor: 'memories',
+    group: 'aiKnowledge',
+  },
+  {
+    icon: <Puzzle className="size-4 md:size-6" />,
+    anchor: 'mcp',
+    group: 'aiKnowledge',
+  },
+  {
+    icon: <Sparkles className="size-4 md:size-6" />,
+    anchor: 'skills',
+    group: 'aiKnowledge',
+  },
+  {
+    icon: <Drama className="size-4 md:size-6" />,
+    anchor: 'prompt',
+    group: 'aiKnowledge',
+  },
+  {
+    icon: <LayoutTemplate className="size-4 md:size-6" />,
+    anchor: 'template',
+    group: 'aiKnowledge',
   },
   {
     icon: <ScanText className="size-4 md:size-6" />,
     anchor: 'imageMethod',
+    group: 'mediaSearch',
   },
   {
     icon: <Volume2 className="size-4 md:size-6" />,
     anchor: 'audio',
+    group: 'mediaSearch',
   },
   {
     icon: <Globe2 className="size-4 md:size-6" />,
     anchor: 'webSearch',
+    group: 'mediaSearch',
   },
-  '-',
+  {
+    icon: <ImageUp className="size-4 md:size-6" />,
+    anchor: 'imageHosting',
+    group: 'syncData',
+  },
+  {
+    icon: <DatabaseBackup className="size-4 md:size-6" />,
+    anchor: 'sync',
+    group: 'syncData',
+  },
   {
     icon: <UserRoundCog className="size-4 md:size-6" />,
     anchor: 'dev',
+    group: 'advanced',
   }
 ]
 

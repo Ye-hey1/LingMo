@@ -4,26 +4,22 @@ import { useRouter } from "next/navigation";
 import baseConfig from '@/app/core/setting/config'
 import { useTranslations } from 'next-intl'
 import { ChevronRight } from "lucide-react";
+import { Fragment } from "react";
 
 const MOBILE_ME_SCROLL_KEY = 'mobile-me-scroll-top'
 
 export function SettingTab() {
   const router = useRouter()
   const t = useTranslations('settings')
-  const notMobilePages = ['about', 'file', 'shortcuts']
+  const notMobilePages = ['about', 'file', 'shortcuts', 'memories']
   
-  // Add translations to the config, keep separators
-  const config = baseConfig.map(item => {
-    if (typeof item === 'string') return item
-    return {
+  const config = baseConfig
+    .filter(item => !notMobilePages.includes(item.anchor))
+    .map(item => ({
       ...item,
-      title: t(`${item.anchor}.title`)
-    }
-  }).filter(item => {
-    // 过滤掉不支持的移动端页面，但保留分隔符
-    if (typeof item === 'string') return true
-    return !notMobilePages.includes(item.anchor)
-  })
+      title: t(`${item.anchor}.title`),
+      groupTitle: t(`sections.${item.group}`),
+    }))
 
   function handleNavigation(anchor: string) {
     const mePage = document.getElementById('mobile-me')
@@ -37,27 +33,27 @@ export function SettingTab() {
     <ul className="flex flex-col w-full">
       {
         config.map((item, index) => {
-          // 如果是分隔符字符串，渲染分隔线
-          if (typeof item === 'string') {
-            return (
-              <li key={`separator-${index}`}>
-                <div className="h-0.5 bg-muted my-2" />
-              </li>
-            )
-          }
+          const previous = config[index - 1]
+          const showGroupTitle = !previous || previous.group !== item.group
           
           return (
-            <li
-              className="flex items-center gap-2 p-4 w-full justify-between active:bg-accent"
-              key={item.anchor}
-              onClick={() => handleNavigation(item.anchor)}
-            >
-              <div className="flex items-center gap-4">
-                {item.icon}
-                <span className="text-sm">{item.title}</span>
-              </div>
-              <ChevronRight className="size-4" />
-            </li>
+            <Fragment key={item.anchor}>
+              {showGroupTitle && (
+                <li className="bg-muted/35 px-4 py-2 text-xs font-medium text-muted-foreground">
+                  {item.groupTitle}
+                </li>
+              )}
+              <li
+                className="flex w-full items-center justify-between gap-2 p-4 active:bg-accent"
+                onClick={() => handleNavigation(item.anchor)}
+              >
+                <div className="flex items-center gap-4">
+                  {item.icon}
+                  <span className="text-sm">{item.title}</span>
+                </div>
+                <ChevronRight className="size-4" />
+              </li>
+            </Fragment>
           )
         })
       }

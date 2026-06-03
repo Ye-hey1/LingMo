@@ -7,8 +7,7 @@ import { Outline } from './outline'
 import { Loader2, Download, Menu } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import emitter from '@/lib/emitter'
-import { DEFAULT_OUTLINE_POSITION, normalizeOutlinePosition, type OutlinePosition } from '@/lib/outline-preferences'
-import { Store } from '@tauri-apps/plugin-store'
+import useSettingStore from '@/stores/setting'
 
 interface MdEditorProps {
   tabContentsRef: RefObject<Record<string, string>>
@@ -41,9 +40,12 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
   // Bug fix: Track expected content to detect if editor is behind
   const expectedContentRef = useRef<string | null>(null)
   // Outline panel state
-  const [outlineOpen, setOutlineOpen] = useState(false)
   const [outlineHoverOpen, setOutlineHoverOpen] = useState(false)
-  const [outlinePosition, setOutlinePosition] = useState<OutlinePosition>(DEFAULT_OUTLINE_POSITION)
+  const {
+    enableOutline: outlineOpen,
+    setEnableOutline: setOutlineOpen,
+    outlinePosition,
+  } = useSettingStore()
   // State for editor instance (to trigger re-render when ready)
   const [editorInstance, setEditorInstance] = useState<any>(null)
   // Track if editor has called onEditorReady (meaning it's fully initialized)
@@ -114,16 +116,6 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
       }
     }
   }, [filePath])
-
-  useEffect(() => {
-    async function loadOutlinePreferences() {
-      const store = await Store.load('store.json')
-      setOutlineOpen(await store.get<boolean>('enableOutline') || false)
-      setOutlinePosition(normalizeOutlinePosition(await store.get('outlinePosition')))
-    }
-
-    loadOutlinePreferences()
-  }, [])
 
   useEffect(() => {
     return () => {
@@ -399,7 +391,7 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
         onEditorReady={handleEditorReady}
         outlineOpen={outlineOpen}
         outlinePosition={outlinePosition}
-        onToggleOutline={() => setOutlineOpen(prev => !prev)}
+        onToggleOutline={() => void setOutlineOpen(!outlineOpen)}
         editable={!isPulling && !aiStreaming}
         autoScroll={aiStreaming}
         showOverlay={aiStreaming}
@@ -415,7 +407,15 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
 
       {!isPulling && editorReady && editorInstance && (
         <div
-          className={`absolute z-30 ${outlinePanelOpen ? 'left-1 top-5 bottom-8 w-72' : 'left-1 top-14 h-8 w-8'}`}
+          className={`absolute z-30 ${
+            outlinePosition === 'right'
+              ? outlinePanelOpen
+                ? 'right-1 top-5 bottom-8 w-72'
+                : 'right-1 top-14 h-8 w-8'
+              : outlinePanelOpen
+                ? 'left-1 top-5 bottom-8 w-72'
+                : 'left-1 top-14 h-8 w-8'
+          }`}
           onMouseEnter={openHoverOutline}
           onMouseLeave={closeHoverOutline}
         >
@@ -434,7 +434,7 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
             <Outline
               editor={editorInstance}
               isOpen={outlinePanelOpen}
-              position="left"
+              position={outlinePosition}
               floating
             />
           )}

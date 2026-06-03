@@ -33,7 +33,6 @@ import { DiagramLink } from './diagram-link-extension'
 import { MathEditorDialog } from './math-editor-dialog'
 import { SearchReplacePanel } from './search-replace-panel'
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { Store } from '@tauri-apps/plugin-store'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { handleImageUpload } from '@/lib/image-handler'
 import useArticleStore from '@/stores/article'
@@ -631,11 +630,8 @@ export function TipTapEditor({
   const autoScrollRef = useRef(autoScroll)
   autoScrollRef.current = autoScroll
 
-  // 获取正文缩放设置
-  const { contentTextScale, typewriterMode, aiCompletionEnabled } = useSettingStore()
-
-  // 居中内容设置
-  const [centeredContent, setCenteredContent] = useState(false)
+  // 获取界面和正文设置
+  const { contentTextScale, typewriterMode, aiCompletionEnabled, centeredContent, codeTheme } = useSettingStore()
 
   // 编辑器容器 ref，用于应用字体缩放
   const editorContainerRef = useRef<HTMLDivElement>(null)
@@ -673,20 +669,6 @@ export function TipTapEditor({
   const restoredViewPathRef = useRef<string | null>(null)
   const lastViewStateRef = useRef<{ path: string; selectionFrom: number; selectionTo: number; scrollTop: number } | null>(null)
 
-  // 读取居中内容设置（移动端强制关闭）
-  useEffect(() => {
-    async function loadCenteredContent() {
-      // 移动端强制关闭居中内容
-      if (isMobileDevice()) {
-        setCenteredContent(false)
-        return
-      }
-      const store = await Store.load('store.json');
-      const centered = await store.get<boolean>('centeredContent') || false
-      setCenteredContent(centered)
-    }
-    loadCenteredContent()
-  }, [])
   // Bug fix: Track when editor is ready (has caught up with content)
   const isReadyRef = useRef(false)
   // Bug fix: Track if this is the first onUpdate after initialization
@@ -3157,7 +3139,12 @@ export function TipTapEditor({
   }
 
   return (
-    <div ref={editorContainerRef} id="aritcle-md-editor" className="tiptap-editor relative flex flex-col h-full">
+    <div
+      ref={editorContainerRef}
+      id="aritcle-md-editor"
+      className="tiptap-editor relative flex h-full flex-col"
+      data-code-theme={codeTheme || 'github'}
+    >
       {isMobile && mobileContext && (
         <MobileEditorContextBar
           mode={mobileContext.mode}
@@ -3176,9 +3163,9 @@ export function TipTapEditor({
       >
         <div
           className={getEditorContentContainerClass({
-            centeredContent,
+            centeredContent: centeredContent && !isMobile,
             isMobile,
-            outlineOpen: false,
+            outlineOpen: effectiveOutlineOpen,
             outlinePosition,
           })}
         >

@@ -57,6 +57,140 @@
   width: 100%;
   height: 100%;
   position: relative;
+  --editor-code-bg: hsl(var(--muted) / 0.5);
+  --editor-code-header-bg: hsl(var(--muted) / 0.3);
+  --editor-code-foreground: hsl(var(--foreground));
+  --editor-code-comment: #6a737d;
+  --editor-code-red: #f97583;
+  --editor-code-blue: #0366d6;
+  --editor-code-purple: #6f42c1;
+  --editor-code-green: #032f62;
+  --editor-code-yellow: #b08800;
+  --editor-code-keyword: #d73a49;
+}
+
+.tiptap-editor[data-code-theme='github-dark'],
+.tiptap-editor[data-code-theme='one-dark-pro'],
+.tiptap-editor[data-code-theme='dracula'],
+.tiptap-editor[data-code-theme='monokai'],
+.tiptap-editor[data-code-theme='nord'],
+.tiptap-editor[data-code-theme='solarized-dark'],
+.tiptap-editor[data-code-theme='vitesse-dark'] {
+  --editor-code-bg: #0d1117;
+  --editor-code-header-bg: #161b22;
+  --editor-code-foreground: #c9d1d9;
+  --editor-code-comment: #8b949e;
+  --editor-code-red: #ff7b72;
+  --editor-code-blue: #79c0ff;
+  --editor-code-purple: #d2a8ff;
+  --editor-code-green: #a5d6ff;
+  --editor-code-yellow: #d29922;
+  --editor-code-keyword: #ff7b72;
+}
+
+.tiptap-editor[data-code-theme='one-dark-pro'] {
+  --editor-code-bg: #282c34;
+  --editor-code-header-bg: #21252b;
+  --editor-code-foreground: #abb2bf;
+  --editor-code-comment: #5c6370;
+  --editor-code-red: #e06c75;
+  --editor-code-blue: #61afef;
+  --editor-code-purple: #c678dd;
+  --editor-code-green: #98c379;
+  --editor-code-yellow: #e5c07b;
+  --editor-code-keyword: #c678dd;
+}
+
+.tiptap-editor[data-code-theme='dracula'] {
+  --editor-code-bg: #282a36;
+  --editor-code-header-bg: #21222c;
+  --editor-code-foreground: #f8f8f2;
+  --editor-code-comment: #6272a4;
+  --editor-code-red: #ff5555;
+  --editor-code-blue: #8be9fd;
+  --editor-code-purple: #bd93f9;
+  --editor-code-green: #50fa7b;
+  --editor-code-yellow: #f1fa8c;
+  --editor-code-keyword: #ff79c6;
+}
+
+.tiptap-editor[data-code-theme='monokai'] {
+  --editor-code-bg: #272822;
+  --editor-code-header-bg: #1f201b;
+  --editor-code-foreground: #f8f8f2;
+  --editor-code-comment: #75715e;
+  --editor-code-red: #f92672;
+  --editor-code-blue: #66d9ef;
+  --editor-code-purple: #ae81ff;
+  --editor-code-green: #a6e22e;
+  --editor-code-yellow: #e6db74;
+  --editor-code-keyword: #f92672;
+}
+
+.tiptap-editor[data-code-theme='nord'] {
+  --editor-code-bg: #2e3440;
+  --editor-code-header-bg: #3b4252;
+  --editor-code-foreground: #d8dee9;
+  --editor-code-comment: #616e88;
+  --editor-code-red: #bf616a;
+  --editor-code-blue: #81a1c1;
+  --editor-code-purple: #b48ead;
+  --editor-code-green: #a3be8c;
+  --editor-code-yellow: #ebcb8b;
+  --editor-code-keyword: #81a1c1;
+}
+
+.tiptap-editor[data-code-theme='solarized-dark'] {
+  --editor-code-bg: #002b36;
+  --editor-code-header-bg: #073642;
+  --editor-code-foreground: #93a1a1;
+  --editor-code-comment: #657b83;
+  --editor-code-red: #dc322f;
+  --editor-code-blue: #268bd2;
+  --editor-code-purple: #6c71c4;
+  --editor-code-green: #859900;
+  --editor-code-yellow: #b58900;
+  --editor-code-keyword: #cb4b16;
+}
+
+.tiptap-editor[data-code-theme='solarized-light'] {
+  --editor-code-bg: #fdf6e3;
+  --editor-code-header-bg: #eee8d5;
+  --editor-code-foreground: #586e75;
+  --editor-code-comment: #93a1a1;
+  --editor-code-red: #dc322f;
+  --editor-code-blue: #268bd2;
+  --editor-code-purple: #6c71c4;
+  --editor-code-green: #859900;
+  --editor-code-yellow: #b58900;
+  --editor-code-keyword: #cb4b16;
+}
+
+.tiptap-editor[data-code-theme='vs'],
+.tiptap-editor[data-code-theme='vitesse-light'] {
+  --editor-code-bg: #ffffff;
+  --editor-code-header-bg: #f3f4f6;
+  --editor-code-foreground: #1f2328;
+  --editor-code-comment: #6a737d;
+  --editor-code-red: #a31515;
+  --editor-code-blue: #0451a5;
+  --editor-code-purple: #795e26;
+  --editor-code-green: #008000;
+  --editor-code-yellow: #b08800;
+  --editor-code-keyword: #0000ff;
+}
+
+.tiptap-editor[data-code-theme='vitesse-dark'] {
+  --editor-code-bg: #121212;
+  --editor-code-header-bg: #1e1e1e;
+  --editor-code-foreground: #dbd7ca;
+  --editor-code-comment: #758575;
+  --editor-code-red: #cb7676;
+  --editor-code-blue: #80a8cc;
+  --editor-code-purple: #c98a7d;
+  --editor-code-green: #4d9375;
+  --editor-code-yellow: #c99076;
+  --editor-code-keyword: #bd976a;
 }
 
 .tiptap-editor .ProseMirror {
@@ -195,8 +329,8 @@
 
 /* 代码样式 */
 .tiptap-editor .ProseMirror code {
-  background-color: hsl(var(--muted) / 0.5);
-  color: hsl(var(--foreground));
+  background-color: var(--editor-code-bg);
+  color: var(--editor-code-foreground);
   padding: 0.2em 0.4em;
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
@@ -205,7 +339,7 @@
 
 /* 代码块 */
 .tiptap-editor .ProseMirror pre {
-  background-color: hsl(var(--muted) / 0.5);
+  background-color: var(--editor-code-bg);
   border-radius: 8px;
   padding: 16px;
   overflow-x: auto;
@@ -214,14 +348,23 @@
 
 .tiptap-editor .ProseMirror pre code {
   background-color: transparent;
+  color: var(--editor-code-foreground);
   padding: 0;
   font-size: 14px;
+}
+
+.tiptap-editor .ProseMirror .code-block-wrapper {
+  background-color: var(--editor-code-bg) !important;
+}
+
+.tiptap-editor .ProseMirror .code-block-wrapper > div:first-child {
+  background-color: var(--editor-code-header-bg) !important;
 }
 
 /* 代码高亮 */
 .tiptap-editor .ProseMirror pre code .hljs-comment,
 .tiptap-editor .ProseMirror pre code .hljs-quote {
-  color: #6a737d;
+  color: var(--editor-code-comment);
 }
 
 .tiptap-editor .ProseMirror pre code .hljs-variable,
@@ -232,7 +375,7 @@
 .tiptap-editor .ProseMirror pre code .hljs-selector-class,
 .tiptap-editor .ProseMirror pre code .hljs-regexp,
 .tiptap-editor .ProseMirror pre code .hljs-deletion {
-  color: #f97583;
+  color: var(--editor-code-red);
 }
 
 .tiptap-editor .ProseMirror pre code .hljs-number,
@@ -242,28 +385,28 @@
 .tiptap-editor .ProseMirror pre code .hljs-params,
 .tiptap-editor .ProseMirror pre code .hljs-meta,
 .tiptap-editor .ProseMirror pre code .hljs-link {
-  color: #0366d6;
+  color: var(--editor-code-blue);
 }
 
 .tiptap-editor .ProseMirror pre code .hljs-attribute {
-  color: #6f42c1;
+  color: var(--editor-code-purple);
 }
 
 .tiptap-editor .ProseMirror pre code .hljs-string,
 .tiptap-editor .ProseMirror pre code .hljs-symbol,
 .tiptap-editor .ProseMirror pre code .hljs-bullet,
 .tiptap-editor .ProseMirror pre code .hljs-addition {
-  color: #032f62;
+  color: var(--editor-code-green);
 }
 
 .tiptap-editor .ProseMirror pre code .hljs-title,
 .tiptap-editor .ProseMirror pre code .hljs-section {
-  color: #6f42c1;
+  color: var(--editor-code-purple);
 }
 
 .tiptap-editor .ProseMirror pre code .hljs-keyword,
 .tiptap-editor .ProseMirror pre code .hljs-selector-tag {
-  color: #d73a49;
+  color: var(--editor-code-keyword);
 }
 
 /* 引用块 */
