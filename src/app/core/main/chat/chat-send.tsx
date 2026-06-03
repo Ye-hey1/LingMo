@@ -1354,7 +1354,7 @@ export const ChatSend = forwardRef<{
       // 如果启用了 Web 搜索，添加提示
       let agentContext = context
       if (webSearchEnabled) {
-        agentContext = `## 联网搜索\n\n用户已为本轮对话开启联网搜索。请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或 Tavily Extract 不可用时再使用 web_fetch。搜索与提取结果来自 Tavily Search API。\n\n${context}`
+        agentContext = `## 联网搜索\n\n用户已为本轮对话开启联网搜索。请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或正文提取不可用时再使用 web_fetch。\n\n${context}`
       }
 
       // 设置到 agentState，用于实时显示

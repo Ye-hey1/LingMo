@@ -1073,7 +1073,7 @@
           },
           "webSearch": {
             "title": "Web 検索",
-            "desc": "Tavily Web 検索ボタンを表示"
+            "desc": "Web 検索ボタンを表示"
           },
           "newChat": {
             "desc": "新しい会話を開始"
@@ -1381,7 +1381,7 @@
     },
     "webSearch": {
       "title": "Web Search",
-      "desc": "Configure Tavily web search settings here, including API key, search depth, and health checks."
+      "desc": "Web 検索チャンネル、入力欄の既定状態、プロジェクト識別用の認証情報を設定します。"
     }
   },
   "record": {

@@ -1050,7 +1050,7 @@
           },
           "webSearch": {
             "title": "聯網搜尋",
-            "desc": "顯示 Tavily 聯網搜尋按鈕"
+            "desc": "顯示聯網搜尋按鈕"
           },
           "newChat": {
             "desc": "開始新對話"
@@ -1371,8 +1371,8 @@
       }
     },
     "webSearch": {
-      "title": "\u806f\u7db2\u641c\u5c0b",
-      "desc": "\u5728\u9019\u88e1\u914d\u7f6e Tavily \u806f\u7db2\u641c\u5c0b\u80fd\u529b\uff0c\u5305\u62ec API Key\u3001\u641c\u5c0b\u6df1\u5ea6\u8207\u5065\u5eb7\u6aa2\u67e5\u3002"
+      "title": "聯網搜尋",
+      "desc": "配置聯網搜尋渠道、輸入框預設狀態和專案識別憑證。"
     }
   },
   "record": {

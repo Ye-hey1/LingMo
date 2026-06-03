@@ -100,7 +100,7 @@ const SortableToolbarItem = React.memo(function SortableToolbarItem({
             variant={webSearchEnabled ? "secondary" : "ghost"}
             size="icon"
             icon={<GlobeIcon className={webSearchEnabled ? "size-4 text-primary" : "size-4"} />}
-            tooltipText={webSearchEnabled ? '已启用 Web 搜索（Tavily）' : '启用 Web 搜索（Tavily）'}
+            tooltipText={webSearchEnabled ? '已启用 Web 搜索' : '启用 Web 搜索'}
             onClick={onToggleWebSearch}
             disabled={loading}
             buttonClassName={webSearchEnabled ? 'bg-primary/10 text-primary hover:bg-primary/15' : undefined}

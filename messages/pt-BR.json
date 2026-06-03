@@ -1113,7 +1113,7 @@
           },
           "webSearch": {
             "title": "Pesquisa Web",
-            "desc": "Mostrar o botão de pesquisa web Tavily"
+            "desc": "Mostrar o botão de busca web"
           },
           "newChat": {
             "desc": "Iniciar nova conversa"
@@ -1389,7 +1389,7 @@
     },
     "webSearch": {
       "title": "Pesquisa na Web",
-      "desc": "Configure aqui as opcoes de pesquisa web do Tavily, incluindo API Key, profundidade de busca e verificacao de saude."
+      "desc": "Configure canais de busca web, o estado padrão da entrada e credenciais de identificação de projetos."
     }
   },
   "record": {

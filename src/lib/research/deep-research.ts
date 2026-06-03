@@ -944,26 +944,22 @@ async function buildSearchProviders(): Promise<ResearchSearchProvider[]> {
   const providers: ResearchSearchProvider[] = []
   const settings = useSettingStore.getState()
 
-  if (settings.researchSearchAnySearchMcpEnabled) {
-    try {
-      const binding = await findMcpSearchBinding('anysearch', { optional: true })
-      if (binding) {
-        providers.push(createAnySearchMcpProvider(binding))
-      }
-    } catch (error) {
-      console.warn('[DeepResearch] AnySearch MCP provider unavailable:', error)
+  try {
+    const binding = await findMcpSearchBinding('anysearch', { optional: true })
+    if (binding) {
+      providers.push(createAnySearchMcpProvider(binding))
     }
+  } catch (error) {
+    console.warn('[DeepResearch] AnySearch MCP provider unavailable:', error)
   }
 
-  if (settings.researchSearchFirecrawlMcpEnabled) {
-    try {
-      const binding = await findMcpSearchBinding('firecrawl', { optional: true })
-      if (binding) {
-        providers.push(createFirecrawlProvider(binding))
-      }
-    } catch (error) {
-      console.warn('[DeepResearch] Firecrawl provider unavailable:', error)
+  try {
+    const binding = await findMcpSearchBinding('firecrawl', { optional: true })
+    if (binding) {
+      providers.push(createFirecrawlProvider(binding))
     }
+  } catch (error) {
+    console.warn('[DeepResearch] Firecrawl provider unavailable:', error)
   }
 
   if (settings.researchSearchSerpApiEnabled && settings.serpApiKey.trim()) {

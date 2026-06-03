@@ -1264,7 +1264,7 @@
           },
           "webSearch": {
             "title": "Web Search",
-            "desc": "Show the Tavily web search button"
+            "desc": "Show the web search button"
           },
           "newChat": {
             "desc": "Start a new conversation"
@@ -1463,7 +1463,7 @@
     },
     "webSearch": {
       "title": "Web Search",
-      "desc": "Configure Tavily web search settings here, including API key, search depth, and health checks."
+      "desc": "Configure web search channels, the default input state, and project identification credentials."
     }
   },
   "record": {
