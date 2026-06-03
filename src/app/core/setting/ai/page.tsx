@@ -24,7 +24,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import Image from "next/image"
 
 import { FormItem } from "../components/setting-base"
-import { AiConfig, ModelConfig, ModelType, builtinProviderTemplates } from "../config"
+import { AiConfig, ModelConfig, ModelType, builtinProviderTemplates, mergeProviderTemplateModels } from "../config"
 import useSettingStore from "@/stores/setting"
 
 import { BotMessageSquare, Eye, EyeOff, LoaderCircle, Minus, Plus, Search, Trash2, X } from "lucide-react"
@@ -35,7 +35,6 @@ import { getCachedProviderTemplates, getProviderTemplateMatch, loadProviderTempl
 import { cn } from "@/lib/utils"
 import { createOpenAIClient } from "@/lib/ai/utils"
 import { inferModelContextWindow } from "@/lib/ai/context-window"
-import { isOpenLessAsrPresetConfig } from "@/lib/speech/asr-presets"
 
 export default function AiPage() {
   const t = useTranslations('settings.ai')
@@ -43,7 +42,7 @@ export default function AiPage() {
 
   type ActionFeedback = { type: 'success' | 'error'; message: string } | null
 
-  const allModelConfigs = aiModelList.filter((item) => !isOpenLessAsrPresetConfig(item))
+  const allModelConfigs = aiModelList
   const [apiKeyVisible, setApiKeyVisible] = useState(false)
   const [testingConnection, setTestingConnection] = useState(false)
   const [fetchingModelList, setFetchingModelList] = useState(false)
@@ -559,7 +558,7 @@ export default function AiPage() {
     const aiModelListInStore = (await store.get<AiConfig[]>('aiModelList')) || []
     const id = v4()
 
-    const newConfig: AiConfig = {
+    const templateConfig: AiConfig = {
       ...template,
       key: id,
       templateKey: template.templateKey || template.key,
@@ -567,6 +566,7 @@ export default function AiPage() {
       modelType: template.modelType,
       enabled: template.enabled !== false,
     }
+    const newConfig = mergeProviderTemplateModels(templateConfig).config
 
     const updatedList = [newConfig, ...aiModelListInStore]
     await store.set('aiModelList', updatedList)
@@ -847,6 +847,9 @@ export default function AiPage() {
   }
 
   const migrateOldConfig = (config: AiConfig): AiConfig => {
+    const templateMerged = mergeProviderTemplateModels(config)
+    config = templateMerged.config
+
     if (config.models && config.models.length > 0) {
       return config
     }
@@ -899,19 +902,20 @@ export default function AiPage() {
       const templates = await loadProviderTemplates(builtinProviderTemplates)
       setProviderTemplates(templates)
 
+      const migratedList = (aiModelListFromStore || []).map(migrateOldConfig)
       if (aiModelListFromStore) {
-        const migratedList = aiModelListFromStore.map(migrateOldConfig)
         const hasChanges = migratedList.some((config, index) => {
           return JSON.stringify(config) !== JSON.stringify(aiModelListFromStore[index])
         })
 
         if (hasChanges) {
           await store.set('aiModelList', migratedList)
+          await store.save()
           setAiModelList(migratedList)
         }
       }
 
-      const allModels = (aiModelListFromStore || []).filter((item) => !isOpenLessAsrPresetConfig(item))
+      const allModels = migratedList
       if (selectedAiConfig && allModels.find((item) => item.key === selectedAiConfig)) {
         return
       }

@@ -24,7 +24,6 @@ import { cn } from "@/lib/utils"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { TooltipButton } from "@/components/tooltip-button"
-import { isOpenLessAsrPresetConfig, isOpenLessAsrPresetReady } from "@/lib/speech/asr-presets"
 
 interface GroupedModel {
   configKey: string
@@ -147,7 +146,7 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
       // 检查配置是否有效
       if (!config.baseURL) return
       if (config.enabled === false) return
-      if (targetModelType === 'stt' && isOpenLessAsrPresetConfig(config) && !isOpenLessAsrPresetReady(config)) {
+      if (targetModelType === 'stt' && !config.apiKey?.trim()) {
         return
       }
       

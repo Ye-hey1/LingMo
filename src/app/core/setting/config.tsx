@@ -178,7 +178,53 @@ const builtinProviderTemplates: AiConfig[] = [
     title: 'ChatGPT',
     baseURL: 'https://api.openai.com/v1',
     icon: 'https://s2.loli.net/2025/06/25/cVMf586WTBYAju4.png',
-    apiKeyUrl: 'https://platform.openai.com/api-keys'
+    apiKeyUrl: 'https://platform.openai.com/api-keys',
+    models: [
+      {
+        id: 'openai-whisper-1',
+        model: 'whisper-1',
+        modelType: 'stt',
+      },
+    ],
+  },
+  {
+    key: 'siliconflow',
+    title: 'SiliconFlow',
+    baseURL: 'https://api.siliconflow.cn/v1',
+    apiKeyUrl: 'https://cloud.siliconflow.cn/account/ak',
+    models: [
+      {
+        id: 'siliconflow-sensevoice-small',
+        model: 'FunAudioLLM/SenseVoiceSmall',
+        modelType: 'stt',
+      },
+    ],
+  },
+  {
+    key: 'zhipu',
+    title: '智谱 BigModel',
+    baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+    apiKeyUrl: 'https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys',
+    models: [
+      {
+        id: 'zhipu-glm-asr-2512',
+        model: 'glm-asr-2512',
+        modelType: 'stt',
+      },
+    ],
+  },
+  {
+    key: 'groq',
+    title: 'Groq',
+    baseURL: 'https://api.groq.com/openai/v1',
+    apiKeyUrl: 'https://console.groq.com/keys',
+    models: [
+      {
+        id: 'groq-whisper-large-v3-turbo',
+        model: 'whisper-large-v3-turbo',
+        modelType: 'stt',
+      },
+    ],
   },
   {
     key: 'gemini',
@@ -200,6 +246,88 @@ const builtinProviderTemplates: AiConfig[] = [
     icon: 'https://s2.loli.net/2025/06/25/IifFV4HTQ9dpGZE.png',
   },
 ]
+
+function normalizeProviderBaseUrl(baseURL?: string) {
+  return (baseURL || '').trim().replace(/\/+$/, '').toLowerCase()
+}
+
+export function getBuiltinProviderTemplateMatch(config: AiConfig | undefined) {
+  if (!config) {
+    return undefined
+  }
+
+  if (config.templateKey) {
+    const matchedByTemplateKey = builtinProviderTemplates.find((template) => template.key === config.templateKey)
+    if (matchedByTemplateKey) {
+      return matchedByTemplateKey
+    }
+  }
+
+  const normalizedBaseURL = normalizeProviderBaseUrl(config.baseURL)
+  if (!normalizedBaseURL) {
+    return undefined
+  }
+
+  return builtinProviderTemplates.find((template) => normalizeProviderBaseUrl(template.baseURL) === normalizedBaseURL)
+}
+
+function cloneTemplateModel(model: ModelConfig, existingIds: Set<string>) {
+  let id = model.id
+  let suffix = 2
+  while (existingIds.has(id)) {
+    id = `${model.id}-${suffix}`
+    suffix += 1
+  }
+
+  existingIds.add(id)
+  return { ...model, id }
+}
+
+export function mergeProviderTemplateModels(config: AiConfig) {
+  const template = getBuiltinProviderTemplateMatch(config)
+  const templateModels = template?.models?.filter((model) => model.model?.trim()) || []
+  if (templateModels.length === 0) {
+    return { config, changed: false }
+  }
+
+  const existingModels = config.models?.length
+    ? config.models.map((model) => ({ ...model }))
+    : config.model
+      ? [
+        {
+          id: config.key,
+          model: config.model,
+          modelType: config.modelType || 'chat',
+          supportsImageInput: config.supportsImageInput,
+          temperature: config.temperature,
+          topP: config.topP,
+          contextWindow: config.contextWindow,
+          voice: config.voice,
+          enableStream: config.enableStream,
+        } satisfies ModelConfig,
+      ]
+      : []
+
+  const existingModelKeys = new Set(
+    existingModels.map((model) => `${model.modelType}:${model.model.trim().toLowerCase()}`)
+  )
+  const existingIds = new Set(existingModels.map((model) => model.id))
+  const missingModels = templateModels
+    .filter((model) => !existingModelKeys.has(`${model.modelType}:${model.model.trim().toLowerCase()}`))
+    .map((model) => cloneTemplateModel(model, existingIds))
+
+  if (missingModels.length === 0 && config.models?.length) {
+    return { config, changed: false }
+  }
+
+  return {
+    config: {
+      ...config,
+      models: [...existingModels, ...missingModels],
+    },
+    changed: true,
+  }
+}
 
 const baseAiConfig = builtinProviderTemplates
 

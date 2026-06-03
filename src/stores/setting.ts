@@ -1,7 +1,7 @@
 import { Store } from '@tauri-apps/plugin-store'
 import { create } from 'zustand'
 import { getVersion } from '@tauri-apps/api/app'
-import { AiConfig } from '@/app/core/setting/config'
+import { AiConfig, mergeProviderTemplateModels } from '@/app/core/setting/config'
 import { GitlabInstanceType } from '@/lib/sync/gitlab.types'
 import { GiteaInstanceType } from '@/lib/sync/gitea.types'
 import { CustomThemeColors } from '@/types/theme'
@@ -127,8 +127,11 @@ function isRemovedBuiltinAiConfig(config: AiConfig) {
 
 async function removeBuiltinLingMoModelSettings(store: Store) {
   const aiModelList = ((await store.get('aiModelList')) as AiConfig[]) || []
-  const cleanedAiModelList = aiModelList.filter((config) => !isRemovedBuiltinAiConfig(config))
-  let changed = cleanedAiModelList.length !== aiModelList.length
+  const cleanedAiModelList = aiModelList
+    .filter((config) => !isRemovedBuiltinAiConfig(config))
+    .map((config) => mergeProviderTemplateModels(config).config)
+  let changed = cleanedAiModelList.length !== aiModelList.length ||
+    cleanedAiModelList.some((config, index) => JSON.stringify(config) !== JSON.stringify(aiModelList[index]))
 
   if (changed) {
     await store.set('aiModelList', cleanedAiModelList)
