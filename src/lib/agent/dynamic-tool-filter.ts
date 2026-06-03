@@ -126,7 +126,7 @@ export interface DynamicFilterOptions {
 }
 
 const DEFAULT_OPTIONS: DynamicFilterOptions = {
-  maxTools: 30,
+  maxTools: 35,
   minScore: 0,
   alwaysInclude: [
     'get_editor_content',
@@ -134,6 +134,9 @@ const DEFAULT_OPTIONS: DynamicFilterOptions = {
     'read_markdown_file',
     'safe_grep',
     'create_file',
+    'get_current_time',
+    'web_search',
+    'web_extract',
   ],
   forceInclude: [],
 }

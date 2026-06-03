@@ -146,39 +146,67 @@ export function getAllTools(): Tool[] {
   return tools
 }
 
-// MCP tools cache
+// MCP tools cache — keyed by server+tool name for dedup
 let mcpToolsCache: Tool[] = []
 let mcpToolsLoaded = false
+let mcpCacheKey = '' // tracks which servers are cached
+
+function buildMcpCacheKey(serverIds: string[]): string {
+  return serverIds.slice().sort().join(',')
+}
 
 /**
  * Get all tools, including MCP tools (async version)
- * This function is used for scenarios that need to load MCP tools
+ * This function is used for scenarios that need to load MCP tools.
+ *
+ * Optimizations (borrowed from claude-code-source patterns):
+ * - Dedup by server+tool name to avoid duplicate registrations
+ * - Cache invalidation only when server selection changes
+ * - Filter out disconnected servers gracefully
  */
 export async function getAllToolsAsync(): Promise<Tool[]> {
   const tools = [...allTools]
 
-  // Dynamically add MCP tools
   try {
     const { useMcpStore } = await import('@/stores/mcp')
     const { mcpServerManager } = await import('@/lib/mcp/server-manager')
 
     const mcpStore = useMcpStore.getState()
+    const currentKey = buildMcpCacheKey(mcpStore.selectedServerIds)
 
-    if (mcpStore.selectedServerIds.length === 0) {
-      mcpToolsLoaded = true
-      return tools
+    // Return cached if server selection hasn't changed
+    if (mcpToolsLoaded && mcpCacheKey === currentKey) {
+      return [...tools, ...mcpToolsCache]
     }
 
+    // Rebuild cache
+    mcpToolsCache = []
+    const seenNames = new Set<string>()
+
     for (const serverId of mcpStore.selectedServerIds) {
-      const mcpTools = mcpServerManager.getServerTools(serverId)
+      let mcpTools: any[]
+      try {
+        mcpTools = mcpServerManager.getServerTools(serverId)
+      } catch {
+        // Server not connected — skip gracefully
+        console.warn(`[Agent MCP] Server ${serverId} not available, skipping`)
+        continue
+      }
 
       for (const mcpTool of mcpTools) {
         const agentTool = convertMcpToolToAgentTool(serverId, mcpTool)
+        // Dedup: if same tool name already registered, skip
+        if (seenNames.has(agentTool.name)) {
+          console.warn(`[Agent MCP] Duplicate tool name ${agentTool.name}, skipping`)
+          continue
+        }
+        seenNames.add(agentTool.name)
         tools.push(agentTool)
         mcpToolsCache.push(agentTool)
       }
     }
     mcpToolsLoaded = true
+    mcpCacheKey = currentKey
   } catch (error) {
     console.error('[Agent MCP] Failed to load MCP tools:', error)
   }
@@ -197,16 +225,36 @@ export function getAllToolsSync(): Tool[] {
 }
 
 /**
- * Reload MCP tools
+ * Reload MCP tools — invalidates cache and reloads
  */
 export async function reloadMcpTools(): Promise<void> {
   mcpToolsCache = []
   mcpToolsLoaded = false
+  mcpCacheKey = ''
   await getAllToolsAsync()
 }
 
+/**
+ * Find tool by name — supports both exact match and MCP prefix patterns.
+ * Borrowed from claude-code-source's toolMatchesName pattern.
+ */
 export function getToolByName(name: string): Tool | undefined {
-  return getAllToolsSync().find(tool => tool.name === name)
+  const tools = getAllToolsSync()
+  // Exact match
+  const exact = tools.find(tool => tool.name === name)
+  if (exact) return exact
+
+  // MCP tools: try matching without server prefix
+  // e.g. "read_file" might match "server1__read_file"
+  if (!name.includes('__')) {
+    const mcpMatch = tools.find(tool => {
+      const parts = tool.name.split('__')
+      return parts.length === 2 && parts[1] === name
+    })
+    if (mcpMatch) return mcpMatch
+  }
+
+  return undefined
 }
 
 export function getToolsByCategory(category: Tool['category']): Tool[] {

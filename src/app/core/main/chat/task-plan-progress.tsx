@@ -1,13 +1,20 @@
 "use client"
 
 import React, { useMemo } from "react"
-import { Clock3, FileSearch, Loader2, Search, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react"
+import {
+  Clock3, FileSearch, Loader2, Search, ShieldCheck,
+  Sparkles, TriangleAlert, ChevronDown, Globe,
+  Zap, Brain, Eye, CheckCircle2, CircleX,
+} from "lucide-react"
 import useChatStore from "@/stores/chat"
 import {
   buildResearchProgressView,
   parseResearchProgressView,
   type ResearchProgressView,
+  type ResearchProgressStep,
 } from "@/lib/research/progress-status"
+import { cn } from "@/lib/utils"
+import { motion, AnimatePresence } from "framer-motion"
 
 type TaskPlanProgressProps = {
   content?: string
@@ -28,8 +35,33 @@ function getDetailText(progress: ResearchProgressView) {
   return progress.currentDetail.replace(/^当前查询：/, '').replace(/^研究主题：/, '')
 }
 
+// 阶段图标映射
+function getStepIcon(step: ResearchProgressStep) {
+  const iconClass = "size-3 shrink-0"
+  if (step.status === 'done') return <CheckCircle2 className={`${iconClass} text-emerald-500`} />
+  if (step.status === 'active') return <Loader2 className={`${iconClass} animate-spin text-blue-500`} />
+  return <div className={`${iconClass} rounded-full border border-border/30`} />
+}
+
+// 统计指标项
+function StatItem({ icon: Icon, label, value, color }: {
+  icon: React.ElementType
+  label: string
+  value: number | string
+  color?: string
+}) {
+  return (
+    <div className="flex items-center gap-1 text-[10px] text-muted-foreground/60">
+      <Icon className={cn("size-2.5", color)} />
+      <span>{label}</span>
+      <span className="tabular-nums font-medium text-muted-foreground/80">{value}</span>
+    </div>
+  )
+}
+
 export function TaskPlanProgress({ content, compact = true, className }: TaskPlanProgressProps) {
   const { chats, loading, researchRunning, chatMode } = useChatStore()
+  const [stepsExpanded, setStepsExpanded] = React.useState(false)
 
   const progress = useMemo(() => {
     if (content) {
@@ -51,70 +83,144 @@ export function TaskPlanProgress({ content, compact = true, className }: TaskPla
     return null
   }, [chats, chatMode, content, loading, researchRunning])
 
-  if (!progress) {
-    return null
-  }
+  if (!progress) return null
 
   const activeStep = progress.steps.find(step => step.status === 'active') || progress.steps[0]
   const isDone = progress.statusText === '研究完成，正在收尾'
   const detail = getDetailText(progress)
+  const doneSteps = progress.steps.filter(s => s.status === 'done').length
+  const totalSteps = progress.steps.length
+  const progressPct = Math.round((doneSteps / totalSteps) * 100)
 
   return (
     <div className={className}>
-      <div className={compact
-        ? "rounded-lg border border-border/70 bg-background/95 px-3 py-2 shadow-sm"
-        : "rounded-lg border border-border/70 bg-background px-4 py-3 shadow-sm"}
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-muted/40">
+      <div className={cn(
+        "rounded-md border transition-colors",
+        isDone
+          ? "border-emerald-200/50 dark:border-emerald-800/30 bg-emerald-50/20 dark:bg-emerald-950/10"
+          : "border-border/25 bg-muted/8",
+        compact ? "px-3 py-2" : "px-4 py-3",
+      )}>
+        {/* 主行：状态 + 进度 */}
+        <div className="flex min-w-0 items-center gap-2.5">
+          {/* 状态图标 */}
+          <div className={cn(
+            "flex shrink-0 items-center justify-center rounded-md border",
+            isDone
+              ? "border-emerald-300/40 bg-emerald-50/50 dark:border-emerald-700/30 dark:bg-emerald-950/30"
+              : "border-border/30 bg-muted/30",
+          )} style={{ width: 28, height: 28 }}>
             {isDone ? (
-              <Sparkles className="size-4 text-primary" />
+              <Sparkles className="size-3.5 text-emerald-600" />
             ) : (
-              <Loader2 className="size-4 animate-spin text-primary" />
+              <Loader2 className="size-3.5 animate-spin text-blue-500" />
             )}
           </div>
 
+          {/* 信息区 */}
           <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-medium text-foreground">{activeStep?.title || '准备研究任务'}</span>
-              <span className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                研究中
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-xs font-medium text-foreground/90">
+                {activeStep?.title || '准备研究任务'}
+              </span>
+              <span className={cn(
+                "shrink-0 text-[9px] font-medium px-1 rounded",
+                isDone
+                  ? "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40"
+                  : "text-blue-600 bg-blue-50 dark:bg-blue-950/40",
+              )}>
+                {isDone ? "完成" : `${doneSteps}/${totalSteps}`}
               </span>
             </div>
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <Search className="size-3 shrink-0" />
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/60">
+              <Search className="size-2.5 shrink-0" />
               <span className="truncate">{detail}</span>
             </div>
           </div>
 
-          <div className="hidden shrink-0 items-center gap-3 text-[11px] text-muted-foreground sm:flex">
-            <span className="inline-flex items-center gap-1">
-              <Clock3 className="size-3" />
+          {/* 右侧统计 */}
+          <div className="hidden shrink-0 items-center gap-2.5 text-[10px] text-muted-foreground/50 sm:flex">
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <Clock3 className="size-2.5" />
               {progress.estimatedMinutes}
             </span>
-            <span className="inline-flex items-center gap-1">
-              <FileSearch className="size-3" />
-              来源 {progress.sourceCount || progress.visitedUrlsCount}
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <FileSearch className="size-2.5" />
+              {progress.sourceCount || progress.visitedUrlsCount} 来源
             </span>
-            <span>证据 {progress.evidenceCount}</span>
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <Eye className="size-2.5" />
+              {progress.evidenceCount} 证据
+            </span>
           </div>
+
+          {/* 步骤展开按钮 */}
+          <button
+            type="button"
+            className="shrink-0 p-0.5 rounded hover:bg-muted/30 transition-colors"
+            onClick={() => setStepsExpanded(!stepsExpanded)}
+          >
+            <ChevronDown className={cn(
+              "size-3 text-muted-foreground/40 transition-transform",
+              stepsExpanded && "rotate-180",
+            )} />
+          </button>
         </div>
-        <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-muted-foreground sm:grid-cols-4">
-          <div className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-1">
-            <ShieldCheck className="size-3 text-emerald-600" />
-            <span>确认 {progress.confirmedClaimsCount}</span>
+
+        {/* 进度条 */}
+        {!isDone && (
+          <div className="mt-1.5 h-0.5 w-full rounded-full bg-muted/50 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-blue-500/60 transition-all duration-700"
+              style={{ width: `${progressPct}%` }}
+            />
           </div>
-          <div className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-1">
-            <TriangleAlert className="size-3 text-amber-600" />
-            <span>争议 {progress.disputedClaimsCount}</span>
-          </div>
-          <div className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-1">
-            <span>低置信 {progress.lowConfidenceCount}</span>
-          </div>
-          <div className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-1">
-            <span>本地 {progress.localSourcesCount}</span>
-          </div>
+        )}
+
+        {/* 统计指标行（紧凑） */}
+        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
+          <StatItem icon={ShieldCheck} label="确认" value={progress.confirmedClaimsCount} color="text-emerald-500" />
+          <StatItem icon={TriangleAlert} label="争议" value={progress.disputedClaimsCount} color="text-amber-500" />
+          <StatItem icon={CircleX} label="低置信" value={progress.lowConfidenceCount} color="text-red-400" />
+          {progress.localSourcesCount > 0 && (
+            <StatItem icon={FileSearch} label="本地" value={progress.localSourcesCount} color="text-sky-500" />
+          )}
+          {progress.learningsCount > 0 && (
+            <StatItem icon={Brain} label="发现" value={progress.learningsCount} />
+          )}
         </div>
+
+        {/* 展开的步骤列表 */}
+        <AnimatePresence initial={false}>
+          {stepsExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden"
+            >
+              <ol className="mt-2 space-y-0.5 border-t border-border/15 pt-2">
+                {progress.steps.map((step, index) => (
+                  <li key={step.id} className="flex items-center gap-2 py-0.5">
+                    {getStepIcon(step)}
+                    <span className={cn(
+                      "text-[11px]",
+                      step.status === 'done' ? "text-muted-foreground/50 line-through decoration-muted-foreground/20" :
+                      step.status === 'active' ? "text-foreground font-medium" :
+                      "text-muted-foreground/30",
+                    )}>
+                      {step.title}
+                    </span>
+                    {step.status === 'active' && (
+                      <span className="text-[9px] text-blue-500 animate-pulse">●</span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   )

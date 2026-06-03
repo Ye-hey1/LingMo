@@ -3,6 +3,11 @@ import type OpenAI from 'openai'
 
 /**
  * 将内部 Tool 定义转换为 OpenAI Function Calling 格式
+ *
+ * Optimizations (borrowed from claude-code-source Tool patterns):
+ * - Enrich descriptions with parameter info for better tool selection
+ * - Include enum constraints where applicable
+ * - Strict mode parameter enforcement
  */
 export function convertToolToOpenAIFunction(tool: Tool): OpenAI.Chat.ChatCompletionTool {
   const properties: Record<string, any> = {}
@@ -16,6 +21,11 @@ export function convertToolToOpenAIFunction(tool: Tool): OpenAI.Chat.ChatComplet
 
     if (param.type === 'array') {
       prop.items = { type: 'string' }
+    }
+
+    // Add default value hint to description
+    if (param.default !== undefined && param.default !== null) {
+      prop.description += ` (默认: ${JSON.stringify(param.default)})`
     }
 
     properties[param.name] = prop

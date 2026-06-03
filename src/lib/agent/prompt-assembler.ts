@@ -106,9 +106,20 @@ function buildSkillSummary(activeSkills?: string[], activeSkillMatches?: SkillMa
 }
 
 function buildCoreRules(language: string) {
+  // 注入当前日期，确保模型知道当前时间（借鉴 claude-code-source 的 userContext 模式）
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  const weekDay = ['日', '一', '二', '三', '四', '五', '六'][now.getDay()]
+  const hours = String(now.getHours()).padStart(2, '0')
+  const minutes = String(now.getMinutes()).padStart(2, '0')
+  const currentDate = `${year}-${month}-${day} (周${weekDay}) ${hours}:${minutes}`
+
   return section(
     'Core Rules',
     [
+      `**Current date: ${currentDate}**. Always use this as the reference for "today", "latest", "recent", "this year", etc.`,
       `Respond in ${language} unless the user explicitly asks for another language.`,
       'Current user request has priority over conversation history. User preference prompt affects style only.',
       'Context priority: quoted selection/current note/explicitly linked files > RAG results > memories/working memory > older chat history.',
@@ -118,6 +129,7 @@ function buildCoreRules(language: string) {
       'Do not claim that files were created, modified, deleted, searched, or commands executed unless a tool result confirms it.',
       'If a required parameter is missing, ask only for that parameter.',
       'After successful completion, stop and give a concise final answer.',
+      'When asked about "latest", "recent", "current", "trending" topics that require up-to-date information, ALWAYS use web_search first. Do NOT rely on training data alone for time-sensitive questions.',
     ].join('\n')
   )
 }
@@ -177,6 +189,13 @@ export async function buildAgentSystemPrompt(options: AgentPromptOptions) {
 
   return [
     'You are LingMo Agent, a local-first knowledge workspace assistant that can answer, analyze, and use tools to help users work with notes, records, diagrams, memories, and connected services.',
+    '',
+    '## Identity & Tone',
+    `- Respond in ${language} unless the user explicitly asks for another language.`,
+    '- Be direct, accurate, and concise.',
+    '- Do NOT fabricate tool calls, file paths, or content you have not verified.',
+    '- If you are unsure, say so instead of guessing.',
+    '',
     buildCoreRules(language),
     userPromptSection,
     memorySection,
@@ -185,6 +204,15 @@ export async function buildAgentSystemPrompt(options: AgentPromptOptions) {
     buildWebControl(options.webSearchEnabled),
     buildToolExecutionMode(options.userInput),
     ...extraSections,
+    '',
+    '## Anti-Patterns (MUST follow)',
+    '- Do NOT call the same tool with the same arguments more than once.',
+    '- Do NOT claim files were created/modified/deleted unless a tool result confirms it.',
+    '- Do NOT fabricate file paths — only use paths returned by tools (list_files, search, safe_grep, etc.).',
+    '- If a tool fails, analyze the error before retrying. Do NOT retry with the exact same arguments.',
+    '- If you have enough information to answer, give the Final Answer immediately. Do NOT call unnecessary tools.',
+    '- When safe_grep returns truncated results, read the specific files instead of broadening the search.',
+    '',
     buildOutputRules(options.mode),
   ].filter(Boolean).join('\n\n')
 }

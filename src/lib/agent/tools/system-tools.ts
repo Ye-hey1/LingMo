@@ -5,7 +5,7 @@ import useArticleStore from '@/stores/article'
 
 export const getCurrentTimeTool: Tool = {
   name: 'get_current_time',
-  description: 'Get the current date and time. Returns format: YYYY-MM-DD (e.g., 2026-01-18), which is suitable for direct use as part of a filename.',
+  description: 'Get the current date and time. The system prompt already contains the current date; only call this tool if you need a more precise timestamp or want to verify the date for time-critical operations.',
   category: 'system',
   requiresConfirmation: false,
   parameters: [],
@@ -16,14 +16,16 @@ export const getCurrentTimeTool: Tool = {
       const year = now.getFullYear()
       const month = String(now.getMonth() + 1).padStart(2, '0')
       const day = String(now.getDate()).padStart(2, '0')
+      const hours = String(now.getHours()).padStart(2, '0')
+      const minutes = String(now.getMinutes()).padStart(2, '0')
+      const seconds = String(now.getSeconds()).padStart(2, '0')
 
-      // 安全的文件名格式：YYYY-MM-DD
-      const safeFileNameDate = `${year}-${month}-${day}`
+      const fullDateTime = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 
       return {
         success: true,
-        data: safeFileNameDate,
-        message: `当前日期：${safeFileNameDate}`,
+        data: fullDateTime,
+        message: `当前日期时间：${fullDateTime}`,
       }
     } catch (error) {
       console.error('[get_current_time] 获取失败', {

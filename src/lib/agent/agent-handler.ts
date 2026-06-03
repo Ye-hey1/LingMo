@@ -178,9 +178,22 @@ export class AgentHandler {
     // 将加载的 Skills 信息存储到状态中，用于 UI 显示
     store.setAgentState({ loadedSkills: skillsInfo })
 
+    // 智能联网判断：当检测到时效性问题时，自动启用联网搜索
+    // 即使 UI 上的联网按钮未开启
+    let effectiveWebSearchEnabled = this.config.webSearchEnabled
+    if (!effectiveWebSearchEnabled) {
+      try {
+        const { isTimeSensitiveRequest } = await import('./tool-intent')
+        if (isTimeSensitiveRequest(userInput)) {
+          effectiveWebSearchEnabled = true
+          console.log('[Agent Handler] Auto-enabled web search for time-sensitive query')
+        }
+      } catch { /* non-critical */ }
+    }
+
     const reactConfig: ReActConfig = {
       maxIterations: 15,
-      webSearchEnabled: this.config.webSearchEnabled,
+      webSearchEnabled: effectiveWebSearchEnabled,
       activeSkills,
       activeSkillMatches: skillMatches,
       onIterationStart: () => {
@@ -319,7 +332,7 @@ export class AgentHandler {
       // Function Calling 模式 — 通过 API 级别的 tool_calls 调用工具
       const fcConfig: FunctionCallAgentConfig = {
         maxIterations: 15,
-        webSearchEnabled: this.config.webSearchEnabled,
+        webSearchEnabled: effectiveWebSearchEnabled,
         onIterationStart: reactConfig.onIterationStart,
         onThought: reactConfig.onThought,
         onAction: reactConfig.onAction,

@@ -160,11 +160,11 @@ interface TimelineItem {
 }
 
 const STATUS_LABELS: Record<TimelineStatus, string> = {
-  completed: "完成",
-  running: "进行中",
-  waiting: "等待确认",
-  failed: "失败",
-  pending: "排队中",
+  completed: "✓",
+  running: "·",
+  waiting: "⏳",
+  failed: "✗",
+  pending: "○",
 };
 
 function getShortText(value: unknown, maxLength = 120): string {
@@ -1147,32 +1147,32 @@ export function AgentPlan({
     const isTimelineExpanded = expandedTasks.includes("timeline-root");
 
     return (
-      <div className="mb-2 rounded-lg border border-border/40 bg-muted/20 px-3 py-1.5 shadow-sm">
-        {/* 紧凑的折叠头部 - 灰度显示 */}
+      <div className="mb-1.5 rounded-md border border-border/20 bg-muted/8 px-2.5 py-1">
+        {/* 紧凑的折叠头部 */}
         <button
           type="button"
           className="flex w-full items-center justify-between gap-2 text-left"
           onClick={() => toggleStepExpansion("timeline-root")}
         >
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
             {hasRunning ? (
-              <Loader2 className="size-3.5 animate-spin text-blue-500 shrink-0" />
+              <Loader2 className="size-3 animate-spin text-blue-500 shrink-0" />
             ) : hasFailed ? (
-              <CircleX className="size-3.5 text-red-500 shrink-0" />
+              <CircleX className="size-3 text-red-500 shrink-0" />
             ) : (
-              <CheckCircle2 className="size-3.5 text-green-500 shrink-0" />
+              <CheckCircle2 className="size-3 text-green-500 shrink-0" />
             )}
-            <span className="text-xs text-muted-foreground truncate">
-              {isRunning ? "Agent 执行中..." : `已完成 ${completedCount}/${eventTimeline.length} 步`}
+            <span className="text-[11px] text-muted-foreground/60 truncate">
+              {isRunning ? "执行中…" : `${completedCount} 步已完成`}
             </span>
             {totalDuration > 0 && (
-              <span className="text-xs text-muted-foreground/60 tabular-nums">
+              <span className="text-[10px] text-muted-foreground/40 tabular-nums">
                 {formatDuration(totalDuration)}
               </span>
             )}
           </div>
           <ChevronRight
-            className={`size-3.5 text-muted-foreground/40 shrink-0 transition-transform ${
+            className={`size-3 text-muted-foreground/30 shrink-0 transition-transform ${
               isTimelineExpanded ? "rotate-90" : ""
             }`}
           />
@@ -1206,17 +1206,17 @@ export function AgentPlan({
                     }}
                   >
                     <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-2">
+                      <div className="flex min-w-0 items-center gap-1.5">
                         <span className="truncate text-xs text-muted-foreground">{item.title}</span>
                         <span
-                          className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
+                          className={`shrink-0 text-[10px] leading-none ${
                             item.status === "failed"
-                              ? "bg-red-50 text-red-600"
+                              ? "text-red-500"
                               : item.status === "waiting"
-                                ? "bg-amber-50 text-amber-700"
+                                ? "text-amber-600"
                                 : item.status === "running"
-                                  ? "bg-blue-50 text-blue-700"
-                                  : "bg-emerald-50 text-emerald-700"
+                                  ? "text-blue-500"
+                                  : "text-emerald-600"
                           }`}
                         >
                           {STATUS_LABELS[item.status]}
@@ -1271,24 +1271,24 @@ export function AgentPlan({
     const allDone = completedStepIndex >= totalSteps - 1;
 
     return (
-      <div className="mb-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2 shadow-sm">
+      <div className="mb-1.5 rounded-md border border-border/20 bg-muted/8 px-2.5 py-2">
         {/* Header */}
-        <div className="flex items-center gap-2 mb-2">
-          <ListChecks className="size-4 text-cyan-600 shrink-0" />
-          <span className="text-xs font-medium text-foreground truncate">
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <ListChecks className="size-3.5 text-cyan-600 shrink-0" />
+          <span className="text-[11px] font-medium text-foreground/80 truncate">
             {summary || `任务规划 (${totalSteps} 步)`}
           </span>
-          <span className={`ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-none font-medium ${
+          <span className={`ml-auto shrink-0 text-[10px] leading-none font-medium ${
             allDone
-              ? "bg-emerald-50 text-emerald-700"
-              : "bg-cyan-50 text-cyan-700"
+              ? "text-emerald-600"
+              : "text-cyan-600"
           }`}>
-            {allDone ? "全部完成" : `${doneCount}/${totalSteps}`}
+            {allDone ? "✓" : `${doneCount}/${totalSteps}`}
           </span>
         </div>
 
         {/* Progress bar */}
-        <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden mb-2">
+        <div className="h-1 w-full rounded-full bg-muted overflow-hidden mb-1.5">
           <div
             className={`h-full rounded-full transition-all duration-500 ${
               allDone ? "bg-emerald-500" : "bg-cyan-500"
@@ -1652,27 +1652,22 @@ export function AgentPlan({
   // Show loading state in live mode - compact design inspired by Codex TUI
   if (mode === "live" && isRunning && displaySteps.length === 0 && eventTimeline.length === 0) {
     return (
-      <div className="w-full mb-2">
-        <div className="flex items-center gap-2 py-2 px-1">
+      <div className="w-full mb-1">
+        <div className="flex items-center gap-1.5 py-1 px-1">
           {/* Animated spinner */}
-          <Loader2 className="size-4 animate-spin text-blue-500 shrink-0" />
+          <Loader2 className="size-3.5 animate-spin text-blue-500 shrink-0" />
 
-          {/* Status text with shimmer effect */}
-          <span className="text-sm font-medium animate-shimmer bg-[length:200%_100%] bg-clip-text text-transparent bg-gradient-to-r from-foreground via-foreground/70 to-foreground">
+          {/* Status text */}
+          <span className="text-[11px] font-medium text-muted-foreground">
             {isThinking ? t("thinking") : t("running")}
           </span>
 
           {/* Elapsed time */}
           {currentStepDuration > 0 && (
-            <span className="text-xs text-muted-foreground tabular-nums">
-              ({formatDuration(currentStepDuration)})
+            <span className="text-[10px] text-muted-foreground/40 tabular-nums">
+              {formatDuration(currentStepDuration)}
             </span>
           )}
-
-          {/* Inline detail */}
-          <span className="text-xs text-muted-foreground">
-            · {t("analyzingRequest")}
-          </span>
         </div>
       </div>
     );

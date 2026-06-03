@@ -748,6 +748,9 @@ export const ChatSend = forwardRef<{
           filename: source.title || source.url,
           content: evidenceBySource.get(source.id)?.join('\n') || source.snippet || '',
           sourceType,
+          engine: source.engine,
+          credibilityScore: source.credibilityScore,
+          publishedAt: source.publishedAt,
         }
       })
       const mergedRagSources = Array.from(new Set([

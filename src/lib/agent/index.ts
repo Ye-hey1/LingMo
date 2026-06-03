@@ -90,3 +90,12 @@ export { loadWorkingMemory, formatWorkingMemoryForPrompt } from './working-memor
 
 // ---- React Diff Helpers ----
 export { replaceLinesInRange } from './tools/react-diff-helpers'
+
+// ---- 工具输入验证 ----
+export { validateToolInput, formatValidationErrors } from './tool-input-validator'
+
+// ---- 工具结果预算 ----
+export { applyToolResultBudget, estimateTokenCount, calculateAvailableBudget } from './tool-result-budget'
+
+// ---- 并行工具执行 ----
+export { executeToolsBatched, partitionToolCalls, type ParallelToolCall, type ParallelToolResult } from './parallel-tool-executor'

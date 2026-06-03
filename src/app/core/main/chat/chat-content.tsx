@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { McpToolCallCard } from './mcp-tool-call'
 import { AgentExecutionStatus } from './agent-execution-status'
 import { AgentPanelWithRag } from './agent-panel-with-rag'
+import { CompactToolCalls, CompactThinking } from './compact-tool-calls'
 import { TaskPlanProgress } from './task-plan-progress'
 import { ChatImages } from "./chat-images"
 import { cleanAssistantGeneratedContent } from '@/lib/ai/assistant-content'
@@ -229,9 +230,14 @@ const ChatContent = React.memo(function ChatContent() {
   }, [chats, autoScrollEnabled, performAutoScroll])
 
   // Agent 执行时，仅在启用自动滚动时才滚动到底部
+  // 使用 RAF 批处理避免每个 thought 更新都触发滚动（借鉴 claude-code-source 的 yield 批处理模式）
   useEffect(() => {
     if (autoScrollEnabled && agentState.isRunning) {
-      performAutoScroll()
+      // 使用 requestAnimationFrame 合并同一帧内的多次更新
+      const rafId = requestAnimationFrame(() => {
+        performAutoScroll()
+      })
+      return () => cancelAnimationFrame(rafId)
     }
   }, [agentState.currentThought, agentState.thoughtHistory, agentState.pendingConfirmation, agentState.isRunning, autoScrollEnabled, performAutoScroll])
 
@@ -503,7 +509,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
             initial={false}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2 }}
-            className="w-full space-y-3"
+            className="w-full space-y-2.5"
           >
             {/* 1. 合并的 RAG 和 Agent 面板 - 只在有 agentHistory 时显示 */}
             {chat.agentHistory && (
@@ -520,6 +526,14 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
                 {!agentState.isFinalAnswerMode && (agentState.isRunning || agentState.completedSteps?.length > 0 || agentState.thoughtHistory?.length > 0) && (
                   <AgentExecutionStatus />
                 )}
+                {/* 实时工具调用紧凑展示 */}
+                {agentState.toolCalls && agentState.toolCalls.length > 0 && !agentState.isFinalAnswerMode && (
+                  <CompactToolCalls
+                    toolCalls={agentState.toolCalls}
+                    isStreaming={agentState.isRunning}
+                    grouped={true}
+                  />
+                )}
                 {agentState.isFinalAnswerMode && liveFinalAnswerContent && (
                   <ChatPreview
                     text={liveFinalAnswerContent}
@@ -529,9 +543,9 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
               </div>
             )}
 
-            {/* 3. MCP 工具调用展示 */}
-            {mcpToolCalls.length > 0 && (
-              <div className="space-y-3">
+            {/* 3. 历史工具调用 — 优先用紧凑展示 */}
+            {mcpToolCalls.length > 0 && !isLiveAgentVisible && (
+              <div className="space-y-0.5">
                 {mcpToolCalls.map(toolCall => (
                   <McpToolCallCard key={toolCall.id} toolCall={toolCall} />
                 ))}

@@ -20,6 +20,9 @@ import {
 } from './orchestration'
 import useArticleStore from '@/stores/article'
 import type { SkillMatchSummary } from '@/lib/skills/types'
+import { validateToolInput, formatValidationErrors } from './tool-input-validator'
+import { applyToolResultBudget } from './tool-result-budget'
+import { executeToolsBatched, type ParallelToolCall, type ParallelToolResult } from './parallel-tool-executor'
 
 /**
  * Function Calling Agent — 基于 OpenAI tool_calls 的稳定 Agent 引擎
@@ -157,6 +160,20 @@ export class FunctionCallAgent extends BaseAgent {
         }
       }
 
+      // ---- 策略失败检测 ----
+      if (this.currentIteration > 5) {
+        const { detectStrategyFailure } = await import('./loop-detection')
+        const failure = detectStrategyFailure(this.steps)
+        if (failure?.shouldSwitch) {
+          console.warn(`[Agent] Strategy failure: ${failure.suggestion}`)
+          // Inject guidance instead of breaking — let the model try another approach
+          messages.push({
+            role: 'system',
+            content: `[系统提示] ${failure.suggestion}。请不要继续使用 ${failure.failedTool}，尝试其他工具或直接给出结论。`,
+          } as any)
+        }
+      }
+
       this.currentIteration++
       this.emitEvent('iteration.started')
       this.config.onIterationStart?.()
@@ -183,9 +200,14 @@ export class FunctionCallAgent extends BaseAgent {
         const forceToolCall = toolExecutionPrompt.length > 0
         const validatedMessages = this.validateAndFixMessages(messages)
 
-        // ---- 上下文溢出恢复包装 ----
+        // 智能 tool_choice 策略（借鉴 claude-code-source 的 tool_choice 逻辑）
+        // - forceToolCall: 当用户明确要求执行工具时，强制调用
+        // - 有联网需求且搜索关键词时：auto（让模型决定是否搜索）
+        // - 其他：auto（自由选择，但系统提示会指导何时用工具）
+        const toolChoice: 'auto' | 'required' | 'none' = forceToolCall ? 'required' : 'auto'
+
         const stream = await this.createStreamWithOverflowRecovery(
-          openai, aiConfigNow, validatedMessages, openaiTools, forceToolCall, messages, systemPrompt,
+          openai, aiConfigNow, validatedMessages, openaiTools, toolChoice, messages, systemPrompt,
         )
 
         // 流式响应超时保护：如果 90 秒没有收到任何 chunk，自动中断
@@ -331,16 +353,24 @@ export class FunctionCallAgent extends BaseAgent {
       // 将 assistant 消息（含 tool_calls）加入历史
       messages.push(assistantMessage as any)
 
-      // 执行每个 tool_call
-      for (const tc of toolCalls) {
-        if (this.stopped) throw new Error('USER_STOPPED')
+      // ---- 预处理所有 tool_calls: 验证 + 策略检查 + 分组 ----
+      interface PreparedToolCall {
+        tc: any
+        toolName: string
+        params: Record<string, any>
+        tool: import('./types').Tool | undefined
+        skipReason?: string
+      }
 
+      const preparedCalls: PreparedToolCall[] = []
+      const preFilteredCalls: ParallelToolCall[] = []
+
+      for (const tc of toolCalls) {
         const toolName = tc.function.name
         let params: Record<string, any> = {}
         try {
           params = JSON.parse(tc.function.arguments || '{}')
         } catch {
-          // 参数解析失败
           messages.push({ role: 'tool', tool_call_id: tc.id, content: 'Error: Invalid JSON in tool arguments' })
           continue
         }
@@ -353,39 +383,42 @@ export class FunctionCallAgent extends BaseAgent {
           continue
         }
 
-        const safeGrepConvergenceMessage = getSafeGrepConvergenceMessage(toolName, params, this.steps)
-        if (safeGrepConvergenceMessage) {
-          const message = '已避免重复宽泛检索：safe_grep 结果已截断。请读取上一轮候选文件，或使用更具体的 query、folderPath、includeExtensions 收窄检索。'
-          messages.push({ role: 'tool', tool_call_id: tc.id, content: message })
-          this.steps.push({ thought: textContent, action: { tool: toolName, params }, observation: message })
+        const safeGrepMsg = getSafeGrepConvergenceMessage(toolName, params, this.steps)
+        if (safeGrepMsg) {
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: safeGrepMsg })
+          this.steps.push({ thought: textContent, action: { tool: toolName, params }, observation: safeGrepMsg })
           continue
         }
 
-        this.config.onAction?.(toolName, params)
-        this.emitEvent('action.parsed', { tool: toolName, params })
-
-        // 查找工具（降级：如果不在 filtered tools 中，尝试从全量工具中查找）
+        // 查找工具
         let tool = getToolByName(toolName)
         if (!tool) {
-          // 动态过滤可能导致工具不在列表中 — 尝试全量查找
           tool = allTools.find(t => t.name === toolName) ?? undefined
         }
         if (!tool) {
-          const errorMsg = `工具 "${toolName}" 不存在。`
+          const errorMsg = `工具 "${toolName}" 不存在。可用工具: ${allTools.slice(0, 10).map(t => t.name).join(', ')}... 请仅使用已定义的工具名称。`
           messages.push({ role: 'tool', tool_call_id: tc.id, content: errorMsg })
           this.steps.push({ thought: textContent, action: { tool: toolName, params }, observation: errorMsg })
           continue
         }
 
+        // 参数验证
+        const validation = validateToolInput(tool, params)
+        if (!validation.valid) {
+          const errorMsg = formatValidationErrors(toolName, validation)
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: errorMsg })
+          this.steps.push({ thought: textContent, action: { tool: toolName, params }, observation: errorMsg })
+          continue
+        }
+        if (validation.correctedParams) {
+          params = validation.correctedParams
+        }
+
         if (!this.config.webSearchEnabled && (tool.category === 'web' || tool.capabilities?.includes('network'))) {
-          const message = '联网功能未开启。请先点击聊天输入框中的联网按钮，再重新发送需要联网的请求。'
+          const message = '联网功能未开启，无法搜索实时信息。请告知用户：\n"抱歉，我需要联网搜索才能回答这个关于实时信息的问题。请点击聊天输入框中的联网按钮开启搜索功能，然后重新提问。"'
           messages.push({ role: 'tool', tool_call_id: tc.id, content: message })
           this.steps.push({ thought: textContent, action: { tool: toolName, params }, observation: message })
-          this.emitEvent('error', {
-            source: 'tool',
-            toolName,
-            error: 'WEB_ACCESS_DISABLED',
-          })
+          this.emitEvent('error', { source: 'tool', toolName, error: 'WEB_ACCESS_DISABLED' })
           continue
         }
 
@@ -403,7 +436,7 @@ export class FunctionCallAgent extends BaseAgent {
           continue
         }
 
-        // 确认机制
+        // 确认机制（需要串行等待）
         if (policyResult.requiresConfirmation && this.config.requestConfirmation) {
           const confirmed = await this.config.requestConfirmation(toolName, params)
           if (!confirmed) {
@@ -423,55 +456,77 @@ export class FunctionCallAgent extends BaseAgent {
           continue
         }
 
-        // ---- Task 4: 带瞬态重试的工具执行 ----
-        const toolCall: ToolCall = {
-          id: `tc-${++this.toolCallCounter}`,
+        // 通过所有检查，加入批量执行队列
+        this.config.onAction?.(toolName, params)
+        this.emitEvent('action.parsed', { tool: toolName, params })
+
+        preFilteredCalls.push({
+          id: tc.id,
           toolName,
           params,
-          status: 'running',
-          timestamp: Date.now(),
-        }
-        this.emitToolCall(toolCall)
-
-        const result = await this.executeWithTransientRetry(tool, params)
-
-        if (this.stopped) throw new Error('USER_STOPPED')
-
-        // 构建 observation
-        let observation: string
-        if (result.success) {
-          const formattedObservation = formatToolObservation(toolName, result)
-          observation = formattedObservation || result.message || `工具 ${toolName} 执行成功。`
-          if (!formattedObservation && result.data && typeof result.data === 'object') {
-            observation += `\n${JSON.stringify(result.data, null, 2)}`
-          }
-          this.toolCache.set(toolName, params, observation)
-        } else {
-          observation = `工具 ${toolName} 执行失败: ${result.error || '未知错误'}`
-        }
-
-        // 截断过长的 observation
-        observation = truncateObservation(observation)
-
-        // 更新 toolCall 状态
-        toolCall.status = result.success ? 'success' : 'error'
-        toolCall.result = result
-        this.recordToolResult(toolName, argsHash, result.success)
-        this.emitToolCall(toolCall)
-        this.config.onObservation?.(observation)
-        this.emitEvent('observation.created', { observation })
-
-        // 将工具结果加入消息历史
-        messages.push({ role: 'tool', tool_call_id: tc.id, content: observation })
-
-        this.steps.push({
-          thought: textContent,
-          action: { tool: toolName, params },
-          observation,
+          tool,
         })
+      }
 
-        // 记录到工作记忆（使用 BaseAgent 的方法）
-        this.recordWorkingMemory(toolName, params, result.success, result.error)
+      // ---- 批量执行工具（只读并发，写入串行） ----
+      if (preFilteredCalls.length > 0) {
+        const batchResults = await executeToolsBatched(
+          preFilteredCalls,
+          {
+            abortSignal: this.abortController?.signal,
+            runId: this.eventBus.getRunId(),
+            iteration: this.currentIteration,
+            userInput: this.currentUserInput,
+          },
+        )
+
+        // 按顺序处理结果并写入 messages
+        for (let i = 0; i < batchResults.length; i++) {
+          if (this.stopped) throw new Error('USER_STOPPED')
+
+          const { callId: tcId, toolName, params, result } = batchResults[i]
+          const argsHash = this.hashArgs(params)
+
+          // 发出 tool call 事件
+          const toolCall: ToolCall = {
+            id: `tc-${++this.toolCallCounter}`,
+            toolName,
+            params,
+            status: 'running',
+            timestamp: Date.now(),
+          }
+
+          let observation: string
+          if (result.success) {
+            const formattedObservation = formatToolObservation(toolName, result)
+            observation = formattedObservation || result.message || `工具 ${toolName} 执行成功。`
+            if (!formattedObservation && result.data && typeof result.data === 'object') {
+              observation += `\n${JSON.stringify(result.data, null, 2)}`
+            }
+            this.toolCache.set(toolName, params, observation)
+          } else {
+            observation = `工具 ${toolName} 执行失败: ${result.error || '未知错误'}`
+          }
+
+          observation = truncateObservation(observation)
+          observation = applyToolResultBudget(observation)
+
+          toolCall.status = result.success ? 'success' : 'error'
+          toolCall.result = result
+          this.recordToolResult(toolName, argsHash, result.success)
+          this.emitToolCall(toolCall)
+          this.config.onObservation?.(observation)
+          this.emitEvent('observation.created', { observation })
+
+          messages.push({ role: 'tool', tool_call_id: tcId, content: observation })
+          this.steps.push({
+            thought: textContent,
+            action: { tool: toolName, params },
+            observation,
+          })
+
+          this.recordWorkingMemory(toolName, params, result.success, result.error)
+        }
       }
 
       // ---- 最大迭代总结 ----
@@ -635,7 +690,7 @@ export class FunctionCallAgent extends BaseAgent {
     aiConfig: any,
     validatedMessages: OpenAI.Chat.ChatCompletionMessageParam[],
     openaiTools: any[],
-    forceToolCall: boolean,
+    toolChoice: 'auto' | 'required' | 'none',
     _messages: OpenAI.Chat.ChatCompletionMessageParam[], // full list for recovery
     _systemPrompt: string,
   ): Promise<any> {
@@ -644,7 +699,7 @@ export class FunctionCallAgent extends BaseAgent {
         model: aiConfig.model || '',
         messages: validatedMessages,
         tools: openaiTools.length > 0 ? openaiTools : undefined,
-        tool_choice: openaiTools.length > 0 ? (forceToolCall ? 'required' : 'auto') : undefined,
+        tool_choice: openaiTools.length > 0 ? toolChoice : undefined,
         temperature: aiConfig.temperature,
         top_p: aiConfig.topP,
         stream: true,
