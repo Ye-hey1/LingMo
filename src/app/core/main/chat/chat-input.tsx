@@ -44,7 +44,9 @@ import {
 import { buildTypingFrames } from './onboarding-typing'
 import type { AiConfig, ModelConfig } from '@/app/core/setting/config'
 import { AiDocCommandPopover } from './ai-doc-command-popover'
-import { filterAiDocCommands, findAiDocCommand, type AiDocCommandId } from '@/lib/ai-doc-commands'
+import { filterSlashCommands, findSlashCommand, invalidateSkillSlashCache, type SlashCommandItem } from '@/lib/ai-doc-commands/slash-bridge'
+import { findAiDocCommand, type AiDocCommandId } from '@/lib/ai-doc-commands'
+import { skillExecutor } from '@/lib/skills'
 import { loadActivityCalendarData, loadCachedActivityCalendarData } from '@/lib/activity'
 import { createActivityReviewNote } from '@/lib/activity/review-note'
 
@@ -233,7 +235,7 @@ export const ChatInput = React.memo(function ChatInput() {
   }, [text])
   const atOpen = atQuery !== null
 
-  // 对话模式下，对需要工具或长任务的指令给出模式切换建议。
+  // 对话模式下,对需要工具或长任务的指令给出模式切换建议。
   const [suggestedMode, setSuggestedMode] = useState<null | {
     mode: Extract<ChatMode, 'agent' | 'research'>
     title: string
@@ -254,65 +256,103 @@ export const ChatInput = React.memo(function ChatInput() {
   const isModelRunning = loading || researchRunning
   const isResearchActive = researchRunning || (loading && chatMode === 'research')
   const effectivePlaceholder = isResearchActive
-    ? '研究运行中，预计 3-6 分钟完成。你可以点击停止按钮中断。'
+    ? '研究运行中,预计 3-6 分钟完成。你可以点击停止按钮中断。'
     : placeholder
 
   // 斜杠命令面板状态
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   const slashCommandsCountRef = useRef(0)
-  const selectedSlashCommandRef = useRef<{ display: string; instruction: string; maxTokens?: number; temperature?: number } | null>(null)
+  // 已选中但尚未提交的命令：选择后仅填入输入框，按 Enter 才真正执行
+  const pendingCommandRef = useRef<SlashCommandItem | null>(null)
 
   // 当输入以 / 开头时显示命令面板
   const slashQuery = useMemo(() => {
-    if (selectedSlashCommandRef.current?.display === text) return null
+    // 已选中命令后不弹出面板
+    if (pendingCommandRef.current) return null
     if (!text.startsWith('/')) return null
-    // 不允许跨行的命令查询；包含空格仍允许（用于模糊搜索）
     if (text.includes('\n')) return null
     return text.slice(1)
   }, [text])
   const slashOpen = slashQuery !== null
-  const slashFilteredCommands = useMemo(
-    () => (slashOpen ? filterAiDocCommands(slashQuery || '') : []),
-    [slashOpen, slashQuery],
-  )
+
+  // 异步加载命令列表（包含 Skills）
+  const [slashFilteredCommands, setSlashFilteredCommands] = useState<SlashCommandItem[]>([])
+  useEffect(() => {
+    if (!slashOpen) {
+      setSlashFilteredCommands([])
+      return
+    }
+    let cancelled = false
+    void filterSlashCommands(slashQuery || '').then((result) => {
+      if (!cancelled) setSlashFilteredCommands(result)
+    })
+    return () => { cancelled = true }
+  }, [slashOpen, slashQuery])
 
   useEffect(() => {
     slashCommandsCountRef.current = slashFilteredCommands.length
-    // query 改变时重置选中索引
     setSlashSelectedIndex((prev) => {
       if (slashFilteredCommands.length === 0) return 0
       return Math.min(prev, slashFilteredCommands.length - 1)
     })
   }, [slashFilteredCommands])
 
-  const executeAiDocCommand = useCallback(async (commandId: AiDocCommandId) => {
-    const command = findAiDocCommand(commandId)
-    if (!command) return
+  // ---- 阶段 1：选中命令，仅填入输入框 ----
+  const selectSlashCommand = useCallback(async (commandId: string) => {
+    const slashCommand = await findSlashCommand(commandId)
+    if (!slashCommand) return
 
-    if (command.executionMode === 'agent' && chatMode !== 'agent') {
+    if (slashCommand.executionMode === 'agent' && chatMode !== 'agent') {
       toast({
         title: '请切换到 Agent 模式',
-        description: `/${command.title} 需要执行本地工具或编辑文件，对话模式只用于问答、联网搜索和阅读上下文。`,
+        description: `/${slashCommand.title} 需要执行本地工具或编辑文件，对话模式只用于问答、联网搜索和阅读上下文。`,
         variant: 'destructive',
       })
+      return
+    }
+
+    // 填入命令名，关闭 popover
+    pendingCommandRef.current = slashCommand
+    setText(`/${slashCommand.title}`)
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
+  }, [chatMode])
+
+  // ---- 阶段 2：按 Enter 后真正执行 ----
+  const executeSlashCommand = useCallback(async (slashCommand: SlashCommandItem) => {
+    if (slashCommand.source === 'skill') {
+      if (!slashCommand.skillContent) return
+
+      pendingCommandRef.current = null
       setText('')
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
       }
+
+      const skillInstruction = skillExecutor.formatSkillForExecution(
+        slashCommand.skillContent,
+        `执行 /${slashCommand.title}`,
+      )
+
+      try {
+        chatSendRef.current?.sendChat(skillInstruction)
+      } catch (error) {
+        toast({
+          title: '发送失败',
+          description: error instanceof Error ? error.message : String(error),
+          variant: 'destructive',
+        })
+      }
       return
     }
 
-    // 立即清空 popover（先把 text 置空，等下面再写入 prompt）
-    setText('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
+    const command = findAiDocCommand(slashCommand.id as AiDocCommandId)
+    if (!command) return
 
-    // 知识管理类命令不需要活动数据，直接执行
-    const knowledgeCommands = new Set(['discover-connections', 'generate-flashcards', 'feynman-socratic', 'note-summary', 'note-to-mindmap', 'note-to-visual-report', 'note-to-deck-brief', 'note-to-poster-card', 'auto-wikilink'])
+    // 加载活动数据（回顾类命令需要，其他命令可接受 null）
     let data: any = null
-
-    if (!knowledgeCommands.has(commandId)) {
+    if (command.category === 'review') {
       try {
         data = (await loadCachedActivityCalendarData({ includeExternalAiDetails: true }))
           || (await loadActivityCalendarData({ includeExternalAiDetails: true }))
@@ -326,20 +366,25 @@ export const ChatInput = React.memo(function ChatInput() {
       }
     }
 
+    // 清空输入框
+    pendingCommandRef.current = null
+    setText('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
+
     const exec = await command.buildExecution(data)
     if (exec.skipReason) {
       toast({ title: '无法生成', description: exec.skipReason, variant: 'destructive' })
       return
     }
 
-    // 非 AI 命令：直接执行（不需要发送给 Agent）
+    // 非 AI 命令：直接执行
     if (exec.prompt === null) {
       try {
         if (exec.directContent?.startsWith('已生成')) {
-          // 图表等已直接生成的内容，只显示提示
           toast({ title: '完成', description: exec.directContent })
         } else if (exec.directContent) {
-          // 有内容需要保存为笔记（如沉淀对话）
           const filePath = await createActivityReviewNote(exec.title, exec.directContent)
           await loadFileTree({ skipRemoteSync: true })
           const articleStore = useArticleStore.getState()
@@ -356,33 +401,23 @@ export const ChatInput = React.memo(function ChatInput() {
       return
     }
 
-    // AI 命令：输入框只显示 /命令名，但发送给 LLM 的是完整 prompt
+    // AI 命令：发送给 LLM
     const displayLabel = `/${command.title}`
     const commandInstruction = `你正在执行一个应用内命令：${displayLabel}。
 这是明确的操作任务，不要先解释概念，不要做泛化介绍，必须直接按命令目标执行工具。
-如果上下文中已经包含“当前打开的笔记”“关联文件内容”或“用户引用内容”，必须优先直接基于这些内容完成任务，不要再要求用户粘贴原文。
+如果上下文中已经包含"当前打开的笔记""关联文件内容"或"用户引用内容"，必须优先直接基于这些内容完成任务，不要再要求用户粘贴原文。
 
 ${exec.prompt}`
-    selectedSlashCommandRef.current = {
-      display: displayLabel,
-      instruction: commandInstruction,
-      maxTokens: exec.maxTokens,
-      temperature: exec.temperature,
+    try {
+      chatSendRef.current?.sendChat(commandInstruction, { maxTokens: exec.maxTokens, temperature: exec.temperature })
+    } catch (error) {
+      toast({
+        title: '发送失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
     }
-    setText(displayLabel)
-    window.setTimeout(() => {
-      try {
-        chatSendRef.current?.sendChat(commandInstruction, { maxTokens: exec.maxTokens, temperature: exec.temperature })
-        selectedSlashCommandRef.current = null
-      } catch (error) {
-        toast({
-          title: '发送失败',
-          description: error instanceof Error ? error.message : String(error),
-          variant: 'destructive',
-        })
-      }
-    }, 0)
-  }, [chatMode, loadFileTree])
+  }, [loadFileTree])
   const t = useTranslations()
   const [inputHistory, setInputHistory] = useLocalStorage<string[]>('chat-input-history', [])
   const [dictationPolishModeValue, setDictationPolishModeValue] = useLocalStorage<string>(
@@ -510,7 +545,7 @@ ${exec.prompt}`
 
     toast({
       title: '当前模型无法解析图片',
-      description: '请切换到支持视觉能力的主模型，或在“设置 > 图片识别 > VLM”配置一个视觉模型用于 Vision Bridge。',
+      description: '请切换到支持视觉能力的主模型,或在"设置 > 图片识别 > VLM"配置一个视觉模型用于 Vision Bridge。',
       variant: 'destructive',
     })
     return false
@@ -730,7 +765,7 @@ ${exec.prompt}`
     }
   }, [applyTypedText, ensureImageInputSupported])
 
-  // 输入历史（最多保留 50 条，自动去重）
+  // 输入历史(最多保留 50 条,自动去重)
   function addToHistory(input: string) {
     if (!input.trim()) return
 
@@ -770,8 +805,8 @@ ${exec.prompt}`
   function handleToggleWebSearch() {
     if (!webSearchEnabled && !tavilyApiKey.trim()) {
       toast({
-        title: '请先配置 Tavily API Key',
-        description: '你可以在“设置 > 联网搜索”中填写 API Key，然后再开启联网搜索。',
+        title: '请先配置联网搜索',
+        description: '你可以在"设置 > 联网搜索"中填写可用搜索渠道的 API Key,然后再开启联网搜索。',
         variant: 'destructive',
       })
       return
@@ -785,7 +820,7 @@ ${exec.prompt}`
     if (!input) {
       toast({
         title: '请先输入内容',
-        description: '当前输入为空，请先输入问题或指令。',
+        description: '当前输入为空,请先输入问题或指令。',
       })
       textareaRef.current?.focus()
       return
@@ -794,7 +829,7 @@ ${exec.prompt}`
     if (!primaryModel) {
       toast({
         title: '请先配置 AI 模型',
-        description: '在发送或增强前，请先在底部工具栏选择可用模型。',
+        description: '在发送或增强前,请先在底部工具栏选择可用模型。',
         variant: 'destructive',
       })
       return
@@ -863,7 +898,7 @@ ${exec.prompt}`
           name: path.split('/').pop() || path,
           source: 'file' as const
         }))
-        
+
         setAttachedImages(prev => [...prev, ...newImages])
       }
     } catch (error) {
@@ -909,7 +944,7 @@ ${exec.prompt}`
       }
 
       setAttachedImages(prev => [...prev, ...newImages])
-      
+
       // Clear the input so selecting the same file again still triggers change.
       event.target.value = ''
     } catch (error) {
@@ -941,9 +976,9 @@ ${exec.prompt}`
         const uint8Array = new Uint8Array(arrayBuffer)
         const fileName = `paste-${Date.now()}-${Math.random().toString(36).substring(7)}.png`
         const filePath = `screenshot/${fileName}`
-        
+
         await writeFile(filePath, uint8Array, { baseDir: BaseDirectory.AppData })
-        
+
         const fullPath = await (async () => {
           const { appDataDir, join } = await import('@tauri-apps/api/path')
           const appData = await appDataDir()
@@ -986,7 +1021,7 @@ ${exec.prompt}`
     const nextText = prompt.trim()
     if (!nextText) return
 
-    selectedSlashCommandRef.current = null
+    pendingCommandRef.current = null
     applyTypedText(nextText)
     setPlaceholder('')
     window.setTimeout(() => {
@@ -1168,11 +1203,11 @@ ${exec.prompt}`
           const totalLines = editorContent.totalLines || numberedLines.length
           const truncatedNote =
             totalLines > 100
-              ? `\n... (共 ${totalLines} 行，已显示前 100 行，剩余 ${totalLines - 100} 行)`
+              ? `\n... (共 ${totalLines} 行,已显示前 100 行,剩余 ${totalLines - 100} 行)`
               : ''
 
           return {
-            preview: `文件预览：${filePath.split('/').pop() || filePath}\n以下内容来自当前编辑器（建议使用 \`replace_editor_content\` 精确修改，内容版本号：${editorContent.version}）\n\n\`\`\`\n${previewLines.join('\n')}\n\`\`\`${truncatedNote}\n`,
+            preview: `文件预览:${filePath.split('/').pop() || filePath}\n以下内容来自当前编辑器(建议使用 \`replace_editor_content\` 精确修改,内容版本号:${editorContent.version})\n\n\`\`\`\n${previewLines.join('\n')}\n\`\`\`${truncatedNote}\n`,
             estimatedTokens: estimateTokens(editorContent.markdown || editorContent.numberedLines),
             contentMode: 'active-editor',
           }
@@ -1185,9 +1220,9 @@ ${exec.prompt}`
 
       if (!fileExists) {
         return {
-          preview: `文件不存在：${filePath.split('/').pop() || filePath}`,
+          preview: `文件不存在:${filePath.split('/').pop() || filePath}`,
           contentMode: 'full-file',
-          note: '请确认路径是否正确，或先在左侧文件树中打开该文件后再发送。',
+          note: '请确认路径是否正确,或先在左侧文件树中打开该文件后再发送。',
         }
       }
 
@@ -1205,18 +1240,18 @@ ${exec.prompt}`
       const totalLines = lines.length
       const truncatedNote =
         totalLines > 100
-          ? `\n... (共 ${totalLines} 行，已显示前 100 行，剩余 ${totalLines - 100} 行)`
+          ? `\n... (共 ${totalLines} 行,已显示前 100 行,剩余 ${totalLines - 100} 行)`
           : ''
 
       return {
-        preview: `文件预览：${filePath.split('/').pop() || filePath}\n以下内容来自文件读取（建议使用 \`replace_editor_content\` 精确修改）\n\n\`\`\`\n${previewLines.join('\n')}\n\`\`\`${truncatedNote}\n`,
+        preview: `文件预览:${filePath.split('/').pop() || filePath}\n以下内容来自文件读取(建议使用 \`replace_editor_content\` 精确修改)\n\n\`\`\`\n${previewLines.join('\n')}\n\`\`\`${truncatedNote}\n`,
         estimatedTokens: estimateTokens(content),
         contentMode: 'full-file',
       }
     } catch (error) {
       console.error('Failed to generate file preview:', error)
       return {
-        preview: `读取文件失败：${filePath.split('/').pop() || filePath}`,
+        preview: `读取文件失败:${filePath.split('/').pop() || filePath}`,
         contentMode: 'full-file',
         note: '请检查文件编码和访问权限后重试。',
       }
@@ -1249,14 +1284,14 @@ ${exec.prompt}`
       addLinkedResource(resource, {
         preview: isActiveResource && currentArticle
           ? '已使用当前 PDF 可读文本作为上下文。'
-          : 'PDF 文件已附加。若需要提取文本，请先在编辑区打开该 PDF。',
+          : 'PDF 文件已附加。若需要提取文本,请先在编辑区打开该 PDF。',
         meta: {
           origin,
           contentMode: isActiveResource && currentArticle ? 'pdf-active' : 'pdf-pending',
           estimatedTokens: isActiveResource && currentArticle ? estimateTokens(currentArticle) : undefined,
           note: isActiveResource && currentArticle
             ? '当前 PDF 文本已注入上下文。'
-            : '当前仅附加 PDF 文件路径，尚未注入可读文本。',
+            : '当前仅附加 PDF 文件路径,尚未注入可读文本。',
         },
       })
       return key
@@ -1270,7 +1305,7 @@ ${exec.prompt}`
         contentMode: origin === 'diagram' ? 'diagram-file' : previewResult.contentMode,
         estimatedTokens: previewResult.estimatedTokens,
         note: origin === 'diagram'
-          ? '该资源来自图表文件，会按图表上下文注入。'
+          ? '该资源来自图表文件,会按图表上下文注入。'
           : previewResult.note,
       },
     })
@@ -1349,8 +1384,8 @@ ${exec.prompt}`
       }
 
       if (autoLinkSuppressedRef.current) {
-        // 如果当前打开的文件和之前自动链接的不同，说明用户打开了新文件
-        // 此时重置抑制状态，允许自动链接新文件
+        // 如果当前打开的文件和之前自动链接的不同,说明用户打开了新文件
+        // 此时重置抑制状态,允许自动链接新文件
         if (activeFilePath && previousAutoKey !== activeFilePath && !isVirtualEditorPath(activeFilePath)) {
           autoLinkSuppressedRef.current = false
           // 继续执行下面的自动链接逻辑
@@ -1527,7 +1562,7 @@ ${exec.prompt}`
         onClearAllContexts={clearAllContexts}
       />
 
-      {/* 输入框容器 - 相对定位，用于放置 Token 气泡 */}
+      {/* 输入框容器 - 相对定位,用于放置 Token 气泡 */}
       <div className="relative">
         <div
           ref={inputDropZoneRef}
@@ -1547,7 +1582,7 @@ ${exec.prompt}`
             query={slashQuery || ''}
             selectedIndex={slashSelectedIndex}
             onSelectionChange={setSlashSelectedIndex}
-            onSelect={(commandId) => void executeAiDocCommand(commandId)}
+            onSelect={(commandId) => selectSlashCommand(commandId)}
             anchorRef={textareaRef}
           />
           <FileAutocompletePopover
@@ -1579,8 +1614,9 @@ ${exec.prompt}`
             value={text}
             onChange={(e) => {
               const val = e.target.value
-              if (selectedSlashCommandRef.current?.display !== val) {
-                selectedSlashCommandRef.current = null
+              // 用户编辑了已选命令的文字 → 取消待定状态，恢复为普通 / 搜索
+              if (pendingCommandRef.current && val !== `/${pendingCommandRef.current.title}`) {
+                pendingCommandRef.current = null
               }
               setText(val)
               if (chatMode === 'chat' && isSensitiveInstruction(val)) {
@@ -1665,21 +1701,21 @@ ${exec.prompt}`
                 }
               }
 
-              const selectedSlashCommand = selectedSlashCommandRef.current
+              // ---- 待定命令按 Enter 提交 ----
               if (
-                selectedSlashCommand &&
-                selectedSlashCommand.display === text &&
+                pendingCommandRef.current &&
                 e.key === 'Enter' &&
                 !isComposing &&
                 !e.shiftKey
               ) {
-                e.preventDefault()
-                chatSendRef.current?.sendChat(selectedSlashCommand.instruction, {
-                  maxTokens: selectedSlashCommand.maxTokens,
-                  temperature: selectedSlashCommand.temperature,
-                })
-                selectedSlashCommandRef.current = null
-                return
+                const slashCommand = pendingCommandRef.current
+                if (slashCommand && text === `/${slashCommand.title}`) {
+                  e.preventDefault()
+                  void executeSlashCommand(slashCommand)
+                  return
+                }
+                // 文字已被用户修改，走正常 Enter 逻辑
+                pendingCommandRef.current = null
               }
 
               // 斜杠命令面板按键拦截
@@ -1704,7 +1740,7 @@ ${exec.prompt}`
                   if (slashFilteredCommands.length > 0) {
                     e.preventDefault()
                     const target = slashFilteredCommands[Math.min(slashSelectedIndex, slashFilteredCommands.length - 1)]
-                    void executeAiDocCommand(target.id)
+                    selectSlashCommand(target.id)
                     return
                   }
                 }
@@ -1720,7 +1756,7 @@ ${exec.prompt}`
                 if (dictation.isActive) {
                   return
                 }
-                selectedSlashCommandRef.current = null
+                pendingCommandRef.current = null
                 chatSendRef.current?.sendChat()
               }
               if (e.key === "Escape" && dictation.isActive) {
@@ -1765,7 +1801,7 @@ ${exec.prompt}`
             onPaste={handlePaste}
           />
         </div>
-        
+
         <div className="flex w-full min-w-0 items-center gap-1 overflow-hidden border-t border-border/50 px-1 pt-1.5 pb-0.5">
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-lg bg-muted/20 p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <ChatInputAddMenu
@@ -1778,7 +1814,7 @@ ${exec.prompt}`
               variant={webSearchEnabled ? "secondary" : "ghost"}
               size="icon"
               icon={<GlobeIcon className={webSearchEnabled ? "size-4 text-primary" : "size-4"} />}
-              tooltipText={webSearchEnabled ? '已启用 Web 搜索（Tavily）' : '启用 Web 搜索（Tavily）'}
+              tooltipText={webSearchEnabled ? '已启用 Web 搜索' : '启用 Web 搜索'}
               onClick={handleToggleWebSearch}
               disabled={loading || isResearchActive}
               buttonClassName={webSearchEnabled ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/15' : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-background/70 hover:text-foreground'}
@@ -1818,16 +1854,16 @@ ${exec.prompt}`
                   : dictation.phase === "transcribing"
                   ? '正在识别语音...'
                   : dictation.phase === "polishing"
-                    ? `正在整理语音文本：${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
+                    ? `正在整理语音文本:${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
                   : dictation.phase === "starting"
                     ? '正在启动录音...'
                     : dictation.isListening
-                    ? `停止录音并转文字 ${dictation.formattedDuration}，模式：${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
+                    ? `停止录音并转文字 ${dictation.formattedDuration},模式:${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
                     : dictation.isOtherRecordingActive
                       ? '当前已有录音任务'
                       : !sttModel
                         ? '请先配置语音识别模型'
-                        : `语音输入，整理模式：${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
+                        : `语音输入,整理模式:${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
               }
               onClick={() => {
                 if (isModelRunning) {
