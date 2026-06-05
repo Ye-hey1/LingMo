@@ -1513,53 +1513,48 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
               </section>
 
               <section className="rounded-lg border border-border/60 bg-background p-3">
-                <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-medium">
                     <CheckCircle2 className="size-3.5 text-primary" />
                     {t('record.mark.enhancedClipboard.workflow.title')}
                   </div>
-                  <span className="text-[11px] text-muted-foreground">
-                    {t('record.mark.enhancedClipboard.workflow.undo.count', { count: undoStack.length })}
-                  </span>
+                  {latestUndo && (
+                    <button
+                      type="button"
+                      onClick={handleUndo}
+                      disabled={isBusy}
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                    >
+                      <Undo2 className="size-3" />
+                      {latestUndo.label}
+                    </button>
+                  )}
                 </div>
-                <div className="space-y-2">
-                  {WORKFLOW_STEPS.map((step) => {
+                {/* Compact inline progress bar */}
+                <div className="flex items-center gap-1">
+                  {WORKFLOW_STEPS.map((step, idx) => {
                     const stepState = workflowSteps[step]
+                    const isLast = idx === WORKFLOW_STEPS.length - 1
                     return (
-                      <div key={step} className="rounded-md border border-border/45 bg-muted/10 px-2.5 py-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex min-w-0 items-center gap-2">
-                            {renderStepIcon(stepState.status)}
-                            <span className="truncate text-xs">
-                              {t(`record.mark.enhancedClipboard.workflow.steps.${step}`)}
-                            </span>
-                          </div>
-                          <span className="shrink-0 text-[11px] text-muted-foreground">
-                            {t(`record.mark.enhancedClipboard.workflow.state.${stepState.status}`)}
-                          </span>
+                      <div key={step} className="flex items-center gap-1 min-w-0">
+                        <div
+                          className={cn(
+                            'flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors whitespace-nowrap',
+                            stepState.status === 'done' && 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+                            stepState.status === 'running' && 'bg-primary/15 text-primary',
+                            stepState.status === 'failed' && 'bg-destructive/15 text-destructive',
+                            stepState.status === 'idle' && 'bg-muted/50 text-muted-foreground/50',
+                          )}
+                          title={stepState.error || t(`record.mark.enhancedClipboard.workflow.steps.${step}`)}
+                        >
+                          {stepState.status === 'running' ? <Loader2 className="size-2.5 animate-spin" /> : null}
+                          {t(`record.mark.enhancedClipboard.workflow.steps.${step}`)}
                         </div>
-                        {stepState.error && (
-                          <p className="mt-1.5 line-clamp-2 break-words pl-5 text-[11px] leading-relaxed text-destructive">
-                            {stepState.error}
-                          </p>
-                        )}
+                        {!isLast && <span className="text-muted-foreground/30">›</span>}
                       </div>
                     )
                   })}
                 </div>
-                {latestUndo && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleUndo}
-                    className="mt-3 h-8 w-full justify-start text-xs"
-                    disabled={isBusy}
-                  >
-                    <Undo2 className="size-3.5" />
-                    {t('record.mark.enhancedClipboard.workflow.undo.button', { action: latestUndo.label })}
-                  </Button>
-                )}
               </section>
             </div>
 
