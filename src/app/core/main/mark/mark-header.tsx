@@ -135,15 +135,22 @@ export function MarkHeader() {
       {/* 菜单按钮 */}
       <div className="flex items-center gap-1">
         {trashState ? (
-          <Button variant="ghost" size="icon" onClick={() => setTrashState(false)}>
-            <XCircle />
-          </Button>
+          <button
+            type="button"
+            className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            onClick={() => setTrashState(false)}
+          >
+            <XCircle className="size-4" />
+          </button>
         ) : (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon">
-                <Menu />
-              </Button>
+              <button
+                type="button"
+                className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Menu className="size-4" />
+              </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => setTrashState(true)}>

@@ -56,7 +56,7 @@ export function RecordFilterChips({ count, trashState = false }: RecordFilterChi
     <div className="flex flex-wrap items-center gap-1 border-b px-3 py-1.5">
       <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>
       {activeChips.map((chip) => (
-        <span key={chip.key} className="inline-flex items-center gap-0.5 rounded-full border border-border/50 px-1.5 py-0 text-[10px] text-muted-foreground">
+        <span key={chip.key} className="inline-flex items-center gap-0.5 rounded bg-muted/40 px-1.5 py-0 text-[10px] text-muted-foreground">
           {chip.label}
           <button
             type="button"

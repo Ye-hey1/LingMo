@@ -44,7 +44,7 @@ export function MarkFilterPopover() {
             value={recordFilters.search}
             onChange={(e) => setRecordSearch(e.target.value)}
             placeholder="搜索记录..."
-            className="h-7 rounded-md border-border/60 bg-muted/20 pl-8 pr-2 text-xs shadow-none focus-visible:ring-1"
+            className="h-6 rounded border-0 bg-muted/30 pl-8 pr-2 text-xs shadow-none ring-0 focus-visible:ring-0 focus-visible:border-0"
           />
         </div>
         <TooltipProvider>
@@ -86,10 +86,10 @@ export function MarkFilterPopover() {
               type="button"
               onClick={() => setRecordProcessState(option.value)}
               className={cn(
-                "h-5 rounded-full border px-2 text-[10px] font-medium transition-colors",
+                "h-5 rounded px-1.5 text-[10px] transition-colors",
                 recordFilters.processState === option.value
-                  ? "border-foreground/20 bg-foreground text-background"
-                  : "border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "bg-foreground/10 text-foreground font-medium"
+                  : "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
               )}
             >
               {option.label}
@@ -103,27 +103,27 @@ export function MarkFilterPopover() {
               type="button"
               onClick={() => setRecordTimePreset(preset)}
               className={cn(
-                "h-5 rounded-full border px-2 text-[10px] font-medium transition-colors",
+                "h-5 rounded px-1.5 text-[10px] transition-colors",
                 recordFilters.timePreset === preset
-                  ? "border-foreground/20 bg-foreground text-background"
-                  : "border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "bg-foreground/10 text-foreground font-medium"
+                  : "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
               )}
             >
               {t(`toolbar.filter.timeOptions.${preset}`)}
             </button>
           ))}
 
-          {/* Type pills */}
+          {/* Type */}
           {MARK_TYPE_OPTIONS.map((type) => (
             <button
               key={type}
               type="button"
               onClick={() => toggleRecordType(type)}
               className={cn(
-                "h-5 rounded-full border px-2 text-[10px] font-medium transition-colors",
+                "h-5 rounded px-1.5 text-[10px] transition-colors",
                 recordFilters.selectedTypes.includes(type)
-                  ? "border-primary/30 bg-primary/10 text-primary"
-                  : "border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "bg-primary/10 text-primary font-medium"
+                  : "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
               )}
             >
               {t(`type.${type}`)}
