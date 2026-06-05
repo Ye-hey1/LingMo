@@ -1530,16 +1530,16 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
                     </button>
                   )}
                 </div>
-                {/* Compact inline progress bar */}
-                <div className="flex items-center gap-1">
+                {/* Compact progress pills */}
+                <div className="flex flex-wrap items-center gap-1">
                   {WORKFLOW_STEPS.map((step, idx) => {
                     const stepState = workflowSteps[step]
                     const isLast = idx === WORKFLOW_STEPS.length - 1
                     return (
-                      <div key={step} className="flex items-center gap-1 min-w-0">
+                      <div key={step} className="flex items-center gap-1">
                         <div
                           className={cn(
-                            'flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors whitespace-nowrap',
+                            'inline-flex items-center gap-0.5 rounded-full px-1.5 py-px text-[10px] font-medium leading-tight transition-colors',
                             stepState.status === 'done' && 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
                             stepState.status === 'running' && 'bg-primary/15 text-primary',
                             stepState.status === 'failed' && 'bg-destructive/15 text-destructive',
@@ -1547,10 +1547,10 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
                           )}
                           title={stepState.error || t(`record.mark.enhancedClipboard.workflow.steps.${step}`)}
                         >
-                          {stepState.status === 'running' ? <Loader2 className="size-2.5 animate-spin" /> : null}
+                          {stepState.status === 'running' && <Loader2 className="size-2.5 animate-spin" />}
                           {t(`record.mark.enhancedClipboard.workflow.steps.${step}`)}
                         </div>
-                        {!isLast && <span className="text-muted-foreground/30">›</span>}
+                        {!isLast && <span className="text-[10px] text-muted-foreground/30">›</span>}
                       </div>
                     )
                   })}
