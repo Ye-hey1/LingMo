@@ -1430,7 +1430,9 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
               {t('record.mark.enhancedClipboard.actions.translate')}
             </Button>
             <Select value={targetLanguage} onValueChange={setTargetLanguage}>
-              <SelectTrigger className="h-7 w-[72px] shrink-0 border-none shadow-none text-[11px] px-1" />
+              <SelectTrigger className="h-7 w-[80px] shrink-0 text-[11px] px-1.5">
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
                 {LANGUAGE_OPTIONS.map((language) => (
                   <SelectItem key={language} value={language}>{language}</SelectItem>
@@ -1528,17 +1530,21 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="history" className="mt-3">
+        <TabsContent value="history" className="mt-2">
+          <div className="h-[420px] overflow-y-auto">
           <RecognitionHistory
             version={historyVersion}
             onSelect={handleHistorySelect}
             onDelete={handleHistoryDelete}
             onClear={handleHistoryClear}
           />
+          </div>
         </TabsContent>
 
-        <TabsContent value="settings" className="mt-3">
+        <TabsContent value="settings" className="mt-2">
+          <div className="h-[420px] overflow-y-auto">
           <RecognitionSettings />
+          </div>
         </TabsContent>
       </Tabs>
 
