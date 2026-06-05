@@ -1322,16 +1322,16 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
               {statusText}
             </p>
           </div>
-          <TabsList className="grid h-8 w-full grid-cols-3 sm:w-[280px]">
-            <TabsTrigger value="workbench" className="text-xs">
+          <TabsList className="grid h-7 w-full grid-cols-3 bg-muted/40 sm:w-[260px]">
+            <TabsTrigger value="workbench" className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-none">
               <Wand2 className="mr-1.5 size-3.5" />
               {t('record.mark.enhancedClipboard.tabs.clipboard')}
             </TabsTrigger>
-            <TabsTrigger value="history" className="text-xs">
+            <TabsTrigger value="history" className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-none">
               <History className="mr-1.5 size-3.5" />
               {t('record.mark.enhancedClipboard.tabs.history')}
             </TabsTrigger>
-            <TabsTrigger value="settings" className="text-xs">
+            <TabsTrigger value="settings" className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-none">
               <Settings className="mr-1.5 size-3.5" />
               {t('record.mark.enhancedClipboard.tabs.settings')}
             </TabsTrigger>
@@ -1341,7 +1341,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
         <TabsContent value="workbench" className="mt-2 space-y-2">
           {/* Row 1: Paste button + drop zone */}
           <div
-            className="flex items-center gap-2 rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-2"
+            className="flex items-center gap-2 rounded-md bg-muted/30 px-2.5 py-1.5"
             onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
             onDrop={(e) => {
               e.preventDefault(); e.stopPropagation()
@@ -1352,11 +1352,9 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
               else if (text) handleTextDrop(text)
             }}
           >
-            <Button
+            <button
               type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 gap-1.5 text-xs shrink-0"
+              className="inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-40"
               onClick={handleReadClipboard}
               disabled={isBusy}
             >
@@ -1366,69 +1364,59 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
                 <ClipboardPaste className="size-3" />
               )}
               {t('record.mark.enhancedClipboard.source.clipboard')}
-            </Button>
+            </button>
             <span className="text-[11px] text-muted-foreground/60">
               {t('record.mark.enhancedClipboard.source.dragHint')}
             </span>
           </div>
 
           {/* Row 2: AI action buttons */}
-          <div className="flex items-center gap-1">
-            <Button
+          <div className="flex items-center gap-0.5">
+            <button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1 text-xs"
+              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
               onClick={() => recognizeImage()}
               disabled={isBusy || !draftImage || !enableImageRecognition}
             >
               {processingAction === 'recognize' ? <Loader2 className="size-3 animate-spin" /> : <ImageIcon className="size-3" />}
               {t('record.mark.enhancedClipboard.actions.recognize')}
-            </Button>
-            <Button
+            </button>
+            <button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1 text-xs"
+              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
               onClick={handleOrganize}
               disabled={isBusy || !canProcessText}
             >
               {processingAction === 'organize' ? <Loader2 className="size-3 animate-spin" /> : <Wand2 className="size-3" />}
               {t('record.mark.enhancedClipboard.actions.organize')}
-            </Button>
-            <Button
+            </button>
+            <button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1 text-xs"
+              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
               onClick={handleGenerateTags}
               disabled={isBusy || !draftContent.trim()}
             >
               {processingAction === 'tag' ? <Loader2 className="size-3 animate-spin" /> : <Tag className="size-3" />}
               {t('record.mark.enhancedClipboard.actions.tag')}
-            </Button>
-            <Button
+            </button>
+            <button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1 text-xs"
+              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
               onClick={handleGenerateTitle}
               disabled={isBusy || !draftContent.trim()}
             >
               {processingAction === 'title' ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
               {t('record.mark.enhancedClipboard.actions.title')}
-            </Button>
-            <Button
+            </button>
+            <button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1 text-xs"
+              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
               onClick={handleTranslate}
               disabled={isBusy || !draftContent.trim()}
             >
               {processingAction === 'translate' ? <Loader2 className="size-3 animate-spin" /> : <Languages className="size-3" />}
               {t('record.mark.enhancedClipboard.actions.translate')}
-            </Button>
+            </button>
             <Select value={targetLanguage} onValueChange={setTargetLanguage}>
               <SelectTrigger className="h-7 w-[80px] shrink-0 text-[11px] px-1.5">
                 <SelectValue />
@@ -1494,38 +1482,33 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
               )}
             </div>
             <div className="flex items-center gap-1.5">
-              <Button
+              <button
                 type="button"
-                variant="ghost"
-                size="icon"
-                className="size-7"
+                className="inline-flex h-6 w-6 items-center justify-center rounded text-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
                 onClick={handleCopyDraftText}
                 disabled={isBusy || !draftContent.trim()}
                 title={t('record.mark.enhancedClipboard.actions.copyText')}
               >
                 <Copy className="size-3" />
-              </Button>
-              <Button
+              </button>
+              <button
                 type="button"
-                variant="ghost"
-                size="icon"
-                className="size-7"
+                className="inline-flex h-6 w-6 items-center justify-center rounded text-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
                 onClick={handleClear}
                 disabled={isBusy || !hasDraft}
                 title={t('record.mark.enhancedClipboard.source.clear')}
               >
                 <Trash2 className="size-3" />
-              </Button>
-              <Button
+              </button>
+              <button
                 type="button"
-                size="sm"
-                className="h-7 gap-1 text-xs"
+                className="inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-primary transition-colors hover:bg-primary/10 disabled:opacity-40"
                 onClick={handleImportRecord}
                 disabled={isBusy || !hasDraft}
               >
                 <ArrowDownToLine className="size-3" />
                 {t('record.mark.enhancedClipboard.actions.import')}
-              </Button>
+              </button>
             </div>
           </div>
         </TabsContent>
