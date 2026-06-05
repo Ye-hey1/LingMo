@@ -223,7 +223,9 @@ export function NoteSidebar() {
       )}
 
       {trashState ? (
-        <MarkList />
+        <div className="flex-1 overflow-y-auto">
+          <MarkList />
+        </div>
       ) : (
         <div className="flex-1 overflow-y-auto">
           <TagManage />

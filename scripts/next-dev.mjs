@@ -150,7 +150,6 @@ function getMissingServerChunkReferences() {
   const chunkPatterns = [
     /require\(["']\.\/((?:chunks|vendor-chunks)\/[^"']+\.js)["']\)/g,
     /__webpack_require__\.e\(["']((?:chunks|vendor-chunks)\/[^"']+)["']\)/g,
-    /["']((?:chunks|vendor-chunks)\/[^"']+)["']/g,
   ]
 
   const normalizeChunkPath = (referencedPath) =>

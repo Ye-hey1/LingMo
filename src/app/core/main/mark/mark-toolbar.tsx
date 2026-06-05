@@ -228,12 +228,11 @@ export function MarkToolbar() {
             <MarkViewModeToggle value={recordViewMode} onChange={setRecordViewMode} />
             <BottomBarIconButton
               icon={areRecordTagsExpanded ? <ChevronsDownUp className="size-3" /> : <ChevronsUpDown className="size-3" />}
-              label={areRecordTagsExpanded ? '全部折叠文件夹' : '全部展开文件夹'}
+              label={areRecordTagsExpanded ? '全部折叠' : '全部展开'}
               onClick={handleToggleRecordTagsExpanded}
               active={areRecordTagsExpanded}
               disabled={recordTagIds.length === 0}
             />
-            <MarkHealthButton />
             <BottomBarIconButton
               icon={<SquareCheckBig className="size-3" />}
               label={t('multiSelect')}
