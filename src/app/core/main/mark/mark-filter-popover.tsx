@@ -35,16 +35,16 @@ export function MarkFilterPopover() {
   const isActive = hasActiveRecordFilters()
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-2">
       {/* Row 1: Search + Filter toggle + Reset */}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5">
         <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
           <Input
             value={recordFilters.search}
             onChange={(e) => setRecordSearch(e.target.value)}
             placeholder="搜索记录..."
-            className="h-6 rounded-md border-border/50 bg-transparent pl-7 pr-2 text-xs shadow-none"
+            className="h-7 rounded-md border-border/60 bg-muted/20 pl-8 pr-2 text-xs shadow-none focus-visible:ring-1"
           />
         </div>
         <TooltipProvider>
@@ -54,7 +54,7 @@ export function MarkFilterPopover() {
                 type="button"
                 onClick={() => setExpanded(!expanded)}
                 className={cn(
-                  "inline-flex size-6 items-center justify-center rounded-md transition-colors",
+                  "inline-flex size-7 items-center justify-center rounded-md transition-colors",
                   isActive || expanded ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
               >
@@ -68,7 +68,7 @@ export function MarkFilterPopover() {
           <button
             type="button"
             onClick={resetRecordFilters}
-            className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title="清除筛选"
           >
             <RotateCcw className="size-3" />

@@ -1339,130 +1339,109 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
         </div>
 
         <TabsContent value="workbench" className="mt-2 space-y-2">
-          {/* Toolbar: input + actions in one row */}
-          <div className="flex items-center gap-1.5">
+          {/* Row 1: Paste button + drop zone */}
+          <div
+            className="flex items-center gap-2 rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-2"
+            onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+            onDrop={(e) => {
+              e.preventDefault(); e.stopPropagation()
+              const files = Array.from(e.dataTransfer.files)
+              const imageFile = files.find(f => f.type.startsWith('image/'))
+              const text = e.dataTransfer.getData('text/plain')
+              if (imageFile) handleImageDrop(imageFile)
+              else if (text) handleTextDrop(text)
+            }}
+          >
             <Button
               type="button"
               variant="outline"
-              size="icon"
-              className="size-7 shrink-0"
+              size="sm"
+              className="h-7 gap-1.5 text-xs shrink-0"
               onClick={handleReadClipboard}
               disabled={isBusy}
-              title={t('record.mark.enhancedClipboard.source.clipboard')}
             >
               {processingAction === 'clipboard' ? (
-                <Loader2 className="size-3.5 animate-spin" />
+                <Loader2 className="size-3 animate-spin" />
               ) : (
-                <ClipboardPaste className="size-3.5" />
+                <ClipboardPaste className="size-3" />
               )}
+              {t('record.mark.enhancedClipboard.source.clipboard')}
             </Button>
-            <ClipboardDropzone
-              onImageDrop={handleImageDrop}
-              onTextDrop={handleTextDrop}
-              className="rounded flex-1"
-              compact
-            />
-            <div className="mx-1 h-4 w-px bg-border" />
+            <span className="text-[11px] text-muted-foreground/60">
+              {t('record.mark.enhancedClipboard.source.dragHint')}
+            </span>
+          </div>
+
+          {/* Row 2: AI action buttons */}
+          <div className="flex items-center gap-1">
             <Button
               type="button"
               variant="ghost"
-              size="icon"
-              className="size-7 shrink-0"
+              size="sm"
+              className="h-7 gap-1 text-xs"
               onClick={() => recognizeImage()}
               disabled={isBusy || !draftImage || !enableImageRecognition}
-              title={t('record.mark.enhancedClipboard.actions.recognize')}
             >
-              {processingAction === 'recognize' ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <ImageIcon className="size-3.5" />
-              )}
+              {processingAction === 'recognize' ? <Loader2 className="size-3 animate-spin" /> : <ImageIcon className="size-3" />}
+              {t('record.mark.enhancedClipboard.actions.recognize')}
             </Button>
             <Button
               type="button"
               variant="ghost"
-              size="icon"
-              className="size-7 shrink-0"
+              size="sm"
+              className="h-7 gap-1 text-xs"
               onClick={handleOrganize}
               disabled={isBusy || !canProcessText}
-              title={t('record.mark.enhancedClipboard.actions.organize')}
             >
-              {processingAction === 'organize' ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Wand2 className="size-3.5" />
-              )}
+              {processingAction === 'organize' ? <Loader2 className="size-3 animate-spin" /> : <Wand2 className="size-3" />}
+              {t('record.mark.enhancedClipboard.actions.organize')}
             </Button>
             <Button
               type="button"
               variant="ghost"
-              size="icon"
-              className="size-7 shrink-0"
+              size="sm"
+              className="h-7 gap-1 text-xs"
               onClick={handleGenerateTags}
               disabled={isBusy || !draftContent.trim()}
-              title={t('record.mark.enhancedClipboard.actions.tag')}
             >
-              {processingAction === 'tag' ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Tag className="size-3.5" />
-              )}
+              {processingAction === 'tag' ? <Loader2 className="size-3 animate-spin" /> : <Tag className="size-3" />}
+              {t('record.mark.enhancedClipboard.actions.tag')}
             </Button>
             <Button
               type="button"
               variant="ghost"
-              size="icon"
-              className="size-7 shrink-0"
+              size="sm"
+              className="h-7 gap-1 text-xs"
               onClick={handleGenerateTitle}
               disabled={isBusy || !draftContent.trim()}
-              title={t('record.mark.enhancedClipboard.actions.title')}
             >
-              {processingAction === 'title' ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Sparkles className="size-3.5" />
-              )}
+              {processingAction === 'title' ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
+              {t('record.mark.enhancedClipboard.actions.title')}
             </Button>
             <Button
               type="button"
               variant="ghost"
-              size="icon"
-              className="size-7 shrink-0"
+              size="sm"
+              className="h-7 gap-1 text-xs"
               onClick={handleTranslate}
               disabled={isBusy || !draftContent.trim()}
-              title={t('record.mark.enhancedClipboard.actions.translate')}
             >
-              {processingAction === 'translate' ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Languages className="size-3.5" />
-              )}
+              {processingAction === 'translate' ? <Loader2 className="size-3 animate-spin" /> : <Languages className="size-3" />}
+              {t('record.mark.enhancedClipboard.actions.translate')}
             </Button>
             <Select value={targetLanguage} onValueChange={setTargetLanguage}>
-              <SelectTrigger className="h-7 w-20 shrink-0 text-[11px]" />
+              <SelectTrigger className="h-7 w-[72px] shrink-0 border-none shadow-none text-[11px] px-1" />
               <SelectContent>
                 {LANGUAGE_OPTIONS.map((language) => (
                   <SelectItem key={language} value={language}>{language}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <div className="flex-1" />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-7 shrink-0"
-              onClick={handleClear}
-              disabled={isBusy || !hasDraft}
-              title={t('record.mark.enhancedClipboard.source.clear')}
-            >
-              <Trash2 className="size-3.5" />
-            </Button>
           </div>
 
-          {/* Image preview (compact) */}
+          {/* Image preview */}
           {draftImage && (
-            <div className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/30 px-2 py-1.5">
+            <div className="flex items-center gap-2 rounded-md border border-border/40 bg-muted/20 px-2.5 py-1.5">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={draftImage.dataUrl} alt="" className="size-8 rounded object-cover" />
               <span className="truncate text-[11px] text-muted-foreground">{draftImage.fileName}</span>
@@ -1474,51 +1453,45 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
           {draftTags.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {draftTags.map((item) => (
-                <span
-                  key={item}
-                  className="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-1.5 py-px text-[11px] text-primary"
-                >
-                  #{item}
-                </span>
+                <span key={item} className="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-1.5 py-px text-[11px] text-primary">#{item}</span>
               ))}
             </div>
           )}
 
-          {/* Draft */}
-          <div className="space-y-1.5">
-            <Input
-              value={draftTitle}
-              onChange={(event) => setDraftTitle(event.target.value)}
-              placeholder={t('record.mark.enhancedClipboard.draft.titlePlaceholder')}
-              className="h-7 text-sm"
-            />
-            <Textarea
-              value={draftContent}
-              onChange={(event) => handleDraftContentChange(event.target.value)}
-              placeholder={t('record.mark.enhancedClipboard.draft.contentPlaceholder')}
-              className="min-h-[180px] resize-none border-border/40 text-sm leading-relaxed"
-            />
-          </div>
+          {/* Title + Content */}
+          <Input
+            value={draftTitle}
+            onChange={(event) => setDraftTitle(event.target.value)}
+            placeholder={t('record.mark.enhancedClipboard.draft.titlePlaceholder')}
+            className="h-7 text-sm"
+          />
+          <Textarea
+            value={draftContent}
+            onChange={(event) => handleDraftContentChange(event.target.value)}
+            placeholder={t('record.mark.enhancedClipboard.draft.contentPlaceholder')}
+            className="min-h-[160px] resize-none border-border/40 text-sm leading-relaxed"
+          />
 
-          {/* Footer: char count + actions */}
+          {/* Bottom bar */}
           <div className="flex items-center justify-between">
-            <span className="text-[11px] text-muted-foreground">
-              {t('record.mark.enhancedClipboard.draft.characters', { count: draftCharacterCount })}
-            </span>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-muted-foreground">
+                {t('record.mark.enhancedClipboard.draft.characters', { count: draftCharacterCount })}
+              </span>
               {latestUndo && (
-                <Button
+                <button
                   type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-7"
                   onClick={handleUndo}
                   disabled={isBusy}
                   title={latestUndo.label}
+                  className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  <Undo2 className="size-3.5" />
-                </Button>
+                  <Undo2 className="size-3" />
+                  {latestUndo.label}
+                </button>
               )}
+            </div>
+            <div className="flex items-center gap-1.5">
               <Button
                 type="button"
                 variant="ghost"
@@ -1528,7 +1501,18 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
                 disabled={isBusy || !draftContent.trim()}
                 title={t('record.mark.enhancedClipboard.actions.copyText')}
               >
-                <Copy className="size-3.5" />
+                <Copy className="size-3" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                onClick={handleClear}
+                disabled={isBusy || !hasDraft}
+                title={t('record.mark.enhancedClipboard.source.clear')}
+              >
+                <Trash2 className="size-3" />
               </Button>
               <Button
                 type="button"
@@ -1537,7 +1521,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
                 onClick={handleImportRecord}
                 disabled={isBusy || !hasDraft}
               >
-                <ArrowDownToLine className="size-3.5" />
+                <ArrowDownToLine className="size-3" />
                 {t('record.mark.enhancedClipboard.actions.import')}
               </Button>
             </div>

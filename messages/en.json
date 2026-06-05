@@ -1744,7 +1744,8 @@
           "manual": "Manual Draft",
           "image": "Image",
           "empty": "No material yet",
-          "clear": "Clear"
+          "clear": "Clear",
+          "dragHint": "or drag & drop image/text here"
         },
         "actions": {
           "process": "Process",

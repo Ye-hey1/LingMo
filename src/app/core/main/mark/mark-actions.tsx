@@ -5,8 +5,7 @@ import { Trash2, XCircle, Sparkles, RotateCcw } from "lucide-react"
 import { useTranslations } from "next-intl"
 import useMarkStore from "@/stores/mark"
 import { OrganizeNotes } from "./organize-notes"
-import { useEffect, useRef } from "react"
-import { MarkFilterPopover } from "./mark-filter-popover"
+import { useRef } from "react"
 import { confirm } from "@tauri-apps/plugin-dialog"
 import { clearTrash, restoreMarks } from "@/db/marks"
 
@@ -15,15 +14,10 @@ export function MarkActions() {
   const {
     trashState,
     setTrashState,
-    initRecordFilters,
     marks,
     refreshVisibleMarks,
   } = useMarkStore()
   const organizeRef = useRef<{ openOrganize: () => void }>(null)
-
-  useEffect(() => {
-    initRecordFilters()
-  }, [initRecordFilters])
 
   const handleToggleTrash = () => {
     setTrashState(!trashState)
@@ -93,7 +87,6 @@ export function MarkActions() {
           buttonClassName="size-7 rounded-md text-muted-foreground hover:text-foreground"
         />
       )}
-      <MarkFilterPopover />
       <TooltipButton
         icon={trashState ? <XCircle className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
         tooltipText={trashState ? t('toolbar.closeTrash') : t('toolbar.trash')}

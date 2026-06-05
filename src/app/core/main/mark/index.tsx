@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react"
 import { TagManage } from './tag-manage'
 import { MarkList } from './mark-list'
 import { MarkToolbar } from './mark-toolbar'
+import { MarkFilterPopover } from './mark-filter-popover'
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
 import { insertMark } from "@/db/marks"
@@ -224,6 +225,9 @@ export function NoteSidebar() {
 
       {trashState ? (
         <div className="flex-1 overflow-y-auto">
+          <div className="border-b bg-background px-3 py-2">
+            <MarkFilterPopover />
+          </div>
           <MarkList />
         </div>
       ) : (

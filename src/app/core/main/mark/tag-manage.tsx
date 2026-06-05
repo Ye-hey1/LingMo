@@ -30,6 +30,7 @@ import { MarkListCompactView } from './mark-list-compact-view'
 import { MarkListCardView } from './mark-list-card-view'
 import { MARK_TYPE_OPTIONS } from './mark-type-meta'
 import { RecordFilterChips } from './record-filter-chips'
+import { MarkFilterPopover } from './mark-filter-popover'
 import emitter from '@/lib/emitter'
 import { EmitterRecordEvents } from '@/config/emitters'
 import {
@@ -172,6 +173,7 @@ export function TagManage() {
     allMarks,
     queues,
     fetchMarks,
+    initRecordFilters,
     recordFilters,
     setRecordTagId,
     recordViewMode,
@@ -352,12 +354,13 @@ export function TagManage() {
   React.useEffect(() => {
     const fetchData = async() => {
       await initTagsDb()
+      await initRecordFilters()
       await fetchTags()
       await initTags()
       await fetchMarks()
     }
     fetchData()
-  }, [initTags, fetchTags, fetchMarks])
+  }, [initTags, initRecordFilters, fetchTags, fetchMarks])
 
   // 初始化时展开当前标签（只执行一次）
   React.useEffect(() => {
@@ -483,6 +486,9 @@ export function TagManage() {
 
   return (
     <div className="w-full">
+      <div className="border-b bg-background px-3 py-2">
+        <MarkFilterPopover />
+      </div>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

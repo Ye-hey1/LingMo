@@ -1753,7 +1753,8 @@
           "manual": "手动草稿",
           "image": "图片",
           "empty": "暂无素材",
-          "clear": "清空"
+          "clear": "清空",
+          "dragHint": "或拖放图片/文本到此处"
         },
         "actions": {
           "process": "加工",
