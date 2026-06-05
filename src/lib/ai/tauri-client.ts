@@ -122,8 +122,16 @@ function toAbortError(error: unknown) {
   if (error instanceof Error && (error.name === 'AbortError' || error.message === 'Request was aborted.')) {
     return new AbortError()
   }
+  if (typeof error === 'string' && error.trim() === 'Request was aborted.') {
+    return new AbortError()
+  }
   if (error instanceof Error) return error
   return new Error(String(error))
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error &&
+    (error.name === 'AbortError' || error.message === 'Request was aborted.')
 }
 
 function getErrorMessage(error: unknown) {
@@ -324,6 +332,10 @@ function createStreamingIterable<T>(
       return
     }
     if (event.type === 'error') {
+      if (event.data.trim() === 'Request was aborted.' || signal?.aborted) {
+        queue.close()
+        return
+      }
       queue.fail(new Error(event.data))
       return
     }
@@ -337,6 +349,10 @@ function createStreamingIterable<T>(
     queue.close()
   }).catch((error) => {
     const normalizedError = toAbortError(error)
+    if (isAbortError(normalizedError) || signal?.aborted) {
+      queue.close()
+      return
+    }
     if (!receivedAnyChunk && isRetryableTransportError(normalizedError)) {
       const fallbackBody = {
         ...(request.body as Record<string, unknown>),
@@ -351,6 +367,10 @@ function createStreamingIterable<T>(
         queue.push(createSyntheticStreamChunk(completion) as T)
         queue.close()
       }).catch((fallbackError) => {
+        if (isAbortError(toAbortError(fallbackError)) || signal?.aborted) {
+          queue.close()
+          return
+        }
         queue.fail(new Error(`${normalizedError.message}; plugin-http fallback failed: ${getErrorMessage(fallbackError)}`))
       })
       return

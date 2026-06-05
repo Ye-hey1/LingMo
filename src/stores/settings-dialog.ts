@@ -8,6 +8,7 @@ export type SettingsDialogPage =
   | "chat"
   | "editor"
   | "record"
+  | "reminders"
   | "sync"
   | "imageHosting"
   | "ai"
@@ -32,6 +33,7 @@ const VALID_SETTINGS_PAGES = new Set<SettingsDialogPage>([
   "chat",
   "editor",
   "record",
+  "reminders",
   "sync",
   "imageHosting",
   "ai",

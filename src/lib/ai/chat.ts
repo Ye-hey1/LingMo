@@ -5,6 +5,19 @@ import { estimateTokens } from './token-counter'
 import { getModelCapabilityProfile } from './model-capabilities'
 import { prepareMessagesWithImages } from './vision-bridge'
 
+export interface AiStreamFinishMetadata {
+  finishReason?: string | null
+  finishReasons: Array<string | null>
+  truncated: boolean
+  aborted: boolean
+  contentLength: number
+  toolCallCount: number
+}
+
+function isTruncationFinishReason(reason?: string | null) {
+  return reason === 'length' || reason === 'max_tokens'
+}
+
 function inferProvider(config?: AiConfig) {
   const source = `${config?.templateKey || ''} ${config?.key || ''} ${config?.title || ''} ${config?.baseURL || ''}`.toLowerCase()
   if (source.includes('deepseek')) return 'deepseek'
@@ -26,6 +39,15 @@ function getErrorKind(error: unknown) {
   if (/status=429|429|rate limit/i.test(message)) return 'rate_limit'
   if (/status=5\d\d| 5\d\d/i.test(message)) return 'server'
   return 'unknown'
+}
+
+function isExpectedAbortError(error: unknown, signal?: AbortSignal) {
+  if (signal?.aborted) {
+    return true
+  }
+
+  return error instanceof Error &&
+    (error.name === 'AbortError' || error.message === 'Request was aborted.')
 }
 
 function estimateMessagesTokens(messages: OpenAI.Chat.ChatCompletionMessageParam[]) {
@@ -204,6 +226,7 @@ export async function fetchAiStream(
   onThinkingUpdate?: (thinking: string) => void,
   messages?: OpenAI.Chat.ChatCompletionMessageParam[],
   maxTokens?: number,
+  onStreamFinish?: (metadata: AiStreamFinishMetadata) => void,
 ): Promise<string> {
   const startedAt = Date.now()
   let aiConfig: AiConfig | undefined
@@ -274,13 +297,20 @@ export async function fetchAiStream(
     let fullContent = ''
     const toolCalls: any[] = []
     let hasToolCalls = false
+    let finishReason: string | null | undefined
+    const finishReasons: Array<string | null> = []
     
     for await (const chunk of stream) {
       if (abortSignal?.aborted) {
         break;
       }
       
-      const delta = chunk.choices[0]?.delta
+      const choice = chunk.choices[0]
+      const delta = choice?.delta
+      if (choice?.finish_reason) {
+        finishReason = choice.finish_reason
+        finishReasons.push(choice.finish_reason)
+      }
       const thinkingContent = (delta as any)?.reasoning_content || ''
       const content = delta?.content || ''
       
@@ -464,9 +494,12 @@ export async function fetchAiStream(
           messages: conversationMessages,
           temperature: aiConfig?.temperature ?? 0.7,
           top_p: aiConfig?.topP ?? 1,
-          max_tokens: 4096,
           stream: true,
           tools: mcpTools,
+        }
+
+        if (maxTokens && maxTokens > 0) {
+          nextRequestParams.max_tokens = maxTokens
         }
 
         if (capabilities.supportsToolChoice) {
@@ -488,7 +521,12 @@ export async function fetchAiStream(
             break;
           }
           
-          const delta = chunk.choices[0]?.delta
+          const choice = chunk.choices[0]
+          const delta = choice?.delta
+          if (choice?.finish_reason) {
+            finishReason = choice.finish_reason
+            finishReasons.push(choice.finish_reason)
+          }
           const thinkingContent = (delta as any)?.reasoning_content || ''
           const content = delta?.content || ''
           
@@ -553,6 +591,15 @@ export async function fetchAiStream(
         onUpdate(fullContent + '\n\n' + maxIterationsText)
       }
     }
+
+    onStreamFinish?.({
+      finishReason: finishReason ?? null,
+      finishReasons,
+      truncated: finishReasons.some(isTruncationFinishReason),
+      aborted: Boolean(abortSignal?.aborted),
+      contentLength: fullContent.length,
+      toolCallCount: totalToolCallCount,
+    })
     
     await recordAiUsage({
       aiConfig,
@@ -566,7 +613,10 @@ export async function fetchAiStream(
 
     return fullContent
   } catch (error) {
-    console.error('[fetchAiStream] Error:', error)
+    const aborted = isExpectedAbortError(error, abortSignal)
+    if (!aborted) {
+      console.error('[fetchAiStream] Error:', error)
+    }
     await recordAiUsage({
       aiConfig,
       storeKey: 'primaryModel',
@@ -577,6 +627,17 @@ export async function fetchAiStream(
       errorKind: getErrorKind(error),
       latencyMs: Date.now() - startedAt,
     })
+    if (aborted) {
+      onStreamFinish?.({
+        finishReason: null,
+        finishReasons: [],
+        truncated: false,
+        aborted: true,
+        contentLength: 0,
+        toolCallCount: totalToolCallCount,
+      })
+      return ''
+    }
     return handleAIError(error) || ''
   }
 }
@@ -654,6 +715,9 @@ export async function fetchAiStreamToken(text: string, onUpdate: (content: strin
       errorKind: getErrorKind(error),
       latencyMs: Date.now() - startedAt,
     })
+    if (isExpectedAbortError(error, abortSignal)) {
+      return ''
+    }
     return handleAIError(error) || ''
   }
 }

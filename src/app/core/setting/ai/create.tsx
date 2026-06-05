@@ -56,14 +56,19 @@ export default function CreateConfig({ hasCustomModels = false, onConfigCreated,
   }
 
   const createButton = (
-    <Button onClick={createCustomConfig} disabled={creating}>
-      <Plus />
-      {creating ? "创建中..." : "自定义模型配置"}
-    </Button>
+    <button
+      type="button"
+      onClick={createCustomConfig}
+      disabled={creating}
+      className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border/60 py-2 text-[12px] text-muted-foreground/60 transition-colors hover:border-primary/30 hover:bg-muted/30 hover:text-muted-foreground disabled:opacity-50"
+    >
+      <Plus className="h-3 w-3" />
+      {creating ? "创建中..." : "自定义配置"}
+    </button>
   )
 
   if (hasCustomModels) {
-    return <div className={cn("mb-6", className)}>{createButton}</div>
+    return <div className={cn("", className)}>{createButton}</div>
   }
 
   return (

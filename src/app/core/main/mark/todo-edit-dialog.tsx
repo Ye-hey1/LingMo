@@ -8,18 +8,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { toast } from "@/hooks/use-toast"
 import { useState, useEffect } from "react"
 import { updateMark } from "@/db/marks"
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
-import { CheckSquare } from "lucide-react"
 
-import { Subtask, Priority as PriorityType } from "./todo-form"
+import { TodoForm, TodoFormData, Subtask, Priority as PriorityType } from "./todo-form"
 
 type Priority = PriorityType
 
@@ -30,6 +26,8 @@ interface TodoData {
   priority: Priority
   dueDate?: string
   subtasks?: Subtask[]
+  reminderAt?: number
+  reminderId?: string
 }
 
 interface TodoEditDialogProps {
@@ -38,51 +36,128 @@ interface TodoEditDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
+function parseTodoData(mark: Mark): TodoData {
+  try {
+    return JSON.parse(mark.content || '{}')
+  } catch {
+    return {
+      title: mark.desc || '',
+      description: '',
+      completed: false,
+      priority: 'medium',
+    }
+  }
+}
+
+function parseReminderAt(value?: string) {
+  if (!value) return undefined
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? timestamp : undefined
+}
+
+function formatDateTimeLocal(timestamp?: number) {
+  if (!timestamp) return undefined
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return undefined
+
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join('-') + `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 export function TodoEditDialog({ mark, open, onOpenChange }: TodoEditDialogProps) {
   const t = useTranslations()
   const { fetchMarks } = useMarkStore()
   const { fetchTags, getCurrentTag } = useTagStore()
 
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [priority, setPriority] = useState<Priority>('medium')
-  const [dueDate, setDueDate] = useState('')
+  const [formData, setFormData] = useState<TodoFormData>({
+    title: '',
+    description: '',
+    priority: 'medium',
+  })
+  const reminderTimestamp = formData.reminderEnabled ? parseReminderAt(formData.reminderAt) : undefined
+  const canSubmit = Boolean(formData.title.trim())
+    && (!formData.reminderEnabled || Boolean(reminderTimestamp && reminderTimestamp > Date.now()))
 
   useEffect(() => {
     if (open && mark) {
-      try {
-        const todoData: TodoData = JSON.parse(mark.content || '{}')
-        setTitle(todoData.title || '')
-        setDescription(todoData.description || '')
-        setPriority(todoData.priority || 'medium')
-        setDueDate(todoData.dueDate || '')
-      } catch {
-        setTitle(mark.desc || '')
-        setDescription('')
-        setPriority('medium')
-      }
+      const todoData = parseTodoData(mark)
+      setFormData({
+        title: todoData.title || '',
+        description: todoData.description || '',
+        priority: todoData.priority || 'medium',
+        dueDate: todoData.dueDate || undefined,
+        subtasks: todoData.subtasks || undefined,
+        reminderEnabled: Boolean(todoData.reminderAt && todoData.reminderAt > Date.now()),
+        reminderAt: formatDateTimeLocal(todoData.reminderAt),
+      })
     }
   }, [open, mark])
 
   async function handleSave() {
-    if (!title.trim()) {
+    if (!formData.title.trim()) {
       return
     }
 
-    // 保持原有的 completed、dueDate、subtasks 状态
-    const original: TodoData = JSON.parse(mark.content || '{}')
+    const original = parseTodoData(mark)
+    if (formData.reminderEnabled && (!reminderTimestamp || reminderTimestamp <= Date.now())) {
+      toast({
+        title: t('record.mark.todo.invalidReminderTime'),
+        variant: 'destructive',
+      })
+      return
+    }
+
+    let reminderId: string | undefined
+    if (formData.reminderEnabled && reminderTimestamp) {
+      try {
+        const { reminderScheduler } = await import('@/lib/reminders/scheduler')
+        const reminder = await reminderScheduler.create({
+          title: formData.title.trim(),
+          message: formData.description.trim() || undefined,
+          dueAt: reminderTimestamp,
+          source: {
+            type: 'note',
+            label: t('record.mark.todo.title'),
+          },
+        })
+        reminderId = reminder.id
+      } catch (error) {
+        toast({
+          title: t('record.mark.todo.reminderCreateFailed'),
+          description: error instanceof Error ? error.message : String(error),
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+
+    if (original.reminderId) {
+      try {
+        const { reminderScheduler } = await import('@/lib/reminders/scheduler')
+        await reminderScheduler.cancel(original.reminderId)
+      } catch {
+        // Existing reminders are best-effort cleanup; saving the task should still proceed.
+      }
+    }
+
     const todoData: TodoData = {
-      title: title.trim(),
-      description: description.trim(),
-      priority,
+      title: formData.title.trim(),
+      description: formData.description.trim(),
+      priority: formData.priority,
       completed: original.completed ?? false,
-      dueDate: dueDate || undefined,
-      subtasks: original.subtasks,
+      dueDate: formData.dueDate || undefined,
+      subtasks: formData.subtasks || undefined,
+      reminderAt: reminderTimestamp,
+      reminderId,
     }
 
     await updateMark({
       ...mark,
-      desc: title.trim(),
+      desc: formData.title.trim(),
       content: JSON.stringify(todoData)
     })
 
@@ -95,74 +170,27 @@ export function TodoEditDialog({ mark, open, onOpenChange }: TodoEditDialogProps
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="min-w-full md:min-w-[550px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <CheckSquare className="w-5 h-5" />
-            {t('record.mark.type.todo')}
-          </DialogTitle>
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-[860px] gap-0 p-0">
+        <DialogHeader className="border-b border-border/70 px-5 py-4">
+          <DialogTitle>{t('record.mark.todo.edit')}</DialogTitle>
           <DialogDescription>
-            {t('record.mark.todo.description')}
+            {t('record.mark.todo.editDescription')}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div>
-            <Label htmlFor="edit-todo-title">{t('record.mark.todo.title')} *</Label>
-            <Input
-              id="edit-todo-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder={t('record.mark.todo.titlePlaceholder')}
-              className="mt-1.5"
-            />
-          </div>
-
-          <div>
-            <Label htmlFor="edit-todo-description">{t('record.mark.todo.description')}</Label>
-            <Textarea
-              id="edit-todo-description"
-              rows={3}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder={t('record.mark.todo.descriptionPlaceholder')}
-              className="mt-1.5"
-            />
-          </div>
-
-          <div>
-            <Label htmlFor="edit-todo-priority">{t('record.mark.todo.priority')}</Label>
-            <Tabs value={priority} onValueChange={(value) => setPriority(value as Priority)} className="mt-1.5">
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="low" className="data-[state=active]:bg-green-800 data-[state=active]:text-white">
-                  {t('record.mark.todo.priorityLow')}
-                </TabsTrigger>
-                <TabsTrigger value="medium" className="data-[state=active]:bg-orange-700 data-[state=active]:text-white">
-                  {t('record.mark.todo.priorityMedium')}
-                </TabsTrigger>
-                <TabsTrigger value="high" className="data-[state=active]:bg-red-900 data-[state=active]:text-white">
-                  {t('record.mark.todo.priorityHigh')}
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-
-          <div>
-            <Label htmlFor="edit-todo-due-date">{t('record.mark.todo.dueDate')}</Label>
-            <Input
-              id="edit-todo-due-date"
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              className="mt-1.5"
-            />
-          </div>
+        <div className="max-h-[calc(100vh-13rem)] overflow-y-auto px-5 py-4">
+          <TodoForm
+            mode="edit"
+            data={formData}
+            onChange={setFormData}
+            showReminderOption={true}
+          />
         </div>
-        <DialogFooter>
+        <DialogFooter className="border-t border-border/70 px-5 py-3">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t('common.cancel')}
           </Button>
-          <Button onClick={handleSave} disabled={!title.trim()}>
+          <Button onClick={handleSave} disabled={!canSubmit}>
             {t('common.save')}
           </Button>
         </DialogFooter>

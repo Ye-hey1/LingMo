@@ -13,25 +13,27 @@ export function TooltipButton(
     side = "top",
     buttonClassName,
     buttonId,
+    type = "button",
     ...props 
   }:
   {
     icon: React.ReactNode;
     tooltipText: string;
-    onClick?: () => void;
+    onClick?: React.MouseEventHandler<HTMLButtonElement>;
     disabled?: boolean;
     variant?: "default" | "destructive" | "outline" | "secondary" | "ghost" | "link" | null | undefined;
     size?: "icon" | "sm" | "default" | "lg";
     side?: "top" | "right" | "bottom" | "left";
     buttonClassName?: string;
     buttonId?: string;
+    type?: "button" | "submit" | "reset";
   })
 {
   return (
     <TooltipProvider>
       <Tooltip {...props}>
         <TooltipTrigger asChild>
-          <Button id={buttonId} className={cn("relative", buttonClassName)} disabled={disabled} size={size} variant={variant} onClick={onClick} aria-label={tooltipText}>
+          <Button id={buttonId} type={type} className={cn("relative", buttonClassName)} disabled={disabled} size={size} variant={variant} onClick={onClick} aria-label={tooltipText}>
             {icon}
           </Button>
         </TooltipTrigger>

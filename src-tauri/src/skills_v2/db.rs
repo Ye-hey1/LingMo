@@ -1,7 +1,11 @@
+use crate::skills_v2::content_hash::hash_directory;
 use crate::skills_v2::error::SkillResult;
 use crate::skills_v2::migrations::run_migrations;
+use crate::skills_v2::skill_metadata::{is_skill_directory, sanitize_skill_name};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillRecord {
@@ -162,6 +166,21 @@ impl SkillStore {
             (enabled as i32, chrono::Utc::now().timestamp(), id),
         )?;
         Ok(affected > 0)
+    }
+
+    pub fn update_skill_storage(
+        &self,
+        id: &str,
+        name: &str,
+        central_path: &str,
+        content_hash: Option<&str>,
+        updated_at: i64,
+    ) -> SkillResult<()> {
+        self.conn.execute(
+            "UPDATE skills SET name = ?1, central_path = ?2, content_hash = ?3, updated_at = ?4 WHERE id = ?5",
+            (name, central_path, content_hash, updated_at, id),
+        )?;
+        Ok(())
     }
 
     // --- Discovered Skills ---
@@ -337,9 +356,135 @@ impl SkillStore {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(records)
     }
+
+    fn migrate_installed_skill_roots(&self, app_data_dir: &Path) -> SkillResult<()> {
+        let central_root = app_data_dir.join("skills");
+        fs::create_dir_all(&central_root)?;
+
+        for record in self.get_all_skills()? {
+            if let Err(error) = self.migrate_installed_skill_root(&record, &central_root) {
+                eprintln!(
+                    "[skills-v2] Failed to migrate skill '{}' to root skills directory: {}",
+                    record.name, error
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn migrate_installed_skill_root(
+        &self,
+        record: &SkillRecord,
+        central_root: &Path,
+    ) -> SkillResult<()> {
+        let current_path = PathBuf::from(&record.central_path);
+
+        if path_is_inside(&current_path, central_root) {
+            return Ok(());
+        }
+
+        let fallback_name = current_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&record.name);
+        let preferred_name = sanitize_skill_name(fallback_name);
+
+        if !current_path.exists() {
+            let existing_target = central_root.join(&preferred_name);
+            if existing_target.exists() && is_skill_directory(&existing_target) {
+                self.update_record_to_target(record, &existing_target)?;
+            }
+            return Ok(());
+        }
+
+        if !current_path.is_dir() || !is_skill_directory(&current_path) {
+            return Ok(());
+        }
+
+        let initial_target = central_root.join(&preferred_name);
+        if initial_target.exists()
+            && is_skill_directory(&initial_target)
+            && hash_directory(&initial_target) == hash_directory(&current_path)
+        {
+            self.update_record_to_target(record, &initial_target)?;
+            return Ok(());
+        }
+
+        let final_target = unique_skill_target(central_root, &preferred_name);
+        copy_dir_recursive(&current_path, &final_target)?;
+        self.update_record_to_target(record, &final_target)?;
+        Ok(())
+    }
+
+    fn update_record_to_target(&self, record: &SkillRecord, target: &Path) -> SkillResult<()> {
+        let target_name = target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&record.name);
+        let target_path = target.to_string_lossy().to_string();
+        let content_hash = hash_directory(target);
+
+        self.update_skill_storage(
+            &record.id,
+            target_name,
+            &target_path,
+            content_hash.as_deref(),
+            chrono::Utc::now().timestamp(),
+        )
+    }
 }
 
-pub fn init_skill_store(app_data_dir: &std::path::Path) -> SkillResult<SkillStore> {
+fn path_is_inside(path: &Path, root: &Path) -> bool {
+    if path.starts_with(root) {
+        return true;
+    }
+
+    match (path.canonicalize(), root.canonicalize()) {
+        (Ok(canonical_path), Ok(canonical_root)) => canonical_path.starts_with(canonical_root),
+        _ => false,
+    }
+}
+
+fn unique_skill_target(central_root: &Path, preferred_name: &str) -> PathBuf {
+    let initial_target = central_root.join(preferred_name);
+    if !initial_target.exists() {
+        return initial_target;
+    }
+
+    let mut index = 2u32;
+    loop {
+        let candidate = central_root.join(format!("{}-{}", preferred_name, index));
+        if !candidate.exists() {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> SkillResult<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if src_path.is_dir() {
+            if entry.file_name() == ".git" {
+                continue;
+            }
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn init_skill_store(app_data_dir: &Path) -> SkillResult<SkillStore> {
     let db_path = app_data_dir.join("skills-v2").join("skills.db");
-    SkillStore::new(&db_path)
+    let store = SkillStore::new(&db_path)?;
+    store.migrate_installed_skill_roots(app_data_dir)?;
+    Ok(store)
 }

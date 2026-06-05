@@ -62,6 +62,12 @@ export const MEDIUM_RISK_TOOLS = new Set([
   'safe_write_file',
 ])
 
+export const LOW_RISK_WRITE_TOOLS = new Set([
+  'create_reminder',
+  'cancel_reminder',
+  'complete_reminder',
+])
+
 export const READ_ONLY_TOOLS = new Set([
   'select_skill',
   'load_skill_content',
@@ -93,12 +99,14 @@ export const READ_ONLY_TOOLS = new Set([
   'discover_note_clusters',
   'suggest_links_for_note',
   'list_agent_run_summaries',
+  'list_reminders',
 ])
 
 const writePatterns = [
   /创建|新建|新增|写入|改写|修改|编辑|更新|重写|插入|替换|保存/,
   /优化|精简|简化|润色|调整|补充|增加|添加|补全|扩写|完善|丰富/,
   /重命名|改名|命名为|移动|复制|草拟|起草/,
+  /提醒|通知|定时|闹钟|计时器|倒计时/,
   /写(一篇|个|份)?(关于|有关|主题为)?/,
   /生成(文章|内容|文件|笔记|文档|图表|流程图|思维导图|白板|幻灯片|ppt|pdf|docx|xlsx)/,
   /改成|改为|整理成|转换成/,
@@ -221,6 +229,10 @@ export function getToolRiskLevel(toolName: string, category: string): ToolRiskLe
   }
 
   if (READ_ONLY_TOOLS.has(toolName) || READ_ONLY_TOOLS.has(baseName)) {
+    return 'low'
+  }
+
+  if (LOW_RISK_WRITE_TOOLS.has(toolName) || LOW_RISK_WRITE_TOOLS.has(baseName)) {
     return 'low'
   }
 

@@ -1,7 +1,7 @@
 /**
  * BaseAgent - 统一的 Agent 基类
  *
- * 提取 ReActAgent 和 FunctionCallAgent 的公共逻辑：
+ * 提取 ReActAgent 的公共运行能力：
  * - 事件发射
  * - 步骤管理
  * - 工具执行（含重试、缓存、策略检查）
@@ -16,6 +16,7 @@ import { createAgentEventBus, type AgentEventBus } from './event-bus'
 import { executeWithTimeout, compressToolResult } from './tool-utils'
 import { ToolResultCache } from './tool-cache'
 import { IntentPolicy, deriveIntentPolicy } from './tool-policy'
+import { isInternalAgentInstruction } from './parse-action-input'
 
 // ---------------------------------------------------------------------------
 // Transient error detection
@@ -26,6 +27,21 @@ const TRANSIENT_ERROR_RE =
 
 function isTransientError(msg: string): boolean {
   return TRANSIENT_ERROR_RE.test(msg)
+}
+
+function summarizeEventText(value?: string, maxLength = 220): string | undefined {
+  const cleaned = (value || '').replace(/\s+/g, ' ').trim()
+  if (!cleaned) {
+    return undefined
+  }
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned
+}
+
+function observationLooksSuccessful(value?: string): boolean | undefined {
+  if (!value) {
+    return undefined
+  }
+  return !/失败|错误|出错|阻止|取消|failed|error|blocked|cancelled/i.test(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -108,9 +124,35 @@ export abstract class BaseAgent {
     })
   }
 
-  protected emitObservation(observation: string) {
-    this.config.onObservation?.(observation)
-    this.emitEvent('observation.created', { observation })
+  protected emitObservation(
+    observation: string,
+    options: { internal?: boolean; visibility?: 'visible' | 'hidden'; toolName?: string } = {},
+  ) {
+    const internal = options.internal || isInternalAgentInstruction(observation)
+    const visibility = options.visibility || (internal ? 'hidden' : 'visible')
+    if (!internal && visibility !== 'hidden') {
+      this.config.onObservation?.(observation)
+    }
+    this.emitEvent('observation.created', { observation, internal, visibility, toolName: options.toolName })
+  }
+
+  protected completeStep(step: ReActStep): ReActStep {
+    const stepIndex = this.steps.length + 1
+    const internal = isInternalAgentInstruction(step.observation)
+    this.steps.push(step)
+    this.emitEvent('step.completed', {
+      title: step.action?.tool ? `Completed ${step.action.tool}` : 'Step completed',
+      stepIndex,
+      toolName: step.action?.tool,
+      action: step.action,
+      thought: summarizeEventText(step.thought),
+      observation: summarizeEventText(step.observation),
+      duration: step.duration,
+      success: observationLooksSuccessful(step.observation),
+      internal,
+      visibility: internal ? 'hidden' : 'visible',
+    })
+    return step
   }
 
   // =========================================================================

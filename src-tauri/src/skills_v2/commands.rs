@@ -24,9 +24,46 @@ pub fn skill_v2_get_by_id(
 }
 
 #[tauri::command]
-pub fn skill_v2_delete(id: String, state: State<'_, SkillState>) -> Result<bool, String> {
-    let store = state.0.lock().map_err(|e| e.to_string())?;
-    store.delete_skill(&id).map_err(|e| e.to_string())
+pub fn skill_v2_delete(
+    id: String,
+    app: AppHandle,
+    state: State<'_, SkillState>,
+) -> Result<bool, String> {
+    let (deleted, record) = {
+        let store = state.0.lock().map_err(|e| e.to_string())?;
+        let record = store.get_skill_by_id(&id).map_err(|e| e.to_string())?;
+        let deleted = store.delete_skill(&id).map_err(|e| e.to_string())?;
+        (deleted, record)
+    };
+
+    if deleted {
+        if let Some(record) = record {
+            let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+            let central_root = app_data_dir.join("skills");
+            let central_path = std::path::PathBuf::from(record.central_path);
+
+            if central_path.exists() {
+                let canonical_root = central_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| central_root.clone());
+                let canonical_target = central_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| central_path.clone());
+
+                if canonical_target.starts_with(&canonical_root)
+                    && canonical_target != canonical_root
+                {
+                    if canonical_target.is_dir() {
+                        std::fs::remove_dir_all(&canonical_target).map_err(|e| e.to_string())?;
+                    } else {
+                        std::fs::remove_file(&canonical_target).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(deleted)
 }
 
 #[tauri::command]
@@ -58,6 +95,7 @@ pub fn skill_v2_get_discovered(
 #[tauri::command]
 pub fn skill_v2_import_discovered(
     discovered_id: String,
+    app: AppHandle,
     state: State<'_, SkillState>,
 ) -> Result<SkillRecord, String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
@@ -72,30 +110,14 @@ pub fn skill_v2_import_discovered(
         return Err("Source path no longer exists".into());
     }
 
-    let name = item.name_guess.clone().unwrap_or_else(|| "unnamed".into());
-    let now = chrono::Utc::now().timestamp();
-
-    let record = SkillRecord {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: name.clone(),
-        description: None,
-        source_type: "local".into(),
-        source_ref: Some(item.found_path.clone()),
-        source_ref_resolved: None,
-        source_subpath: None,
-        source_branch: None,
-        source_revision: None,
-        remote_revision: None,
-        central_path: item.found_path.clone(),
-        content_hash: crate::skills_v2::content_hash::hash_directory(source_path),
-        enabled: true,
-        status: "ok".into(),
-        update_status: "unknown".into(),
-        created_at: now,
-        updated_at: now,
-    };
-
-    store.insert_skill(&record).map_err(|e| e.to_string())?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let record = installer::install_from_local_dir(
+        source_path,
+        &app_data_dir,
+        &store,
+        item.name_guess.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
     store
         .mark_discovered_imported(&discovered_id)
         .map_err(|e| e.to_string())?;

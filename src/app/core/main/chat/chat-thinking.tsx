@@ -2,10 +2,11 @@
 
 import { Chat } from "@/db/chats"
 import { useState, useEffect, useMemo, useRef } from "react"
-import { Brain, ChevronDown, Link2, Loader2 } from "lucide-react"
+import { Brain, ChevronDown, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
 import type { MessageCitationDetail } from "@/lib/ai/citations"
+import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
 
 interface ChatThinkingProps {
   chat: Chat
@@ -40,13 +41,32 @@ function getCompactSourceLabel(label: string, target: string) {
   return normalized.split('/').filter(Boolean).at(-1) || value
 }
 
+function formatElapsedTime(seconds: number) {
+  if (seconds < 60) {
+    return `${seconds}秒`
+  }
+
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  if (minutes < 60) {
+    return `${minutes}分${String(remainingSeconds).padStart(2, '0')}秒`
+  }
+
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return `${hours}时${String(remainingMinutes).padStart(2, '0')}分`
+}
+
 export default function ChatThinking({
   chat,
   isStreaming = false,
   citationDetails = [],
   ragSources = [],
 }: ChatThinkingProps) {
-  const thinkingContent = chat.thinking || ''
+  const thinkingContent = useMemo(
+    () => cleanAssistantGeneratedContent(chat.thinking || ''),
+    [chat.thinking],
+  )
   const hasThinkingContent = !!thinkingContent.trim()
   const sourceLinks = useMemo(() => {
     const seen = new Set<string>()
@@ -87,9 +107,25 @@ export default function ChatThinking({
   // 一旦 chat.content 出现，说明模型已完成思考进入输出阶段
   const isThinking = isStreaming && !chat.content?.trim()
   const showCitationLinks = !isThinking && hasCitations
+  const canExpand = hasThinkingContent || showCitationLinks
 
   const [isExpanded, setIsExpanded] = useState(false)
+  const [elapsedSeconds, setElapsedSeconds] = useState(1)
   const contentRef = useRef<HTMLDivElement>(null)
+  const thinkingStartedAtRef = useRef(chat.createdAt || Date.now())
+
+  useEffect(() => {
+    if (!isThinking) return
+
+    const updateElapsed = () => {
+      const seconds = Math.floor((Date.now() - thinkingStartedAtRef.current) / 1000)
+      setElapsedSeconds(Math.max(1, seconds))
+    }
+
+    updateElapsed()
+    const interval = window.setInterval(updateElapsed, 1000)
+    return () => window.clearInterval(interval)
+  }, [isThinking])
 
   useEffect(() => {
     if (isThinking && isExpanded && contentRef.current) {
@@ -101,13 +137,16 @@ export default function ChatThinking({
     }
   }, [thinkingContent, isThinking, isExpanded])
 
-  if (!hasThinkingContent && !hasCitations) return null
+  if (!isThinking && !hasThinkingContent && !hasCitations) return null
 
   const statusText = isThinking
-    ? '思考中...'
+    ? hasThinkingContent
+      ? '思考中...'
+      : '正在思考...'
     : hasThinkingContent
       ? `已思考`
       : '引用来源'
+  const showThinkingElapsed = isThinking && hasThinkingContent
 
   return (
     <div className="mb-0.5 w-full select-none">
@@ -117,10 +156,14 @@ export default function ChatThinking({
         className={cn(
           "inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5",
           "text-left transition-all duration-150",
-          "text-muted-foreground/60 hover:bg-muted/20 hover:text-muted-foreground/80 active:bg-muted/30",
+          "text-muted-foreground/60",
+          canExpand && "hover:bg-muted/20 hover:text-muted-foreground/80 active:bg-muted/30",
+          !canExpand && "cursor-default",
           isThinking && "bg-blue-50/40 dark:bg-blue-950/20"
         )}
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={() => {
+          if (canExpand) setIsExpanded(!isExpanded)
+        }}
       >
         {isThinking ? (
           <Loader2 className="size-3 text-blue-500 animate-spin" />
@@ -132,19 +175,27 @@ export default function ChatThinking({
           {statusText}
         </span>
 
-        {hasCitations && (
+        {showThinkingElapsed && (
+          <span className="shrink-0 text-[10px] text-muted-foreground/45">
+            · {formatElapsedTime(elapsedSeconds)}
+          </span>
+        )}
+
+        {showCitationLinks && (
           <span className="flex shrink-0 items-center gap-1 rounded-full bg-muted/25 px-1.5 py-0 text-[10px] text-muted-foreground/55">
             <span className="size-1.5 rounded-full bg-primary/30" />
             {sourceLinks.length}
           </span>
         )}
 
-        <motion.div
-          animate={{ rotate: isExpanded ? 180 : 0 }}
-          transition={{ duration: 0.15 }}
-        >
-          <ChevronDown className="size-2.5 text-muted-foreground/35" />
-        </motion.div>
+        {canExpand && (
+          <motion.div
+            animate={{ rotate: isExpanded ? 180 : 0 }}
+            transition={{ duration: 0.15 }}
+          >
+            <ChevronDown className="size-2.5 text-muted-foreground/35" />
+          </motion.div>
+        )}
       </button>
 
       <AnimatePresence initial={false}>

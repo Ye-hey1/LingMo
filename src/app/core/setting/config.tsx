@@ -19,6 +19,7 @@ import {
   PenTool,
   Globe2,
   Brain,
+  AlarmClock,
 } from "lucide-react"
 
 const baseConfig = [
@@ -45,6 +46,11 @@ const baseConfig = [
   {
     icon: <PenTool className="size-4 md:size-6" />,
     anchor: 'record',
+    group: 'workspace',
+  },
+  {
+    icon: <AlarmClock className="size-4 md:size-6" />,
+    anchor: 'reminders',
     group: 'workspace',
   },
   {
@@ -175,7 +181,7 @@ export interface Model {
 const builtinProviderTemplates: AiConfig[] = [
   {
     key: 'chatgpt',
-    title: 'ChatGPT',
+    title: 'OpenAI',
     baseURL: 'https://api.openai.com/v1',
     icon: 'https://s2.loli.net/2025/06/25/cVMf586WTBYAju4.png',
     apiKeyUrl: 'https://platform.openai.com/api-keys',
@@ -202,8 +208,9 @@ const builtinProviderTemplates: AiConfig[] = [
   },
   {
     key: 'zhipu',
-    title: '智谱 BigModel',
+    title: '智谱 AI',
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+    icon: 'https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/zhipu-color.svg',
     apiKeyUrl: 'https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys',
     models: [
       {
@@ -217,6 +224,7 @@ const builtinProviderTemplates: AiConfig[] = [
     key: 'groq',
     title: 'Groq',
     baseURL: 'https://api.groq.com/openai/v1',
+    icon: '/provider-icons/groq.svg',
     apiKeyUrl: 'https://console.groq.com/keys',
     models: [
       {

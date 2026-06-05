@@ -60,6 +60,13 @@ interface ChatSendProps {
   hideIdleButton?: boolean;
 }
 
+export interface ChatSendOptions {
+  maxTokens?: number
+  temperature?: number
+  forcedSkillIds?: string[]
+  displayText?: string
+}
+
 const MIN_AUTO_EXTRACT_CHAR_COUNT = 500
 const AGENT_CONTEXT_TOTAL_LIMIT = 70000
 const AI_DOC_COMMAND_PREFIX = '你正在执行一个应用内命令：'
@@ -256,7 +263,7 @@ function citationDetailToResearchLocalSource(detail: ChatCitationSource, index: 
 }
 
 export const ChatSend = forwardRef<{
-  sendChat: (instructionOverride?: string, options?: { maxTokens?: number; temperature?: number }) => void
+  sendChat: (instructionOverride?: string, options?: ChatSendOptions) => void
   stopChat: () => Promise<void>
 }, ChatSendProps>(({
   inputValue,
@@ -435,6 +442,11 @@ export const ChatSend = forwardRef<{
       return trimmed
     }
 
+    const visibleContent = cleanAssistantGeneratedContent(trimmed)
+    if (visibleContent && visibleContent !== trimmed) {
+      return visibleContent
+    }
+
     const markers = ['\nThought:', '\nAction:', '\nAction Input:']
     let cutoff = trimmed.length
 
@@ -538,7 +550,7 @@ export const ChatSend = forwardRef<{
     })
   }
 
-  async function handleChatMode(imageUrls: string[], instructionOverride?: string) {
+  async function handleChatMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions) {
     const effectiveInstruction = instructionOverride ?? inputValue
     const placeholderMessage = await insert({
       tagId: currentTagId,
@@ -573,24 +585,8 @@ export const ChatSend = forwardRef<{
       })
 
       const { context, ragSources, ragSourceDetails } = contextResult
-      const diagnosticDetail: ChatCitationSource = {
-        filepath: 'rag-diagnostics',
-        filename: 'RAG 检索诊断',
-        content: [
-          `策略：${contextResult.diagnostics.strategy}`,
-          contextResult.diagnostics.ragSkippedReason ? `跳过原因：${contextResult.diagnostics.ragSkippedReason}` : '',
-          contextResult.diagnostics.ragQuery ? `检索 query：${contextResult.diagnostics.ragQuery}` : '',
-          contextResult.diagnostics.ragKeywords.length ? `关键词：${contextResult.diagnostics.ragKeywords.join('、')}` : '',
-          `当前文档注入：${contextResult.diagnostics.currentNoteInjected ? '是' : '否'}`,
-          `关联文件：${contextResult.diagnostics.linkedFileInjectedCount}/${contextResult.diagnostics.linkedFileCount}`,
-          `RAG 命中：${contextResult.diagnostics.ragSourceCount}`,
-          `注入字符：当前 ${contextResult.diagnostics.injectedChars.current} / 关联 ${contextResult.diagnostics.injectedChars.linked} / 引用 ${contextResult.diagnostics.injectedChars.quote} / RAG ${contextResult.diagnostics.injectedChars.rag} / 总计 ${contextResult.diagnostics.injectedChars.total}`,
-          ...contextResult.diagnostics.warnings.map(warning => `警告：${warning}`),
-        ].filter(Boolean).join('\n'),
-        sourceType: 'rag' as const,
-      }
-      const enrichedRagSourceDetails = [diagnosticDetail, ...ragSourceDetails]
-      const enrichedRagSources = ['RAG 检索诊断', ...ragSources]
+      const visibleRagSourceDetails = ragSourceDetails
+      const visibleRagSources = ragSources
 
       const { chats: currentChats } = useChatStore.getState()
       const latestUserChatId = currentChats
@@ -619,8 +615,8 @@ export const ChatSend = forwardRef<{
       if (ragSources.length > 0 || ragSourceDetails.length > 0) {
         await saveChat({
           ...placeholderMessage,
-          ragSources: JSON.stringify(enrichedRagSources),
-          ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
+          ragSources: JSON.stringify(visibleRagSources),
+          ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
         }, true)
       }
 
@@ -634,8 +630,8 @@ export const ChatSend = forwardRef<{
             ...placeholderMessage,
             content,
             thinking: thinkingContent || undefined,
-            ragSources: JSON.stringify(enrichedRagSources),
-            ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
+            ragSources: JSON.stringify(visibleRagSources),
+            ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
           }, false)
         },
         abortController.signal,
@@ -649,11 +645,12 @@ export const ChatSend = forwardRef<{
           await saveChat({
             ...placeholderMessage,
             thinking,
-            ragSources: JSON.stringify(enrichedRagSources),
-            ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
+            ragSources: JSON.stringify(visibleRagSources),
+            ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
           }, false)
         },
-        messages
+        messages,
+        options?.maxTokens,
       )
       if (!finalContent && result) {
         finalContent = result
@@ -662,8 +659,8 @@ export const ChatSend = forwardRef<{
       await saveChat({
         ...placeholderMessage,
         content: abortController.signal.aborted ? (finalContent || t('record.chat.input.stopped')) : finalContent,
-        ragSources: JSON.stringify(enrichedRagSources),
-        ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
+        ragSources: JSON.stringify(visibleRagSources),
+        ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
       }, true)
     } catch (error) {
       await saveChat({
@@ -1155,7 +1152,7 @@ export const ChatSend = forwardRef<{
   }
 
   // Agent 模式处理
-  async function handleAgentMode(imageUrls: string[], instructionOverride?: string) {
+  async function handleAgentMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions) {
     const effectiveInstruction = instructionOverride ?? inputValue
     // 先创建一个占位的 AI 消息
     const placeholderMessage = await insert({
@@ -1176,6 +1173,7 @@ export const ChatSend = forwardRef<{
     const agentHandler = new AgentHandler({
       activeChatId: placeholderMessage.id,
       webSearchEnabled,
+      forcedSkillIds: options?.forcedSkillIds,
       requestConfirmation,
       currentQuote: quoteData
         ? {
@@ -1188,11 +1186,12 @@ export const ChatSend = forwardRef<{
           }
         : undefined,
       onFinalAnswerRender: (markdownContent) => {
+        const visibleMarkdownContent = cleanAssistantGeneratedContent(markdownContent)
         // 检测到 Final Answer 时触发渲染
         setAgentState({
           activeChatId: placeholderMessage.id,
           isFinalAnswerMode: true,
-          finalAnswerContent: markdownContent
+          finalAnswerContent: visibleMarkdownContent
         })
       },
       formatAutoFinalAnswer: (key, values) => t(key as any, values),
@@ -1263,7 +1262,7 @@ export const ChatSend = forwardRef<{
             finalContent,
             placeholderMessageId: placeholderMessage.id,
             conversationId: placeholderMessage.conversationId,
-            userInput: inputValue,
+            userInput: options?.displayText || effectiveInstruction,
             hasSuccessfulToolCall,
           })
         }
@@ -1332,24 +1331,8 @@ export const ChatSend = forwardRef<{
       })
 
       const { context, ragSources, ragSourceDetails } = contextResult
-      const diagnosticDetail: ChatCitationSource = {
-        filepath: 'rag-diagnostics',
-        filename: 'RAG 检索诊断',
-        content: [
-          `策略：${contextResult.diagnostics.strategy}`,
-          contextResult.diagnostics.ragSkippedReason ? `跳过原因：${contextResult.diagnostics.ragSkippedReason}` : '',
-          contextResult.diagnostics.ragQuery ? `检索 query：${contextResult.diagnostics.ragQuery}` : '',
-          contextResult.diagnostics.ragKeywords.length ? `关键词：${contextResult.diagnostics.ragKeywords.join('、')}` : '',
-          `当前文档注入：${contextResult.diagnostics.currentNoteInjected ? '是' : '否'}`,
-          `关联文件：${contextResult.diagnostics.linkedFileInjectedCount}/${contextResult.diagnostics.linkedFileCount}`,
-          `RAG 命中：${contextResult.diagnostics.ragSourceCount}`,
-          `注入字符：当前 ${contextResult.diagnostics.injectedChars.current} / 关联 ${contextResult.diagnostics.injectedChars.linked} / 引用 ${contextResult.diagnostics.injectedChars.quote} / RAG ${contextResult.diagnostics.injectedChars.rag} / 总计 ${contextResult.diagnostics.injectedChars.total}`,
-          ...contextResult.diagnostics.warnings.map(warning => `警告：${warning}`),
-        ].filter(Boolean).join('\n'),
-        sourceType: 'rag' as const,
-      }
-      const enrichedRagSourceDetails = [diagnosticDetail, ...ragSourceDetails]
-      const enrichedRagSources = ['RAG 检索诊断', ...ragSources]
+      const visibleRagSourceDetails = ragSourceDetails
+      const visibleRagSources = ragSources
 
       // 如果启用了 Web 搜索，添加提示
       let agentContext = context
@@ -1358,8 +1341,8 @@ export const ChatSend = forwardRef<{
       }
 
       // 设置到 agentState，用于实时显示
-      if (enrichedRagSources.length > 0) {
-        const filteredSourceDetails = enrichedRagSourceDetails
+      if (visibleRagSources.length > 0) {
+        const filteredSourceDetails = visibleRagSourceDetails
           .filter(d => d.sourceType !== 'web')
           .map(d => ({
             filepath: d.filepath,
@@ -1372,17 +1355,17 @@ export const ChatSend = forwardRef<{
             to: d.to,
           }))
         setAgentState({
-          ragSources: enrichedRagSources,
+          ragSources: visibleRagSources,
           ragSourceDetails: filteredSourceDetails,
         })
       }
 
       // 保存本轮上下文来源到 AI 消息中
-      if (enrichedRagSources.length > 0 || enrichedRagSourceDetails.length > 0) {
+      if (visibleRagSources.length > 0 || visibleRagSourceDetails.length > 0) {
         await saveChat({
           ...placeholderMessage,
-          ragSources: JSON.stringify(enrichedRagSources),
-          ragSourceDetails: JSON.stringify(enrichedRagSourceDetails),
+          ragSources: JSON.stringify(visibleRagSources),
+          ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
         }, true)
       }
 
@@ -1411,11 +1394,11 @@ export const ChatSend = forwardRef<{
   }
 
   // 对话（Agent 模式）
-  async function handleSubmit(instructionOverride?: unknown) {
+  async function handleSubmit(instructionOverride?: unknown, options?: ChatSendOptions) {
     const effectiveInstruction =
       typeof instructionOverride === 'string' ? instructionOverride : undefined
     const requestText = effectiveInstruction ?? inputValue
-    const displayText = inputValue.trim()
+    const displayText = options?.displayText?.trim() || inputValue.trim()
 
     if (!requestText.trim() || !displayText) return
 
@@ -1439,12 +1422,12 @@ export const ChatSend = forwardRef<{
     setLoading(true)
     let keepLoading = false
     if (chatMode === 'chat') {
-      await handleChatMode(imageUrls, effectiveInstruction)
+      await handleChatMode(imageUrls, effectiveInstruction, options)
     } else if (chatMode === 'research') {
       await handleClarifiedResearchMode(effectiveInstruction)
       keepLoading = abortControllerRef.current !== null
     } else {
-      await handleAgentMode(imageUrls, effectiveInstruction)
+      await handleAgentMode(imageUrls, effectiveInstruction, options)
     }
     if (!keepLoading) {
       setLoading(false)
@@ -1471,8 +1454,8 @@ export const ChatSend = forwardRef<{
   }
 
   useImperativeHandle(ref, () => ({
-    sendChat: (instructionOverride?: string) => {
-      void handleSubmit(instructionOverride)
+    sendChat: (instructionOverride?: string, options?: ChatSendOptions) => {
+      void handleSubmit(instructionOverride, options)
     },
     stopChat: handleStop,
   }))

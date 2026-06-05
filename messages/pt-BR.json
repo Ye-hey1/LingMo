@@ -455,6 +455,9 @@
           "image": {
             "desc": "上传图片到笔记"
           },
+          "recognition": {
+            "desc": "Reconhecer imagens ou texto da área de transferência"
+          },
           "link": {
             "desc": "记录网页链接"
           },
@@ -465,6 +468,71 @@
             "desc": "创建待办事项"
           }
         }
+      }
+    },
+    "reminders": {
+      "title": "Lembretes",
+      "desc": "Configure lembretes na área de trabalho e a criação de lembretes pela IA.",
+      "desktop": {
+        "title": "Lembretes da área de trabalho",
+        "desc": "Use para lembretes futuros, contagens regressivas e tarefas criadas pela IA."
+      },
+      "enabled": {
+        "title": "Ativar lembretes",
+        "desc": "Quando ativado, o LingMo envia uma notificação do sistema no horário do lembrete."
+      },
+      "agent": {
+        "title": "Permitir lembretes criados pela IA",
+        "desc": "Quando ativado, você pode pedir à IA para lembrar você em 30 minutos."
+      },
+      "advance": {
+        "title": "Aviso antecipado padrão",
+        "desc": "Usado quando o lembrete não especifica antecedência.",
+        "value": "{minutes} min"
+      },
+      "context": {
+        "title": "Mostrar contexto",
+        "desc": "Inclui origem ou notas extras no corpo da notificação."
+      },
+      "prefix": {
+        "title": "Prefixo do título",
+        "desc": "Personalize o início dos títulos das notificações.",
+        "placeholder": "Lembrete LingMo"
+      },
+      "test": {
+        "button": "Enviar teste",
+        "desc": "Solicita permissão de notificação do sistema e envia um teste.",
+        "sending": "Enviando...",
+        "title": "Lembrete de teste",
+        "message": "Se você viu esta notificação, os lembretes estão prontos.",
+        "source": "Configurações de lembrete"
+      },
+      "list": {
+        "title": "Lembretes atuais",
+        "desc": "Veja lembretes criados manualmente ou pela IA.",
+        "loading": "Carregando lembretes...",
+        "empty": "Nenhum lembrete agendado",
+        "emptyDesc": "Tente pedir à IA: lembre-me de beber água em 30 minutos.",
+        "complete": "Marcar como concluído",
+        "cancel": "Cancelar lembrete"
+      },
+      "repeat": {
+        "none": "Uma vez",
+        "daily": "Diário",
+        "weekly": "Semanal",
+        "monthly": "Mensal"
+      },
+      "toast": {
+        "loadFailed": "Falha ao carregar lembretes",
+        "testSent": "Lembrete de teste enviado",
+        "testSentDesc": "Se nenhuma notificação aparecer, verifique o modo Não Perturbe ou as configurações da central de notificações.",
+        "permissionDenied": "Permissão de notificação não concedida",
+        "permissionDeniedDesc": "Permita que o LingMo envie notificações nas configurações do sistema e tente novamente.",
+        "unsupportedRuntime": "Notificações do sistema indisponíveis aqui",
+        "unsupportedRuntimeDesc": "Lembretes de teste só podem ser enviados pelo app desktop do LingMo. A prévia no navegador não suporta o plugin de notificação do sistema.",
+        "testFailed": "Falha ao enviar teste",
+        "cancelled": "Lembrete cancelado",
+        "completed": "Lembrete concluído"
       }
     },
     "uploadStore": {
@@ -1463,13 +1531,20 @@
       },
       "todo": {
         "title": "Registro Todo",
-        "description": "Crie itens todo para gerenciar suas tarefas",
-        "titlePlaceholder": "Digite o título do todo...",
-        "descriptionPlaceholder": "Digite descrição detalhada (opcional)",
+        "createTitle": "Novo Todo",
+        "createDescription": "Planeje tarefa, lembrete e subtarefas",
+        "description": "Acompanhe o progresso da tarefa",
+        "titleLabel": "Tarefa",
+        "titlePlaceholder": "Digite o nome da tarefa",
+        "notes": "Notas",
+        "descriptionPlaceholder": "Adicione contexto, requisitos ou links",
         "priority": "Prioridade",
         "priorityLow": "Baixa",
+        "priorityLowHint": "Acompanhamento leve",
         "priorityMedium": "Média",
+        "priorityMediumHint": "Progresso normal",
         "priorityHigh": "Alta",
+        "priorityHighHint": "Tratar primeiro",
         "dateRange": "Intervalo de Datas",
         "dateRangePlaceholder": "Selecione o intervalo de datas",
         "dueDate": "Data de Vencimento",
@@ -1477,14 +1552,40 @@
         "save": "Criar Todo",
         "saveEdit": "Salvar",
         "edit": "Editar Todo",
-        "editDescription": "Modificar os detalhes do item todo",
+        "editDescription": "Ajuste detalhes, prazo e subtarefas",
         "cancel": "Cancelar",
-        "selectTag": "Selecionar Tag",
+        "selectTag": "Tag",
         "completed": "Concluído",
         "uncompleted": "Não Concluído",
         "subtasks": "Subtarefas",
-        "subtaskPlaceholder": "Digite o título, Enter para adicionar",
+        "subtaskPlaceholder": "Adicionar subtarefa",
         "addSubtask": "Adicionar Subtarefa",
+        "batchAdd": "Adicionar em lote",
+        "batchPlaceholder": "Uma subtarefa por linha",
+        "addBatch": "Adicionar",
+        "summaryTitle": "Resumo da Tarefa",
+        "summaryFallback": "Registro atual",
+        "emptyTitle": "Sem tarefa",
+        "emptyNotes": "Sem notas",
+        "subtaskProgress": "Progresso das subtarefas",
+        "none": "Nenhuma",
+        "taskSection": "Informações",
+        "prioritySection": "Nível da tarefa",
+        "today": "Hoje",
+        "tomorrow": "Amanhã",
+        "nextWeek": "Próxima semana",
+        "clearDate": "Limpar data",
+        "reminder": "Lembrete Desktop",
+        "reminderHint": "Mostra uma notificação desktop no horário escolhido",
+        "reminderTime": "Horário do Lembrete",
+        "reminderOff": "Desligado",
+        "in30Minutes": "Em 30 min",
+        "in1Hour": "Em 1 hora",
+        "tomorrowMorning": "Amanhã 9h",
+        "dueMorning": "Dia do prazo 9h",
+        "lingmoHint": "Depois de salvar, LingMo pode referenciar isto em registros, revisões e lembretes.",
+        "invalidReminderTime": "O lembrete deve ser depois de agora",
+        "reminderCreateFailed": "Falha ao criar lembrete",
         "overdue": "Atrasado",
         "dueToday": "Vence Hoje",
         "stats": "Estatísticas",
@@ -1492,7 +1593,214 @@
       },
       "clipboard": {
         "detectedImage": "Imagem da área de transferência detectada",
-        "detectedText": "Texto da área de transferência detectado"
+        "detectedText": "Texto da área de transferência detectado",
+        "recognitionHint": "O conteúdo da imagem será reconhecido automaticamente",
+        "processing": "Processando...",
+        "copied": "Copiado para a área de transferência",
+        "downloaded": "Imagem baixada",
+        "copy": "Copiar",
+        "download": "Baixar",
+        "pressEnterToConfirm": "Pressione Enter para confirmar, Esc para cancelar",
+        "recognitionComplete": "Reconhecimento concluído",
+        "description": "Descrição",
+        "recognizedContent": "Conteúdo reconhecido",
+        "noDescription": "Sem descrição",
+        "noContent": "Sem conteúdo",
+        "enterDescription": "Inserir descrição...",
+        "enterContent": "Inserir conteúdo...",
+        "retry": "Reconhecer novamente",
+        "cancelEdit": "Cancelar edição",
+        "dropzone": {
+          "title": "Solte aqui para enviar",
+          "subtitle": "Suporta arquivos de imagem e conteúdo de texto",
+          "upload": "Arrastar e soltar para enviar",
+          "formats": "Suporta formatos PNG, JPG, GIF",
+          "image": "Imagem",
+          "text": "Texto"
+        }
+      },
+      "enhancedClipboard": {
+        "title": "Central de Conhecimento",
+        "tabs": {
+          "clipboard": "Bancada",
+          "history": "Histórico",
+          "settings": "Configurações"
+        },
+        "or": "ou",
+        "status": {
+          "idle": "Comece pela área de transferência, arrastar e soltar ou entrada manual",
+          "ready": "Material preparado para organizar ou importar",
+          "reading": "Lendo a área de transferência...",
+          "recognizing": "Reconhecendo conteúdo da imagem...",
+          "recognized": "Imagem reconhecida e convertida em rascunho editável",
+          "organizing": "Organizando como nota de conhecimento...",
+          "organized": "Organizado como nota de conhecimento",
+          "tagging": "Gerando tags de conhecimento...",
+          "tagged": "Tags de conhecimento geradas",
+          "titling": "Gerando título...",
+          "titled": "Título gerado",
+          "translating": "Traduzindo rascunho...",
+          "translated": "Traduzido para {language}",
+          "importing": "Importando registro...",
+          "imported": "Importado para registros",
+          "copied": "Copiado para a área de transferência",
+          "cleared": "Bancada limpa"
+        },
+        "source": {
+          "title": "Fonte",
+          "clipboard": "Ler Área de Transferência",
+          "clipboardText": "Texto da Área de Transferência",
+          "clipboardImage": "Imagem da Área de Transferência",
+          "dropText": "Texto Solto",
+          "dropImage": "Imagem Solta",
+          "manual": "Rascunho Manual",
+          "image": "Imagem",
+          "empty": "Nenhum material ainda",
+          "clear": "Limpar"
+        },
+        "actions": {
+          "process": "Processar",
+          "recognize": "Reconhecer",
+          "organize": "Organizar",
+          "tag": "Tags",
+          "title": "Título",
+          "translate": "Traduzir",
+          "import": "Importar Registro",
+          "copyText": "Copiar Texto",
+          "copyImage": "Copiar Imagem",
+          "processing": "Processando o material atual..."
+        },
+        "draft": {
+          "untitled": "Material sem título",
+          "content": "Rascunho",
+          "source": "Fonte: {source}",
+          "titlePlaceholder": "Nomeie este rascunho de conhecimento...",
+          "contentPlaceholder": "Cole, reconheça, organize ou traduza material aqui e importe quando estiver pronto.",
+          "characters": "{count} caracteres",
+          "tagsPrefix": "Tags: "
+        },
+        "messages": {
+          "noClipboard": "Nenhum texto ou imagem legível na área de transferência",
+          "readFail": "Falha ao ler material",
+          "recognizeFirst": "Adicione uma imagem primeiro",
+          "recognizeDisabled": "Reconhecimento de imagem desativado. Ative nas configurações",
+          "processFail": "Processamento falhou. Verifique as configurações de IA ou reconhecimento",
+          "emptyAiResult": "A IA não retornou um resultado utilizável",
+          "organizeEmpty": "Nenhum texto para organizar",
+          "tagEmpty": "Nenhum rascunho para marcar",
+          "tagFail": "Falha ao gerar tags",
+          "titleEmpty": "Nenhum rascunho para gerar título",
+          "titleFail": "Falha ao gerar título",
+          "translateEmpty": "Nenhum rascunho para traduzir",
+          "copySuccess": "Copiado para a área de transferência",
+          "copyFail": "Falha ao copiar",
+          "emptyDraft": "Nenhum rascunho para importar",
+          "importSuccess": "Importado para a tag de registro atual",
+          "importFail": "Falha ao importar registro",
+          "historyRestored": "Restaurado do histórico para a bancada",
+          "undoSuccess": "Desfeito: {action}",
+          "stepFail": "{step} falhou"
+        },
+        "workflow": {
+          "title": "Etapas de Processamento",
+          "steps": {
+            "read": "Ler Material",
+            "recognize": "Reconhecer Imagem",
+            "organize": "Organizar Conteúdo",
+            "tag": "Gerar Tags",
+            "title": "Gerar Título",
+            "import": "Importar Registro",
+            "translate": "Traduzir Rascunho",
+            "copy": "Copiar Conteúdo"
+          },
+          "state": {
+            "idle": "Pendente",
+            "running": "Processando",
+            "done": "Concluído",
+            "failed": "Falhou"
+          },
+          "undo": {
+            "count": "{count} ações reversíveis",
+            "button": "Desfazer: {action}",
+            "read": "Leitura do material",
+            "recognize": "Reconhecimento de imagem",
+            "organize": "Organização do conteúdo",
+            "tag": "Geração de tags",
+            "title": "Geração de título",
+            "translate": "Tradução do rascunho",
+            "import": "Estado antes da importação",
+            "clear": "Limpar bancada",
+            "restore": "Restaurar histórico"
+          }
+        }
+      },
+      "recognitionHistory": {
+        "title": "Histórico de Reconhecimento",
+        "empty": "Nenhum registro de reconhecimento",
+        "searchPlaceholder": "Pesquisar títulos, conteúdo ou tags...",
+        "noResults": "Nenhum registro correspondente",
+        "justNow": "Agora mesmo",
+        "minutesAgo": "{count} minutos atrás",
+        "hoursAgo": "{count} horas atrás",
+        "noDescription": "Sem descrição",
+        "clearAll": "Limpar todos os registros",
+        "filters": {
+          "all": "Todos os Tipos",
+          "image": "Imagens",
+          "text": "Texto",
+          "favorite": "Favoritos",
+          "allSources": "Todas as Fontes"
+        },
+        "selection": {
+          "filtered": "Selecionar resultados atuais ({count})",
+          "clear": "Limpar seleção"
+        },
+        "export": {
+          "filtered": "Exportar Atual",
+          "selected": "Exportar {count} Selecionados",
+          "empty": "Nenhum histórico para exportar",
+          "success": "{count} registros exportados",
+          "fail": "Falha ao exportar",
+          "type": "Tipo: ",
+          "source": "Fonte: ",
+          "time": "Hora: ",
+          "tags": "Tags: "
+        },
+        "actions": {
+          "favorite": "Favoritar",
+          "restore": "Restaurar para a bancada",
+          "delete": "Excluir"
+        },
+        "type": {
+          "image": "Imagem",
+          "text": "Texto"
+        }
+      },
+      "recognitionSettings": {
+        "title": "Configurações de Reconhecimento",
+        "enableRecognition": "Ativar Reconhecimento",
+        "enableRecognitionHint": "Quando ativado, reconhecerá automaticamente capturas de tela e conteúdo de imagens",
+        "enableRecognitionDesc": "Usar OCR ou modelo de IA para reconhecer texto em imagens",
+        "method": "Método de Reconhecimento",
+        "methodHint": "Escolha o método de reconhecimento, OCR é mais rápido, IA é mais preciso",
+        "methodOcr": "Reconhecimento local, velocidade rápida",
+        "methodVlm": "Reconhecimento em nuvem, mais preciso",
+        "visionModel": "Modelo AI Vision",
+        "visionModelHint": "Afeta apenas o reconhecimento AI Vision no Knowledge Relay",
+        "visionModelDesc": "Usa o modelo global de reconhecimento de imagem quando nenhum modelo é selecionado.",
+        "autoRecognize": "Reconhecimento Automático",
+        "autoRecognizeDesc": "Iniciar reconhecimento automaticamente ao colar capturas de tela ou imagens",
+        "aiWorkflow": "Fluxo de IA",
+        "autoOrganizeAfterRecognize": "Organizar automaticamente após reconhecer",
+        "autoOrganizeAfterRecognizeDesc": "Organiza imagens reconhecidas como notas de conhecimento",
+        "autoTagAfterOrganize": "Gerar tags após organizar",
+        "autoTagAfterOrganizeDesc": "Gera tags visíveis de conhecimento após a organização",
+        "autoTitleBeforeImport": "Gerar título antes de importar",
+        "autoTitleBeforeImportDesc": "Gera um título melhor antes de importar o registro",
+        "saveHistory": "Salvar Histórico",
+        "saveHistoryDesc": "Salvar registros de reconhecimento para visualização posterior",
+        "reset": "Redefinir",
+        "maxHistoryItems": "Máximo de Itens no Histórico"
       },
       "tag": {
         "searchPlaceholder": "Crie ou pesquise tags...",
@@ -1706,6 +2014,7 @@
         "recording": "Gravação de Áudio",
         "scan": "Digitalizar Imagem",
         "image": "Carregar Imagem",
+        "recognition": "Reconhecer Área de Transferência",
         "link": "Gravar Link",
         "file": "Carregar Arquivo",
         "todo": "Registro Todo",

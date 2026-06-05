@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -7,11 +8,96 @@ import ts from 'typescript'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const tempDir = await mkdtemp(join(tmpdir(), 'lingmo-agent-tests-'))
+const compiledModules = new Set()
 
-async function importTsModule(relativePath) {
+function toMjsRelativePath(relativePath) {
+  return relativePath.replace(/\.tsx?$/, '.mjs')
+}
+
+function resolveRelativeDependency(currentRelativePath, specifier) {
+  const currentDir = dirname(join(repoRoot, currentRelativePath))
+  const basePath = resolve(currentDir, specifier)
+  const candidates = [
+    basePath,
+    `${basePath}.ts`,
+    `${basePath}.tsx`,
+    join(basePath, 'index.ts'),
+    join(basePath, 'index.tsx'),
+  ]
+
+  const dependencyPath = candidates.find(candidate => existsSync(candidate))
+  if (!dependencyPath) {
+    return null
+  }
+
+  return resolve(dependencyPath)
+    .replace(resolve(repoRoot), '')
+    .replace(/^[/\\]/, '')
+}
+
+function rewriteSpecifier(currentRelativePath, dependencyRelativePath) {
+  const currentOutDir = dirname(toMjsRelativePath(currentRelativePath))
+  const dependencyOutPath = toMjsRelativePath(dependencyRelativePath)
+
+  let relativeSpecifier = dependencyOutPath
+  if (currentOutDir && currentOutDir !== '.') {
+    relativeSpecifier = dependencyOutPath
+      .split(/[\\/]/)
+      .join('/')
+    const currentParts = currentOutDir.split(/[\\/]/).filter(Boolean)
+    const dependencyParts = dependencyOutPath.split(/[\\/]/).filter(Boolean)
+    while (currentParts.length && dependencyParts.length && currentParts[0] === dependencyParts[0]) {
+      currentParts.shift()
+      dependencyParts.shift()
+    }
+    relativeSpecifier = [
+      ...currentParts.map(() => '..'),
+      ...dependencyParts,
+    ].join('/')
+  }
+
+  if (!relativeSpecifier.startsWith('.')) {
+    relativeSpecifier = `./${relativeSpecifier}`
+  }
+
+  return relativeSpecifier
+}
+
+async function rewriteLocalImports(output, relativePath) {
+  const dependencies = new Set()
+  const rewrite = (match, prefix, specifier, suffix) => {
+    if (!specifier.startsWith('.')) {
+      return match
+    }
+
+    const dependencyRelativePath = resolveRelativeDependency(relativePath, specifier)
+    if (!dependencyRelativePath) {
+      return match
+    }
+
+    dependencies.add(dependencyRelativePath)
+    return `${prefix}${rewriteSpecifier(relativePath, dependencyRelativePath)}${suffix}`
+  }
+
+  let rewritten = output.replace(/(from\s+['"])(\.{1,2}\/[^'"]+)(['"])/g, rewrite)
+  rewritten = rewritten.replace(/(import\s*\(\s*['"])(\.{1,2}\/[^'"]+)(['"]\s*\))/g, rewrite)
+
+  for (const dependency of dependencies) {
+    await compileTsModule(dependency)
+  }
+
+  return rewritten
+}
+
+async function compileTsModule(relativePath) {
+  if (compiledModules.has(relativePath)) {
+    return
+  }
+  compiledModules.add(relativePath)
+
   const sourcePath = join(repoRoot, relativePath)
   const source = await readFile(sourcePath, 'utf8')
-  const output = ts.transpileModule(source, {
+  const output = await rewriteLocalImports(ts.transpileModule(source, {
     compilerOptions: {
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.ES2022,
@@ -19,9 +105,15 @@ async function importTsModule(relativePath) {
       strict: true,
     },
     fileName: sourcePath,
-  }).outputText
-  const outPath = join(tempDir, relativePath.replace(/[\\/]/g, '__').replace(/\.ts$/, '.mjs'))
+  }).outputText, relativePath)
+  const outPath = join(tempDir, toMjsRelativePath(relativePath))
+  await mkdir(dirname(outPath), { recursive: true })
   await writeFile(outPath, output, 'utf8')
+}
+
+async function importTsModule(relativePath) {
+  await compileTsModule(relativePath)
+  const outPath = join(tempDir, toMjsRelativePath(relativePath))
   return import(pathToFileURL(outPath).href)
 }
 
@@ -32,16 +124,28 @@ try {
     getToolRiskLevel,
   } = await importTsModule('src/lib/agent/tool-policy.ts')
   const {
+    extractVisibleFinalAnswer,
+    findLooseFinalAnswerJsonField,
     isIncompleteStructuredAgentJson,
+    isInternalAgentInstruction,
     isStructuredThoughtOnlyJson,
     parseActionInputJson,
     parseStructuredActionJson,
     parseStructuredFinalAnswerJson,
+    sanitizeVisibleAssistantContent,
   } = await importTsModule('src/lib/agent/parse-action-input.ts')
   const {
     createAgentEventBus,
     replayAgentEvents,
   } = await importTsModule('src/lib/agent/event-bus.ts')
+  const {
+    getConcreteToolCompletionBlockReason,
+    isConcreteArtifactRequest,
+  } = await importTsModule('src/lib/agent/final-answer.ts')
+  const {
+    isSupportOnlyObservationText,
+    isSupportOnlyToolName,
+  } = await importTsModule('src/lib/agent/support-tools.ts')
   const {
     buildAgentContextSnapshot,
     formatAgentContextSnapshot,
@@ -151,8 +255,67 @@ try {
     '这是最终答案',
   )
   assert.equal(
+    parseStructuredFinalAnswerJson('{"thought":"done","final_answer":"## Done\\n- a"}'),
+    '## Done\n- a',
+  )
+  assert.equal(
     parseStructuredFinalAnswerJson('{"action":"Final Answer","action_input":{"answer":"完成"}}'),
     '完成',
+  )
+  assert.equal(
+    parseStructuredFinalAnswerJson('{"action":"create_file","action_input":{"content":"not final"}}'),
+    null,
+  )
+  assert.deepEqual(
+    findLooseFinalAnswerJsonField('{"thought":"done","final_answer":"## Done\\n- a'),
+    { value: '## Done\n- a', complete: false },
+  )
+  assert.equal(
+    extractVisibleFinalAnswer(', ","final_answer":"✅ 图表已创建完成！\\n\\n基于数据整理如下'),
+    '✅ 图表已创建完成！\n\n基于数据整理如下',
+  )
+  assert.equal(
+    sanitizeVisibleAssistantContent('{"thought":"done","final_answer":"## Done\\n- a"}'),
+    '## Done\n- a',
+  )
+  assert.equal(
+    sanitizeVisibleAssistantContent('{"thought":"search first","action":"search_markdown_files","action_input":{"query":"agent"}}'),
+    'search first',
+  )
+  assert.equal(
+    isInternalAgentInstruction('你已经获得了工具执行结果，现在请直接用 Final Answer 输出最终分析报告。格式：\n{"final_answer": "你的完整回答（Markdown 格式）"}'),
+    true,
+  )
+  assert.equal(
+    sanitizeVisibleAssistantContent('你已经获得了工具执行结果，现在请直接用 Final Answer 输出最终分析报告。格式：\n{"final_answer": "你的完整回答（Markdown 格式）"}'),
+    '',
+  )
+  assert.equal(
+    sanitizeVisibleAssistantContent('尚未获得创建/编辑/图表/导出类工具成功结果，不能把文件、图表、导出或可视化任务判定为已完成。对于图表/思维导图/Excalidraw 任务，请继续输出 JSON Action，优先使用 create_diagram_from_outline；需要空白或自定义画布时使用 create_diagram_file。'),
+    '',
+  )
+  assert.equal(isSupportOnlyToolName('select_skill'), true)
+  assert.equal(isSupportOnlyToolName('mcp__safe_read_file'), false)
+  assert.equal(isSupportOnlyObservationText('已选择 1 个 Skills: excalidraw-diagram。这些 Skills 的完整说明已加载。'), true)
+  assert.equal(isConcreteArtifactRequest('根据文章核心要点生成一张思维导图', false), true)
+  assert.equal(isConcreteArtifactRequest('解释一下这篇文章的重点', false), false)
+  assert.match(
+    getConcreteToolCompletionBlockReason({
+      userInput: '根据文章核心要点生成一张 Excalidraw 思维导图',
+      actionLikeRequest: false,
+      hasConcreteSuccessfulAction: false,
+      hasOnlySupportProgress: true,
+    }) || '',
+    /create_diagram_from_outline/,
+  )
+  assert.equal(
+    getConcreteToolCompletionBlockReason({
+      userInput: '根据文章核心要点生成一张 Excalidraw 思维导图',
+      actionLikeRequest: false,
+      hasConcreteSuccessfulAction: true,
+      hasOnlySupportProgress: false,
+    }),
+    null,
   )
   assert.equal(isStructuredThoughtOnlyJson('{"thought":"我需要直接总结当前笔记"}'), true)
   assert.equal(isStructuredThoughtOnlyJson('{"thought":"read first","action":"read_markdown_file","action_input":{"filePath":"a.md"}}'), false)
@@ -181,6 +344,42 @@ try {
   assert.equal(replay.currentThought, 'Need to read a file')
   assert.equal(replay.toolCalls.length, 1)
   assert.equal(replay.finalAnswer, 'done')
+
+  const supportBus = createAgentEventBus({ runId: 'support-run' })
+  supportBus.emit('agent.started', { userInput: 'draw diagram' })
+  supportBus.emit('action.parsed', { tool: 'select_skill', params: { skill_ids: ['excalidraw-diagram'] } }, { iteration: 1 })
+  supportBus.emit('tool.updated', {
+    toolCall: {
+      id: 'support-tool-1',
+      toolName: 'select_skill',
+      params: { skill_ids: ['excalidraw-diagram'] },
+      status: 'success',
+      timestamp: 2,
+      result: { success: true, message: '已选择 1 个 Skills: excalidraw-diagram。' },
+    },
+  })
+  supportBus.emit('observation.created', {
+    toolName: 'select_skill',
+    observation: '已选择 1 个 Skills: excalidraw-diagram。这些 Skills 的完整说明已加载。',
+  })
+  supportBus.emit('step.completed', {
+    toolName: 'select_skill',
+    observation: '已选择 1 个 Skills: excalidraw-diagram。这些 Skills 的完整说明已加载。',
+  })
+  supportBus.emit('skills.selected', { skillIds: ['excalidraw-diagram'] })
+  const supportReplay = replayAgentEvents(supportBus.getEvents())
+  assert.equal(supportReplay.toolCalls.length, 0)
+  assert.equal(supportReplay.observations.length, 0)
+  assert.equal(supportReplay.telemetry.toolCallCount, 0)
+  assert.equal(supportReplay.telemetry.completedStepCount, 0)
+
+  const rejectedFinalBus = createAgentEventBus({ runId: 'rejected-final-run' })
+  rejectedFinalBus.emit('agent.started', { userInput: 'draw diagram' })
+  rejectedFinalBus.emit('final.answer.rendered', { content: '图已经创建完成。', streaming: true })
+  rejectedFinalBus.emit('final.answer.rejected', { reason: '尚未获得创建/编辑/图表/导出类工具成功结果，不能把文件、图表、导出或可视化任务判定为已完成。' })
+  const rejectedFinalReplay = replayAgentEvents(rejectedFinalBus.getEvents())
+  assert.equal(rejectedFinalReplay.finalAnswer, undefined)
+  assert.equal(rejectedFinalReplay.telemetry.currentPhase, 'thinking')
 
   const snapshot = buildAgentContextSnapshot({
     userGoal: 'summarize note',

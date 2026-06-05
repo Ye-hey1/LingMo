@@ -2,7 +2,7 @@ import { Chat } from "@/db/chats"
 import useChatStore from "@/stores/chat"
 import { CornerUpLeft, RefreshCw, XIcon } from "lucide-react"
 import { clear, hasText, readText } from "tauri-plugin-clipboard-api"
-import { Children, cloneElement, isValidElement, Fragment, useEffect, useRef, useState } from "react"
+import { Children, cloneElement, isValidElement, Fragment, useEffect, useRef, useState, type MouseEvent } from "react"
 import { MessageInfo } from "./message-info"
 import { CondensedIndicator } from "./condensed-indicator"
 import { TranslateControl } from "./translate-control"
@@ -14,7 +14,7 @@ import emitter from "@/lib/emitter"
 import { getActionButtonClass } from "./styles"
 
 export default function MessageControl({chat, children}: {chat: Chat, children: React.ReactNode}) {
-  const { deleteChat, chats, loading } = useChatStore()
+  const { deleteChat, truncateFromChat, chats, loading } = useChatStore()
   const [translatedContent, setTranslatedContent] = useState<string>('')
   const [compact, setCompact] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -41,7 +41,14 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
     }
   }, [])
 
-  async function deleteHandler() {
+  function stopActionEvent(event?: MouseEvent<HTMLButtonElement>) {
+    event?.preventDefault()
+    event?.stopPropagation()
+  }
+
+  async function deleteHandler(event?: MouseEvent<HTMLButtonElement>) {
+    stopActionEvent(event)
+
     if (chat.type === "clipboard" && !chat.image) {
       const hasTextRes = await hasText()
       if (hasTextRes) {
@@ -90,7 +97,20 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
     })
   }
 
-  function regenerateHandler() {
+  function emitDraftFromUserMessage(targetChat: Chat) {
+    const content = targetChat.content || ''
+    if (!content.trim() || loading) return
+
+    emitter.emit('chat-message-draft', {
+      content,
+      images: parseMessageImages(targetChat),
+      quoteData: parseMessageQuote(targetChat),
+    })
+  }
+
+  function regenerateHandler(event?: MouseEvent<HTMLButtonElement>) {
+    stopActionEvent(event)
+
     const currentIndex = chats.findIndex(item => item.id === chat.id)
     const previousUserChat = currentIndex >= 0
       ? [...chats.slice(0, currentIndex)].reverse().find(item => item.role === 'user' && item.type === 'chat')
@@ -101,8 +121,10 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
     }
   }
 
-  function restartFromMessageHandler() {
-    emitResendFromUserMessage(chat)
+  async function restartFromMessageHandler(event?: MouseEvent<HTMLButtonElement>) {
+    stopActionEvent(event)
+    emitDraftFromUserMessage(chat)
+    await truncateFromChat(chat.id)
   }
 
   const actionChildren = Children.map(children, (child) => {
@@ -183,7 +205,7 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
             {chat.role === 'user' && chat.type === 'chat' ? (
               <TooltipButton
                 icon={<CornerUpLeft className='size-3.5' />}
-                tooltipText="从这里重新开始"
+                tooltipText="从这里开始"
                 variant={"ghost"}
                 size={"sm"}
                 buttonClassName={actionButtonClass}

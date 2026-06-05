@@ -37,10 +37,12 @@ export function FolderItem({
   item,
   focusSidebar,
   forceExpanded = false,
+  isDropTarget = false,
 }: {
   item: DirTree
   focusSidebar?: () => void
   forceExpanded?: boolean
+  isDropTarget?: boolean
 }) {
   const [isEditing, setIsEditing] = useState(item.isEditing)
   const [name, setName] = useState(item.name)
@@ -696,7 +698,7 @@ export function FolderItem({
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className={`${isDragging ? 'file-on-drop' : ''} ${path === activeFilePath ? 'active' : ''} group file-manange-item flex select-none`}
+            className={`${isDragging || isDropTarget ? 'file-on-drop' : ''} ${path === activeFilePath ? 'active' : ''} group file-manange-item flex select-none`}
             data-file-manager-folder-path={path}
             title={path}
             onClick={() => handleSelectFolder()}

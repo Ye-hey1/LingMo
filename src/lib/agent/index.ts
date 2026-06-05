@@ -5,10 +5,9 @@
  * 内部模块之间的互相引用仍使用相对路径。
  *
  * 目录结构：
- *   agent-handler.ts    — Agent 入口调度器（选择 ReAct 或 FunctionCall 引擎）
+ *   agent-handler.ts    — Agent 入口调度器
  *   base-agent.ts       — Agent 基类（事件、步骤、工具执行、确认）
  *   react.ts            — ReAct 引擎（Thought-Action-Observation 循环）
- *   function-call-agent.ts — Function Calling 引擎（OpenAI tool_calls）
  *   types.ts            — 统一类型定义
  *   prompt-assembler.ts — 系统提示词构建
  *   task-planner.ts     — 任务规划
@@ -17,10 +16,9 @@
  *   event-bus.ts        — 事件总线
  *   working-memory.ts   — 工作记忆
  *   context-compression.ts — 上下文压缩
- *   message-trimmer.ts  — 消息裁剪
+ *   message-trimmer.ts  — ReAct 上下文裁剪
  *   token-budget.ts     — Token 预算管理
  *   tool-utils.ts       — 工具执行超时 + 结果压缩
- *   tool-definitions.ts — 工具 OpenAI 格式转换
  *   tool-cache.ts       — 工具结果缓存
  *   tool-policy.ts      — 工具策略（只读/读写分类）
  *   tool-intent.ts      — 工具意图识别
@@ -55,6 +53,9 @@ export type {
   AgentEvent,
   AgentEventType,
   AgentState,
+  AgentActivity,
+  AgentActivityPhase,
+  AgentTurnTelemetry,
   AgentContextSnapshot,
   AgentApprovalScope,
   ConfirmationRecord,
@@ -82,8 +83,8 @@ export {
 export { formatConfirmationPreview } from './tool-confirmation-display'
 
 // ---- 事件总线 ----
-export { createAgentEventBus } from './event-bus'
-export type { AgentEventBus } from './event-bus'
+export { createAgentEventBus, replayAgentEvents } from './event-bus'
+export type { AgentEventBus, AgentReplayState } from './event-bus'
 
 // ---- 工作记忆 ----
 export { loadWorkingMemory, formatWorkingMemoryForPrompt } from './working-memory'

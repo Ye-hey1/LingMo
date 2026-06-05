@@ -67,6 +67,7 @@ export type AgentEventType =
   | 'observation.created'
   | 'tool.updated'
   | 'final.answer.rendered'
+  | 'final.answer.rejected'
   | 'skills.selected'
   | 'agent.planning'
   | 'model.request.started'
@@ -126,6 +127,46 @@ export interface AgentContextSnapshot {
   sourceStepCount: number
 }
 
+export type AgentActivityPhase =
+  | 'idle'
+  | 'preparing'
+  | 'loading-skills'
+  | 'planning'
+  | 'thinking'
+  | 'tool'
+  | 'waiting-confirmation'
+  | 'answering'
+  | 'completed'
+  | 'error'
+
+export interface AgentActivity {
+  phase: AgentActivityPhase
+  label: string
+  detail?: string
+  startedAt: number
+  iteration?: number
+  toolName?: string
+  outputChars?: number
+  inputTokens?: number
+  outputTokens?: number
+}
+
+export interface AgentTurnTelemetry {
+  startedAt?: number
+  updatedAt?: number
+  elapsedMs: number
+  outputChars: number
+  inputTokens?: number
+  outputTokens?: number
+  toolCallCount: number
+  runningToolCount: number
+  successfulToolCount: number
+  failedToolCount: number
+  completedStepCount: number
+  currentPhase?: AgentActivityPhase
+  latestToolName?: string
+}
+
 export interface AgentState {
   agentRunId?: string
   agentEventCursor?: number
@@ -178,6 +219,8 @@ export interface AgentState {
   isFinalAnswerMode?: boolean
   finalAnswerContent?: string
   agentContextSnapshot?: AgentContextSnapshot
+  activity?: AgentActivity
+  telemetry?: AgentTurnTelemetry
   taskPlan?: {
     isComplex: boolean
     steps: Array<{

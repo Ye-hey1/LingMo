@@ -589,6 +589,9 @@
           "image": {
             "desc": "Upload images to notes"
           },
+          "recognition": {
+            "desc": "Recognize clipboard images or text"
+          },
           "link": {
             "desc": "Record web links"
           },
@@ -599,6 +602,71 @@
             "desc": "Create todo items"
           }
         }
+      }
+    },
+    "reminders": {
+      "title": "Reminders",
+      "desc": "Configure desktop reminders and how AI can create them.",
+      "desktop": {
+        "title": "Desktop reminders",
+        "desc": "Use LingMo for later reminders, countdowns, and AI-created todo prompts."
+      },
+      "enabled": {
+        "title": "Enable desktop reminders",
+        "desc": "When enabled, LingMo sends a system notification at reminder time."
+      },
+      "agent": {
+        "title": "Allow AI-created reminders",
+        "desc": "When enabled, you can ask AI to remind you in 30 minutes."
+      },
+      "advance": {
+        "title": "Default advance notice",
+        "desc": "Used when a reminder does not specify an advance notice.",
+        "value": "{minutes} min"
+      },
+      "context": {
+        "title": "Show reminder context",
+        "desc": "Include source or extra notes in the notification body."
+      },
+      "prefix": {
+        "title": "Notification title prefix",
+        "desc": "Customize the beginning of notification titles.",
+        "placeholder": "LingMo Reminder"
+      },
+      "test": {
+        "button": "Send test reminder",
+        "desc": "Request system notification permission and send a test reminder.",
+        "sending": "Sending...",
+        "title": "Test reminder",
+        "message": "If you see this notification, desktop reminders are ready.",
+        "source": "Reminder settings"
+      },
+      "list": {
+        "title": "Current reminders",
+        "desc": "View reminders created manually or by AI.",
+        "loading": "Loading reminders...",
+        "empty": "No scheduled reminders",
+        "emptyDesc": "Try asking AI: remind me to drink water in 30 minutes.",
+        "complete": "Mark complete",
+        "cancel": "Cancel reminder"
+      },
+      "repeat": {
+        "none": "Once",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly"
+      },
+      "toast": {
+        "loadFailed": "Failed to load reminders",
+        "testSent": "Test reminder sent",
+        "testSentDesc": "If no system notification appears, check Focus Assist, Do Not Disturb, or notification center settings.",
+        "permissionDenied": "System notification permission was not granted",
+        "permissionDeniedDesc": "Allow LingMo to send notifications in system settings, then try again.",
+        "unsupportedRuntime": "System notifications are unavailable here",
+        "unsupportedRuntimeDesc": "Test reminders can only be sent from the LingMo desktop app. Browser previews do not support the system notification plugin.",
+        "testFailed": "Failed to send test reminder",
+        "cancelled": "Reminder cancelled",
+        "completed": "Reminder completed"
       }
     },
     "uploadStore": {
@@ -1544,13 +1612,20 @@
       },
       "todo": {
         "title": "Todo Record",
-        "description": "Create todo items to manage your tasks",
-        "titlePlaceholder": "Enter todo title...",
-        "descriptionPlaceholder": "Enter detailed description (optional)",
+        "createTitle": "New Todo",
+        "createDescription": "Plan the task, reminder, and subtasks",
+        "description": "Track task progress",
+        "titleLabel": "Task",
+        "titlePlaceholder": "Enter task name",
+        "notes": "Notes",
+        "descriptionPlaceholder": "Add context, requirements, or links",
         "priority": "Priority",
         "priorityLow": "Low",
+        "priorityLowHint": "Light follow-up",
         "priorityMedium": "Medium",
+        "priorityMediumHint": "Normal progress",
         "priorityHigh": "High",
+        "priorityHighHint": "Handle first",
         "dateRange": "Date Range",
         "dateRangePlaceholder": "Select date range",
         "dueDate": "Due Date",
@@ -1558,14 +1633,40 @@
         "save": "Create Todo",
         "saveEdit": "Save",
         "edit": "Edit Todo",
-        "editDescription": "Modify the details of the todo item",
+        "editDescription": "Adjust task details, due date, and subtasks",
         "cancel": "Cancel",
-        "selectTag": "Select Tag",
+        "selectTag": "Tag",
         "completed": "Completed",
         "uncompleted": "Uncompleted",
         "subtasks": "Subtasks",
-        "subtaskPlaceholder": "Enter subtask title, press Enter",
+        "subtaskPlaceholder": "Add a subtask",
         "addSubtask": "Add Subtask",
+        "batchAdd": "Batch Add",
+        "batchPlaceholder": "One subtask per line",
+        "addBatch": "Add",
+        "summaryTitle": "Task Brief",
+        "summaryFallback": "Current record",
+        "emptyTitle": "No task yet",
+        "emptyNotes": "No notes",
+        "subtaskProgress": "Subtask progress",
+        "none": "None",
+        "taskSection": "Task Info",
+        "prioritySection": "Task Level",
+        "today": "Today",
+        "tomorrow": "Tomorrow",
+        "nextWeek": "Next Week",
+        "clearDate": "Clear Date",
+        "reminder": "Desktop Reminder",
+        "reminderHint": "Show a desktop notification at the selected time",
+        "reminderTime": "Reminder Time",
+        "reminderOff": "Off",
+        "in30Minutes": "In 30 min",
+        "in1Hour": "In 1 hour",
+        "tomorrowMorning": "Tomorrow 9 AM",
+        "dueMorning": "Due day 9 AM",
+        "lingmoHint": "After saving, LingMo can reference this in records, reviews, and reminders.",
+        "invalidReminderTime": "Reminder time must be later than now",
+        "reminderCreateFailed": "Failed to create reminder",
         "overdue": "Overdue",
         "dueToday": "Due Today",
         "stats": "Stats",
@@ -1573,7 +1674,214 @@
       },
       "clipboard": {
         "detectedImage": "Clipboard image detected",
-        "detectedText": "Clipboard text detected"
+        "detectedText": "Clipboard text detected",
+        "recognitionHint": "Image content will be recognized automatically",
+        "processing": "Processing...",
+        "copied": "Copied to clipboard",
+        "downloaded": "Image downloaded",
+        "copy": "Copy",
+        "download": "Download",
+        "pressEnterToConfirm": "Press Enter to confirm, Esc to cancel",
+        "recognitionComplete": "Recognition complete",
+        "description": "Description",
+        "recognizedContent": "Recognized content",
+        "noDescription": "No description",
+        "noContent": "No content",
+        "enterDescription": "Enter description...",
+        "enterContent": "Enter content...",
+        "retry": "Retry recognition",
+        "cancelEdit": "Cancel edit",
+        "dropzone": {
+          "title": "Drop here to upload",
+          "subtitle": "Supports image files and text content",
+          "upload": "Drag and drop to upload",
+          "formats": "Supports PNG, JPG, GIF formats",
+          "image": "Image",
+          "text": "Text"
+        }
+      },
+      "enhancedClipboard": {
+        "title": "Knowledge Relay",
+        "tabs": {
+          "clipboard": "Workbench",
+          "history": "History",
+          "settings": "Settings"
+        },
+        "or": "or",
+        "status": {
+          "idle": "Start from clipboard, drag and drop, or manual input",
+          "ready": "Material is staged and ready to organize or import",
+          "reading": "Reading clipboard...",
+          "recognizing": "Recognizing image content...",
+          "recognized": "Image recognized and converted into an editable draft",
+          "organizing": "Organizing into a knowledge note...",
+          "organized": "Organized into a knowledge note",
+          "tagging": "Generating knowledge tags...",
+          "tagged": "Knowledge tags generated",
+          "titling": "Generating title...",
+          "titled": "Title generated",
+          "translating": "Translating draft...",
+          "translated": "Translated to {language}",
+          "importing": "Importing record...",
+          "imported": "Imported to records",
+          "copied": "Copied to clipboard",
+          "cleared": "Workbench cleared"
+        },
+        "source": {
+          "title": "Source",
+          "clipboard": "Read Clipboard",
+          "clipboardText": "Clipboard Text",
+          "clipboardImage": "Clipboard Image",
+          "dropText": "Dropped Text",
+          "dropImage": "Dropped Image",
+          "manual": "Manual Draft",
+          "image": "Image",
+          "empty": "No material yet",
+          "clear": "Clear"
+        },
+        "actions": {
+          "process": "Process",
+          "recognize": "Recognize",
+          "organize": "Organize",
+          "tag": "Tags",
+          "title": "Title",
+          "translate": "Translate",
+          "import": "Import Record",
+          "copyText": "Copy Text",
+          "copyImage": "Copy Image",
+          "processing": "Processing current material..."
+        },
+        "draft": {
+          "untitled": "Untitled Material",
+          "content": "Draft",
+          "source": "Source: {source}",
+          "titlePlaceholder": "Name this knowledge draft...",
+          "contentPlaceholder": "Paste, recognize, organize, or translate material here, then import it when ready.",
+          "characters": "{count} characters",
+          "tagsPrefix": "Tags: "
+        },
+        "messages": {
+          "noClipboard": "No readable text or image found in the clipboard",
+          "readFail": "Failed to read material",
+          "recognizeFirst": "Add an image first",
+          "recognizeDisabled": "Image recognition is disabled. Enable it in settings",
+          "processFail": "Processing failed. Check AI or recognition settings",
+          "emptyAiResult": "AI returned no usable result",
+          "organizeEmpty": "No text to organize",
+          "tagEmpty": "No draft to tag",
+          "tagFail": "Failed to generate tags",
+          "titleEmpty": "No draft to title",
+          "titleFail": "Failed to generate title",
+          "translateEmpty": "No draft to translate",
+          "copySuccess": "Copied to clipboard",
+          "copyFail": "Copy failed",
+          "emptyDraft": "No draft to import",
+          "importSuccess": "Imported to the current record tag",
+          "importFail": "Failed to import record",
+          "historyRestored": "Restored from history to workbench",
+          "undoSuccess": "Undone: {action}",
+          "stepFail": "{step} failed"
+        },
+        "workflow": {
+          "title": "Processing Steps",
+          "steps": {
+            "read": "Read Material",
+            "recognize": "Recognize Image",
+            "organize": "Organize Body",
+            "tag": "Generate Tags",
+            "title": "Generate Title",
+            "import": "Import Record",
+            "translate": "Translate Draft",
+            "copy": "Copy Content"
+          },
+          "state": {
+            "idle": "Pending",
+            "running": "Running",
+            "done": "Done",
+            "failed": "Failed"
+          },
+          "undo": {
+            "count": "{count} undo steps",
+            "button": "Undo: {action}",
+            "read": "Read Material",
+            "recognize": "Image Recognition",
+            "organize": "Body Organization",
+            "tag": "Tag Generation",
+            "title": "Title Generation",
+            "translate": "Draft Translation",
+            "import": "Pre-import State",
+            "clear": "Clear Workbench",
+            "restore": "Restore History"
+          }
+        }
+      },
+      "recognitionHistory": {
+        "title": "Recognition History",
+        "empty": "No recognition records",
+        "searchPlaceholder": "Search titles, content, or tags...",
+        "noResults": "No matching history records",
+        "justNow": "Just now",
+        "minutesAgo": "{count} minutes ago",
+        "hoursAgo": "{count} hours ago",
+        "noDescription": "No description",
+        "clearAll": "Clear all records",
+        "filters": {
+          "all": "All Types",
+          "image": "Images",
+          "text": "Text",
+          "favorite": "Favorites",
+          "allSources": "All Sources"
+        },
+        "selection": {
+          "filtered": "Select current results ({count})",
+          "clear": "Clear selection"
+        },
+        "export": {
+          "filtered": "Export Current",
+          "selected": "Export {count} Selected",
+          "empty": "No history records to export",
+          "success": "Exported {count} history records",
+          "fail": "Export failed",
+          "type": "Type: ",
+          "source": "Source: ",
+          "time": "Time: ",
+          "tags": "Tags: "
+        },
+        "actions": {
+          "favorite": "Favorite",
+          "restore": "Restore to workbench",
+          "delete": "Delete"
+        },
+        "type": {
+          "image": "Image",
+          "text": "Text"
+        }
+      },
+      "recognitionSettings": {
+        "title": "Recognition Settings",
+        "enableRecognition": "Enable Recognition",
+        "enableRecognitionHint": "Automatically recognize screenshots and image content when enabled",
+        "enableRecognitionDesc": "Use OCR or AI model to recognize text in images",
+        "method": "Recognition Method",
+        "methodHint": "Choose recognition method, OCR is faster, AI is more accurate",
+        "methodOcr": "Local recognition, fast speed",
+        "methodVlm": "Cloud recognition, more accurate",
+        "visionModel": "AI Vision Model",
+        "visionModelHint": "Only affects AI Vision recognition in Knowledge Relay",
+        "visionModelDesc": "Falls back to the global image recognition model when no model is selected.",
+        "autoRecognize": "Auto Recognize",
+        "autoRecognizeDesc": "Automatically start recognition when pasting screenshots or images",
+        "aiWorkflow": "AI Workflow",
+        "autoOrganizeAfterRecognize": "Auto organize after recognition",
+        "autoOrganizeAfterRecognizeDesc": "Automatically organize recognized images into knowledge notes",
+        "autoTagAfterOrganize": "Auto tag after organization",
+        "autoTagAfterOrganizeDesc": "Generate visible knowledge tags after organization",
+        "autoTitleBeforeImport": "Auto title before import",
+        "autoTitleBeforeImportDesc": "Generate a better title before importing the record",
+        "saveHistory": "Save History",
+        "saveHistoryDesc": "Save recognition records for later viewing",
+        "reset": "Reset",
+        "maxHistoryItems": "Max History Items"
       },
       "tag": {
         "searchPlaceholder": "Create or search tags...",
@@ -1793,6 +2101,7 @@
         "recording": "Recording Record",
         "scan": "Scan Image",
         "image": "Upload Image",
+        "recognition": "Recognize Clipboard",
         "link": "Record Link",
         "file": "Upload File",
         "todo": "Todo Record",
@@ -1834,6 +2143,12 @@
         "cancel": "取消",
         "removeThinking": "移除思考过程",
         "stop": "Stop"
+      },
+      "trash": {
+        "title": "Confirm",
+        "confirm": "Are you sure you want to permanently empty the trash? This action cannot be undone.",
+        "empty": "Trash is empty",
+        "clearSuccess": "Trash cleared"
       }
     },
     "chat": {

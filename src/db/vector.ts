@@ -1,4 +1,4 @@
-import { getDb, runDbTransaction, serializedWrite } from './index';
+import { getDb, serializedWrite } from './index';
 
 export interface VectorDocument {
   id: number;
@@ -159,14 +159,12 @@ export async function upsertVectorDocument(doc: Omit<VectorDocument, 'id'>) {
 export async function upsertVectorDocumentsBatch(docs: Omit<VectorDocument, 'id'>[]) {
   return serializedWrite(async () => {
     const db = await getDb();
-    await runDbTransaction(db, async () => {
-      for (const doc of docs) {
-        await db.execute(
-          'insert into vector_documents (filename, chunk_id, content, embedding, updated_at) values ($1, $2, $3, $4, $5) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at',
-          [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at],
-        );
-      }
-    });
+    for (const doc of docs) {
+      await db.execute(
+        'insert into vector_documents (filename, chunk_id, content, embedding, updated_at) values ($1, $2, $3, $4, $5) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at',
+        [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at],
+      );
+    }
     await vectorCache.update();
   });
 }
@@ -182,21 +180,19 @@ export async function replaceVectorDocumentsForFile(
       new Set([filename, ...legacyFilenames].filter(Boolean)),
     );
 
-    await runDbTransaction(db, async () => {
-      for (const filenameToDelete of filenamesToDelete) {
-        await db.execute(
-          'delete from vector_documents where filename = $1',
-          [filenameToDelete],
-        );
-      }
+    for (const filenameToDelete of filenamesToDelete) {
+      await db.execute(
+        'delete from vector_documents where filename = $1',
+        [filenameToDelete],
+      );
+    }
 
-      for (const doc of docs) {
-        await db.execute(
-          'insert into vector_documents (filename, chunk_id, content, embedding, updated_at) values ($1, $2, $3, $4, $5) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at',
-          [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at],
-        );
-      }
-    });
+    for (const doc of docs) {
+      await db.execute(
+        'insert into vector_documents (filename, chunk_id, content, embedding, updated_at) values ($1, $2, $3, $4, $5) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at',
+        [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at],
+      );
+    }
 
     for (const filenameToDelete of filenamesToDelete) {
       vectorCache.deleteByFilename(filenameToDelete);

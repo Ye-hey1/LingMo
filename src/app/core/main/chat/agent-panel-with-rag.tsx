@@ -129,7 +129,17 @@ export function AgentPanelWithRag({
 
   // 如果既没有 RAG 也没有 Agent 内容，不渲染
   const hasRag = ragSources.length > 0
-  const hasAgent = agentHistoryJson || isRunning || thoughtHistory.length > 0
+  const hasAgent = Boolean(
+    agentHistoryJson ||
+    isRunning ||
+    pendingConfirmation ||
+    currentThought ||
+    currentAction ||
+    currentObservation ||
+    thoughtHistory.length > 0 ||
+    completedSteps.length > 0 ||
+    toolCalls.length > 0
+  )
   const showRag = hasRag && !(mode === "live" && isRunning)
 
   if (!showRag && !hasAgent) {

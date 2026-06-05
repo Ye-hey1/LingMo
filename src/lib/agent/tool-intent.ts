@@ -28,6 +28,12 @@ const TIME_SENSITIVE_HINTS = [
   /新闻|热点|焦点|头条|刷屏|出圈|爆火/,
 ]
 
+const REMINDER_HINTS = [
+  /提醒我|提醒一下|到点提醒|稍后提醒|定时提醒|桌面提醒|通知我|稍后通知|闹钟|计时器|倒计时|待会儿叫我|待会叫我/,
+  /(分钟|小时|天|周|月|半小时|一会儿|一会|稍后|之后|以后).{0,12}(提醒|通知|叫我)/,
+  /\b(remind me|reminder|notify me|timer|countdown|alarm)\b/i,
+]
+
 /**
  * 判断用户输入是否是明确的工具执行请求
  */
@@ -48,6 +54,13 @@ export function isTimeSensitiveRequest(userInput: string): boolean {
   return TIME_SENSITIVE_HINTS.some(pattern => pattern.test(input))
 }
 
+export function isReminderRequest(userInput: string): boolean {
+  const input = userInput.trim()
+  if (!input) return false
+
+  return REMINDER_HINTS.some(pattern => pattern.test(input))
+}
+
 /**
  * 构建工具执行提示
  *
@@ -57,8 +70,9 @@ export function isTimeSensitiveRequest(userInput: string): boolean {
 export function buildToolExecutionPrompt(userInput: string): string {
   const isExplicit = isExplicitToolExecutionRequest(userInput)
   const isTimeSensitive = isTimeSensitiveRequest(userInput)
+  const isReminder = isReminderRequest(userInput)
 
-  if (!isExplicit && !isTimeSensitive) {
+  if (!isExplicit && !isTimeSensitive && !isReminder) {
     return ''
   }
 
@@ -85,6 +99,20 @@ export function buildToolExecutionPrompt(userInput: string): string {
       '- Your training data may be outdated. You MUST use web_search to get up-to-date results BEFORE answering.',
       '- Do NOT guess or fabricate recent information from training data alone.',
       '- Call web_search with a specific, relevant query, then synthesize the results into your answer.',
+    )
+  }
+
+  if (isReminder) {
+    sections.push(
+      '',
+      '### Reminder Request Detected',
+      '',
+      '- The user wants LingMo to remind or notify them later.',
+      '- Use create_reminder instead of merely saying you will remind them.',
+      '- For relative times such as "30 分钟后" or "in 2 hours", pass delayMinutes.',
+      '- For natural time phrases such as "半小时后", "明天上午九点", or "tomorrow at 3pm", pass timeText if delayMinutes or dueAt is not obvious.',
+      '- For absolute times, pass dueAt using the current date/time in runtime context.',
+      '- After create_reminder succeeds, give a concise Final Answer confirming the scheduled time.',
     )
   }
 

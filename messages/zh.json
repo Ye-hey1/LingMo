@@ -589,6 +589,9 @@
           "image": {
             "desc": "上传图片到笔记"
           },
+          "recognition": {
+            "desc": "识别剪贴板图片或文本"
+          },
           "link": {
             "desc": "记录网页链接"
           },
@@ -599,6 +602,71 @@
             "desc": "创建待办事项"
           }
         }
+      }
+    },
+    "reminders": {
+      "title": "提醒",
+      "desc": "配置桌面提醒和 AI 创建提醒的行为。",
+      "desktop": {
+        "title": "桌面提醒",
+        "desc": "用于稍后提醒、倒计时和 AI 创建的待办提示。"
+      },
+      "enabled": {
+        "title": "启用桌面提醒",
+        "desc": "开启后，LingMo 会在提醒时间触发系统通知。"
+      },
+      "agent": {
+        "title": "允许 AI 创建提醒",
+        "desc": "开启后，你可以直接对 AI 说“30 分钟后提醒我休息”。"
+      },
+      "advance": {
+        "title": "默认提前提醒",
+        "desc": "未指定提前量时使用此设置。",
+        "value": "{minutes} 分钟"
+      },
+      "context": {
+        "title": "显示提醒上下文",
+        "desc": "通知中显示来源或补充说明，便于理解提醒背景。"
+      },
+      "prefix": {
+        "title": "通知标题前缀",
+        "desc": "自定义系统通知标题开头。",
+        "placeholder": "LingMo 提醒"
+      },
+      "test": {
+        "button": "发送测试提醒",
+        "desc": "请求系统通知权限并发送一条测试提醒。",
+        "sending": "发送中...",
+        "title": "测试提醒",
+        "message": "如果你看到了这条通知，桌面提醒已经可用。",
+        "source": "提醒设置"
+      },
+      "list": {
+        "title": "当前提醒",
+        "desc": "查看由 AI 或手动创建的待触发提醒。",
+        "loading": "正在加载提醒...",
+        "empty": "暂无待触发提醒",
+        "emptyDesc": "你可以在 AI 对话中说“30 分钟后提醒我喝水”。",
+        "complete": "标记完成",
+        "cancel": "取消提醒"
+      },
+      "repeat": {
+        "none": "一次",
+        "daily": "每天",
+        "weekly": "每周",
+        "monthly": "每月"
+      },
+      "toast": {
+        "loadFailed": "加载提醒失败",
+        "testSent": "测试提醒已发送",
+        "testSentDesc": "如果系统没有弹出通知，请检查系统勿扰模式或通知中心设置。",
+        "permissionDenied": "未获得系统通知权限",
+        "permissionDeniedDesc": "请在系统设置中允许 LingMo 发送通知后再试。",
+        "unsupportedRuntime": "当前环境无法发送系统通知",
+        "unsupportedRuntimeDesc": "测试提醒只能在 LingMo 桌面应用中发送，普通浏览器预览不支持系统通知插件。",
+        "testFailed": "发送测试提醒失败",
+        "cancelled": "提醒已取消",
+        "completed": "提醒已完成"
       }
     },
     "uploadStore": {
@@ -1553,13 +1621,20 @@
       },
       "todo": {
         "title": "待办记录",
-        "description": "创建待办事项，管理你的任务",
-        "titlePlaceholder": "输入待办标题...",
-        "descriptionPlaceholder": "输入详细描述（可选）",
+        "createTitle": "新建待办",
+        "createDescription": "安排任务、提醒和子任务",
+        "description": "记录任务进展",
+        "titleLabel": "任务",
+        "titlePlaceholder": "输入任务名称",
+        "notes": "备注",
+        "descriptionPlaceholder": "补充背景、要求或链接",
         "priority": "优先级",
         "priorityLow": "低",
+        "priorityLowHint": "轻量跟进",
         "priorityMedium": "中",
+        "priorityMediumHint": "常规推进",
         "priorityHigh": "高",
+        "priorityHighHint": "优先处理",
         "dateRange": "日期范围",
         "dateRangePlaceholder": "选择日期范围",
         "dueDate": "截止日期",
@@ -1567,14 +1642,40 @@
         "save": "创建待办",
         "saveEdit": "保存",
         "edit": "编辑待办",
-        "editDescription": "修改待办事项的详细信息",
+        "editDescription": "调整任务内容、截止时间和子任务",
         "cancel": "取消",
-        "selectTag": "选择标签",
+        "selectTag": "归属标签",
         "completed": "已完成",
         "uncompleted": "未完成",
         "subtasks": "子任务",
-        "subtaskPlaceholder": "输入子任务标题，回车添加",
+        "subtaskPlaceholder": "新增子任务",
         "addSubtask": "添加子任务",
+        "batchAdd": "批量添加",
+        "batchPlaceholder": "每行一个子任务",
+        "addBatch": "添加",
+        "summaryTitle": "任务概览",
+        "summaryFallback": "当前记录",
+        "emptyTitle": "未填写任务",
+        "emptyNotes": "暂无备注",
+        "subtaskProgress": "子任务进度",
+        "none": "无",
+        "taskSection": "任务信息",
+        "prioritySection": "任务级别",
+        "today": "今天",
+        "tomorrow": "明天",
+        "nextWeek": "下周",
+        "clearDate": "清除日期",
+        "reminder": "桌面提醒",
+        "reminderHint": "到点后在桌面右下角通知",
+        "reminderTime": "提醒时间",
+        "reminderOff": "未开启",
+        "in30Minutes": "30 分钟后",
+        "in1Hour": "1 小时后",
+        "tomorrowMorning": "明早 9 点",
+        "dueMorning": "截止日 9 点",
+        "lingmoHint": "保存后可被 LingMo 在记录、回顾和提醒中引用。",
+        "invalidReminderTime": "提醒时间需要晚于当前时间",
+        "reminderCreateFailed": "提醒创建失败",
         "overdue": "逾期",
         "dueToday": "今日截止",
         "stats": "统计",
@@ -1582,7 +1683,214 @@
       },
       "clipboard": {
         "detectedImage": "检测到剪贴板图片",
-        "detectedText": "检测到剪贴板文本"
+        "detectedText": "检测到剪贴板文本",
+        "recognitionHint": "将自动识别图片内容",
+        "processing": "处理中...",
+        "copied": "已复制到剪贴板",
+        "downloaded": "图片已下载",
+        "copy": "复制",
+        "download": "下载",
+        "pressEnterToConfirm": "按 Enter 确认，Esc 取消",
+        "recognitionComplete": "识别完成",
+        "description": "描述",
+        "recognizedContent": "识别内容",
+        "noDescription": "无描述",
+        "noContent": "无内容",
+        "enterDescription": "输入描述...",
+        "enterContent": "输入内容...",
+        "retry": "重新识别",
+        "cancelEdit": "取消编辑",
+        "dropzone": {
+          "title": "拖拽到此处上传",
+          "subtitle": "支持图片文件和文本内容",
+          "upload": "拖拽上传",
+          "formats": "支持 PNG、JPG、GIF 等格式",
+          "image": "图片",
+          "text": "文本"
+        }
+      },
+      "enhancedClipboard": {
+        "title": "知识中转站",
+        "tabs": {
+          "clipboard": "工作台",
+          "history": "历史",
+          "settings": "设置"
+        },
+        "or": "或",
+        "status": {
+          "idle": "从剪贴板、拖拽或手动输入开始加工素材",
+          "ready": "素材已进入工作台，可以继续整理或导入记录",
+          "reading": "正在读取剪贴板...",
+          "recognizing": "正在识别图片内容...",
+          "recognized": "图片识别完成，已生成可编辑草稿",
+          "organizing": "正在整理成知识笔记...",
+          "organized": "已整理成知识笔记",
+          "tagging": "正在生成知识标签...",
+          "tagged": "已生成知识标签",
+          "titling": "正在生成标题...",
+          "titled": "已生成标题",
+          "translating": "正在翻译草稿...",
+          "translated": "已翻译为 {language}",
+          "importing": "正在导入记录...",
+          "imported": "已导入记录",
+          "copied": "已复制到剪贴板",
+          "cleared": "工作台已清空"
+        },
+        "source": {
+          "title": "来源",
+          "clipboard": "读取剪贴板",
+          "clipboardText": "剪贴板文本",
+          "clipboardImage": "剪贴板图片",
+          "dropText": "拖拽文本",
+          "dropImage": "拖拽图片",
+          "manual": "手动草稿",
+          "image": "图片",
+          "empty": "暂无素材",
+          "clear": "清空"
+        },
+        "actions": {
+          "process": "加工",
+          "recognize": "识别",
+          "organize": "整理",
+          "tag": "标签",
+          "title": "标题",
+          "translate": "翻译",
+          "import": "导入记录",
+          "copyText": "复制文字",
+          "copyImage": "复制图片",
+          "processing": "正在处理当前素材..."
+        },
+        "draft": {
+          "untitled": "未命名素材",
+          "content": "加工草稿",
+          "source": "来源：{source}",
+          "titlePlaceholder": "给这条知识草稿起个标题...",
+          "contentPlaceholder": "在这里粘贴、识别、整理或翻译素材，确认后再导入记录。",
+          "characters": "{count} 个字符",
+          "tagsPrefix": "标签："
+        },
+        "messages": {
+          "noClipboard": "剪贴板中没有可读取的文字或图片",
+          "readFail": "读取素材失败",
+          "recognizeFirst": "请先放入一张图片",
+          "recognizeDisabled": "图片识别未启用，请在设置中开启",
+          "processFail": "加工失败，请检查 AI 或识别设置",
+          "emptyAiResult": "AI 没有返回可用结果",
+          "organizeEmpty": "没有可整理的文字",
+          "tagEmpty": "没有可打标签的草稿",
+          "tagFail": "生成标签失败",
+          "titleEmpty": "没有可生成标题的草稿",
+          "titleFail": "生成标题失败",
+          "translateEmpty": "没有可翻译的草稿",
+          "copySuccess": "已复制到剪贴板",
+          "copyFail": "复制失败",
+          "emptyDraft": "没有可导入的草稿",
+          "importSuccess": "已导入到当前记录标签",
+          "importFail": "导入记录失败",
+          "historyRestored": "已从历史恢复到工作台",
+          "undoSuccess": "已撤销：{action}",
+          "stepFail": "{step} 失败"
+        },
+        "workflow": {
+          "title": "处理步骤",
+          "steps": {
+            "read": "读取素材",
+            "recognize": "识别图片",
+            "organize": "整理正文",
+            "tag": "生成标签",
+            "title": "生成标题",
+            "import": "导入记录",
+            "translate": "翻译草稿",
+            "copy": "复制内容"
+          },
+          "state": {
+            "idle": "待处理",
+            "running": "处理中",
+            "done": "完成",
+            "failed": "失败"
+          },
+          "undo": {
+            "count": "{count} 步可撤销",
+            "button": "撤销：{action}",
+            "read": "读取素材",
+            "recognize": "图片识别",
+            "organize": "正文整理",
+            "tag": "标签生成",
+            "title": "标题生成",
+            "translate": "翻译草稿",
+            "import": "导入前状态",
+            "clear": "清空工作台",
+            "restore": "恢复历史"
+          }
+        }
+      },
+      "recognitionHistory": {
+        "title": "识别历史",
+        "empty": "暂无识别记录",
+        "searchPlaceholder": "搜索标题、内容或标签...",
+        "noResults": "没有匹配的历史记录",
+        "justNow": "刚刚",
+        "minutesAgo": "{count} 分钟前",
+        "hoursAgo": "{count} 小时前",
+        "noDescription": "无描述",
+        "clearAll": "清空所有记录",
+        "filters": {
+          "all": "全部类型",
+          "image": "图片",
+          "text": "文本",
+          "favorite": "收藏",
+          "allSources": "全部来源"
+        },
+        "selection": {
+          "filtered": "选中当前结果（{count}）",
+          "clear": "取消选择"
+        },
+        "export": {
+          "filtered": "导出当前结果",
+          "selected": "导出选中 {count}",
+          "empty": "没有可导出的历史记录",
+          "success": "已导出 {count} 条历史记录",
+          "fail": "导出失败",
+          "type": "类型：",
+          "source": "来源：",
+          "time": "时间：",
+          "tags": "标签："
+        },
+        "actions": {
+          "favorite": "收藏",
+          "restore": "恢复到工作台",
+          "delete": "删除"
+        },
+        "type": {
+          "image": "图片",
+          "text": "文本"
+        }
+      },
+      "recognitionSettings": {
+        "title": "识别设置",
+        "enableRecognition": "启用识别",
+        "enableRecognitionHint": "开启后将自动识别截图和图片内容",
+        "enableRecognitionDesc": "使用 OCR 或 AI 模型识别图片中的文字",
+        "method": "识别方法",
+        "methodHint": "选择识别方式，OCR 更快，AI 更准确",
+        "methodOcr": "本地识别，速度快",
+        "methodVlm": "云端识别，更准确",
+        "visionModel": "AI Vision 模型",
+        "visionModelHint": "仅影响知识中转站的 AI Vision 识别",
+        "visionModelDesc": "未选择时跟随全局图像识别模型。",
+        "autoRecognize": "自动识别",
+        "autoRecognizeDesc": "截图或粘贴图片时自动开始识别",
+        "aiWorkflow": "AI 工作流",
+        "autoOrganizeAfterRecognize": "识别后自动整理",
+        "autoOrganizeAfterRecognizeDesc": "图片识别完成后自动整理成知识笔记",
+        "autoTagAfterOrganize": "整理后自动打标签",
+        "autoTagAfterOrganizeDesc": "整理完成后生成可见的知识标签",
+        "autoTitleBeforeImport": "导入前自动生成标题",
+        "autoTitleBeforeImportDesc": "导入记录前用 AI 生成更准确的标题",
+        "saveHistory": "保存历史",
+        "saveHistoryDesc": "保存识别记录以便后续查看",
+        "reset": "重置",
+        "maxHistoryItems": "最大记录数"
       },
       "tag": {
         "searchPlaceholder": "创建或查询标签...",
@@ -1670,8 +1978,8 @@
             "error": "失败"
           },
           "empty": {
-            "title": "开始与 AI 对话",
-            "subtitle": "使用 Chat 或 Agent 模式与 AI 互动",
+            "title": "开始使用 LingMo",
+            "subtitle": "选择 Chat、Agent 或 Research，开始协作",
             "currentModel": "当前模型",
             "currentPrompt": "当前 Prompt",
             "noModel": "未设置模型",
@@ -1807,6 +2115,7 @@
         "recording": "录音记录",
         "scan": "扫描图片",
         "image": "上传图片",
+        "recognition": "识别剪贴板",
         "link": "记录链接",
         "file": "上传文件",
         "todo": "待办记录",
@@ -1834,6 +2143,12 @@
           "last7Days": "最近7天",
           "last30Days": "最近30天"
         }
+      },
+      "trash": {
+        "title": "提示",
+        "confirm": "确定要永久清空垃圾箱吗？此操作不可撤销。",
+        "empty": "垃圾箱为空",
+        "clearSuccess": "垃圾箱已清空"
       }
     },
     "chat": {
@@ -1842,8 +2157,8 @@
         "message": "已压缩 {count} 条历史消息"
       },
       "empty": {
-        "title": "开始与 AI 对话",
-        "subtitle": "使用 Chat 或 Agent 模式与 AI 互动",
+        "title": "开始使用 LingMo",
+        "subtitle": "选择 Chat、Agent 或 Research，开始协作",
         "currentModel": "当前模型",
         "currentPrompt": "当前 Prompt",
         "currentMode": "对话模式",

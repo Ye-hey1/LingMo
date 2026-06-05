@@ -449,6 +449,9 @@
           "image": {
             "desc": "上传图片到笔记"
           },
+          "recognition": {
+            "desc": "クリップボードの画像やテキストを認識"
+          },
           "link": {
             "desc": "记录网页链接"
           },
@@ -459,6 +462,71 @@
             "desc": "创建待办事项"
           }
         }
+      }
+    },
+    "reminders": {
+      "title": "リマインダー",
+      "desc": "デスクトップ通知と AI によるリマインダー作成を設定します。",
+      "desktop": {
+        "title": "デスクトップリマインダー",
+        "desc": "後で通知、カウントダウン、AI 作成の予定通知に使用します。"
+      },
+      "enabled": {
+        "title": "デスクトップ通知を有効にする",
+        "desc": "有効にすると、LingMo は指定時刻にシステム通知を送信します。"
+      },
+      "agent": {
+        "title": "AI による作成を許可",
+        "desc": "有効にすると、AI に「30 分後に休憩を提醒して」と頼めます。"
+      },
+      "advance": {
+        "title": "デフォルト事前通知",
+        "desc": "事前通知が指定されていない場合に使用します。",
+        "value": "{minutes} 分"
+      },
+      "context": {
+        "title": "通知にコンテキストを表示",
+        "desc": "通知本文に出典や補足説明を表示します。"
+      },
+      "prefix": {
+        "title": "通知タイトルの接頭辞",
+        "desc": "システム通知タイトルの先頭をカスタマイズします。",
+        "placeholder": "LingMo リマインダー"
+      },
+      "test": {
+        "button": "テスト通知を送信",
+        "desc": "システム通知権限を要求し、テスト通知を送信します。",
+        "sending": "送信中...",
+        "title": "テストリマインダー",
+        "message": "この通知が表示されれば、デスクトップリマインダーは利用可能です。",
+        "source": "リマインダー設定"
+      },
+      "list": {
+        "title": "現在のリマインダー",
+        "desc": "手動または AI により作成された予定リマインダーを表示します。",
+        "loading": "リマインダーを読み込み中...",
+        "empty": "予定されたリマインダーはありません",
+        "emptyDesc": "AI に「30 分後に水を飲むよう提醒して」と頼めます。",
+        "complete": "完了にする",
+        "cancel": "キャンセル"
+      },
+      "repeat": {
+        "none": "一回",
+        "daily": "毎日",
+        "weekly": "毎週",
+        "monthly": "毎月"
+      },
+      "toast": {
+        "loadFailed": "リマインダーの読み込みに失敗しました",
+        "testSent": "テスト通知を送信しました",
+        "testSentDesc": "システム通知が表示されない場合は、おやすみモードや通知センターの設定を確認してください。",
+        "permissionDenied": "システム通知権限がありません",
+        "permissionDeniedDesc": "システム設定で LingMo の通知を許可してから、もう一度お試しください。",
+        "unsupportedRuntime": "この環境ではシステム通知を送信できません",
+        "unsupportedRuntimeDesc": "テスト通知は LingMo デスクトップアプリでのみ送信できます。ブラウザプレビューではシステム通知プラグインを利用できません。",
+        "testFailed": "テスト通知の送信に失敗しました",
+        "cancelled": "リマインダーをキャンセルしました",
+        "completed": "リマインダーを完了しました"
       }
     },
     "uploadStore": {
@@ -1457,13 +1525,20 @@
       },
       "todo": {
         "title": "Todo記録",
-        "description": "Todoアイテムを作成してタスクを管理",
-        "titlePlaceholder": "Todoのタイトルを入力...",
-        "descriptionPlaceholder": "詳細説明を入力（オプション）",
+        "createTitle": "新規Todo",
+        "createDescription": "タスク、リマインダー、サブタスクを設定",
+        "description": "タスクの進捗を記録",
+        "titleLabel": "タスク",
+        "titlePlaceholder": "タスク名を入力",
+        "notes": "メモ",
+        "descriptionPlaceholder": "背景、要件、リンクを追加",
         "priority": "優先度",
         "priorityLow": "低",
+        "priorityLowHint": "軽いフォロー",
         "priorityMedium": "中",
+        "priorityMediumHint": "通常進行",
         "priorityHigh": "高",
+        "priorityHighHint": "優先対応",
         "dateRange": "日付範囲",
         "dateRangePlaceholder": "日付範囲を選択",
         "dueDate": "期限",
@@ -1471,14 +1546,40 @@
         "save": "Todo作成",
         "saveEdit": "保存",
         "edit": "Todo編集",
-        "editDescription": "Todoアイテムの詳細を変更",
+        "editDescription": "タスク内容、期限、サブタスクを調整",
         "cancel": "キャンセル",
-        "selectTag": "タグを選択",
+        "selectTag": "タグ",
         "completed": "完了",
         "uncompleted": "未完了",
         "subtasks": "サブタスク",
-        "subtaskPlaceholder": "サブタスクを入力してEnter",
+        "subtaskPlaceholder": "サブタスクを追加",
         "addSubtask": "サブタスク追加",
+        "batchAdd": "一括追加",
+        "batchPlaceholder": "1 行に 1 つのサブタスク",
+        "addBatch": "追加",
+        "summaryTitle": "タスク概要",
+        "summaryFallback": "現在の記録",
+        "emptyTitle": "タスク未入力",
+        "emptyNotes": "メモなし",
+        "subtaskProgress": "サブタスク進捗",
+        "none": "なし",
+        "taskSection": "タスク情報",
+        "prioritySection": "タスクレベル",
+        "today": "今日",
+        "tomorrow": "明日",
+        "nextWeek": "来週",
+        "clearDate": "日付を消去",
+        "reminder": "デスクトップ通知",
+        "reminderHint": "指定時刻にデスクトップ通知を表示",
+        "reminderTime": "通知時刻",
+        "reminderOff": "オフ",
+        "in30Minutes": "30 分後",
+        "in1Hour": "1 時間後",
+        "tomorrowMorning": "明日 9 時",
+        "dueMorning": "期限日 9 時",
+        "lingmoHint": "保存後、LingMo は記録、振り返り、通知で参照できます。",
+        "invalidReminderTime": "通知時刻は現在より後にしてください",
+        "reminderCreateFailed": "リマインダーの作成に失敗しました",
         "overdue": "期限切れ",
         "dueToday": "今日期限",
         "stats": "統計",
@@ -1486,7 +1587,214 @@
       },
       "clipboard": {
         "detectedImage": "クリップボードの画像を検出しました",
-        "detectedText": "クリップボードのテキストを検出しました"
+        "detectedText": "クリップボードのテキストを検出しました",
+        "recognitionHint": "画像コンテンツを自動認識します",
+        "processing": "処理中...",
+        "copied": "クリップボードにコピーしました",
+        "downloaded": "画像をダウンロードしました",
+        "copy": "コピー",
+        "download": "ダウンロード",
+        "pressEnterToConfirm": "Enterで確認、Escでキャンセル",
+        "recognitionComplete": "認識完了",
+        "description": "説明",
+        "recognizedContent": "認識されたコンテンツ",
+        "noDescription": "説明なし",
+        "noContent": "コンテンツなし",
+        "enterDescription": "説明を入力...",
+        "enterContent": "コンテンツを入力...",
+        "retry": "再認識",
+        "cancelEdit": "編集キャンセル",
+        "dropzone": {
+          "title": "ここにドロップしてアップロード",
+          "subtitle": "画像ファイルとテキストコンテンツをサポート",
+          "upload": "ドラッグ＆ドロップでアップロード",
+          "formats": "PNG、JPG、GIF形式をサポート",
+          "image": "画像",
+          "text": "テキスト"
+        }
+      },
+      "enhancedClipboard": {
+        "title": "ナレッジ中継所",
+        "tabs": {
+          "clipboard": "ワークベンチ",
+          "history": "履歴",
+          "settings": "設定"
+        },
+        "or": "または",
+        "status": {
+          "idle": "クリップボード、ドラッグ＆ドロップ、または手入力から素材を加工できます",
+          "ready": "素材がワークベンチに入りました。整理またはインポートできます",
+          "reading": "クリップボードを読み取り中...",
+          "recognizing": "画像内容を認識中...",
+          "recognized": "画像認識が完了し、編集可能な下書きを作成しました",
+          "organizing": "ナレッジノートに整理中...",
+          "organized": "ナレッジノートに整理しました",
+          "tagging": "ナレッジタグを生成中...",
+          "tagged": "ナレッジタグを生成しました",
+          "titling": "タイトルを生成中...",
+          "titled": "タイトルを生成しました",
+          "translating": "下書きを翻訳中...",
+          "translated": "{language} に翻訳しました",
+          "importing": "記録にインポート中...",
+          "imported": "記録にインポートしました",
+          "copied": "クリップボードにコピーしました",
+          "cleared": "ワークベンチをクリアしました"
+        },
+        "source": {
+          "title": "ソース",
+          "clipboard": "クリップボードを読む",
+          "clipboardText": "クリップボードのテキスト",
+          "clipboardImage": "クリップボードの画像",
+          "dropText": "ドロップしたテキスト",
+          "dropImage": "ドロップした画像",
+          "manual": "手入力の下書き",
+          "image": "画像",
+          "empty": "素材はまだありません",
+          "clear": "クリア"
+        },
+        "actions": {
+          "process": "加工",
+          "recognize": "認識",
+          "organize": "整理",
+          "tag": "タグ",
+          "title": "タイトル",
+          "translate": "翻訳",
+          "import": "記録に追加",
+          "copyText": "テキストをコピー",
+          "copyImage": "画像をコピー",
+          "processing": "現在の素材を処理中..."
+        },
+        "draft": {
+          "untitled": "無題の素材",
+          "content": "加工下書き",
+          "source": "ソース：{source}",
+          "titlePlaceholder": "このナレッジ下書きにタイトルを付ける...",
+          "contentPlaceholder": "ここに素材を貼り付け、認識、整理、翻訳し、準備できたら記録に追加します。",
+          "characters": "{count} 文字",
+          "tagsPrefix": "タグ："
+        },
+        "messages": {
+          "noClipboard": "クリップボードに読み取れるテキストまたは画像がありません",
+          "readFail": "素材の読み取りに失敗しました",
+          "recognizeFirst": "先に画像を追加してください",
+          "recognizeDisabled": "画像認識は無効です。設定で有効にしてください",
+          "processFail": "処理に失敗しました。AIまたは認識設定を確認してください",
+          "emptyAiResult": "AIから利用可能な結果が返りませんでした",
+          "organizeEmpty": "整理するテキストがありません",
+          "tagEmpty": "タグ付けする下書きがありません",
+          "tagFail": "タグ生成に失敗しました",
+          "titleEmpty": "タイトルを生成する下書きがありません",
+          "titleFail": "タイトル生成に失敗しました",
+          "translateEmpty": "翻訳する下書きがありません",
+          "copySuccess": "クリップボードにコピーしました",
+          "copyFail": "コピーに失敗しました",
+          "emptyDraft": "インポートする下書きがありません",
+          "importSuccess": "現在の記録タグにインポートしました",
+          "importFail": "記録へのインポートに失敗しました",
+          "historyRestored": "履歴からワークベンチに復元しました",
+          "undoSuccess": "元に戻しました：{action}",
+          "stepFail": "{step} に失敗しました"
+        },
+        "workflow": {
+          "title": "処理ステップ",
+          "steps": {
+            "read": "素材を読む",
+            "recognize": "画像を認識",
+            "organize": "本文を整理",
+            "tag": "タグを生成",
+            "title": "タイトルを生成",
+            "import": "記録に追加",
+            "translate": "下書きを翻訳",
+            "copy": "内容をコピー"
+          },
+          "state": {
+            "idle": "待機中",
+            "running": "処理中",
+            "done": "完了",
+            "failed": "失敗"
+          },
+          "undo": {
+            "count": "{count} 件を元に戻せます",
+            "button": "元に戻す：{action}",
+            "read": "素材読み取り",
+            "recognize": "画像認識",
+            "organize": "本文整理",
+            "tag": "タグ生成",
+            "title": "タイトル生成",
+            "translate": "下書き翻訳",
+            "import": "インポート前の状態",
+            "clear": "ワークベンチをクリア",
+            "restore": "履歴を復元"
+          }
+        }
+      },
+      "recognitionHistory": {
+        "title": "認識履歴",
+        "empty": "認識記録がありません",
+        "searchPlaceholder": "タイトル、内容、タグを検索...",
+        "noResults": "一致する履歴はありません",
+        "justNow": "たった今",
+        "minutesAgo": "{count}分前",
+        "hoursAgo": "{count}時間前",
+        "noDescription": "説明なし",
+        "clearAll": "すべての記録をクリア",
+        "filters": {
+          "all": "すべての種類",
+          "image": "画像",
+          "text": "テキスト",
+          "favorite": "お気に入り",
+          "allSources": "すべてのソース"
+        },
+        "selection": {
+          "filtered": "現在の結果を選択（{count}）",
+          "clear": "選択を解除"
+        },
+        "export": {
+          "filtered": "現在の結果をエクスポート",
+          "selected": "{count}件をエクスポート",
+          "empty": "エクスポートできる履歴がありません",
+          "success": "{count}件の履歴をエクスポートしました",
+          "fail": "エクスポートに失敗しました",
+          "type": "種類：",
+          "source": "ソース：",
+          "time": "時間：",
+          "tags": "タグ："
+        },
+        "actions": {
+          "favorite": "お気に入り",
+          "restore": "ワークベンチに復元",
+          "delete": "削除"
+        },
+        "type": {
+          "image": "画像",
+          "text": "テキスト"
+        }
+      },
+      "recognitionSettings": {
+        "title": "認識設定",
+        "enableRecognition": "認識を有効にする",
+        "enableRecognitionHint": "有効にするとスクリーンショットと画像コンテンツを自動認識します",
+        "enableRecognitionDesc": "OCRまたはAIモデルを使用して画像内のテキストを認識",
+        "method": "認識方法",
+        "methodHint": "認識方法を選択、OCRは高速、AIはより正確",
+        "methodOcr": "ローカル認識、高速",
+        "methodVlm": "クラウド認識、より正確",
+        "visionModel": "AI Visionモデル",
+        "visionModelHint": "ナレッジ中継所のAI Vision認識にのみ適用",
+        "visionModelDesc": "未選択の場合はグローバル画像認識モデルに従います。",
+        "autoRecognize": "自動認識",
+        "autoRecognizeDesc": "スクリーンショットや画像の貼り付け時に自動的に認識を開始",
+        "aiWorkflow": "AIワークフロー",
+        "autoOrganizeAfterRecognize": "認識後に自動整理",
+        "autoOrganizeAfterRecognizeDesc": "画像認識後、自動でナレッジノートに整理します",
+        "autoTagAfterOrganize": "整理後に自動タグ付け",
+        "autoTagAfterOrganizeDesc": "整理後に表示用のナレッジタグを生成します",
+        "autoTitleBeforeImport": "追加前に自動タイトル生成",
+        "autoTitleBeforeImportDesc": "記録に追加する前にAIでより良いタイトルを生成します",
+        "saveHistory": "履歴を保存",
+        "saveHistoryDesc": "後で閲覧できるように認識記録を保存",
+        "reset": "リセット",
+        "maxHistoryItems": "最大履歴件数"
       },
       "tag": {
         "searchPlaceholder": "タグを作成または検索...",
@@ -1685,6 +1993,7 @@
         "recording": "音声記録",
         "scan": "画像スキャン",
         "image": "画像アップロード",
+        "recognition": "クリップボード認識",
         "link": "リンク記録",
         "file": "ファイルアップロード",
         "todo": "Todo記録",

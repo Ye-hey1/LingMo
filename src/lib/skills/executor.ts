@@ -13,6 +13,7 @@ import type {
   SkillScript,
 } from './types'
 import { resolveSkillDirectory, resolveScriptRelativePath, buildShellCommand } from './path-utils'
+import { skillManager } from './manager'
 
 // ============================================================================
 // SkillExecutor 类
@@ -47,9 +48,23 @@ export class SkillExecutor {
   formatSkillForExecution(skill: SkillContent, userInput: string): string {
     const sections: string[] = []
 
-    // 添加 Skill 标题
-    sections.push(`## Using Skill: ${skill.metadata.name}`)
+    sections.push(`# 使用 Skill: ${skill.metadata.name}`)
     sections.push('')
+    sections.push('用户通过斜杠命令显式调用了这个 Skill。后续用户文字是本次 Skill 的具体任务参数。')
+    sections.push('请优先遵循此 Skill 的说明、脚本、参考资料和工具要求，再结合用户请求输出结果。')
+    sections.push('如果 Skill 中出现 Claude、MCP 或其他外部环境的工具名，请将其作为方法参考，优先映射为 LingMo 当前可用工具；不要调用不存在的工具。')
+    sections.push('如果 Skill 要求与通用回答习惯冲突，以 Skill 要求为准；不要在最终回复中解释这段包装提示。')
+    sections.push('')
+
+    // 添加 Skill 标题
+    sections.push(`## Skill: ${skill.metadata.name}`)
+    sections.push('')
+
+    const fileInfo = skillManager.getSkillFileInfo(skill.metadata.id)
+    if (fileInfo) {
+      sections.push(`Base directory for this skill: ${fileInfo.directory} (${skill.metadata.scope === 'global' ? 'AppData' : 'workspace'})`)
+      sections.push('')
+    }
 
     // 添加 Skill 描述
     if (skill.metadata.description) {
@@ -93,6 +108,16 @@ export class SkillExecutor {
       for (const ref of skill.references) {
         sections.push(`  - [${ref.name}](${ref.path})`)
       }
+      sections.push('')
+      sections.push('如需这些参考资料的正文，请使用 load_skill_content 按 Skill ID 读取；这些路径是相对于上方 Skill 根目录的资源路径。')
+      sections.push('')
+    }
+
+    // 添加工具权限提示
+    if (skill.metadata.allowedTools && skill.metadata.allowedTools.length > 0) {
+      sections.push(
+        `**Skill Tool Guidance**: ${skill.metadata.allowedTools.join(', ')}`
+      )
       sections.push('')
     }
 

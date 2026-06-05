@@ -97,6 +97,19 @@ interface SkillsV2State {
   installFromMarket: (source: string, skillId: string) => Promise<SkillRecord>
 }
 
+async function refreshRuntimeSkillIndex() {
+  try {
+    const [{ useSkillsStore }, { invalidateSkillSlashCache }] = await Promise.all([
+      import('@/stores/skills'),
+      import('@/lib/ai-doc-commands/slash-bridge'),
+    ])
+    await useSkillsStore.getState().refreshSkills()
+    invalidateSkillSlashCache()
+  } catch (error) {
+    console.warn('[SkillsV2] Failed to refresh runtime skill index:', error)
+  }
+}
+
 export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
   skills: [],
   discovered: [],
@@ -127,6 +140,7 @@ export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
     set({ deletingSkillId: id })
     try {
       await invoke('skill_v2_delete', { id })
+      await refreshRuntimeSkillIndex()
       set({
         skills: get().skills.filter(s => s.id !== id),
         scenarioSkills: get().scenarioSkills.filter(s => s.id !== id),
@@ -138,6 +152,7 @@ export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
 
   setEnabled: async (id, enabled) => {
     await invoke('skill_v2_set_enabled', { id, enabled })
+    await refreshRuntimeSkillIndex()
     const skills = get().skills.map(s => s.id === id ? { ...s, enabled } : s)
     set({ skills })
   },
@@ -160,6 +175,7 @@ export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
 
   importDiscovered: async (id) => {
     const record = await invoke<SkillRecord>('skill_v2_import_discovered', { discoveredId: id })
+    await refreshRuntimeSkillIndex()
     set({
       skills: [record, ...get().skills],
       discovered: get().discovered.map(d => d.id === id ? { ...d, imported: true } : d),
@@ -225,6 +241,7 @@ export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
     set({ installing: true })
     try {
       const record = await invoke<SkillRecord>('skill_v2_install_git', { url, name: name ?? null })
+      await refreshRuntimeSkillIndex()
       set({ skills: [record, ...get().skills] })
       return record
     } finally {
@@ -236,6 +253,7 @@ export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
     set({ installing: true })
     try {
       const record = await invoke<SkillRecord>('skill_v2_install_archive', { path })
+      await refreshRuntimeSkillIndex()
       set({ skills: [record, ...get().skills] })
       return record
     } finally {
@@ -247,6 +265,7 @@ export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
     set({ installing: true })
     try {
       const record = await invoke<SkillRecord>('skill_v2_install_local_dir', { path, name: name ?? null })
+      await refreshRuntimeSkillIndex()
       set({ skills: [record, ...get().skills] })
       return record
     } finally {
@@ -297,6 +316,7 @@ export const useSkillsV2Store = create<SkillsV2State>((set, get) => ({
         source,
         skillId,
       })
+      await refreshRuntimeSkillIndex()
       set({ skills: [record, ...get().skills] })
       return record
     } finally {

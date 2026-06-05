@@ -6,15 +6,18 @@ import { formatIntentPolicyForPrompt, type IntentPolicy } from './tool-policy'
 import { buildToolExecutionPrompt } from './tool-intent'
 
 export interface AgentPromptOptions {
-  mode: 'function-call' | 'react'
+  mode: 'react'
   userInput: string
   webSearchEnabled?: boolean
   memoryPrompt?: string
   activeSkills?: string[]
   activeSkillMatches?: SkillMatchSummary[]
+  forcedSkillIds?: string[]
   intentPolicy: IntentPolicy
   extraSections?: string[]
 }
+
+export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__LINGMO_SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'
 
 const LANGUAGE_NAMES: Record<string, string> = {
   zh: '简体中文',
@@ -68,8 +71,90 @@ async function buildUserPromptSection() {
   }
 }
 
-function buildSkillSummary(activeSkills?: string[], activeSkillMatches?: SkillMatchSummary[]) {
+function normalizeSkillIds(skillIds?: string[]) {
+  return Array.from(new Set((skillIds || []).map(id => id.trim()).filter(Boolean)))
+}
+
+function buildFullSkillBlock(skill: NonNullable<ReturnType<typeof skillManager.getSkill>>) {
+  const lines: string[] = []
+  const fileInfo = skillManager.getSkillFileInfo(skill.metadata.id)
+
+  lines.push(`### ${skill.metadata.name}`)
+  lines.push('')
+  lines.push(`- ID: ${skill.metadata.id}`)
+  lines.push(`- Description: ${skill.metadata.description}`)
+  if (fileInfo) {
+    lines.push(`- Base directory for this skill: ${fileInfo.directory} (${skill.metadata.scope === 'global' ? 'AppData' : 'workspace'})`)
+  }
+  if (skill.metadata.version) {
+    lines.push(`- Version: ${skill.metadata.version}`)
+  }
+  if (skill.metadata.author) {
+    lines.push(`- Author: ${skill.metadata.author}`)
+  }
+  if (skill.metadata.allowedTools?.length) {
+    lines.push(`- Authorized tools: ${skill.metadata.allowedTools.join(', ')}`)
+  }
+
+  if (skill.scripts?.length) {
+    lines.push('')
+    lines.push('Available scripts:')
+    for (const script of skill.scripts) {
+      lines.push(`- ${script.path} (${script.type})`)
+    }
+  }
+
+  if (skill.references?.length) {
+    lines.push('')
+    lines.push('Available references:')
+    for (const reference of skill.references) {
+      lines.push(`- ${reference.path}`)
+    }
+  }
+
+  if (skill.assets?.length) {
+    lines.push('')
+    lines.push('Available assets:')
+    for (const asset of skill.assets) {
+      lines.push(`- ${asset.path} (${asset.type})`)
+    }
+  }
+
+  lines.push('')
+  lines.push('Instructions:')
+  lines.push(skill.instructions)
+
+  return lines.join('\n')
+}
+
+function buildForcedSkillSection(forcedSkillIds?: string[]) {
+  const skillIds = normalizeSkillIds(forcedSkillIds)
+  if (skillIds.length === 0) return ''
+
+  const skillBlocks = skillIds
+    .map(id => skillManager.getSkill(id))
+    .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill))
+    .map(buildFullSkillBlock)
+
+  if (skillBlocks.length === 0) return ''
+
+  return section(
+    'Slash-Invoked Skills',
+    [
+      'The user explicitly invoked these Skills with a slash command.',
+      'Apply these complete Skill instructions before generic behavior, user preference prompt, or automatic skill matching.',
+      'Treat the text after the slash command as the concrete user request for this Skill.',
+      'If extra reference content is needed, prefer the load_skill_content tool with the Skill ID. Skill reference paths shown below are AppData skill resources, not normal workspace notes.',
+      'If a Skill mentions Claude, MCP, or another host environment, map the method to LingMo tools that are actually available instead of calling non-existent tools.',
+      '',
+      skillBlocks.join('\n\n---\n\n'),
+    ].join('\n')
+  )
+}
+
+function buildSkillSummary(activeSkills?: string[], activeSkillMatches?: SkillMatchSummary[], excludedSkillIds?: string[]) {
   const matchesById = new Map((activeSkillMatches || []).map(match => [match.id, match]))
+  const excluded = new Set(normalizeSkillIds(excludedSkillIds))
   const skillIds = activeSkillMatches?.length
     ? activeSkillMatches.map(match => match.id)
     : activeSkills || []
@@ -77,6 +162,7 @@ function buildSkillSummary(activeSkills?: string[], activeSkillMatches?: SkillMa
   if (skillIds.length === 0) return ''
 
   const skillLines = skillIds
+    .filter(id => !excluded.has(id))
     .map(id => skillManager.getSkill(id))
     .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill))
     .slice(0, 5)
@@ -117,7 +203,7 @@ function buildCoreRules(language: string) {
   const currentDate = `${year}-${month}-${day} (周${weekDay}) ${hours}:${minutes}`
 
   return section(
-    'Core Rules',
+    'Dynamic Runtime Context',
     [
       `**Current date: ${currentDate}**. Always use this as the reference for "today", "latest", "recent", "this year", etc.`,
       `Respond in ${language} unless the user explicitly asks for another language.`,
@@ -130,6 +216,36 @@ function buildCoreRules(language: string) {
       'If a required parameter is missing, ask only for that parameter.',
       'After successful completion, stop and give a concise final answer.',
       'When asked about "latest", "recent", "current", "trending" topics that require up-to-date information, ALWAYS use web_search first. Do NOT rely on training data alone for time-sensitive questions.',
+    ].join('\n')
+  )
+}
+
+function buildStaticIdentity(language: string) {
+  return [
+    'You are LingMo Agent, a local-first knowledge workspace assistant that can answer, analyze, and use tools to help users work with notes, records, diagrams, memories, and connected services.',
+    '',
+    section(
+      'Identity & Tone',
+      [
+        `Respond in ${language} unless the user explicitly asks for another language.`,
+        'Be direct, accurate, and concise.',
+        'Do not fabricate tool calls, file paths, search results, command results, or content you have not verified.',
+        'If the available evidence is insufficient, say what is missing or use the smallest necessary tool to get it.',
+      ].join('\n')
+    ),
+  ].join('\n')
+}
+
+function buildStaticRuntimeDiscipline() {
+  return section(
+    'Agent Runtime Discipline',
+    [
+      'Run one clear turn step at a time: model response -> optional tool call -> observation -> next model response or final answer.',
+      'Treat each tool result as the evidence for the next step. Do not ignore a failed or policy-blocked observation.',
+      'After a successful tool result, either take a distinct next action that uses that result, or produce the final answer.',
+      'Do not repeat the same action with the same arguments. If retrying is necessary, change the arguments based on the error.',
+      'Keep tool arguments minimal and exact. Prefer reading targeted files or narrowed searches over broad repeated scans.',
+      'When the task is done, stop with final_answer. Do not add another tool call just to look busy.',
     ].join('\n')
   )
 }
@@ -157,25 +273,14 @@ function buildToolExecutionMode(userInput: string) {
   return buildToolExecutionPrompt(userInput)
 }
 
-function buildOutputRules(mode: AgentPromptOptions['mode']) {
-  if (mode === 'react') {
-    return section(
-      'ReAct Output Format',
-      [
-        'Return JSON only.',
-        'Tool call: {"thought":"reason","action":"tool_name","action_input":{"param":"value"}}',
-        'Batch reads, max 3 read-only tools: {"thought":"reason","actions":[{"action":"tool_name","action_input":{}}]}',
-        'Final answer: {"thought":"reason","final_answer":"answer"}',
-      ].join('\n')
-    )
-  }
-
+function buildOutputRules(_mode: AgentPromptOptions['mode']) {
   return section(
-    'Final Answer',
+    'ReAct Output Format',
     [
-      'Use normal Markdown text for the final answer.',
-      'Keep it grounded in tool results and supplied context.',
-      'Do not include internal policy text, tool schemas, or hidden reasoning.',
+      'Return JSON only.',
+      'Tool call: {"thought":"reason","action":"tool_name","action_input":{"param":"value"}}',
+      'Batch reads, max 3 read-only tools: {"thought":"reason","actions":[{"action":"tool_name","action_input":{}}]}',
+      'Final answer: {"thought":"reason","final_answer":"answer"}',
     ].join('\n')
   )
 }
@@ -183,28 +288,31 @@ function buildOutputRules(mode: AgentPromptOptions['mode']) {
 export async function buildAgentSystemPrompt(options: AgentPromptOptions) {
   const language = await getOutputLanguage()
   const userPromptSection = await buildUserPromptSection()
-  const skillSection = buildSkillSummary(options.activeSkills, options.activeSkillMatches)
+  const forcedSkillSection = buildForcedSkillSection(options.forcedSkillIds)
+  const skillSection = buildSkillSummary(options.activeSkills, options.activeSkillMatches, options.forcedSkillIds)
   const memorySection = section('Unified Context', options.memoryPrompt)
   const extraSections = (options.extraSections || []).map(compactBlock).filter(Boolean)
+  const staticSections = [
+    buildStaticIdentity(language),
+    buildStaticRuntimeDiscipline(),
+  ]
 
-  return [
-    'You are LingMo Agent, a local-first knowledge workspace assistant that can answer, analyze, and use tools to help users work with notes, records, diagrams, memories, and connected services.',
-    '',
-    '## Identity & Tone',
-    `- Respond in ${language} unless the user explicitly asks for another language.`,
-    '- Be direct, accurate, and concise.',
-    '- Do NOT fabricate tool calls, file paths, or content you have not verified.',
-    '- If you are unsure, say so instead of guessing.',
-    '',
+  const dynamicSections = [
     buildCoreRules(language),
     userPromptSection,
     memorySection,
+    forcedSkillSection,
     skillSection,
     buildRuntimePolicy(options.intentPolicy),
     buildWebControl(options.webSearchEnabled),
     buildToolExecutionMode(options.userInput),
     ...extraSections,
-    '',
+  ]
+
+  return [
+    ...staticSections,
+    SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    ...dynamicSections,
     '## Anti-Patterns (MUST follow)',
     '- Do NOT call the same tool with the same arguments more than once.',
     '- Do NOT claim files were created/modified/deleted unless a tool result confirms it.',

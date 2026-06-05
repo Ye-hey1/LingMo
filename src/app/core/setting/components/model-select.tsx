@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useEffect, useState } from "react"
-import { AiConfig, ModelConfig } from "../../setting/config"
+import { AiConfig, ModelConfig, builtinProviderTemplates } from "../../setting/config"
 import { Store } from "@tauri-apps/plugin-store"
 import useSettingStore from "@/stores/setting"
 import { ChevronsUpDown, X } from "lucide-react"
@@ -24,10 +24,12 @@ import { cn } from "@/lib/utils"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { TooltipButton } from "@/components/tooltip-button"
+import { getCachedProviderTemplates, getProviderTemplateMatch } from "@/lib/ai/provider-templates-runtime"
+import { getConfiguredProviderDisplayTitle } from "@/lib/ai/provider-display"
 
 interface GroupedModel {
   configKey: string
-  configTitle: string
+  providerTitle: string
   model: ModelConfig
 }
 
@@ -50,88 +52,48 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
   const [open, setOpen] = React.useState(false)
   const t = useTranslations('settings.defaultModel')
 
-  // 获取正确的存储键名
   function getStoreKey(modelKey: string): string {
     switch (modelKey) {
-      case 'primaryModel':
-        return 'primaryModel'
-      case 'imageMethod':
-        return 'imageMethodModel'
-      case 'completion':
-        return 'completionModel'
-      case 'markDesc':
-        return 'markDescModel'
+      case 'primaryModel': return 'primaryModel'
+      case 'imageMethod': return 'imageMethodModel'
+      case 'completion': return 'completionModel'
+      case 'markDesc': return 'markDescModel'
       case 'audio':
-      case 'tts':
-        return 'audioModel'
-      case 'stt':
-        return 'sttModel'
-      case 'embedding':
-        return 'embeddingModel'
-      case 'reranking':
-        return 'rerankingModel'
-      case 'condense':
-        return 'condenseModel'
-      case 'inspiration':
-        return 'inspirationModel'
-      default:
-        return `${modelKey}Model`
+      case 'tts': return 'audioModel'
+      case 'stt': return 'sttModel'
+      case 'embedding': return 'embeddingModel'
+      case 'reranking': return 'rerankingModel'
+      case 'condense': return 'condenseModel'
+      case 'inspiration': return 'inspirationModel'
+      default: return `${modelKey}Model`
     }
   }
 
   function setPrimaryModelHandler(primaryModel: string) {
     setModel(primaryModel)
     switch (modelKey) {
-      case 'primaryModel':
-        setPrimaryModel(primaryModel)
-        break;
-      case 'imageMethod':
-        setImageMethodModel(primaryModel)
-        break;
-      case 'completion':
-        setCompletionModel(primaryModel)
-        break;
-      case 'markDesc':
-        setMarkDescModel(primaryModel)
-        break;
+      case 'primaryModel': setPrimaryModel(primaryModel); break
+      case 'imageMethod': setImageMethodModel(primaryModel); break
+      case 'completion': setCompletionModel(primaryModel); break
+      case 'markDesc': setMarkDescModel(primaryModel); break
       case 'audio':
-      case 'tts':
-        setAudioModel(primaryModel)
-        break;
-      case 'stt':
-        setSttModel(primaryModel)
-        break;
-      case 'embedding':
-        setEmbeddingModel(primaryModel)
-        break;
-      case 'reranking':
-        setRerankingModel(primaryModel)
-        break;
-      case 'condense':
-        setCondenseModel(primaryModel)
-        break;
-      case 'inspiration':
-        setInspirationModel(primaryModel)
-        break;
-      default:
-        break;
+      case 'tts': setAudioModel(primaryModel); break
+      case 'stt': setSttModel(primaryModel); break
+      case 'embedding': setEmbeddingModel(primaryModel); break
+      case 'reranking': setRerankingModel(primaryModel); break
+      case 'condense': setCondenseModel(primaryModel); break
+      case 'inspiration': setInspirationModel(primaryModel); break
     }
   }
 
-  // 获取需要过滤的模型类型
   function getTargetModelType(modelKey: string): string {
     switch (modelKey) {
-      case 'embedding':
-        return 'embedding'
-      case 'reranking':
-        return 'rerank'
+      case 'embedding': return 'embedding'
+      case 'reranking': return 'rerank'
       case 'audio':
-      case 'tts':
-        return 'tts'
-      case 'stt':
-        return 'stt'
-      default:
-        return 'chat'
+      case 'tts': return 'tts'
+      case 'stt': return 'stt'
+      default: return 'chat'
     }
   }
 
@@ -139,52 +101,44 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
     const store = await Store.load('store.json');
     const aiConfigs = await store.get<AiConfig[]>('aiModelList')
     if (!aiConfigs) return
+
+    // 加载 provider 模板，用于统一供应商显示名称
+    const templates = await getCachedProviderTemplates()
+
     const models: GroupedModel[] = []
     const targetModelType = getTargetModelType(modelKey)
-    
+
+    const getProviderTitleWithTemplates = (config: AiConfig, tpl: AiConfig[]): string => {
+      const matched = getProviderTemplateMatch(config, tpl)
+      const builtin = builtinProviderTemplates.find((tpl2) => {
+        if (config.templateKey && config.templateKey === tpl2.key) return true
+        const norm = (u?: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase()
+        return norm(config.baseURL) === norm(tpl2.baseURL)
+      })
+      return getConfiguredProviderDisplayTitle(config, matched) || getConfiguredProviderDisplayTitle(config, builtin)
+    }
+
     aiConfigs.forEach(config => {
-      // 检查配置是否有效
       if (!config.baseURL) return
       if (config.enabled === false) return
-      if (targetModelType === 'stt' && !config.apiKey?.trim()) {
-        return
-      }
-      
-      // 处理新的 models 数组结构
+      if (targetModelType === 'stt' && !config.apiKey?.trim()) return
+
       if (config.models && config.models.length > 0) {
-        config.models.forEach(model => {
-          // 根据modelKey过滤对应类型的模型
-          if (model.modelType === targetModelType && model.model) {
+        const providerTitle = getProviderTitleWithTemplates(config, templates)
+        config.models.forEach(m => {
+          if (m.modelType === targetModelType && m.model) {
             models.push({
               configKey: config.key,
-              configTitle: config.title,
-              model,
+              providerTitle,
+              model: m,
             })
           }
         })
-      } else {
-        // 向后兼容：处理旧的单模型结构
-        const configModelType = config.modelType || 'chat'
-        if (configModelType === targetModelType && config.model) {
-          models.push({
-            configKey: config.key,
-            configTitle: config.title,
-            model: {
-              id: config.key,
-              model: config.model,
-              modelType: configModelType,
-              temperature: config.temperature,
-              topP: config.topP,
-              voice: config.voice,
-              enableStream: config.enableStream
-            }
-          })
-        }
       }
     })
 
     setGroupedModels(models)
-    
+
     const storeKey = getStoreKey(modelKey)
     const primaryModel = await store.get<string>(storeKey)
     if (!primaryModel) return
@@ -207,63 +161,33 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
     setPrimaryModelHandler('')
   }
 
-  // 检查模型是否被选中（支持向后兼容）
   const isModelSelected = (modelId: string): boolean => {
-    if (!model) return false
-    
-    // 首先尝试精确匹配（新格式的组合键）
-    if (model === modelId) return true
-    
-    // 向后兼容匹配（旧格式的单独ID）
-    if (modelId.includes('-')) {
-      const parts = modelId.split('-')
-      const originalId = parts.slice(2).join('-') // 去掉 config.key 部分
-      return originalId === model
-    }
-    
-    return false
+    return model === modelId
   }
 
-  // 查找当前选中的模型显示信息
   const findSelectedModelDisplay = () => {
     if (!model || !groupedModels.length) return null
-    
-    // 首先尝试精确匹配（新格式的组合键）
-    let selectedItem = groupedModels.find(item => item.model.id === model)
-    
-    // 如果没找到，尝试向后兼容匹配（旧格式的单独ID）
-    if (!selectedItem) {
-      selectedItem = groupedModels.find(item => {
-        // 对于新格式的组合键，提取原始ID进行匹配
-        if (item.model.id.includes('-')) {
-          const parts = item.model.id.split('-')
-          const originalId = parts.slice(2).join('-') // 去掉 config.key 部分
-          return originalId === model
-        }
-        return item.model.id === model
-      })
-    }
-    
+    const selectedItem = groupedModels.find(item => item.model.id === model)
     if (selectedItem) {
-      return `${selectedItem.model.model}(${selectedItem.configTitle})`
+      return selectedItem.providerTitle
+        ? `${selectedItem.model.model} (${selectedItem.providerTitle})`
+        : selectedItem.model.model
     }
-    
     return null
   }
 
-  // 按配置分组模型
+  // 按真实供应商显示名分组；没有供应商时不显示分组标题。
   const groupedByConfig = groupedModels.reduce((acc, item) => {
-    if (!acc[item.configTitle]) {
-      acc[item.configTitle] = []
-    }
-    acc[item.configTitle].push(item)
+    const key = item.providerTitle
+    if (!acc[key]) acc[key] = []
+    acc[key].push(item)
     return acc
   }, {} as Record<string, GroupedModel[]>)
 
   useEffect(() => {
     initModelList()
   }, [aiModelList, modelKey])
-  
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <div className="flex gap-2">
@@ -295,8 +219,8 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
           <CommandInput placeholder={t('placeholder')} className="h-9" />
           <CommandList>
             <CommandEmpty>No model found.</CommandEmpty>
-            {Object.entries(groupedByConfig).map(([configTitle, models]) => (
-              <CommandGroup key={configTitle} heading={configTitle}>
+            {Object.entries(groupedByConfig).map(([providerTitle, models]) => (
+              <CommandGroup key={providerTitle || 'models-without-provider'} heading={providerTitle || undefined}>
                 {models.map((item) => (
                   <CommandItem
                     key={item.model.id}

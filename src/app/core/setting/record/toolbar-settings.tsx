@@ -10,7 +10,8 @@ import {
   Link2,
   FileText,
   CheckSquare,
-  GripVertical
+  GripVertical,
+  ClipboardList
 } from 'lucide-react'
 import useSettingStore, { RecordToolbarItem } from '@/stores/setting'
 import {
@@ -50,6 +51,11 @@ const TOOL_CONFIGS = {
     icon: <ImagePlus className="size-4" />,
     titleKey: 'record.mark.toolbar.image',
     descKey: 'settings.record.toolbar.recordToolbar.image.desc',
+  },
+  recognition: {
+    icon: <ClipboardList className="size-4" />,
+    titleKey: 'record.mark.toolbar.recognition',
+    descKey: 'settings.record.toolbar.recordToolbar.recognition.desc',
   },
   link: {
     icon: <Link2 className="size-4" />,

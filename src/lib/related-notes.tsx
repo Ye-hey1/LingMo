@@ -74,7 +74,7 @@ export function RelatedNotesPanel() {
   const [semanticNotes, setSemanticNotes] = useState<SemanticNote[]>([])
   const [fallbackNotes, setFallbackNotes] = useState<RelatedNote[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [isExpanded, setIsExpanded] = useState(true)
+  const [isExpanded, setIsExpanded] = useState(false)
 
   const loadRelatedNotes = useCallback(async () => {
     if (!activeFilePath) return

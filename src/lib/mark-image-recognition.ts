@@ -13,6 +13,7 @@ interface RecognizeStructuredImageParams {
   base64?: string
   method: ImageRecognitionMethod
   sourceLabel?: string
+  modelKey?: string
 }
 
 const MAX_TITLE_LENGTH = 28
@@ -141,12 +142,13 @@ export async function recognizeStructuredImage({
   base64,
   method,
   sourceLabel = '截图',
+  modelKey,
 }: RecognizeStructuredImageParams): Promise<ImageRecognitionResult> {
   if (method === 'vlm') {
     if (!base64) {
       return buildEmptyRecognitionResult(sourceLabel)
     }
-    const markdown = await fetchAiDescByImage(base64, { mode: 'structured', sourceLabel })
+    const markdown = await fetchAiDescByImage(base64, { mode: 'structured', sourceLabel, modelKey })
     return ensureStructuredMarkdown(markdown || '', sourceLabel)
   }
 

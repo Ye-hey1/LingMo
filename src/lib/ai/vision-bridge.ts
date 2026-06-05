@@ -11,24 +11,50 @@ const VISION_BRIDGE_PROMPT = [
 ].join('\n')
 
 const IMAGE_CAPABLE_MODEL_PATTERNS = [
+  // OpenAI
   /vlm/i,
   /\bvision\b/i,
   /gpt-4o/i,
   /gpt-4\.1/i,
+  /gpt-4-turbo/i,
+  
+  // 智谱 GLM 系列
   /glm-4.*v/i,
+  /glm-5/i,           // glm-5.x 系列
+  /glm-4v/i,
+  /cogvlm/i,
+  
+  // 通义千问
   /qwen.*vl/i,
+  /qwen-vl/i,
+  /qwq/i,
+  
+  // 其他国产模型
   /qvq/i,
   /minicpm.*v/i,
   /internvl/i,
+  /deepseek.*vl/i,    // DeepSeek VL
+  /deepseek-vl/i,
+  /yi.*vision/i,      // Yi Vision
+  /step.*v/i,         // StepFun
+  /moonshot.*v/i,     // Moonshot
+  /doubao.*v/i,       // 豆包
+  /hunyuan.*v/i,      // 混元
+  /baichuan.*v/i,     // 百川
+  
+  // 国际模型
   /llava/i,
   /pixtral/i,
   /gemini-1\.5/i,
   /gemini-2\./i,
+  /gemini-pro-vision/i,
   /claude-3/i,
   /claude-3\.5/i,
   /claude-3\.7/i,
   /claude-sonnet-4/i,
   /gemma-3/i,
+  /mistral.*vision/i,
+  /llama.*vision/i,
 ]
 
 const descriptionCache = new Map<string, { ts: number; desc: string }>()
@@ -174,8 +200,22 @@ async function describeImageDataUrl(dataUrl: string, index: number, abortSignal?
   }
 
   const aiConfig = await getAISettings('imageMethodModel')
-  if (!aiConfig?.baseURL || !aiConfig.model || !supportsImageInput(aiConfig)) {
-    return `图片 ${index}：未配置可用的视觉桥接模型，无法生成描述。`
+  
+  // 详细的诊断信息
+  if (!aiConfig) {
+    return `图片 ${index}：未找到图片识别模型配置。请在设置 → AI → 图片识别中配置模型。`
+  }
+  if (!aiConfig.baseURL) {
+    return `图片 ${index}：模型 BaseURL 未配置。请检查 API 设置。`
+  }
+  if (!aiConfig.model) {
+    return `图片 ${index}：模型名称未配置。请选择一个支持视觉的模型。`
+  }
+  if (!aiConfig.apiKey) {
+    return `图片 ${index}：API Key 未配置。请在设置中填写 API Key。`
+  }
+  if (!supportsImageInput(aiConfig)) {
+    return `图片 ${index}：模型 "${aiConfig.model}" 不支持图片输入。请在模型设置中手动开启"支持图片输入"选项，或更换支持视觉的模型（如 gpt-4o、glm-4v、qwen-vl 等）。`
   }
 
   const openai = await createOpenAIClient(aiConfig)

@@ -1,12 +1,6 @@
 /**
- * Intelligent Context Trimming — turn-aware message history management
- *
- * Ported from CowAgent's agent.protocol.agent_stream:
- *   _trim_messages / _truncate_historical_tool_results /
- *   _aggressive_trim_for_overflow / _identify_complete_turns /
- *   compress_turn_to_text_only
- *
- * Adapted for LingMo's OpenAI-format message arrays.
+ * Intelligent Context Trimming — turn-aware message history management.
+ * Adapted for LingMo's OpenAI-format message arrays and the ReAct loop.
  */
 
 import {
@@ -34,6 +28,8 @@ export interface TrimOptions {
   maxTurns?: number
   /** Explicit context window override from the selected model config. */
   contextWindow?: number
+  /** Maximum characters to keep in non-primary system context messages. */
+  maxSystemMessageChars?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +174,8 @@ export function compressTurnToTextOnly(turn: ConversationTurn): ConversationTurn
 // ---------------------------------------------------------------------------
 
 const COMPRESS_THRESHOLD = 5 // turns
+const DEFAULT_SYSTEM_CONTEXT_CHARS = 60_000
+const AGGRESSIVE_SYSTEM_CONTEXT_CHARS = 30_000
 
 /**
  * Intelligent context trimming.
@@ -245,6 +243,103 @@ export function trimMessages(
   const result: Record<string, any>[] = []
   for (const t of turns) result.push(...t.messages)
   return result
+}
+
+function cloneMessage(message: Record<string, any>): Record<string, any> {
+  return JSON.parse(JSON.stringify(message))
+}
+
+function truncateStringContent(value: string, maxChars: number, label: string): string {
+  if (maxChars <= 0 || value.length <= maxChars) {
+    return value
+  }
+
+  return `${value.slice(0, maxChars)}\n\n[${label}: ${value.length - maxChars} chars omitted]`
+}
+
+function truncateMessageContent(
+  message: Record<string, any>,
+  maxChars: number,
+  label: string,
+): Record<string, any> {
+  const cloned = cloneMessage(message)
+  const content = cloned.content
+
+  if (typeof content === 'string') {
+    cloned.content = truncateStringContent(content, maxChars, label)
+    return cloned
+  }
+
+  if (Array.isArray(content)) {
+    let remaining = maxChars
+    cloned.content = content.map((part: any) => {
+      if (!part || typeof part !== 'object' || part.type !== 'text' || typeof part.text !== 'string') {
+        return part
+      }
+
+      const next = { ...part }
+      next.text = truncateStringContent(part.text, Math.max(0, remaining), label)
+      remaining = Math.max(0, remaining - part.text.length)
+      return next
+    })
+  }
+
+  return cloned
+}
+
+function splitSystemMessages(messages: Record<string, any>[]) {
+  const systemMessages: Record<string, any>[] = []
+  const conversationMessages: Record<string, any>[] = []
+
+  for (const message of messages) {
+    if (message.role === 'system') {
+      systemMessages.push(message)
+    } else {
+      conversationMessages.push(message)
+    }
+  }
+
+  return { systemMessages, conversationMessages }
+}
+
+function preserveSystemMessages(
+  systemMessages: Record<string, any>[],
+  maxSystemMessageChars: number,
+): Record<string, any>[] {
+  return systemMessages.map((message, index) => {
+    if (index === 0) {
+      return cloneMessage(message)
+    }
+
+    return truncateMessageContent(
+      message,
+      maxSystemMessageChars,
+      'System context trimmed for ReAct budget',
+    )
+  })
+}
+
+/**
+ * Trim conversation history without dropping system instructions/context.
+ *
+ * The ReAct loop carries tool state as complete thought/action/observation
+ * steps. Preserving system messages separately keeps the current task rules
+ * and injected workspace context available while older chat turns are trimmed.
+ */
+export function trimMessagesPreservingSystem(
+  messages: Record<string, any>[],
+  options: TrimOptions,
+): Record<string, any>[] {
+  if (!messages.length) return messages
+
+  const { systemMessages, conversationMessages } = splitSystemMessages(messages)
+  const preservedSystem = preserveSystemMessages(
+    systemMessages,
+    options.maxSystemMessageChars ?? DEFAULT_SYSTEM_CONTEXT_CHARS,
+  )
+  const trimmedConversation = trimMessages(conversationMessages.map(cloneMessage), options)
+
+  return [...preservedSystem, ...trimmedConversation]
 }
 
 // ---------------------------------------------------------------------------
@@ -323,4 +418,19 @@ export function aggressiveTrimForOverflow(messages: Record<string, any>[]): Reco
   }
 
   return cloned
+}
+
+/**
+ * Aggressive overflow recovery that still preserves system instructions.
+ */
+export function aggressiveTrimForOverflowPreservingSystem(
+  messages: Record<string, any>[],
+): Record<string, any>[] {
+  if (!messages.length) return messages
+
+  const { systemMessages, conversationMessages } = splitSystemMessages(messages)
+  const preservedSystem = preserveSystemMessages(systemMessages, AGGRESSIVE_SYSTEM_CONTEXT_CHARS)
+  const trimmedConversation = aggressiveTrimForOverflow(conversationMessages)
+
+  return [...preservedSystem, ...trimmedConversation]
 }

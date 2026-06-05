@@ -20,7 +20,7 @@ import { useTranslations } from 'next-intl'
 import { useLocalStorage } from 'react-use';
 import { ChatModeSelect } from "./chat-mode-select"
 import { getWorkspacePath } from "@/lib/workspace"
-import { ChatSend } from "./chat-send"
+import { ChatSend, type ChatSendOptions } from "./chat-send"
 import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFolder } from "@/lib/files"
 import emitter from "@/lib/emitter"
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -31,7 +31,6 @@ import type { PendingQuote } from "@/stores/chat"
 import { convertFileSrc } from "@tauri-apps/api/core"
 import { readTextFile, writeFile, BaseDirectory, exists } from "@tauri-apps/plugin-fs"
 import { toast } from "@/hooks/use-toast"
-import { AgentStatusBar } from "./agent-status-bar"
 import { ChatInputContext } from "./chat-input-context"
 import { ChatContextRing } from "./chat-token-display"
 import { ChatInputAddMenu } from "./chat-input-add-menu"
@@ -44,7 +43,7 @@ import {
 import { buildTypingFrames } from './onboarding-typing'
 import type { AiConfig, ModelConfig } from '@/app/core/setting/config'
 import { AiDocCommandPopover } from './ai-doc-command-popover'
-import { filterSlashCommands, findSlashCommand, invalidateSkillSlashCache, type SlashCommandItem } from '@/lib/ai-doc-commands/slash-bridge'
+import { filterSlashCommands, findSlashCommand, getAllSlashCommands, type SlashCommandItem } from '@/lib/ai-doc-commands/slash-bridge'
 import { findAiDocCommand, type AiDocCommandId } from '@/lib/ai-doc-commands'
 import { skillExecutor } from '@/lib/skills'
 import { loadActivityCalendarData, loadCachedActivityCalendarData } from '@/lib/activity'
@@ -73,6 +72,68 @@ function flattenFileTree(tree: DirTree[]): FileAutocompleteItem[] {
   }
   traverse(tree)
   return list
+}
+
+function isKeyboardEventComposing(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+  const nativeEvent = event.nativeEvent as KeyboardEvent & { isComposing?: boolean }
+  return nativeEvent.isComposing || nativeEvent.keyCode === 229
+}
+
+function isSendEnterKey(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+  return event.key === 'Enter' && !event.shiftKey && !isKeyboardEventComposing(event)
+}
+
+function normalizeSlashCommandToken(value: string) {
+  return value.trim().replace(/^\/+/, '').toLowerCase()
+}
+
+function parseSlashInput(input: string) {
+  const trimmed = input.trim()
+  if (!trimmed.startsWith('/')) return null
+
+  const body = trimmed.slice(1).trimStart()
+  const match = body.match(/^(\S+)(?:\s+([\s\S]*))?$/)
+  return {
+    commandToken: match?.[1] || '',
+    userRequest: (match?.[2] || '').trim(),
+  }
+}
+
+function isExactSlashCommandInput(input: string, command: SlashCommandItem) {
+  const parsed = parseSlashInput(input)
+  const normalizedInput = normalizeSlashCommandToken(parsed?.commandToken || input)
+  if (!normalizedInput) {
+    return false
+  }
+
+  return [command.title, ...command.searchTerms].some(
+    (term) => normalizeSlashCommandToken(term) === normalizedInput,
+  )
+}
+
+function getSlashCommandInvocation(input: string, command: SlashCommandItem) {
+  const parsed = parseSlashInput(input)
+  if (!parsed?.commandToken) return null
+
+  const normalizedToken = normalizeSlashCommandToken(parsed.commandToken)
+  const aliases = [command.title, ...command.searchTerms]
+    .map(normalizeSlashCommandToken)
+    .filter(Boolean)
+  if (!aliases.some(alias => alias === normalizedToken)) {
+    return null
+  }
+
+  return {
+    command,
+    userRequest: parsed.userRequest,
+  }
+}
+
+function findSlashCommandInvocation(input: string, commands: SlashCommandItem[]) {
+  return commands
+    .map(command => getSlashCommandInvocation(input, command))
+    .filter((match): match is { command: SlashCommandItem; userRequest: string } => !!match)
+    .sort((a, b) => b.command.title.length - a.command.title.length)[0] || null
 }
 
 const SENSITIVE_KEYWORDS = [
@@ -176,7 +237,7 @@ function supportsImageInputForModel(aiModelList: AiConfig[], primaryModel: strin
 type ResourceContextOrigin = 'auto' | 'manual' | 'diagram'
 type ResourceContentMode = 'active-editor' | 'full-file' | 'folder-rag' | 'pdf-active' | 'pdf-pending' | 'diagram-file'
 type ChatSendHandle = {
-  sendChat: (instructionOverride?: string, options?: { maxTokens?: number; temperature?: number }) => void
+  sendChat: (instructionOverride?: string, options?: ChatSendOptions) => void
   stopChat: () => Promise<void>
 }
 
@@ -271,7 +332,7 @@ export const ChatInput = React.memo(function ChatInput() {
     if (pendingCommandRef.current) return null
     if (!text.startsWith('/')) return null
     if (text.includes('\n')) return null
-    return text.slice(1)
+    return parseSlashInput(text)?.commandToken ?? ''
   }, [text])
   const slashOpen = slashQuery !== null
 
@@ -320,7 +381,16 @@ export const ChatInput = React.memo(function ChatInput() {
   }, [chatMode])
 
   // ---- 阶段 2：按 Enter 后真正执行 ----
-  const executeSlashCommand = useCallback(async (slashCommand: SlashCommandItem) => {
+  const executeSlashCommand = useCallback(async (slashCommand: SlashCommandItem, userRequest?: string) => {
+    if (slashCommand.executionMode === 'agent' && chatMode !== 'agent') {
+      toast({
+        title: '请切换到 Agent 模式',
+        description: `/${slashCommand.title} 需要执行本地工具或编辑文件，对话模式只用于问答、联网搜索和阅读上下文。`,
+        variant: 'destructive',
+      })
+      return
+    }
+
     if (slashCommand.source === 'skill') {
       if (!slashCommand.skillContent) return
 
@@ -330,13 +400,20 @@ export const ChatInput = React.memo(function ChatInput() {
         textareaRef.current.style.height = 'auto'
       }
 
+      const actualRequest = userRequest?.trim() || `执行 /${slashCommand.title}`
+      const displayText = userRequest?.trim()
+        ? `/${slashCommand.title} ${userRequest.trim()}`
+        : `/${slashCommand.title}`
       const skillInstruction = skillExecutor.formatSkillForExecution(
         slashCommand.skillContent,
-        `执行 /${slashCommand.title}`,
+        actualRequest,
       )
 
       try {
-        chatSendRef.current?.sendChat(skillInstruction)
+        chatSendRef.current?.sendChat(skillInstruction, {
+          forcedSkillIds: [slashCommand.skillContent.metadata.id],
+          displayText,
+        })
       } catch (error) {
         toast({
           title: '发送失败',
@@ -402,14 +479,22 @@ export const ChatInput = React.memo(function ChatInput() {
     }
 
     // AI 命令：发送给 LLM
-    const displayLabel = `/${command.title}`
+    const commandRequest = userRequest?.trim()
+    const displayLabel = commandRequest
+      ? `/${command.title} ${commandRequest}`
+      : `/${command.title}`
     const commandInstruction = `你正在执行一个应用内命令：${displayLabel}。
 这是明确的操作任务，不要先解释概念，不要做泛化介绍，必须直接按命令目标执行工具。
 如果上下文中已经包含"当前打开的笔记""关联文件内容"或"用户引用内容"，必须优先直接基于这些内容完成任务，不要再要求用户粘贴原文。
+${commandRequest ? `\n用户在命令后的补充要求：${commandRequest}` : ''}
 
 ${exec.prompt}`
     try {
-      chatSendRef.current?.sendChat(commandInstruction, { maxTokens: exec.maxTokens, temperature: exec.temperature })
+      chatSendRef.current?.sendChat(commandInstruction, {
+        maxTokens: exec.maxTokens,
+        temperature: exec.temperature,
+        displayText: displayLabel,
+      })
     } catch (error) {
       toast({
         title: '发送失败',
@@ -417,7 +502,7 @@ ${exec.prompt}`
         variant: 'destructive',
       })
     }
-  }, [loadFileTree])
+  }, [chatMode, loadFileTree])
   const t = useTranslations()
   const [inputHistory, setInputHistory] = useLocalStorage<string[]>('chat-input-history', [])
   const [dictationPolishModeValue, setDictationPolishModeValue] = useLocalStorage<string>(
@@ -460,6 +545,7 @@ ${exec.prompt}`
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const inputDropZoneRef = useRef<HTMLDivElement>(null)
   const placeholderTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const pendingAutoSendTimerRef = useRef<number | null>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const isMobileDevice_ = isMobile
   const onboardingAgentPromptArmedRef = useRef(false)
@@ -486,6 +572,15 @@ ${exec.prompt}`
     textarea.style.height = 'auto'
     const newHeight = Math.min(textarea.scrollHeight, 240)
     textarea.style.height = `${newHeight}px`
+  }, [])
+
+  const clearPendingAutoSend = useCallback(() => {
+    if (pendingAutoSendTimerRef.current === null) {
+      return
+    }
+
+    window.clearTimeout(pendingAutoSendTimerRef.current)
+    pendingAutoSendTimerRef.current = null
   }, [])
 
   const applyTypedText = useCallback((value: string) => {
@@ -688,10 +783,41 @@ ${exec.prompt}`
     setAttachedImages(restoredImages)
     applyTypedText(content)
 
-    window.setTimeout(() => {
+    clearPendingAutoSend()
+    pendingAutoSendTimerRef.current = window.setTimeout(() => {
+      pendingAutoSendTimerRef.current = null
       chatSendRef.current?.sendChat()
     }, 30)
-  }, [applyTypedText, clearLinkedFiles, loading, setPendingQuote, startNewConversation])
+  }, [applyTypedText, clearLinkedFiles, clearPendingAutoSend, loading, setPendingQuote, startNewConversation])
+
+  const restoreMessageDraft = useCallback((detail: {
+    content: string
+    images?: string[]
+    quoteData?: PendingQuote | null
+  }) => {
+    const content = detail.content
+    if (!content.trim() || loading) return
+
+    const restoredImages: ImageAttachment[] = (detail.images || []).map((url, index) => ({
+      id: `draft-${Date.now()}-${index}`,
+      url,
+      name: url.split('/').pop() || `image-${index + 1}`,
+      source: 'record',
+    }))
+
+    clearPendingAutoSend()
+    pendingCommandRef.current = null
+    clearLinkedFiles()
+    setPendingQuote(detail.quoteData || null)
+    setAttachedImages(restoredImages)
+    setIsContextExpanded(Boolean(detail.quoteData || restoredImages.length > 0))
+    applyTypedText(content)
+    setPlaceholder('')
+
+    window.setTimeout(() => {
+      textareaRef.current?.focus()
+    }, 50)
+  }, [applyTypedText, clearLinkedFiles, clearPendingAutoSend, loading, setPendingQuote])
 
   const handleQuickPromptSend = useCallback(async (prompt: string) => {
     if (!prompt.trim()) return
@@ -705,10 +831,18 @@ ${exec.prompt}`
 
     applyTypedText(prompt)
 
-    window.setTimeout(() => {
+    clearPendingAutoSend()
+    pendingAutoSendTimerRef.current = window.setTimeout(() => {
+      pendingAutoSendTimerRef.current = null
       chatSendRef.current?.sendChat()
     }, 30)
-  }, [applyTypedText, chatMode, clearAllContexts, setChatMode, setPendingQuote])
+  }, [applyTypedText, chatMode, clearAllContexts, clearPendingAutoSend, setChatMode, setPendingQuote])
+
+  useEffect(() => {
+    return () => {
+      clearPendingAutoSend()
+    }
+  }, [clearPendingAutoSend])
 
   useEffect(() => {
     const handleResend = (detail: unknown) => {
@@ -733,6 +867,28 @@ ${exec.prompt}`
       emitter.off('chat-message-resend', handleResend)
     }
   }, [sendPresetMessage])
+
+  useEffect(() => {
+    const handleDraft = (detail: unknown) => {
+      const payload = detail as {
+        content?: string
+        images?: string[]
+        quoteData?: PendingQuote | null
+      }
+
+      if (!payload?.content) return
+      restoreMessageDraft({
+        content: payload.content,
+        images: payload.images,
+        quoteData: payload.quoteData,
+      })
+    }
+
+    emitter.on('chat-message-draft', handleDraft)
+    return () => {
+      emitter.off('chat-message-draft', handleDraft)
+    }
+  }, [restoreMessageDraft])
 
   useEffect(() => {
     const handleAttachImage = (detail: unknown) => {
@@ -1529,9 +1685,6 @@ ${exec.prompt}`
         </div>
       )}
 
-      {/* Agent 状态栏 - 只在 Agent 模式下显示 */}
-      {chatMode === 'agent' && <AgentStatusBar />}
-
       {/* Hidden image input for mobile selection */}
       {isMobileDevice_ && (
         <input
@@ -1645,9 +1798,11 @@ ${exec.prompt}`
               const cursorPosition = textarea.selectionStart
               const isAtStart = cursorPosition === 0
               const isAtEnd = cursorPosition === text.length
+              const keyIsComposing = isKeyboardEventComposing(e) || (isComposing && e.key !== 'Enter')
+              const isSendEnter = isSendEnterKey(e)
 
               // @ 文件联想面板按键拦截
-              if (atOpen && !isComposing) {
+              if (atOpen && !keyIsComposing) {
                 const filteredCount = flattenedFiles.filter(
                   file => file.name.toLowerCase().includes((atQuery || '').toLowerCase()) ||
                           file.relativePath.toLowerCase().includes((atQuery || '').toLowerCase())
@@ -1669,7 +1824,7 @@ ${exec.prompt}`
                     return
                   }
                 }
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (isSendEnter) {
                   const filtered = flattenedFiles.filter(
                     file => file.name.toLowerCase().includes((atQuery || '').toLowerCase()) ||
                             file.relativePath.toLowerCase().includes((atQuery || '').toLowerCase())
@@ -1704,9 +1859,7 @@ ${exec.prompt}`
               // ---- 待定命令按 Enter 提交 ----
               if (
                 pendingCommandRef.current &&
-                e.key === 'Enter' &&
-                !isComposing &&
-                !e.shiftKey
+                isSendEnter
               ) {
                 const slashCommand = pendingCommandRef.current
                 if (slashCommand && text === `/${slashCommand.title}`) {
@@ -1719,7 +1872,7 @@ ${exec.prompt}`
               }
 
               // 斜杠命令面板按键拦截
-              if (slashOpen && !isComposing) {
+              if (slashOpen && !keyIsComposing) {
                 if (e.key === 'ArrowDown') {
                   if (slashFilteredCommands.length > 0) {
                     e.preventDefault()
@@ -1736,13 +1889,47 @@ ${exec.prompt}`
                     return
                   }
                 }
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  if (slashFilteredCommands.length > 0) {
-                    e.preventDefault()
-                    const target = slashFilteredCommands[Math.min(slashSelectedIndex, slashFilteredCommands.length - 1)]
+                if (isSendEnter) {
+                  e.preventDefault()
+                  const currentInvocation = findSlashCommandInvocation(text, slashFilteredCommands)
+                  const exactTarget = slashFilteredCommands.find(command =>
+                    isExactSlashCommandInput(text, command),
+                  )
+                  const selectedTarget = slashFilteredCommands[Math.min(slashSelectedIndex, slashFilteredCommands.length - 1)]
+                  const target = currentInvocation?.command || exactTarget || selectedTarget
+
+                  if (target) {
+                    if (currentInvocation || exactTarget) {
+                      void executeSlashCommand(target, currentInvocation?.userRequest)
+                      return
+                    }
+
                     selectSlashCommand(target.id)
                     return
                   }
+
+                  void (async () => {
+                    const allCommands = await getAllSlashCommands()
+                    const refreshedInvocation = findSlashCommandInvocation(text, allCommands)
+                    if (refreshedInvocation) {
+                      await executeSlashCommand(refreshedInvocation.command, refreshedInvocation.userRequest)
+                      return
+                    }
+
+                    const refreshedCommands = await filterSlashCommands(slashQuery || '')
+                    const refreshedExactTarget = refreshedCommands.find(command =>
+                      isExactSlashCommandInput(text, command),
+                    )
+
+                    if (refreshedExactTarget) {
+                      await executeSlashCommand(refreshedExactTarget)
+                      return
+                    }
+
+                    pendingCommandRef.current = null
+                    chatSendRef.current?.sendChat()
+                  })()
+                  return
                 }
                 if (e.key === 'Escape') {
                   e.preventDefault()
@@ -1751,7 +1938,7 @@ ${exec.prompt}`
                 }
               }
 
-              if (e.key === "Enter" && !isComposing && !e.shiftKey && e.keyCode === 13) {
+              if (isSendEnter) {
                 e.preventDefault()
                 if (dictation.isActive) {
                   return
@@ -1768,7 +1955,7 @@ ${exec.prompt}`
                 e.preventDefault()
                 insertPlaceholder()
               }
-              if (e.key === "ArrowUp" && !isComposing) {
+              if (e.key === "ArrowUp" && !keyIsComposing) {
                 if (isAtStart) {
                   e.preventDefault()
                   navigateHistory('up', text)
@@ -1778,7 +1965,7 @@ ${exec.prompt}`
                   textarea.setSelectionRange(0, 0)
                 }
               }
-              if (e.key === "ArrowDown" && !isComposing) {
+              if (e.key === "ArrowDown" && !keyIsComposing) {
                 if (isAtStart) {
                   e.preventDefault()
                   navigateHistory('down', text)

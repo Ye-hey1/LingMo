@@ -21,7 +21,7 @@ export function BacklinksPanel() {
   const { activeFilePath, setActiveFilePath } = useArticleStore()
   const getBacklinks = useNoteIndexStore(s => s.getBacklinks)
   const getUnlinkedMentions = useNoteIndexStore(s => s.getUnlinkedMentions)
-  const [isExpanded, setIsExpanded] = useState(true)
+  const [isExpanded, setIsExpanded] = useState(false)
   const [activeTab, setActiveTab] = useState<'backlinks' | 'outgoing' | 'unlinked' | 'ai-links'>('backlinks')
   const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null)
   const [aiLinkState, setAiLinkState] = useState<'idle' | 'loading' | 'preview' | 'done'>('idle')

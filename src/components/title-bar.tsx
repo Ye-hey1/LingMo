@@ -23,6 +23,7 @@ import { ControlImage } from '@/app/core/main/mark/control-image'
 import { ControlLink } from '@/app/core/main/mark/control-link'
 import { ControlFile } from '@/app/core/main/mark/control-file'
 import { ControlTodo } from '@/app/core/main/mark/control-todo'
+import { ControlRecognition } from '@/app/core/main/mark/control-recognition'
 import {
   DndContext,
   closestCenter,
@@ -219,6 +220,8 @@ export function TitleBar({ onSearchClick, onActivityClick, activityOpen = false 
                                 return <ControlScan />
                               case 'image':
                                 return <ControlImage />
+                              case 'recognition':
+                                return <ControlRecognition />
                               case 'link':
                                 return <ControlLink />
                               case 'file':

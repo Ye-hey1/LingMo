@@ -23,51 +23,54 @@
 
 import * as React from "react"
 import {
-  CheckCircle2,
-  CircleX,
-  Loader2,
   ChevronDown,
-  FileText,
-  Globe,
-  Search,
-  Wrench,
-  Eye,
-  Brain,
-  Zap,
-  Copy,
-  FolderOpen,
-  type LucideIcon,
+  Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
 import type { ToolCall } from "@/lib/agent"
+import { getBaseAgentToolName, isSupportOnlyToolName } from "@/lib/agent/support-tools"
 
 // ---------------------------------------------------------------------------
-// 工具分类与图标映射
+// 工具分类标签
 // ---------------------------------------------------------------------------
 
 interface ToolCategoryConfig {
-  icon: LucideIcon
   label: string
-  color: string // tailwind text color
-  bgColor: string // tailwind bg color for badge
 }
 
 const TOOL_CATEGORIES: Record<string, ToolCategoryConfig> = {
-  read: { icon: FileText, label: "读取", color: "text-blue-500", bgColor: "bg-blue-50 dark:bg-blue-950/40" },
-  write: { icon: Zap, label: "写入", color: "text-amber-500", bgColor: "bg-amber-50 dark:bg-amber-950/40" },
-  search: { icon: Search, label: "搜索", color: "text-violet-500", bgColor: "bg-violet-50 dark:bg-violet-950/40" },
-  web: { icon: Globe, label: "联网", color: "text-cyan-500", bgColor: "bg-cyan-50 dark:bg-cyan-950/40" },
-  mcp: { icon: Wrench, label: "MCP", color: "text-orange-500", bgColor: "bg-orange-50 dark:bg-orange-950/40" },
-  system: { icon: Eye, label: "系统", color: "text-emerald-500", bgColor: "bg-emerald-50 dark:bg-emerald-950/40" },
-  folder: { icon: FolderOpen, label: "文件", color: "text-sky-500", bgColor: "bg-sky-50 dark:bg-sky-950/40" },
-  default: { icon: Wrench, label: "工具", color: "text-muted-foreground", bgColor: "bg-muted/30" },
+  read: {
+    label: "Read",
+  },
+  write: {
+    label: "Write",
+  },
+  search: {
+    label: "Search",
+  },
+  web: {
+    label: "Web",
+  },
+  mcp: {
+    label: "MCP",
+  },
+  system: {
+    label: "System",
+  },
+  folder: {
+    label: "Files",
+  },
+  default: {
+    label: "Tool",
+  },
 }
 
 function categorizeTool(toolName: string): ToolCategoryConfig {
   const base = toolName.includes("__") ? toolName.split("__").pop()! : toolName
   const lower = base.toLowerCase()
 
+  if (lower === "select_skill" || lower.includes("skill")) return TOOL_CATEGORIES.system
   if (lower.startsWith("read_") || lower.startsWith("safe_read") || lower.startsWith("get_")) return TOOL_CATEGORIES.read
   if (lower.startsWith("create_") || lower.startsWith("update_") || lower.startsWith("replace_") || lower.startsWith("delete_") || lower.startsWith("write_")) return TOOL_CATEGORIES.write
   if (lower.startsWith("safe_grep") || lower.startsWith("search") || lower.includes("find")) return TOOL_CATEGORIES.search
@@ -86,6 +89,16 @@ function categorizeTool(toolName: string): ToolCategoryConfig {
 function extractParamSummary(toolName: string, params: Record<string, any>): string {
   const base = toolName.includes("__") ? toolName.split("__").pop()! : toolName
   const lower = base.toLowerCase()
+
+  if (lower === "select_skill") {
+    const skills = params.skill_ids || params.skillIds || params.skills || params.selected_skills
+    if (Array.isArray(skills) && skills.length > 0) {
+      return skills.slice(0, 3).join(", ")
+    }
+    if (typeof skills === "string" && skills.trim()) {
+      return skills
+    }
+  }
 
   // 文件路径类工具 → 显示文件名
   if (lower.includes("read") || lower.includes("file") || lower.includes("create") || lower.includes("update") || lower.includes("replace")) {
@@ -118,6 +131,21 @@ function extractParamSummary(toolName: string, params: Record<string, any>): str
   return ""
 }
 
+function getBaseToolName(toolName: string) {
+  return getBaseAgentToolName(toolName)
+}
+
+function getToolDisplayName(toolName: string) {
+  if (getBaseToolName(toolName).toLowerCase() === "select_skill") {
+    return "Select skill"
+  }
+
+  return getBaseToolName(toolName)
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 // ---------------------------------------------------------------------------
 // 工具调用行组件
 // ---------------------------------------------------------------------------
@@ -128,20 +156,11 @@ interface ToolCallRowProps {
   defaultExpanded?: boolean
 }
 
-function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }: ToolCallRowProps) {
+function ToolCallRow({ toolCall, isStreaming: _isStreaming = false, defaultExpanded = false }: ToolCallRowProps) {
   const [expanded, setExpanded] = React.useState(defaultExpanded)
-  const category = categorizeTool(toolCall.toolName)
-  const Icon = category.icon
   const paramSummary = extractParamSummary(toolCall.toolName, toolCall.params)
   const isRunning = toolCall.status === "running" || toolCall.status === "pending"
-
-  const statusIcon = (() => {
-    switch (toolCall.status) {
-      case "success": return <CheckCircle2 className="size-3.5 text-green-500 shrink-0" />
-      case "error": return <CircleX className="size-3.5 text-red-500 shrink-0" />
-      default: return <Loader2 className="size-3.5 animate-spin text-blue-500 shrink-0" />
-    }
-  })()
+  const hasError = toolCall.status === "error"
 
   // 结果摘要
   const resultSummary = React.useMemo(() => {
@@ -159,38 +178,25 @@ function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }:
 
   return (
     <div className={cn(
-      "group flex items-start gap-2 py-1 px-1.5 rounded-md transition-colors",
-      "hover:bg-muted/30",
-      isRunning && "bg-blue-50/50 dark:bg-blue-950/20",
+      "group flex items-start gap-1.5 rounded-md border border-transparent px-2 py-1 transition-colors",
+      "hover:bg-muted/10",
+      isRunning && "border-border/10 bg-muted/8",
+      hasError && "border-destructive/15 bg-destructive/5",
     )}>
-      {/* 左侧图标区 */}
-      <div className="flex items-center gap-1.5 pt-0.5 shrink-0">
-        <Icon className={cn("size-3.5", category.color)} />
-        {statusIcon}
-      </div>
-
-      {/* 中间内容 */}
       <div className="flex-1 min-w-0">
-        {/* 第一行：工具名 + 参数摘要 */}
-        <div className="flex items-center gap-1.5">
-          <span className={cn(
-            "text-xs font-medium tabular-nums px-1.5 py-0 rounded",
-            category.bgColor, category.color,
-          )}>
-            {toolCall.toolName.includes("__")
-              ? toolCall.toolName.split("__").pop()
-              : toolCall.toolName}
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-mono text-[10px] text-muted-foreground/60">
+            {getToolDisplayName(toolCall.toolName)}
           </span>
           {paramSummary && (
-            <span className="text-xs text-muted-foreground/70 truncate">
+            <span className="truncate text-[10px] text-muted-foreground/35">
               {paramSummary}
             </span>
           )}
         </div>
 
-        {/* 第二行：结果摘要（如果有且未展开） */}
         {!expanded && resultSummary && (
-          <div className="text-[11px] text-muted-foreground/50 truncate mt-0.5">
+          <div className="mt-0.5 truncate text-[10px] text-muted-foreground/35">
             {resultSummary}
           </div>
         )}
@@ -208,15 +214,15 @@ function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }:
               <div className="mt-1 space-y-1">
                 {/* 参数 */}
                 {Object.keys(toolCall.params).length > 0 && (
-                  <pre className="text-[11px] bg-muted/20 rounded px-2 py-1 overflow-x-auto max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground/60">
+                  <pre className="max-h-24 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded border border-border/15 bg-muted/8 px-2 py-1 text-[10px] text-muted-foreground/45">
                     {JSON.stringify(toolCall.params, null, 2)}
                   </pre>
                 )}
                 {/* 结果 */}
                 {toolCall.result && (
                   <pre className={cn(
-                    "text-[11px] bg-muted/20 rounded px-2 py-1 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap break-words",
-                    toolCall.result.success ? "text-muted-foreground/60" : "text-red-600 dark:text-red-400",
+                    "max-h-32 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded border border-border/15 bg-muted/8 px-2 py-1 text-[10px]",
+                    toolCall.result.success ? "text-muted-foreground/45" : "text-destructive/65",
                   )}>
                     {toolCall.result.success
                       ? (typeof toolCall.result.data === "string" ? toolCall.result.data : JSON.stringify(toolCall.result.data || toolCall.result.message, null, 2))
@@ -232,11 +238,11 @@ function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }:
       {/* 右侧操作 */}
       <button
         type="button"
-        className="shrink-0 p-0.5 rounded hover:bg-muted/50 transition-colors opacity-0 group-hover:opacity-100"
+        className="shrink-0 rounded p-0.5 opacity-0 transition-colors hover:bg-muted/30 group-hover:opacity-70"
         onClick={() => setExpanded(!expanded)}
       >
         <ChevronDown className={cn(
-          "size-3 text-muted-foreground/50 transition-transform",
+          "size-3 text-muted-foreground/35 transition-transform",
           expanded && "rotate-180",
         )} />
       </button>
@@ -283,9 +289,7 @@ interface GroupHeaderProps {
   expanded: boolean
 }
 
-function GroupHeader({ group, isStreaming, onToggleExpand, expanded }: GroupHeaderProps) {
-  const Icon = group.category.icon
-  const count = group.calls.length
+function GroupHeader({ group, isStreaming: _isStreaming, onToggleExpand, expanded }: GroupHeaderProps) {
   const hasRunning = group.calls.some(c => c.status === "running" || c.status === "pending")
   const hasError = group.calls.some(c => c.status === "error")
   const allDone = group.calls.every(c => c.status === "success" || c.status === "error")
@@ -293,28 +297,27 @@ function GroupHeader({ group, isStreaming, onToggleExpand, expanded }: GroupHead
   // 合并参数摘要
   const summaries = group.calls.map(c => extractParamSummary(c.toolName, c.params)).filter(Boolean)
   const combinedSummary = summaries.length > 2
-    ? `${summaries.slice(0, 2).join(", ")} 等${summaries.length}项`
+    ? `${summaries.slice(0, 2).join(", ")} +${summaries.length - 2} more`
     : summaries.join(", ")
 
   return (
     <button
       type="button"
       className={cn(
-        "group flex items-center gap-2 w-full py-1.5 px-2 rounded-md transition-colors text-left",
-        "hover:bg-muted/30",
-        hasRunning && "bg-blue-50/30 dark:bg-blue-950/10",
+        "group flex w-full items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left transition-colors",
+        "hover:bg-muted/10",
+        hasRunning && "border-border/10 bg-muted/8",
+        hasError && "border-destructive/15 bg-destructive/5",
       )}
       onClick={onToggleExpand}
     >
-      <Icon className={cn("size-4 shrink-0", group.category.color)} />
-
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-foreground/80">
-            {count > 1 ? `${group.category.label} ×${count}` : group.calls[0].toolName}
+          <span className="text-[10px] text-muted-foreground/60">
+            {group.calls.length > 1 ? group.category.label : getToolDisplayName(group.calls[0].toolName)}
           </span>
           {combinedSummary && (
-            <span className="text-[11px] text-muted-foreground/60 truncate">
+            <span className="truncate text-[10px] text-muted-foreground/35">
               {combinedSummary}
             </span>
           )}
@@ -322,15 +325,15 @@ function GroupHeader({ group, isStreaming, onToggleExpand, expanded }: GroupHead
       </div>
 
       {/* 状态指示 */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        {hasRunning && <Loader2 className="size-3 animate-spin text-blue-500" />}
-        {hasError && <CircleX className="size-3 text-red-500" />}
-        {allDone && !hasError && <CheckCircle2 className="size-3 text-green-500" />}
-        <span className="text-[10px] text-muted-foreground/50 tabular-nums">
-          {allDone ? "完成" : hasRunning ? "执行中" : ""}
+      <div className="flex items-center gap-1.5 shrink-0 text-[9px] tabular-nums">
+        <span className={cn(
+          "text-muted-foreground/35",
+          hasError && "text-destructive/60",
+        )}>
+          {hasError ? "失败" : allDone ? "完成" : hasRunning ? "执行中" : ""}
         </span>
         <ChevronDown className={cn(
-          "size-3 text-muted-foreground/40 transition-transform",
+          "size-3 text-muted-foreground/30 transition-transform",
           expanded && "rotate-180",
         )} />
       </div>
@@ -347,16 +350,20 @@ interface CompactToolCallsProps {
   isStreaming?: boolean
   /** 是否使用分组模式（合并同类工具） */
   grouped?: boolean
+  /** 是否默认展开工具详情 */
+  defaultExpanded?: boolean
 }
 
 export function CompactToolCalls({
   toolCalls,
   isStreaming = false,
   grouped = true,
+  defaultExpanded = true,
 }: CompactToolCallsProps) {
-  if (toolCalls.length === 0) return null
+  const visibleToolCalls = toolCalls.filter(call => !isSupportOnlyToolName(call.toolName))
+  if (visibleToolCalls.length === 0) return null
 
-  const groups = grouped ? groupToolCalls(toolCalls) : toolCalls.map(c => ({
+  const groups = grouped ? groupToolCalls(visibleToolCalls) : visibleToolCalls.map(c => ({
     categoryKey: categorizeTool(c.toolName).label,
     category: categorizeTool(c.toolName),
     calls: [c],
@@ -369,7 +376,10 @@ export function CompactToolCalls({
           key={`group-${gi}-${group.categoryKey}`}
           group={group}
           isStreaming={isStreaming}
-          defaultExpanded={group.calls.length === 1 || group.calls.some(c => c.status === "error")}
+          defaultExpanded={
+            group.calls.some(c => c.status === "error") ||
+            (defaultExpanded && group.calls.length === 1)
+          }
         />
       ))}
     </div>
@@ -395,7 +405,7 @@ function GroupedToolCalls({ group, isStreaming, defaultExpanded = false }: Group
       <ToolCallRow
         toolCall={group.calls[0]}
         isStreaming={isStreaming}
-        defaultExpanded={group.calls[0].status === "error"}
+        defaultExpanded={defaultExpanded || group.calls[0].status === "error"}
       />
     )
   }
@@ -467,9 +477,9 @@ export function CompactThinking({
 
   return (
     <div className={cn(
-      "w-full rounded-md border border-border/20 bg-muted/10 px-3 py-2",
+      "w-full rounded-md border border-border/20 bg-muted/8 px-3 py-2",
       "transition-colors",
-      isStreaming && "border-blue-200/50 dark:border-blue-800/30 bg-blue-50/20 dark:bg-blue-950/10",
+      isStreaming && "bg-muted/12",
     )}>
       <button
         type="button"
@@ -477,12 +487,12 @@ export function CompactThinking({
         onClick={() => setExpanded(!expanded)}
       >
         {isStreaming ? (
-          <Loader2 className="size-3 animate-spin text-blue-500 shrink-0" />
+          <Loader2 className="size-3 animate-spin text-muted-foreground/45 shrink-0" />
         ) : (
-          <Brain className="size-3 text-muted-foreground/60 shrink-0" />
+          <span className="size-1.5 rounded-full bg-muted-foreground/35 shrink-0" />
         )}
-        <span className="text-[11px] text-muted-foreground/60">
-          {isStreaming ? "思考中…" : "思考过程"}
+        <span className="text-[11px] text-muted-foreground/55">
+          {isStreaming ? "Thinking..." : "Thought"}
         </span>
         {needsTruncation && (
           <ChevronDown className={cn(
@@ -524,22 +534,19 @@ interface ToolResultBadgeProps {
 }
 
 export function ToolResultBadge({ toolName, success, summary, durationMs }: ToolResultBadgeProps) {
-  const category = categorizeTool(toolName)
-
   return (
     <span className={cn(
-      "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px]",
+      "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]",
       "border border-border/20",
       success
-        ? "bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400"
-        : "bg-red-50/50 dark:bg-red-950/30 text-red-700 dark:text-red-400",
+        ? "bg-muted/10 text-muted-foreground"
+        : "bg-destructive/5 text-destructive/75",
     )}>
-      {success ? (
-        <CheckCircle2 className="size-2.5" />
-      ) : (
-        <CircleX className="size-2.5" />
-      )}
+      <span className={cn("size-1.5 rounded-full", success ? "bg-muted-foreground/35" : "bg-destructive/70")} />
       <span className="truncate max-w-[120px]">{toolName}</span>
+      {summary && (
+        <span className="truncate max-w-[120px] text-muted-foreground/55">{summary}</span>
+      )}
       {durationMs != null && (
         <span className="text-[9px] opacity-60 tabular-nums">
           {durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`}

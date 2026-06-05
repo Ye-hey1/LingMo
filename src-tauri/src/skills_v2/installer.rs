@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 /// Get the central skills directory under app data.
 fn central_skills_dir(app_data_dir: &Path) -> SkillResult<std::path::PathBuf> {
-    let dir = app_data_dir.join("skills-v2").join("skills");
+    let dir = app_data_dir.join("skills");
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -143,11 +143,13 @@ pub fn install_from_git(
     // Clean up temp
     let _ = fs::remove_dir_all(&temp_dir);
 
-    result.map(|mut r| {
+    let record = result.map(|mut r| {
         r.source_type = "git".into();
         r.source_ref = Some(url.to_string());
         r
-    })
+    })?;
+    store.insert_skill(&record)?;
+    Ok(record)
 }
 
 /// Preview what skills are in a Git repo without installing.

@@ -449,6 +449,9 @@
           "image": {
             "desc": "上传图片到笔记"
           },
+          "recognition": {
+            "desc": "識別剪貼簿圖片或文字"
+          },
           "link": {
             "desc": "记录网页链接"
           },
@@ -459,6 +462,71 @@
             "desc": "创建待办事项"
           }
         }
+      }
+    },
+    "reminders": {
+      "title": "提醒",
+      "desc": "配置桌面提醒與 AI 建立提醒的行為。",
+      "desktop": {
+        "title": "桌面提醒",
+        "desc": "用於稍後提醒、倒數計時和 AI 建立的待辦提示。"
+      },
+      "enabled": {
+        "title": "啟用桌面提醒",
+        "desc": "開啟後，LingMo 會在提醒時間觸發系統通知。"
+      },
+      "agent": {
+        "title": "允許 AI 建立提醒",
+        "desc": "開啟後，你可以直接對 AI 說「30 分鐘後提醒我休息」。"
+      },
+      "advance": {
+        "title": "預設提前提醒",
+        "desc": "未指定提前量時使用此設定。",
+        "value": "{minutes} 分鐘"
+      },
+      "context": {
+        "title": "顯示提醒上下文",
+        "desc": "通知中顯示來源或補充說明，便於理解提醒背景。"
+      },
+      "prefix": {
+        "title": "通知標題前綴",
+        "desc": "自訂系統通知標題開頭。",
+        "placeholder": "LingMo 提醒"
+      },
+      "test": {
+        "button": "發送測試提醒",
+        "desc": "請求系統通知權限並發送一條測試提醒。",
+        "sending": "發送中...",
+        "title": "測試提醒",
+        "message": "如果你看到了這條通知，桌面提醒已經可用。",
+        "source": "提醒設定"
+      },
+      "list": {
+        "title": "目前提醒",
+        "desc": "查看由 AI 或手動建立的待觸發提醒。",
+        "loading": "正在載入提醒...",
+        "empty": "暫無待觸發提醒",
+        "emptyDesc": "你可以在 AI 對話中說「30 分鐘後提醒我喝水」。",
+        "complete": "標記完成",
+        "cancel": "取消提醒"
+      },
+      "repeat": {
+        "none": "一次",
+        "daily": "每天",
+        "weekly": "每週",
+        "monthly": "每月"
+      },
+      "toast": {
+        "loadFailed": "載入提醒失敗",
+        "testSent": "測試提醒已發送",
+        "testSentDesc": "如果系統沒有彈出通知，請檢查系統勿擾模式或通知中心設定。",
+        "permissionDenied": "未獲得系統通知權限",
+        "permissionDeniedDesc": "請在系統設定中允許 LingMo 發送通知後再試。",
+        "unsupportedRuntime": "目前環境無法發送系統通知",
+        "unsupportedRuntimeDesc": "測試提醒只能在 LingMo 桌面應用中發送，普通瀏覽器預覽不支援系統通知插件。",
+        "testFailed": "發送測試提醒失敗",
+        "cancelled": "提醒已取消",
+        "completed": "提醒已完成"
       }
     },
     "uploadStore": {
@@ -1453,13 +1521,20 @@
       },
       "todo": {
         "title": "待辦記錄",
-        "description": "創建待辦事項，管理你的任務",
-        "titlePlaceholder": "輸入待辦標題...",
-        "descriptionPlaceholder": "輸入詳細描述（可選）",
+        "createTitle": "新增待辦",
+        "createDescription": "安排任務、提醒和子任務",
+        "description": "記錄任務進展",
+        "titleLabel": "任務",
+        "titlePlaceholder": "輸入任務名稱",
+        "notes": "備註",
+        "descriptionPlaceholder": "補充背景、要求或連結",
         "priority": "優先級",
         "priorityLow": "低",
+        "priorityLowHint": "輕量跟進",
         "priorityMedium": "中",
+        "priorityMediumHint": "常規推進",
         "priorityHigh": "高",
+        "priorityHighHint": "優先處理",
         "dateRange": "日期範圍",
         "dateRangePlaceholder": "選擇日期範圍",
         "dueDate": "截止日期",
@@ -1467,14 +1542,40 @@
         "save": "創建待辦",
         "saveEdit": "保存",
         "edit": "編輯待辦",
-        "editDescription": "修改待辦事項的詳細信息",
+        "editDescription": "調整任務內容、截止時間和子任務",
         "cancel": "取消",
-        "selectTag": "選擇標籤",
+        "selectTag": "歸屬標籤",
         "completed": "已完成",
         "uncompleted": "未完成",
         "subtasks": "子任務",
-        "subtaskPlaceholder": "輸入子任務標題，Enter添加",
+        "subtaskPlaceholder": "新增子任務",
         "addSubtask": "新增子任務",
+        "batchAdd": "批量新增",
+        "batchPlaceholder": "每行一個子任務",
+        "addBatch": "新增",
+        "summaryTitle": "任務概覽",
+        "summaryFallback": "目前記錄",
+        "emptyTitle": "未填寫任務",
+        "emptyNotes": "暫無備註",
+        "subtaskProgress": "子任務進度",
+        "none": "無",
+        "taskSection": "任務資訊",
+        "prioritySection": "任務級別",
+        "today": "今天",
+        "tomorrow": "明天",
+        "nextWeek": "下週",
+        "clearDate": "清除日期",
+        "reminder": "桌面提醒",
+        "reminderHint": "到點後在桌面右下角通知",
+        "reminderTime": "提醒時間",
+        "reminderOff": "未開啟",
+        "in30Minutes": "30 分鐘後",
+        "in1Hour": "1 小時後",
+        "tomorrowMorning": "明早 9 點",
+        "dueMorning": "截止日 9 點",
+        "lingmoHint": "保存後可被 LingMo 在記錄、回顧和提醒中引用。",
+        "invalidReminderTime": "提醒時間需要晚於目前時間",
+        "reminderCreateFailed": "提醒創建失敗",
         "overdue": "逾期",
         "dueToday": "今日截止",
         "stats": "統計",
@@ -1482,7 +1583,214 @@
       },
       "clipboard": {
         "detectedImage": "檢測到剪貼簿圖片",
-        "detectedText": "檢測到剪貼簿文本"
+        "detectedText": "檢測到剪貼簿文本",
+        "recognitionHint": "將自動識別圖片內容",
+        "processing": "處理中...",
+        "copied": "已複製到剪貼簿",
+        "downloaded": "圖片已下載",
+        "copy": "複製",
+        "download": "下載",
+        "pressEnterToConfirm": "按 Enter 確認，Esc 取消",
+        "recognitionComplete": "識別完成",
+        "description": "描述",
+        "recognizedContent": "識別內容",
+        "noDescription": "無描述",
+        "noContent": "無內容",
+        "enterDescription": "輸入描述...",
+        "enterContent": "輸入內容...",
+        "retry": "重新識別",
+        "cancelEdit": "取消編輯",
+        "dropzone": {
+          "title": "拖拽到此處上傳",
+          "subtitle": "支持圖片文件和文本內容",
+          "upload": "拖拽上傳",
+          "formats": "支持 PNG、JPG、GIF 等格式",
+          "image": "圖片",
+          "text": "文本"
+        }
+      },
+      "enhancedClipboard": {
+        "title": "知識中轉站",
+        "tabs": {
+          "clipboard": "工作台",
+          "history": "歷史",
+          "settings": "設定"
+        },
+        "or": "或",
+        "status": {
+          "idle": "從剪貼簿、拖拽或手動輸入開始加工素材",
+          "ready": "素材已進入工作台，可以繼續整理或匯入記錄",
+          "reading": "正在讀取剪貼簿...",
+          "recognizing": "正在識別圖片內容...",
+          "recognized": "圖片識別完成，已生成可編輯草稿",
+          "organizing": "正在整理成知識筆記...",
+          "organized": "已整理成知識筆記",
+          "tagging": "正在生成知識標籤...",
+          "tagged": "已生成知識標籤",
+          "titling": "正在生成標題...",
+          "titled": "已生成標題",
+          "translating": "正在翻譯草稿...",
+          "translated": "已翻譯為 {language}",
+          "importing": "正在匯入記錄...",
+          "imported": "已匯入記錄",
+          "copied": "已複製到剪貼簿",
+          "cleared": "工作台已清空"
+        },
+        "source": {
+          "title": "來源",
+          "clipboard": "讀取剪貼簿",
+          "clipboardText": "剪貼簿文字",
+          "clipboardImage": "剪貼簿圖片",
+          "dropText": "拖拽文字",
+          "dropImage": "拖拽圖片",
+          "manual": "手動草稿",
+          "image": "圖片",
+          "empty": "暫無素材",
+          "clear": "清空"
+        },
+        "actions": {
+          "process": "加工",
+          "recognize": "識別",
+          "organize": "整理",
+          "tag": "標籤",
+          "title": "標題",
+          "translate": "翻譯",
+          "import": "匯入記錄",
+          "copyText": "複製文字",
+          "copyImage": "複製圖片",
+          "processing": "正在處理當前素材..."
+        },
+        "draft": {
+          "untitled": "未命名素材",
+          "content": "加工草稿",
+          "source": "來源：{source}",
+          "titlePlaceholder": "給這條知識草稿起個標題...",
+          "contentPlaceholder": "在這裡貼上、識別、整理或翻譯素材，確認後再匯入記錄。",
+          "characters": "{count} 個字元",
+          "tagsPrefix": "標籤："
+        },
+        "messages": {
+          "noClipboard": "剪貼簿中沒有可讀取的文字或圖片",
+          "readFail": "讀取素材失敗",
+          "recognizeFirst": "請先放入一張圖片",
+          "recognizeDisabled": "圖片識別未啟用，請在設定中開啟",
+          "processFail": "加工失敗，請檢查 AI 或識別設定",
+          "emptyAiResult": "AI 沒有返回可用結果",
+          "organizeEmpty": "沒有可整理的文字",
+          "tagEmpty": "沒有可打標籤的草稿",
+          "tagFail": "生成標籤失敗",
+          "titleEmpty": "沒有可生成標題的草稿",
+          "titleFail": "生成標題失敗",
+          "translateEmpty": "沒有可翻譯的草稿",
+          "copySuccess": "已複製到剪貼簿",
+          "copyFail": "複製失敗",
+          "emptyDraft": "沒有可匯入的草稿",
+          "importSuccess": "已匯入到目前記錄標籤",
+          "importFail": "匯入記錄失敗",
+          "historyRestored": "已從歷史恢復到工作台",
+          "undoSuccess": "已撤銷：{action}",
+          "stepFail": "{step} 失敗"
+        },
+        "workflow": {
+          "title": "處理步驟",
+          "steps": {
+            "read": "讀取素材",
+            "recognize": "識別圖片",
+            "organize": "整理正文",
+            "tag": "生成標籤",
+            "title": "生成標題",
+            "import": "匯入記錄",
+            "translate": "翻譯草稿",
+            "copy": "複製內容"
+          },
+          "state": {
+            "idle": "待處理",
+            "running": "處理中",
+            "done": "完成",
+            "failed": "失敗"
+          },
+          "undo": {
+            "count": "{count} 步可撤銷",
+            "button": "撤銷：{action}",
+            "read": "讀取素材",
+            "recognize": "圖片識別",
+            "organize": "正文整理",
+            "tag": "標籤生成",
+            "title": "標題生成",
+            "translate": "翻譯草稿",
+            "import": "匯入前狀態",
+            "clear": "清空工作台",
+            "restore": "恢復歷史"
+          }
+        }
+      },
+      "recognitionHistory": {
+        "title": "識別歷史",
+        "empty": "暫無識別記錄",
+        "searchPlaceholder": "搜尋標題、內容或標籤...",
+        "noResults": "沒有匹配的歷史記錄",
+        "justNow": "剛剛",
+        "minutesAgo": "{count} 分鐘前",
+        "hoursAgo": "{count} 小時前",
+        "noDescription": "無描述",
+        "clearAll": "清空所有記錄",
+        "filters": {
+          "all": "全部類型",
+          "image": "圖片",
+          "text": "文字",
+          "favorite": "收藏",
+          "allSources": "全部來源"
+        },
+        "selection": {
+          "filtered": "選中目前結果（{count}）",
+          "clear": "取消選擇"
+        },
+        "export": {
+          "filtered": "匯出目前結果",
+          "selected": "匯出選中 {count}",
+          "empty": "沒有可匯出的歷史記錄",
+          "success": "已匯出 {count} 條歷史記錄",
+          "fail": "匯出失敗",
+          "type": "類型：",
+          "source": "來源：",
+          "time": "時間：",
+          "tags": "標籤："
+        },
+        "actions": {
+          "favorite": "收藏",
+          "restore": "恢復到工作台",
+          "delete": "刪除"
+        },
+        "type": {
+          "image": "圖片",
+          "text": "文字"
+        }
+      },
+      "recognitionSettings": {
+        "title": "識別設定",
+        "enableRecognition": "啟用識別",
+        "enableRecognitionHint": "開啟後將自動識別截圖和圖片內容",
+        "enableRecognitionDesc": "使用 OCR 或 AI 模型識別圖片中的文字",
+        "method": "識別方法",
+        "methodHint": "選擇識別方式，OCR 更快，AI 更準確",
+        "methodOcr": "本地識別，速度快",
+        "methodVlm": "雲端識別，更準確",
+        "visionModel": "AI Vision 模型",
+        "visionModelHint": "僅影響知識中轉站的 AI Vision 識別",
+        "visionModelDesc": "未選擇時跟隨全域圖像識別模型。",
+        "autoRecognize": "自動識別",
+        "autoRecognizeDesc": "截圖或貼上圖片時自動開始識別",
+        "aiWorkflow": "AI 工作流",
+        "autoOrganizeAfterRecognize": "識別後自動整理",
+        "autoOrganizeAfterRecognizeDesc": "圖片識別完成後自動整理成知識筆記",
+        "autoTagAfterOrganize": "整理後自動打標籤",
+        "autoTagAfterOrganizeDesc": "整理完成後生成可見的知識標籤",
+        "autoTitleBeforeImport": "匯入前自動生成標題",
+        "autoTitleBeforeImportDesc": "匯入記錄前用 AI 生成更準確的標題",
+        "saveHistory": "保存歷史",
+        "saveHistoryDesc": "保存識別記錄以便後續查看",
+        "reset": "重置",
+        "maxHistoryItems": "最大記錄數"
       },
       "tag": {
         "searchPlaceholder": "創建或查詢標籤...",
@@ -1681,6 +1989,7 @@
         "recording": "錄音記錄",
         "scan": "掃描圖片",
         "image": "上傳圖片",
+        "recognition": "識別剪貼簿",
         "link": "記錄連結",
         "file": "上傳文件",
         "todo": "待辦記錄",
@@ -1692,6 +2001,12 @@
       "imageGallery": {
         "expand": "展开",
         "collapse": "收起"
+      },
+      "trash": {
+        "title": "提示",
+        "confirm": "確定要永久清空垃圾箱嗎？此操作不可撤銷。",
+        "empty": "垃圾箱為空",
+        "clearSuccess": "垃圾箱已清空"
       }
     },
     "chat": {

@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Circle,
   CircleAlert,
-  CircleDotDashed,
   CircleX,
   ChevronRight,
   Brain,
@@ -18,16 +17,18 @@ import {
   ChevronDown,
   ChevronUp,
   ListChecks,
-  MessageSquareText,
-  Send,
-  Sparkles,
-  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
 import { DiffViewer } from "@/components/ui/diff-viewer";
 import { formatConfirmationPreview } from "@/lib/agent";
 import type { AgentApprovalScope, AgentEvent } from "@/lib/agent";
+import {
+  extractVisibleFinalAnswer,
+  isInternalAgentInstruction,
+  sanitizeVisibleAssistantContent,
+} from "@/lib/agent/parse-action-input";
+import { isSupportOnlyObservationText, isSupportOnlyToolName } from "@/lib/agent/support-tools";
 
 // Type definitions from existing codebase
 interface ToolCall {
@@ -181,7 +182,7 @@ function getShortText(value: unknown, maxLength = 120): string {
     }
   }
 
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const normalized = sanitizeVisibleAssistantContent(text).replace(/\s+/g, " ").trim();
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
 }
 
@@ -227,28 +228,13 @@ export function AgentPlan({
   }, [embedded]);
 
   const extractFinalAnswer = React.useCallback((content: string): string => {
-    if (!content) return "";
-
-    const normalized = content.replace(/Action:\s*Final\s*Answer:\s*/i, "Final Answer: ");
-    const finalAnswerPatterns = [
-      /Final Answer[:：]\s*([\s\S]*)/i,
-      /最终答案[:：]?\s*([\s\S]*)/i,
-    ];
-
-    for (const pattern of finalAnswerPatterns) {
-      const match = normalized.match(pattern);
-      if (match?.[1]) {
-        return match[1].trim();
-      }
-    }
-
-    return "";
+    return extractVisibleFinalAnswer(content) || "";
   }, []);
 
   const getThoughtBody = React.useCallback((content: string): string => {
     if (!content) return "";
 
-    return content
+    return sanitizeVisibleAssistantContent(content)
       .replace(/^Thought:\s*/i, "")
       .replace(/^思考[:：]?\s*/i, "")
       .trim();
@@ -388,6 +374,19 @@ export function AgentPlan({
       const usedToolCallIndices = new Set<number>();
 
       completedSteps.forEach((step, index) => {
+        const sanitizedThought = sanitizeVisibleAssistantContent(step.thought || "");
+        const sanitizedObservation = isInternalAgentInstruction(step.observation)
+          ? undefined
+          : sanitizeVisibleAssistantContent(step.observation || "") || step.observation;
+
+        if (
+          isSupportOnlyToolName(step.action?.tool) ||
+          isSupportOnlyObservationText(step.observation) ||
+          (!step.action && !sanitizedThought && !sanitizedObservation)
+        ) {
+          return;
+        }
+
         const confirmation = confirmationHistory[index];
         let status: DisplayStep["status"] = "completed";
 
@@ -397,7 +396,7 @@ export function AgentPlan({
         if (step.action) {
           // 从后往前查找，优先使用最新的未使用的 toolCall
           for (let i = toolCalls.length - 1; i >= 0; i--) {
-            if (!usedToolCallIndices.has(i) && toolCalls[i].toolName === step.action.tool) {
+            if (!isSupportOnlyToolName(toolCalls[i].toolName) && !usedToolCallIndices.has(i) && toolCalls[i].toolName === step.action.tool) {
               toolCall = toolCalls[i];
               usedToolCallIndices.add(i);
               break;
@@ -422,21 +421,21 @@ export function AgentPlan({
               break;
             default:
               // 如果 toolCall.status 无效，回退到文本匹配判断
-              if (step.observation) {
+              if (sanitizedObservation) {
                 status =
-                  step.observation.includes("失败") ||
-                  step.observation.includes("错误")
+                  sanitizedObservation.includes("失败") ||
+                  sanitizedObservation.includes("错误")
                     ? "failed"
                     : "completed";
               } else if (!step.action) {
                 status = "pending";
               }
           }
-        } else if (step.observation) {
+        } else if (sanitizedObservation) {
           // 如果没有对应的 toolCall，回退到文本匹配判断
           status =
-            step.observation.includes("失败") ||
-            step.observation.includes("错误")
+            sanitizedObservation.includes("失败") ||
+            sanitizedObservation.includes("错误")
               ? "failed"
               : "completed";
         } else if (!step.action) {
@@ -445,9 +444,9 @@ export function AgentPlan({
 
         steps.push({
           id: `completed-${index}`,
-          thought: step.thought,
+          thought: sanitizedThought,
           action: step.action,
-          observation: step.observation,
+          observation: sanitizedObservation,
           status,
           duration: step.duration,
           confirmation,
@@ -456,6 +455,11 @@ export function AgentPlan({
     } else {
       // 兼容旧的 thoughtHistory 格式
       thoughtHistory.forEach((thought, index) => {
+        const sanitizedThought = sanitizeVisibleAssistantContent(thought);
+        if (!sanitizedThought) {
+          return;
+        }
+
         const confirmation = confirmationHistory[index];
         let status: DisplayStep["status"] = "completed";
 
@@ -466,7 +470,7 @@ export function AgentPlan({
 
         steps.push({
           id: `thought-history-${index}`,
-          thought,
+          thought: sanitizedThought,
           status,
           confirmation,
         });
@@ -474,26 +478,34 @@ export function AgentPlan({
     }
 
     // Add current step
-    if (currentThought || currentAction || currentObservation) {
+    const sanitizedCurrentThought = sanitizeVisibleAssistantContent(currentThought);
+    const currentToolName = currentAction?.match(/^(\w+)\(/)?.[1];
+    const sanitizedCurrentObservation = isInternalAgentInstruction(currentObservation)
+      ? ""
+      : isSupportOnlyToolName(currentToolName)
+        ? ""
+        : sanitizeVisibleAssistantContent(currentObservation);
+
+    if (sanitizedCurrentThought || (currentAction && !isSupportOnlyToolName(currentToolName)) || sanitizedCurrentObservation) {
       let status: DisplayStep["status"] = "in-progress";
 
       if (pendingConfirmation) {
         status = "need-help";
-      } else if (currentObservation) {
+      } else if (sanitizedCurrentObservation) {
         status = "completed";
-      } else if (isThinking && !currentThought) {
+      } else if (isThinking && !sanitizedCurrentThought) {
         // 正在等待 AI 生成思考，显示为 pending 状态（会有 loading 效果）
         status = "pending";
       }
 
       const currentStep: DisplayStep = {
         id: "current",
-        thought: currentThought || "",
+        thought: sanitizedCurrentThought || "",
         status,
         duration: currentStepDuration, // 使用实时计算的耗时
       };
 
-      if (currentAction) {
+      if (currentAction && !isSupportOnlyToolName(currentToolName)) {
         // Try to parse action as "toolName(params)" format
         const match = currentAction.match(/^(\w+)\((.*)\)$/);
         if (match) {
@@ -504,12 +516,14 @@ export function AgentPlan({
         }
       }
 
-      if (currentObservation) {
-        currentStep.observation = currentObservation;
+      if (sanitizedCurrentObservation) {
+        currentStep.observation = sanitizedCurrentObservation;
       }
 
       if (toolCalls.length > 0) {
-        currentStep.tools = toolCalls.map((tc) => tc.toolName);
+        currentStep.tools = toolCalls
+          .map((tc) => tc.toolName)
+          .filter(toolName => !isSupportOnlyToolName(toolName));
       }
 
       steps.push(currentStep);
@@ -588,6 +602,10 @@ export function AgentPlan({
 
     agentEvents.forEach((event) => {
       const payload = event.payload || {};
+      if (payload.internal === true || payload.visibility === "hidden") {
+        return;
+      }
+
       const sequence = event.sequence ?? items.length + 1;
       const iterationLabel = event.iteration ? `第 ${event.iteration} 轮` : undefined;
 
@@ -655,7 +673,12 @@ export function AgentPlan({
 
         case "thought":
         case "thought.updated": {
-          const content = typeof payload.content === "string" ? payload.content : "";
+          const rawContent = typeof payload.content === "string" ? payload.content : "";
+          if (extractVisibleFinalAnswer(rawContent)) {
+            return;
+          }
+
+          const content = sanitizeVisibleAssistantContent(rawContent);
           if (!content || event.type === "thought.updated") {
             return;
           }
@@ -675,6 +698,9 @@ export function AgentPlan({
         case "action":
         case "action.parsed": {
           const toolName = typeof payload.tool === "string" ? payload.tool : "工具";
+          if (isSupportOnlyToolName(toolName)) {
+            return;
+          }
           if (event.type === "action" && items.some(item => item.kind === "action" && item.toolName === toolName && item.iteration === event.iteration)) {
             return;
           }
@@ -694,6 +720,9 @@ export function AgentPlan({
 
         case "tool.execution.started": {
           const toolName = typeof payload.toolName === "string" ? payload.toolName : "工具";
+          if (isSupportOnlyToolName(toolName)) {
+            return;
+          }
           const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : event.id || `tool-${sequence}`;
           const item = pushItem({
             id: event.id || `tool-start-${toolCallId}`,
@@ -712,6 +741,9 @@ export function AgentPlan({
 
         case "tool.execution.finished": {
           const toolName = typeof payload.toolName === "string" ? payload.toolName : "工具";
+          if (isSupportOnlyToolName(toolName)) {
+            return;
+          }
           const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : "";
           const item = toolItems.get(toolCallId);
           const success = payload.success !== false;
@@ -790,7 +822,22 @@ export function AgentPlan({
           if (event.type === "observation") {
             return;
           }
-          const observation = typeof payload.observation === "string" ? payload.observation : "";
+          const rawObservation = typeof payload.observation === "string" ? payload.observation : "";
+          if (
+            isSupportOnlyToolName(String(payload.toolName || "")) ||
+            isSupportOnlyObservationText(rawObservation)
+          ) {
+            return;
+          }
+          if (isInternalAgentInstruction(rawObservation)) {
+            return;
+          }
+
+          const observation = sanitizeVisibleAssistantContent(rawObservation);
+          if (!observation) {
+            return;
+          }
+
           pushItem({
             id: event.id || `observation-${sequence}`,
             kind: "observation",
@@ -809,14 +856,15 @@ export function AgentPlan({
           if (event.type === "final.answer.rendered") {
             return;
           }
+          const finalContent = sanitizeVisibleAssistantContent(String(payload.content || ""));
           pushItem({
             id: event.id || `final-${sequence}`,
             kind: "final",
             title: "整理最终回复",
-            description: getShortText(payload.content),
+            description: getShortText(finalContent),
             status: "completed",
             timestamp: event.timestamp,
-            detail: typeof payload.content === "string" ? payload.content : undefined,
+            detail: finalContent || undefined,
             iteration: event.iteration,
           });
           break;
@@ -920,7 +968,7 @@ export function AgentPlan({
     return null;
   }
 
-  // ---- CowAgent 风格的简化显示 ----
+  // ---- Agent 简化显示 ----
   // Toggle step expansion
   const toggleStepExpansion = (stepId: string) => {
     // In live mode, prevent collapsing the current (in-progress) step
@@ -1068,52 +1116,31 @@ export function AgentPlan({
   const getStatusIcon = (status: DisplayStep["status"]) => {
     switch (status) {
       case "completed":
-        return <CheckCircle2 className="h-4.5 w-4.5 text-green-500" />;
+        return <span className="block size-2 rounded-full bg-muted-foreground/30" />;
       case "in-progress":
-        return <CircleDotDashed className="h-4.5 w-4.5 text-blue-500" />;
+        return <Loader2 className="size-3.5 animate-spin text-muted-foreground/45" />;
       case "need-help":
-        return <CircleAlert className="h-4.5 w-4.5 text-yellow-500" />;
+        return <CircleAlert className="size-3.5 text-muted-foreground/65" />;
       case "failed":
-        return <CircleX className="h-4.5 w-4.5 text-red-500" />;
+        return <CircleX className="size-3.5 text-destructive/75" />;
       case "pending":
-        return <Loader2 className="h-4.5 w-4.5 text-blue-500 animate-spin" />;
+        return <Loader2 className="size-3.5 animate-spin text-muted-foreground/45" />;
       default:
-        return <Circle className="h-4.5 w-4.5 text-muted-foreground" />;
+        return <span className="block size-2 rounded-full border border-muted-foreground/30" />;
     }
   };
 
   const getTimelineIcon = (item: TimelineItem) => {
-    const className = "size-3.5";
     if (item.status === "running") {
-      return <Loader2 className={`${className} animate-spin text-blue-500`} />;
+      return <Loader2 className="size-3 animate-spin text-muted-foreground/45" />;
     }
     if (item.status === "waiting") {
-      return <Clock className={`${className} text-amber-500`} />;
+      return <CircleAlert className="size-3 text-muted-foreground/65" />;
     }
     if (item.status === "failed") {
-      return <CircleX className={`${className} text-red-500`} />;
+      return <CircleX className="size-3 text-destructive/75" />;
     }
-
-    switch (item.kind) {
-      case "planning":
-        return <ListChecks className={`${className} text-cyan-600`} />;
-      case "model":
-        return <Brain className={`${className} text-blue-600`} />;
-      case "thought":
-        return <MessageSquareText className={`${className} text-sky-600`} />;
-      case "action":
-        return <Send className={`${className} text-violet-600`} />;
-      case "tool":
-        return <Wrench className={`${className} text-orange-600`} />;
-      case "observation":
-        return <Eye className={`${className} text-emerald-600`} />;
-      case "confirmation":
-        return <CircleAlert className={`${className} text-amber-600`} />;
-      case "final":
-        return <Sparkles className={`${className} text-green-600`} />;
-      default:
-        return <CheckCircle2 className={`${className} text-green-600`} />;
-    }
+    return <span className="block size-1.5 rounded-full bg-muted-foreground/30" />;
   };
 
   // 格式化耗时显示
@@ -1156,11 +1183,11 @@ export function AgentPlan({
         >
           <div className="flex items-center gap-1.5 min-w-0">
             {hasRunning ? (
-              <Loader2 className="size-3 animate-spin text-blue-500 shrink-0" />
+              <Loader2 className="size-3 animate-spin text-muted-foreground/45 shrink-0" />
             ) : hasFailed ? (
-              <CircleX className="size-3 text-red-500 shrink-0" />
+              <CircleX className="size-3 text-destructive/75 shrink-0" />
             ) : (
-              <CheckCircle2 className="size-3 text-green-500 shrink-0" />
+              <span className="size-1.5 rounded-full bg-muted-foreground/35 shrink-0" />
             )}
             <span className="text-[11px] text-muted-foreground/60 truncate">
               {isRunning ? "执行中…" : `${completedCount} 步已完成`}
@@ -1211,12 +1238,12 @@ export function AgentPlan({
                         <span
                           className={`shrink-0 text-[10px] leading-none ${
                             item.status === "failed"
-                              ? "text-red-500"
+                              ? "text-destructive/75"
                               : item.status === "waiting"
-                                ? "text-amber-600"
+                                ? "text-muted-foreground/65"
                                 : item.status === "running"
-                                  ? "text-blue-500"
-                                  : "text-emerald-600"
+                                  ? "text-muted-foreground/65"
+                                  : "text-muted-foreground/45"
                           }`}
                         >
                           {STATUS_LABELS[item.status]}
@@ -1274,14 +1301,14 @@ export function AgentPlan({
       <div className="mb-1.5 rounded-md border border-border/20 bg-muted/8 px-2.5 py-2">
         {/* Header */}
         <div className="flex items-center gap-1.5 mb-1.5">
-          <ListChecks className="size-3.5 text-cyan-600 shrink-0" />
+          <ListChecks className="size-3.5 text-muted-foreground/55 shrink-0" />
           <span className="text-[11px] font-medium text-foreground/80 truncate">
             {summary || `任务规划 (${totalSteps} 步)`}
           </span>
           <span className={`ml-auto shrink-0 text-[10px] leading-none font-medium ${
             allDone
-              ? "text-emerald-600"
-              : "text-cyan-600"
+              ? "text-muted-foreground/60"
+              : "text-muted-foreground/70"
           }`}>
             {allDone ? "✓" : `${doneCount}/${totalSteps}`}
           </span>
@@ -1291,7 +1318,7 @@ export function AgentPlan({
         <div className="h-1 w-full rounded-full bg-muted overflow-hidden mb-1.5">
           <div
             className={`h-full rounded-full transition-all duration-500 ${
-              allDone ? "bg-emerald-500" : "bg-cyan-500"
+              allDone ? "bg-muted-foreground/35" : "bg-muted-foreground/30"
             }`}
             style={{ width: `${progressPct}%` }}
           />
@@ -1308,9 +1335,9 @@ export function AgentPlan({
                 {/* Status indicator */}
                 <div className="mt-0.5 shrink-0">
                   {isCompleted ? (
-                    <CheckCircle2 className="size-3.5 text-emerald-500" />
+                    <span className="block size-2 rounded-full bg-muted-foreground/30" />
                   ) : isRunning ? (
-                    <Loader2 className="size-3.5 animate-spin text-cyan-500" />
+                    <Loader2 className="size-3.5 animate-spin text-muted-foreground/45" />
                   ) : (
                     <Circle className="size-3.5 text-muted-foreground/40" />
                   )}
@@ -1408,7 +1435,7 @@ export function AgentPlan({
                 {step.thought && !shouldHideThoughtBlock(step.thought) && (
                   <div className="text-muted-foreground border-foreground/20 border-l border-dashed pl-3 text-xs">
                     <div className="flex items-center gap-2 py-1">
-                      <Brain className="size-3.5 text-blue-500 shrink-0" />
+                      <Brain className="size-3.5 text-muted-foreground/45 shrink-0" />
                       <span className="font-medium text-xs">
                         {t("thought")}
                       </span>
@@ -1431,7 +1458,7 @@ export function AgentPlan({
                 {step.action && (
                   <div className="text-muted-foreground border-foreground/20 border-l border-dashed pl-3 text-xs">
                     <div className="flex items-center gap-2 py-1">
-                      <Zap className="size-3.5 text-yellow-500 shrink-0" />
+                      <Zap className="size-3.5 text-muted-foreground/45 shrink-0" />
                       <span className="font-medium text-xs">
                         {t("action")}
                       </span>
@@ -1447,7 +1474,7 @@ export function AgentPlan({
                 {step.observation && (
                   <div className="text-muted-foreground border-foreground/20 border-l border-dashed pl-3 text-xs">
                     <div className="flex items-center gap-2 py-1">
-                      <Eye className="size-3.5 text-green-500 shrink-0" />
+                      <Eye className="size-3.5 text-muted-foreground/45 shrink-0" />
                       <span className="font-medium text-xs">
                         {t("observation")}
                       </span>
@@ -1655,7 +1682,7 @@ export function AgentPlan({
       <div className="w-full mb-1">
         <div className="flex items-center gap-1.5 py-1 px-1">
           {/* Animated spinner */}
-          <Loader2 className="size-3.5 animate-spin text-blue-500 shrink-0" />
+          <Loader2 className="size-3.5 animate-spin text-muted-foreground/45 shrink-0" />
 
           {/* Status text */}
           <span className="text-[11px] font-medium text-muted-foreground">

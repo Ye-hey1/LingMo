@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useEffect, useState } from "react"
-import { ModelConfig } from "../../setting/config"
+import { ModelConfig, getBuiltinProviderTemplateMatch } from "../../setting/config"
 import { Store } from "@tauri-apps/plugin-store"
 import useSettingStore from "@/stores/setting"
 import { BotMessageSquare, BotOff, Check } from "lucide-react"
@@ -12,10 +12,12 @@ import {
 import { cn } from "@/lib/utils"
 import { useTranslations } from "next-intl"
 import { TooltipButton } from "@/components/tooltip-button"
+import { getCachedProviderTemplates, getProviderTemplateMatch } from "@/lib/ai/provider-templates-runtime"
+import { getConfiguredProviderDisplayTitle } from "@/lib/ai/provider-display"
 
 interface GroupedModel {
   configKey: string
-  configTitle: string
+  providerTitle: string
   model: ModelConfig
 }
 
@@ -42,18 +44,31 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
   }
 
   useEffect(() => {
-    if (aiModelList && aiModelList.length > 0) {
+    let cancelled = false
+
+    async function initModels() {
+      if (!aiModelList || aiModelList.length === 0) {
+        setGroupedModels([])
+        return
+      }
+
+      const providerTemplates = await getCachedProviderTemplates()
       const models: GroupedModel[] = []
 
       aiModelList.forEach(config => {
         if (!config.baseURL) return
+        const providerTemplate = getProviderTemplateMatch(config, providerTemplates)
+        const builtinProviderTemplate = getBuiltinProviderTemplateMatch(config)
+        const providerTitle =
+          getConfiguredProviderDisplayTitle(config, providerTemplate) ||
+          getConfiguredProviderDisplayTitle(config, builtinProviderTemplate)
 
         if (config.models && config.models.length > 0) {
           config.models.forEach(model => {
             if (model.modelType === 'chat' && model.model) {
               models.push({
                 configKey: config.key,
-                configTitle: config.title,
+                providerTitle,
                 model: model
               })
             }
@@ -62,7 +77,7 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
           if ((config.modelType === 'chat' || !config.modelType) && config.model) {
             models.push({
               configKey: config.key,
-              configTitle: config.title,
+              providerTitle,
               model: {
                 id: config.key,
                 model: config.model,
@@ -77,15 +92,24 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
         }
       })
 
-      setGroupedModels(models)
+      if (!cancelled) {
+        setGroupedModels(models)
+      }
+    }
+
+    void initModels()
+
+    return () => {
+      cancelled = true
     }
   }, [aiModelList])
 
   const groupedByConfig = groupedModels.reduce((acc, item) => {
-    if (!acc[item.configTitle]) {
-      acc[item.configTitle] = []
+    const key = item.providerTitle
+    if (!acc[key]) {
+      acc[key] = []
     }
-    acc[item.configTitle].push(item)
+    acc[key].push(item)
     return acc
   }, {} as Record<string, GroupedModel[]>)
 
@@ -115,9 +139,11 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
           {groupedModels.length === 0 ? (
             <div className="px-2 py-3 text-xs text-muted-foreground">{t('noModel')}</div>
           ) : (
-            Object.entries(groupedByConfig).map(([configTitle, models]) => (
-              <div key={configTitle}>
-                <div className="px-2 pt-2 pb-1 text-[10px] font-medium text-muted-foreground/60">{configTitle}</div>
+            Object.entries(groupedByConfig).map(([providerTitle, models]) => (
+              <div key={providerTitle || 'models-without-provider'}>
+                {providerTitle && (
+                  <div className="px-2 pt-2 pb-1 text-[10px] font-medium text-muted-foreground/60">{providerTitle}</div>
+                )}
                 {models.map((item) => (
                   <button
                     key={item.model.id}

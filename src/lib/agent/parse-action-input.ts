@@ -252,7 +252,8 @@ function findFieldStringStart(source: string, fieldNames: string[]): number {
   return -1
 }
 
-function readStrictStringAt(source: string, quoteIndex: number): string | undefined {
+function readLooseStringField(source: string, fieldNames: string[]): { value: string; complete: boolean } | undefined {
+  const quoteIndex = findFieldStringStart(source, fieldNames)
   if (quoteIndex < 0 || (source[quoteIndex] !== '"' && source[quoteIndex] !== "'")) {
     return undefined
   }
@@ -276,17 +277,28 @@ function readStrictStringAt(source: string, quoteIndex: number): string | undefi
     }
 
     if (char === quote) {
-      return decodeLooseJsonString(value)
+      return {
+        value: decodeLooseJsonString(value).trimEnd(),
+        complete: true,
+      }
     }
 
     value += char
   }
 
-  return undefined
+  return {
+    value: decodeLooseJsonString(
+      value
+        .replace(/\s*```\s*$/g, '')
+        .replace(/\s*[}\]]+\s*$/g, '')
+    ).trimEnd(),
+    complete: false,
+  }
 }
 
 function findLooseStringField(source: string, fieldNames: string[]): string | undefined {
-  return readStrictStringAt(source, findFieldStringStart(source, fieldNames))
+  const looseField = readLooseStringField(source, fieldNames)
+  return looseField?.complete ? looseField.value : undefined
 }
 
 function isJsonLikeTailAfterString(tail: string): boolean {
@@ -432,6 +444,15 @@ function getFinalAnswerField(value: Record<string, any> | null): string | undefi
 export function parseStructuredFinalAnswerJson(jsonStr: string): string | null {
   const parsed = parseActionInputJson(jsonStr)
   if (!parsed) {
+    const looseAnswer = findLooseFinalAnswerJsonField(jsonStr)
+    return looseAnswer?.complete ? looseAnswer.value.trim() || null : null
+  }
+
+  const action = getStringField(parsed.action) ||
+    getStringField(parsed.tool) ||
+    getStringField(parsed.tool_name)
+
+  if (action && !/^(final\s*answer|final)$/i.test(action)) {
     return null
   }
 
@@ -440,11 +461,7 @@ export function parseStructuredFinalAnswerJson(jsonStr: string): string | null {
     return directAnswer
   }
 
-  const action = getStringField(parsed.action) ||
-    getStringField(parsed.tool) ||
-    getStringField(parsed.tool_name)
-
-  if (!action || !/^(final\s*answer|final)$/i.test(action)) {
+  if (!action) {
     return null
   }
 
@@ -459,6 +476,165 @@ export function parseStructuredFinalAnswerJson(jsonStr: string): string | null {
   }
 
   return getFinalAnswerField(getParamsField(rawParams)) || null
+}
+
+export function findLooseFinalAnswerJsonField(jsonStr: string): { value: string; complete: boolean } | null {
+  const source = stripJsonWrappers(jsonStr)
+
+  const action = findLooseStringField(source, ['action', 'tool', 'tool_name'])
+  if (action && !/^(final\s*answer|final)$/i.test(action)) {
+    return null
+  }
+
+  const explicitField = readLooseStringField(source, [
+    'final_answer',
+    'finalAnswer',
+    'answer',
+    'response',
+    'output',
+  ])
+
+  if (explicitField?.value.trim()) {
+    return {
+      value: explicitField.value.trim(),
+      complete: explicitField.complete,
+    }
+  }
+
+  if (hasStructuredAgentControlFields(source)) {
+    return null
+  }
+
+  const contentField = readLooseStringField(source, ['content'])
+  if (!contentField?.value.trim()) {
+    return null
+  }
+
+  return {
+    value: contentField.value.trim(),
+    complete: contentField.complete,
+  }
+}
+
+export function extractVisibleFinalAnswer(content: string): string | null {
+  const trimmed = (content || '').trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const structured = parseStructuredFinalAnswerJson(trimmed)
+  if (structured?.trim()) {
+    return structured.trim()
+  }
+
+  const loose = findLooseFinalAnswerJsonField(trimmed)
+  if (loose?.value.trim()) {
+    return loose.value.trim()
+  }
+
+  const normalized = trimmed
+    .replace(/Action\s*[:：]\s*Final\s*Answer\s*[:：]/i, 'Final Answer:')
+
+  const finalAnswerMatch =
+    normalized.match(/Final\s*Answer\s*[:：]\s*([\s\S]*)/i) ||
+    normalized.match(/最终答案\s*[:：]?\s*([\s\S]*)/i)
+
+  if (finalAnswerMatch?.[1]?.trim()) {
+    return finalAnswerMatch[1].trim()
+  }
+
+  return null
+}
+
+const INTERNAL_AGENT_INSTRUCTION_PATTERNS = [
+  /【系统提示[:：].*工具输出内容过长/i,
+  /---\s*截断元数据\s*---/i,
+  /你已经获得了工具执行结果，现在请直接用\s*Final Answer\s*输出最终分析报告/i,
+  /你只输出了思考内容，没有给出\s*Action\s*或\s*Final Answer/i,
+  /你的上一条输出因为达到模型输出长度上限被截断/i,
+  /Final Answer\s*内容为空，请继续完成任务或输出完整最终答案/i,
+  /Action Input JSON\s*无法解析/i,
+  /请保持动作不变，并只重新输出一次有效的\s*JSON\s*参数/i,
+  /请直接输出[:：]?\s*\n?\s*\{\s*["']action["']/i,
+  /最终答案校验未通过，请继续执行实际工具/i,
+  /尚未获得真实工具成功结果，不能宣称/i,
+  /尚未获得真实工具成功结果，不能把文件、图表、导出或可视化任务判定为已完成/i,
+  /尚未获得创建\/编辑\/图表\/导出类工具成功结果/i,
+  /不能把说明文字当作最终完成结果/i,
+  /请继续输出\s*JSON\s*Action/i,
+  /还没有真实执行结果可供验证/i,
+  /还没有成功的写入\/编辑工具结果/i,
+  /已选择\s*Skill，但还没有真正完成执行步骤/i,
+  /仅完成了\s*Skill\s*选择或说明读取/i,
+  /Your previous response could not be parsed/i,
+]
+
+export function isInternalAgentInstruction(value: unknown): boolean {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  const normalized = value.replace(/\r\n/g, '\n').trim()
+  if (!normalized) {
+    return false
+  }
+
+  return INTERNAL_AGENT_INSTRUCTION_PATTERNS.some(pattern => pattern.test(normalized))
+}
+
+export function sanitizeVisibleAssistantContent(content: string): string {
+  if (!content) {
+    return ''
+  }
+
+  if (isInternalAgentInstruction(content)) {
+    return ''
+  }
+
+  const finalAnswer = extractVisibleFinalAnswer(content)
+  if (finalAnswer) {
+    return finalAnswer.trim()
+  }
+
+  let cleaned = content.replace(/\r\n/g, '\n').trim()
+
+  const structuredAction = parseStructuredActionJson(cleaned)
+  if (structuredAction) {
+    return (structuredAction.thought || '').trim()
+  }
+
+  const parsed = parseActionInputJson(cleaned)
+  if (parsed) {
+    const thought = getStringField(parsed.thought)
+    if (thought) {
+      return thought
+    }
+
+    if (hasStructuredAgentControlFields(cleaned)) {
+      return ''
+    }
+  }
+
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '')
+  cleaned = cleaned.replace(/<think>[\s\S]*$/g, '')
+
+  const actionIndex = cleaned.search(/\n?\s*Action\s*[:：]/i)
+  if (actionIndex >= 0) {
+    cleaned = cleaned.slice(0, actionIndex)
+  }
+
+  const actionInputIndex = cleaned.search(/\n?\s*Action Input\s*[:：]/i)
+  if (actionInputIndex >= 0) {
+    cleaned = cleaned.slice(0, actionInputIndex)
+  }
+
+  cleaned = cleaned
+    .replace(/^(Thought|思考)\s*[:：]\s*/i, '')
+    .replace(/^```(?:json|markdown)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim()
+
+  return cleaned
 }
 
 export function isStructuredThoughtOnlyJson(jsonStr: string): boolean {

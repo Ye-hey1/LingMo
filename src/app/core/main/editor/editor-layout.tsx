@@ -853,15 +853,19 @@ export function EditorLayout() {
         )}
         {itemType === 'markdown' && (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <Suspense fallback={<div className="flex-1" />}>
-              <MdEditor
-                key={tab.id}
-                tabContentsRef={tabContentsRef}
-                filePath={tab.path}
-              />
-            </Suspense>
-            <BacklinksPanel />
-            <RelatedNotesPanel />
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <Suspense fallback={<div className="flex-1" />}>
+                <MdEditor
+                  key={tab.id}
+                  tabContentsRef={tabContentsRef}
+                  filePath={tab.path}
+                />
+              </Suspense>
+            </div>
+            <div className="shrink-0">
+              <BacklinksPanel />
+              <RelatedNotesPanel />
+            </div>
           </div>
         )}
         {itemType === 'unknown' && (

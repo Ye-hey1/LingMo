@@ -20,6 +20,49 @@ export interface MessageCitationDetail {
   publishedAt?: string
 }
 
+export const RAG_DIAGNOSTIC_SOURCE_LABEL = 'RAG 检索诊断'
+export const RAG_DIAGNOSTIC_SOURCE_PATH = 'rag-diagnostics'
+
+type CitationSourceLike = Partial<Pick<
+  MessageCitationDetail,
+  'url' | 'title' | 'filename' | 'filepath' | 'articlePath' | 'sourceType'
+>>
+
+export function isRagDiagnosticSource(source?: string | null) {
+  const normalized = source?.trim()
+  return normalized === RAG_DIAGNOSTIC_SOURCE_LABEL || normalized === RAG_DIAGNOSTIC_SOURCE_PATH
+}
+
+export function isRagDiagnosticCitation(detail?: CitationSourceLike | null) {
+  if (!detail) return false
+
+  return [
+    detail.title,
+    detail.filename,
+    detail.filepath,
+    detail.articlePath,
+    detail.url,
+  ].some(isRagDiagnosticSource)
+}
+
+export function filterVisibleRagSources(sources: string[] = []) {
+  const seen = new Set<string>()
+
+  return sources.filter((source) => {
+    const normalized = source.trim()
+    if (!normalized || isRagDiagnosticSource(normalized) || seen.has(normalized)) {
+      return false
+    }
+
+    seen.add(normalized)
+    return true
+  })
+}
+
+export function filterVisibleCitationDetails<T extends CitationSourceLike>(details: T[] = []) {
+  return details.filter((detail) => !isRagDiagnosticCitation(detail))
+}
+
 function getHostLabel(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '')

@@ -50,6 +50,7 @@ serde_yaml = "0.9"
 chrono = "0.4"
 thiserror = "1"
 tempfile = "3"
+tauri-plugin-notification = "2"
 
 [dependencies.tauri-plugin-sql]
 features = ["sqlite"]
@@ -69,6 +70,7 @@ regex = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Threading"] }
+tauri-winrt-notification = "0.7.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }

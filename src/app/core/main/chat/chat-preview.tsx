@@ -55,6 +55,7 @@ type MermaidRenderResult = {
 
 const MERMAID_RENDER_CACHE_PREFIX = 'lingmo:chat:mermaid:';
 const MAX_STORED_MERMAID_SVG_LENGTH = 500_000;
+const MERMAID_RENDER_TIMEOUT_MS = 15_000;
 const MERMAID_STATEMENT_START = /([)\]}"])\s+([A-Za-z_][\w-]*\s*(?:-->|---|-.->|==>|--o|--x|o--|x--))/g;
 const MERMAID_SEPARATOR_LINE = /^\s*[-–—_=]{3,}\s*;?\s*$/;
 const MERMAID_DASH_TARGET_EDGE = /^\s*[A-Za-z_][\w-]*\s*(?:-->|---|-.->|==>|--o|--x)\s*[-–—_]{3,}\s*;?\s*$/;
@@ -188,6 +189,34 @@ function getMermaidRenderCandidates(source: string): string[] {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function renderMermaidFallback(message: string, source: string, escapeHtml: (value: string) => string): string {
+  return [
+    `<div class="chat-mermaid-error">${escapeHtml(message)}</div>`,
+    '<pre class="chat-mermaid-source"><code>',
+    escapeHtml(source),
+    '</code></pre>',
+  ].join('');
+}
+
+function withMermaidTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error('Mermaid 渲染超时，已显示源码。'));
+    }, ms);
+
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function renderMermaidSvg(
@@ -863,7 +892,10 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
             renderArea.removeAttribute('data-mermaid-rendered')
             renderArea.innerHTML = '<div class="mermaid-canvas-loading">正在渲染图表...</div>'
             const id = `chat-mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-            const { svg, repaired } = await renderMermaidSvg(mermaid, source, id)
+            const { svg, repaired } = await withMermaidTimeout(
+              renderMermaidSvg(mermaid, source, id),
+              MERMAID_RENDER_TIMEOUT_MS,
+            )
             const cacheEntry = { svg }
             mermaidRenderCacheRef.current.set(cacheKey, cacheEntry)
             storeMermaidCacheEntry(source, currentTheme, cacheEntry)
@@ -879,7 +911,8 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
             const msg = getErrorMessage(err)
             mermaidRenderCacheRef.current.set(cacheKey, { error: msg })
             if (cancelled) return
-            renderArea.innerHTML = `<div class="chat-mermaid-error">${md.current ? md.current.utils.escapeHtml(msg) : msg}</div>`
+            const escapeHtml = md.current?.utils.escapeHtml || ((value: string) => value)
+            renderArea.innerHTML = renderMermaidFallback(msg, source, escapeHtml)
           }
         }
         if (renderedFreshDiagram && !cancelled && md.current) {
@@ -890,7 +923,9 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
         containers.forEach((container) => {
           const renderArea = container.querySelector('.mermaid-canvas-render') as HTMLDivElement;
           if (renderArea) {
-            renderArea.innerHTML = `<div class="chat-mermaid-error">${md.current ? md.current.utils.escapeHtml(msg) : msg}</div>`
+            const source = decodeMermaidSource(renderArea)
+            const escapeHtml = md.current?.utils.escapeHtml || ((value: string) => value)
+            renderArea.innerHTML = renderMermaidFallback(msg, source, escapeHtml)
           }
         })
       }

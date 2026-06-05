@@ -123,7 +123,7 @@ export const selectSkillTool: Tool = {
  */
 export const loadSkillContentTool: Tool = {
   name: 'load_skill_content',
-  description: 'Get the support file content for the specified Skill. Supports standard files (KEYWORDS.md, EXAMPLES.md, REFERENCE.md) and custom root-level .md files (e.g., editing.md, pptxgenjs.md). These files contain detailed style guides, keyword lists, and usage examples to help better apply the Skill.',
+  description: 'Get the support file content for the specified Skill. Supports standard files (KEYWORDS.md, EXAMPLES.md, REFERENCE.md), files under references/, and custom root-level .md files (e.g., editing.md, pptxgenjs.md). These files contain detailed style guides, keyword lists, and usage examples to help better apply the Skill.',
   category: 'system',
   requiresConfirmation: false,
   parameters: [
@@ -209,6 +209,9 @@ export const loadSkillContentTool: Tool = {
         return false
       }
 
+      const resolveReferencePath = (refPath: string) =>
+        refPath.includes('/') ? refPath : `${fileInfo.directory}/${refPath}`
+
       if (file_type) {
         // 指定了 file_type，尝试加载特定文件
         const fileName = file_type
@@ -218,6 +221,21 @@ export const loadSkillContentTool: Tool = {
         if (standardFile) {
           const filePath = `${fileInfo.directory}/${standardFile}`
           await readFile(file_type, filePath)
+        } else if (
+          skill.references.some(ref =>
+            ref.name === file_type ||
+            ref.path === file_type ||
+            ref.path.endsWith(`/${file_type}`)
+          )
+        ) {
+          const ref = skill.references.find(ref =>
+            ref.name === file_type ||
+            ref.path === file_type ||
+            ref.path.endsWith(`/${file_type}`)
+          )
+          if (ref) {
+            await readFile(ref.name, resolveReferencePath(ref.path))
+          }
         } else {
           // 可能是根目录的自定义 .md 文件（如 editing.md, pptxgenjs.md）
           const filePath = `${fileInfo.directory}/${fileName}`
@@ -231,16 +249,15 @@ export const loadSkillContentTool: Tool = {
           await readFile(type, filePath)
         }
 
-        // 2. 加载 Skill.references 中的根目录 .md 文件
-        // references 数组中的 rootMdFiles 有 path 属性（文件名而非完整路径）
+        // 2. 加载 Skill.references 中的参考文件（references/ 与根目录 .md）
         for (const ref of skill.references) {
-          // 检查是否是根目录的 .md 文件（path 不包含目录分隔符）
-          if (!ref.path.includes('/') && ref.path.endsWith('.md') && ref.path !== 'SKILL.md') {
+          if (ref.path.endsWith('.md') && ref.path !== 'SKILL.md' && !ref.path.endsWith('/SKILL.md')) {
             // 检查是否已经通过标准文件加载过了
-            const alreadyLoaded = Object.values(standardTypeMapping).includes(ref.path)
+            const alreadyLoaded = Object.values(standardTypeMapping).some(fileName =>
+              ref.path === fileName || ref.path.endsWith(`/${fileName}`)
+            )
             if (!alreadyLoaded) {
-              const filePath = `${fileInfo.directory}/${ref.path}`
-              await readFile(ref.name, filePath)
+              await readFile(ref.name, resolveReferencePath(ref.path))
             }
           }
         }

@@ -1,8 +1,6 @@
 /**
- * Token Budget Management — CJK-aware token estimation & context window budgeting
- *
- * Ported from CowAgent's agent.protocol.agent._estimate_text_tokens / _get_model_context_window
- * with TypeScript adaptations for the OpenAI message format used by LingMo.
+ * Token Budget Management — CJK-aware token estimation and context window budgeting.
+ * Uses lightweight estimates for LingMo's OpenAI-format message arrays.
  */
 
 // ---------------------------------------------------------------------------

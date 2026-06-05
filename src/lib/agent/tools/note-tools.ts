@@ -1,5 +1,5 @@
 import { Tool, ToolResult } from '../types'
-import { BaseDirectory, readTextFile, writeTextFile, rename, copyFile, stat } from '@tauri-apps/plugin-fs'
+import { BaseDirectory, exists, readTextFile, writeTextFile, rename, copyFile, stat } from '@tauri-apps/plugin-fs'
 import { appDataDir } from '@tauri-apps/api/path'
 import { getAllMarkdownFiles, isLinkedFolder, type LinkedResource, type MarkdownFile } from '@/lib/files'
 import { ensureSafeWorkspaceRelativePath, getFilePathOptions } from '@/lib/workspace'
@@ -37,6 +37,33 @@ function normalizeLinkedCandidate(candidate: unknown): string {
 function getLinkedFileName(path: unknown): string {
   const normalized = normalizeLinkedCandidate(path)
   return normalized.split('/').pop() || normalized
+}
+
+function isGlobalSkillMarkdownPath(filePath: string): boolean {
+  return /^(?:skills-v2\/skills|skills)\/[^/]+\/.+\.md$/i.test(filePath)
+}
+
+async function readMarkdownPath(filePath: string): Promise<{
+  content: string
+  resolvedReadPath: string
+  resolvedBaseDir?: BaseDirectory
+  source?: 'skill-resource'
+}> {
+  if (isGlobalSkillMarkdownPath(filePath) && await exists(filePath, { baseDir: BaseDirectory.AppData })) {
+    return {
+      content: await readTextFile(filePath, { baseDir: BaseDirectory.AppData }),
+      resolvedReadPath: filePath,
+      resolvedBaseDir: BaseDirectory.AppData,
+      source: 'skill-resource',
+    }
+  }
+
+  const { path, baseDir } = await getFilePathOptions(filePath)
+  return {
+    content: baseDir ? await readTextFile(path, { baseDir }) : await readTextFile(path),
+    resolvedReadPath: path,
+    resolvedBaseDir: baseDir,
+  }
 }
 
 function matchesLinkedFileCandidate(
@@ -232,22 +259,18 @@ export const readMarkdownFileTool: Tool = {
         }
       }
 
-      let content = ''
-
-      // 统一使用 getFilePathOptions 来处理路径，无论是自定义工作区还是默认工作区
-      const { path, baseDir } = await getFilePathOptions(normalizedFilePath)
-      resolvedReadPath = path
-      resolvedBaseDir = baseDir
-
-      if (baseDir) {
-        content = await readTextFile(path, { baseDir })
-      } else {
-        content = await readTextFile(path)
-      }
+      const readResult = await readMarkdownPath(normalizedFilePath)
+      const { content } = readResult
+      resolvedReadPath = readResult.resolvedReadPath
+      resolvedBaseDir = readResult.resolvedBaseDir
 
       return {
         success: true,
-        data: { filePath: normalizedFilePath, content },
+        data: {
+          filePath: normalizedFilePath,
+          content,
+          source: readResult.source,
+        },
         message: `成功读取文件: ${normalizedFilePath}`,
       }
     } catch (error) {
@@ -833,17 +856,15 @@ export const readMarkdownFilesBatchTool: Tool = {
         try {
           let content = ''
 
-          // 统一使用 getFilePathOptions 来处理路径
           const normalizedFilePath = await ensureSafeWorkspaceRelativePath(filePath)
-          const { path, baseDir } = await getFilePathOptions(normalizedFilePath)
+          const readResult = await readMarkdownPath(normalizedFilePath)
+          content = readResult.content
 
-          if (baseDir) {
-            content = await readTextFile(path, { baseDir })
-          } else {
-            content = await readTextFile(path)
-          }
-
-          results.push({ filePath: normalizedFilePath, content })
+          results.push({
+            filePath: normalizedFilePath,
+            content,
+            source: readResult.source,
+          })
           assertNotAborted(context?.abortSignal)
         } catch (error) {
           errors.push({ filePath, error: String(error) })

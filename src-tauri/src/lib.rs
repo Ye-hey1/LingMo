@@ -1,5 +1,6 @@
 mod ai;
 mod backup;
+mod desktop_notification;
 mod device;
 mod llm_memory;
 mod mcp;
@@ -12,6 +13,7 @@ use ai::{
     cancel_ai_request, AiRequestManager,
 };
 use backup::{export_app_data, import_app_data, import_app_data_from_file};
+use desktop_notification::send_desktop_notification;
 use device::get_device_id;
 use mcp::{send_mcp_message, start_mcp_stdio_server, stop_mcp_server, McpServerManager};
 use mcp_runtime::{
@@ -32,6 +34,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(tauri_plugin_notification::init())
         .manage(McpServerManager::new())
         .manage(RuntimeInstallManager::new())
         .manage(AiRequestManager::new())
@@ -50,6 +53,7 @@ pub fn run() {
             install_mcp_runtime,
             cancel_mcp_runtime_install,
             get_device_id,
+            send_desktop_notification,
             export_app_data,
             import_app_data,
             import_app_data_from_file,

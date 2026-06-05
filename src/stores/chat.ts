@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { Chat, clearChatsByTagId, deleteChat, deleteChatsByConversationId, initChatsDb, insertChat, updateChat, updateChatsInsertedById, getAllChats, deleteAllChats, insertChats, updateChatCondensedContent, getChatsByConversation } from '@/db/chats'
+import { Chat, clearChatsByTagId, deleteChat, deleteChats, deleteChatsByConversationId, initChatsDb, insertChat, updateChat, updateChatsInsertedById, getAllChats, deleteAllChats, insertChats, updateChatCondensedContent, getChatsByConversation } from '@/db/chats'
 import { uploadFile as uploadGithubFile, getFiles as githubGetFiles, decodeBase64ToString } from '@/lib/sync/github';
 import { uploadFile as uploadGiteeFile, getFiles as giteeGetFiles } from '@/lib/sync/gitee';
 import { uploadFile as uploadGitlabFile, getFiles as gitlabGetFiles, getFileContent as gitlabGetFileContent } from '@/lib/sync/gitlab';
@@ -219,6 +219,7 @@ interface ChatState {
   updateChat: (chat: Chat) => void // 更新一条 chat
   saveChat: (chat: Chat, isSave?: boolean) => Promise<void> // 保存一条 chat，用于动态 AI 回复结束后保存数据库
   deleteChat: (id: number) => Promise<void> // 删除一条 chat
+  truncateFromChat: (id: number) => Promise<void> // 从指定消息开始截断当前会话
 
   locale: string
   getLocale: () => Promise<void>
@@ -446,6 +447,8 @@ const useChatStore = create<ChatState>((set, get) => ({
     ragSources: undefined,
     ragSourceDetails: undefined,
     agentContextSnapshot: undefined,
+    activity: undefined,
+    telemetry: undefined,
     taskPlan: undefined,
   },
 
@@ -480,6 +483,8 @@ const useChatStore = create<ChatState>((set, get) => ({
         ragSources: currentState.ragSources,
         ragSourceDetails: currentState.ragSourceDetails,
         agentContextSnapshot: undefined,
+        activity: undefined,
+        telemetry: undefined,
         // 重置 Final Answer 模式
         isFinalAnswerMode: false,
         finalAnswerContent: undefined,
@@ -773,6 +778,40 @@ const useChatStore = create<ChatState>((set, get) => ({
     if (currentConversationId) {
       const { updateConversationMessageCount } = await import('@/db/conversations')
       await updateConversationMessageCount(currentConversationId, -1)
+      await get().initConversations()
+    }
+  },
+
+  truncateFromChat: async (id) => {
+    const chats = get().chats
+    const targetIndex = chats.findIndex(item => item.id === id)
+    if (targetIndex < 0) return
+
+    const removedChats = chats.slice(targetIndex)
+    if (removedChats.length === 0) return
+
+    const removedIds = new Set(removedChats.map(item => item.id))
+    const remainingChats = chats.slice(0, targetIndex)
+    const chatSearchResults = get().chatSearchResults.filter(item => !removedIds.has(item))
+    const chatSearchCurrentIndex = chatSearchResults.length > 0
+      ? Math.min(get().chatSearchCurrentIndex, chatSearchResults.length - 1)
+      : -1
+
+    set({
+      chats: remainingChats,
+      mcpToolCalls: get().mcpToolCalls.filter(call => !removedIds.has(call.chatId)),
+      chatSearchResults,
+      chatSearchCurrentIndex,
+    })
+    get().resetAgentState()
+
+    await deleteChats([...removedIds])
+
+    const { currentConversationId } = get()
+    if (currentConversationId) {
+      const { syncConversationMessageCount, updateConversationTime } = await import('@/db/conversations')
+      await syncConversationMessageCount(currentConversationId)
+      await updateConversationTime(currentConversationId)
       await get().initConversations()
     }
   },

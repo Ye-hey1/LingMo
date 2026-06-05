@@ -1,6 +1,7 @@
 import { TooltipButton } from "@/components/tooltip-button"
 import { Button } from "@/components/ui/button"
 import { useTranslations } from 'next-intl'
+import { toast } from "@/hooks/use-toast"
 import {
   Dialog,
   DialogContent,
@@ -30,7 +31,12 @@ import { handleRecordComplete } from '@/lib/record-navigation'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { isMobileDevice as checkIsMobileDevice } from '@/lib/check'
 import { TodoForm, TodoFormData } from "./todo-form"
-import { GoalPanel } from "./goal-settings-button"
+
+function parseReminderAt(value?: string) {
+  if (!value) return undefined
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? timestamp : undefined
+}
 
 export function ControlTodo() {
   const t = useTranslations();
@@ -46,10 +52,45 @@ export function ControlTodo() {
   const { currentTagId, fetchTags, getCurrentTag, tags } = useTagStore()
   const { fetchMarks } = useMarkStore()
   const [selectedTagId, setSelectedTagId] = useState<number>(currentTagId)
+  const reminderTimestamp = formData.reminderEnabled ? parseReminderAt(formData.reminderAt) : undefined
+  const canSubmit = Boolean(formData.title.trim())
+    && (!formData.reminderEnabled || Boolean(reminderTimestamp && reminderTimestamp > Date.now()))
 
   async function handleSuccess() {
     if (!formData.title.trim()) {
       return
+    }
+
+    if (formData.reminderEnabled && (!reminderTimestamp || reminderTimestamp <= Date.now())) {
+      toast({
+        title: t('record.mark.todo.invalidReminderTime'),
+        variant: 'destructive',
+      })
+      return
+    }
+
+    let reminderId: string | undefined
+    if (formData.reminderEnabled && reminderTimestamp) {
+      try {
+        const { reminderScheduler } = await import('@/lib/reminders/scheduler')
+        const reminder = await reminderScheduler.create({
+          title: formData.title.trim(),
+          message: formData.description.trim() || undefined,
+          dueAt: reminderTimestamp,
+          source: {
+            type: 'note',
+            label: t('record.mark.todo.title'),
+          },
+        })
+        reminderId = reminder.id
+      } catch (error) {
+        toast({
+          title: t('record.mark.todo.reminderCreateFailed'),
+          description: error instanceof Error ? error.message : String(error),
+          variant: 'destructive',
+        })
+        return
+      }
     }
 
     const todoData = {
@@ -59,6 +100,8 @@ export function ControlTodo() {
       completed: false,
       dueDate: formData.dueDate || undefined,
       subtasks: formData.subtasks || undefined,
+      reminderAt: reminderTimestamp,
+      reminderId,
     }
 
     await insertMark({
@@ -81,6 +124,8 @@ export function ControlTodo() {
       priority: 'medium',
       dueDate: undefined,
       subtasks: undefined,
+      reminderEnabled: false,
+      reminderAt: undefined,
     })
     setOpen(false)
   }
@@ -116,6 +161,7 @@ export function ControlTodo() {
       onTagChange={setSelectedTagId}
       tags={tags}
       showTagSelector={true}
+      showReminderOption={true}
     />
   )
 
@@ -126,22 +172,21 @@ export function ControlTodo() {
           <DrawerTrigger asChild>
             <TooltipButton icon={<CheckSquare />} tooltipText={t('record.mark.type.todo')} />
           </DrawerTrigger>
-          <DrawerContent>
+          <DrawerContent className="max-h-[92vh]">
             <DrawerHeader>
-              <DrawerTitle>{t('record.mark.todo.title')}</DrawerTitle>
+              <DrawerTitle>{t('record.mark.todo.createTitle')}</DrawerTitle>
               <DrawerDescription>
-                {t('record.mark.todo.description')}
+                {t('record.mark.todo.createDescription')}
               </DrawerDescription>
             </DrawerHeader>
-            <div className="space-y-4 px-4">
-              <GoalPanel />
+            <div className="overflow-y-auto px-4 pb-2">
               {formContent}
             </div>
             <DrawerFooter>
               <Button
                 type="submit"
                 onClick={handleSuccess}
-                disabled={!formData.title.trim()}
+                disabled={!canSubmit}
                 className="w-full"
               >
                 {t('record.mark.todo.save')}
@@ -154,22 +199,21 @@ export function ControlTodo() {
           <DialogTrigger asChild>
             <TooltipButton icon={<CheckSquare />} tooltipText={t('record.mark.type.todo')} />
           </DialogTrigger>
-          <DialogContent className="min-w-full md:min-w-[640px]">
-            <DialogHeader className="pb-0">
-              <DialogTitle>{t('record.mark.todo.title')}</DialogTitle>
+          <DialogContent className="w-[calc(100vw-2rem)] max-w-[920px] gap-0 p-0">
+            <DialogHeader className="border-b border-border/70 px-5 py-4">
+              <DialogTitle>{t('record.mark.todo.createTitle')}</DialogTitle>
               <DialogDescription>
-                {t('record.mark.todo.description')}
+                {t('record.mark.todo.createDescription')}
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4">
-              <GoalPanel />
+            <div className="max-h-[calc(100vh-13rem)] overflow-y-auto px-5 py-4">
               {formContent}
             </div>
-            <DialogFooter>
+            <DialogFooter className="border-t border-border/70 px-5 py-3">
               <Button
                 type="submit"
                 onClick={handleSuccess}
-                disabled={!formData.title.trim()}
+                disabled={!canSubmit}
               >
                 {t('record.mark.todo.save')}
               </Button>

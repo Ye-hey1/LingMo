@@ -6,6 +6,10 @@ import { getCurrentWebview } from "@tauri-apps/api/webview"
 
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { computedParentPath } from "@/lib/path"
+import {
+  getLingMoFilePointerDragDetail,
+  LINGMO_FILE_POINTER_DRAG_EVENT,
+} from "@/lib/file-pointer-drag"
 import useArticleStore, { DirTree } from "@/stores/article"
 
 import { FileItem } from "./file-item"
@@ -20,14 +24,57 @@ function isInternalFileDragActive() {
   return Boolean((window as unknown as { __lingMoDraggingFilePath?: string }).__lingMoDraggingFilePath)
 }
 
+function readInternalDragPath(value: string) {
+  let actualPath = value
+  try {
+    const parsed = JSON.parse(value)
+    if (parsed?.path) actualPath = parsed.path
+  } catch {
+    // Plain text paths are still supported for older native drag payloads.
+  }
+  return actualPath
+}
+
+function getFileParentPath(filePath: string) {
+  return filePath.includes("/") ? filePath.split("/").slice(0, -1).join("/") : ""
+}
+
+function collectVisibleFilePaths(items: DirTree[]) {
+  const paths: string[] = []
+
+  const visit = (nodes: DirTree[]) => {
+    for (const node of nodes) {
+      if (node.isFile) {
+        paths.push(computedParentPath(node))
+      }
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    }
+  }
+
+  visit(items)
+  return paths
+}
+
 function Tree({
   item,
   focusSidebar,
   forceExpanded = false,
+  selectedFilePaths,
+  onFileSelectionClick,
+  onFileContextMenu,
+  onClearFileSelection,
+  activeDropTargetFolder,
 }: {
   item: DirTree
   focusSidebar: () => void
   forceExpanded?: boolean
+  selectedFilePaths: string[]
+  onFileSelectionClick: (event: React.MouseEvent<HTMLElement>, path: string) => boolean
+  onFileContextMenu: (path: string) => void
+  onClearFileSelection: () => void
+  activeDropTargetFolder: string
 }) {
   const { collapsibleList, loadCollapsibleFiles, setCollapsibleList } = useArticleStore()
   const path = computedParentPath(item)
@@ -40,7 +87,16 @@ function Tree({
   }
 
   if (item.isFile) {
-    return <FileItem item={item} focusSidebar={focusSidebar} />
+    return (
+      <FileItem
+        item={item}
+        focusSidebar={focusSidebar}
+        selectedFilePaths={selectedFilePaths}
+        onFileSelectionClick={onFileSelectionClick}
+        onFileContextMenu={onFileContextMenu}
+        onClearFileSelection={onClearFileSelection}
+      />
+    )
   }
 
   return (
@@ -50,7 +106,12 @@ function Tree({
         className="group/collapsible [&[data-state=open]>button>.file-manange-item>svg:first-child]:rotate-90"
         open={forceExpanded || collapsibleList.includes(path)}
       >
-        <FolderItem item={item} focusSidebar={focusSidebar} forceExpanded={forceExpanded} />
+        <FolderItem
+          item={item}
+          focusSidebar={focusSidebar}
+          forceExpanded={forceExpanded}
+          isDropTarget={activeDropTargetFolder === path}
+        />
         <CollapsibleContent className="file-manager-nested">
           <ul>
             {item.children?.map((subItem) => (
@@ -59,6 +120,11 @@ function Tree({
                 item={subItem}
                 focusSidebar={focusSidebar}
                 forceExpanded={forceExpanded}
+                selectedFilePaths={selectedFilePaths}
+                onFileSelectionClick={onFileSelectionClick}
+                onFileContextMenu={onFileContextMenu}
+                onClearFileSelection={onClearFileSelection}
+                activeDropTargetFolder={activeDropTargetFolder}
               />
             ))}
           </ul>
@@ -78,9 +144,14 @@ export function FileManager({
   forceExpanded?: boolean
 }) {
   const [isDragging, setIsDragging] = useState(false)
+  const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>([])
+  const [selectionAnchorPath, setSelectionAnchorPath] = useState<string>("")
+  const [activeDropTargetFolder, setActiveDropTargetFolder] = useState("")
   const { fileTree, loadFileTree } = useArticleStore()
   const containerRef = useRef<HTMLDivElement>(null)
   const dropTargetFolderRef = useRef<string>("")
+  const autoExpandTimerRef = useRef<number | null>(null)
+  const autoExpandTargetRef = useRef("")
 
   useEffect(() => {
     if (fileTree.length === 0) {
@@ -110,6 +181,121 @@ export function FileManager({
     }
 
     return folderEl.dataset.fileManagerFolderPath || ""
+  }, [])
+
+  const resolveInternalDropTarget = useCallback((position: { x: number; y: number }) => {
+    const el = containerRef.current
+    const target = document.elementFromPoint(position.x, position.y)
+    if (!el || !target || !el.contains(target)) {
+      return { inside: false, targetFolder: "", overTreeItem: false }
+    }
+
+    const targetElement = target as HTMLElement
+    const folderEl = targetElement.closest<HTMLElement>("[data-file-manager-folder-path]")
+    if (folderEl && el.contains(folderEl)) {
+      return {
+        inside: true,
+        targetFolder: folderEl.dataset.fileManagerFolderPath || "",
+        overTreeItem: true,
+      }
+    }
+
+    const fileEl = targetElement.closest<HTMLElement>("[data-file-manager-file-path]")
+    return {
+      inside: true,
+      targetFolder: "",
+      overTreeItem: Boolean(fileEl && el.contains(fileEl)),
+    }
+  }, [])
+
+  const clearAutoExpandTimer = useCallback(() => {
+    if (autoExpandTimerRef.current !== null) {
+      window.clearTimeout(autoExpandTimerRef.current)
+      autoExpandTimerRef.current = null
+    }
+    autoExpandTargetRef.current = ""
+  }, [])
+
+  const scheduleFolderAutoExpand = useCallback((folderPath: string) => {
+    if (!folderPath || forceExpanded) {
+      clearAutoExpandTimer()
+      return
+    }
+
+    if (autoExpandTargetRef.current === folderPath) {
+      return
+    }
+
+    clearAutoExpandTimer()
+    autoExpandTargetRef.current = folderPath
+    autoExpandTimerRef.current = window.setTimeout(() => {
+      autoExpandTimerRef.current = null
+      autoExpandTargetRef.current = ""
+      void (async () => {
+        const store = useArticleStore.getState()
+        if (!store.collapsibleList.includes(folderPath)) {
+          await store.setCollapsibleList(folderPath, true)
+        }
+        await store.loadCollapsibleFiles(folderPath)
+      })()
+    }, 600)
+  }, [clearAutoExpandTimer, forceExpanded])
+
+  const updateActiveDropTargetFolder = useCallback((folderPath: string) => {
+    dropTargetFolderRef.current = folderPath
+    setActiveDropTargetFolder(prev => prev === folderPath ? prev : folderPath)
+    scheduleFolderAutoExpand(folderPath)
+  }, [scheduleFolderAutoExpand])
+
+  const clearActiveDropTargetFolder = useCallback(() => {
+    dropTargetFolderRef.current = ""
+    setActiveDropTargetFolder("")
+    clearAutoExpandTimer()
+  }, [clearAutoExpandTimer])
+
+  const moveInternalFile = useCallback(async (actualPath: string, targetFolder = "") => {
+    const filename = actualPath.slice(actualPath.lastIndexOf("/") + 1)
+    const sourceFolderPath = actualPath.includes("/") ? actualPath.split("/").slice(0, -1).join("/") : ""
+
+    if (!filename || sourceFolderPath === targetFolder) {
+      return
+    }
+
+    const { getFilePathOptions, getWorkspacePath } = await import("@/lib/workspace")
+    const { generateCopyFilename } = await import("@/lib/default-filename")
+    const workspace = await getWorkspacePath()
+    const targetName = await generateCopyFilename(targetFolder, filename)
+    const targetPath = targetFolder ? `${targetFolder}/${targetName}` : targetName
+
+    if (actualPath === targetPath) {
+      return
+    }
+
+    const oldPathOptions = await getFilePathOptions(actualPath)
+    const newPathOptions = await getFilePathOptions(targetPath)
+
+    if (workspace.isCustom) {
+      await rename(oldPathOptions.path, newPathOptions.path)
+    } else {
+      await rename(oldPathOptions.path, newPathOptions.path, {
+        newPathBaseDir: newPathOptions.baseDir,
+        oldPathBaseDir: oldPathOptions.baseDir,
+      })
+    }
+
+    const store = useArticleStore.getState()
+    const movedInTree = store.moveLocalEntry(actualPath, targetPath)
+    if (targetFolder) {
+      await store.ensurePathExpanded(targetFolder)
+    }
+    if (!movedInTree) {
+      await store.loadFileTree({ skipRemoteSync: true })
+    }
+    await store.syncOpenTabsForPathChange(actualPath, targetPath)
+
+    if (actualPath === useArticleStore.getState().activeFilePath) {
+      store.setActiveFilePath(targetPath)
+    }
   }, [])
 
   // 处理外部文件拖入（通过 Tauri 的 onDragDropEvent）
@@ -178,7 +364,7 @@ export function FileManager({
         if (isInternalFileDragActive()) {
           setIsDragging(false)
           isOverContainer = false
-          dropTargetFolderRef.current = ""
+          clearActiveDropTargetFolder()
           return
         }
 
@@ -186,7 +372,8 @@ export function FileManager({
         const { x, y } = event.payload.position
         const rect = el.getBoundingClientRect()
         isOverContainer = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
-        dropTargetFolderRef.current = isOverContainer ? resolveDropTargetFolder(event.payload.position) : ""
+        const targetFolder = isOverContainer ? resolveDropTargetFolder(event.payload.position) : ""
+        updateActiveDropTargetFolder(targetFolder)
         setIsDragging(isOverContainer)
         return
       }
@@ -194,7 +381,7 @@ export function FileManager({
       if (type === 'leave') {
         setIsDragging(false)
         isOverContainer = false
-        dropTargetFolderRef.current = ""
+        clearActiveDropTargetFolder()
         return
       }
 
@@ -202,7 +389,7 @@ export function FileManager({
         setIsDragging(false)
         isOverContainer = false
         if (isInternalFileDragActive()) {
-          dropTargetFolderRef.current = ""
+          clearActiveDropTargetFolder()
           return
         }
 
@@ -211,16 +398,16 @@ export function FileManager({
           const targetFolder = resolveDropTargetFolder(event.payload.position) || dropTargetFolderRef.current
           void handleExternalDrop(paths, targetFolder)
         }
-        dropTargetFolderRef.current = ""
+        clearActiveDropTargetFolder()
       }
     })
 
     return () => {
       void unlisten.then(fn => fn())
     }
-  }, [handleExternalDrop, resolveDropTargetFolder])
+  }, [clearActiveDropTargetFolder, handleExternalDrop, resolveDropTargetFolder, updateActiveDropTargetFolder])
 
-  // 内部文件拖拽（文件树内移动到根目录）仍使用 DOM 事件
+  // 内部文件拖拽（文件树内移动到根目录）仍兼容旧的 DOM drag payload.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -237,49 +424,97 @@ export function FileManager({
       event.stopPropagation()
 
       void (async () => {
-        let actualPath = renamePath
-        try {
-          const parsed = JSON.parse(renamePath)
-          if (parsed?.path) actualPath = parsed.path
-        } catch {
-          // actualPath 就是纯文本路径
-        }
-
-        const filename = actualPath.slice(actualPath.lastIndexOf("/") + 1)
-        const { getFilePathOptions, getWorkspacePath } = await import("@/lib/workspace")
-        const { generateCopyFilename } = await import("@/lib/default-filename")
-        const workspace = await getWorkspacePath()
-        const targetName = await generateCopyFilename("", filename)
-
-        const oldPathOptions = await getFilePathOptions(actualPath)
-        const newPathOptions = await getFilePathOptions(targetName)
-        if (workspace.isCustom) {
-          await rename(oldPathOptions.path, newPathOptions.path)
-        } else {
-          await rename(oldPathOptions.path, newPathOptions.path, {
-            newPathBaseDir: newPathOptions.baseDir,
-            oldPathBaseDir: oldPathOptions.baseDir,
-          })
-        }
-
-        const { activeFilePath, loadFileTree, moveLocalEntry, setActiveFilePath, syncOpenTabsForPathChange } = useArticleStore.getState()
-        const movedInTree = moveLocalEntry(actualPath, targetName)
-        if (!movedInTree) {
-          await loadFileTree({ skipRemoteSync: true })
-        }
-        await syncOpenTabsForPathChange(actualPath, targetName)
-
-        if (actualPath === activeFilePath) {
-          setActiveFilePath(targetName)
-        }
+        await moveInternalFile(readInternalDragPath(renamePath), "")
       })()
     }
 
     el.addEventListener('drop', handleNativeDrop)
     return () => el.removeEventListener('drop', handleNativeDrop)
-  }, [])
+  }, [moveInternalFile])
+
+  useEffect(() => {
+    function handleFilePointerDrag(event: Event) {
+      const detail = getLingMoFilePointerDragDetail(event)
+      if (!detail?.path || detail.isDirectory) {
+        return
+      }
+
+      if (detail.phase === "cancel") {
+        clearActiveDropTargetFolder()
+        return
+      }
+
+      const target = resolveInternalDropTarget({ x: detail.x, y: detail.y })
+      const sourceFolderPath = getFileParentPath(detail.path)
+      const targetFolder = target.inside && target.targetFolder && target.targetFolder !== sourceFolderPath
+        ? target.targetFolder
+        : ""
+
+      if (detail.phase === "start" || detail.phase === "move") {
+        updateActiveDropTargetFolder(targetFolder)
+        return
+      }
+
+      clearActiveDropTargetFolder()
+
+      if (!target.inside) {
+        return
+      }
+
+      // Dropping over another file row should not silently move the file to root.
+      if (!target.targetFolder && target.overTreeItem) {
+        return
+      }
+
+      void moveInternalFile(detail.path, target.targetFolder)
+    }
+
+    window.addEventListener(LINGMO_FILE_POINTER_DRAG_EVENT, handleFilePointerDrag)
+    return () => {
+      window.removeEventListener(LINGMO_FILE_POINTER_DRAG_EVENT, handleFilePointerDrag)
+      clearActiveDropTargetFolder()
+    }
+  }, [clearActiveDropTargetFolder, moveInternalFile, resolveInternalDropTarget, updateActiveDropTargetFolder])
 
   const visibleTree = useMemo(() => tree ?? fileTree, [fileTree, tree])
+  const visibleFilePaths = useMemo(() => collectVisibleFilePaths(visibleTree), [visibleTree])
+
+  const handleFileSelectionClick = useCallback((event: React.MouseEvent<HTMLElement>, path: string) => {
+    if (event.shiftKey && selectionAnchorPath) {
+      const start = visibleFilePaths.indexOf(selectionAnchorPath)
+      const end = visibleFilePaths.indexOf(path)
+      if (start !== -1 && end !== -1) {
+        const [from, to] = start < end ? [start, end] : [end, start]
+        setSelectedFilePaths(visibleFilePaths.slice(from, to + 1))
+        return true
+      }
+    }
+
+    if (event.metaKey || event.ctrlKey) {
+      setSelectionAnchorPath(path)
+      setSelectedFilePaths(prev => (
+        prev.includes(path)
+          ? prev.filter(item => item !== path)
+          : [...prev, path]
+      ))
+      return true
+    }
+
+    if (selectedFilePaths.length > 0) {
+      setSelectedFilePaths([])
+    }
+    setSelectionAnchorPath(path)
+    return false
+  }, [selectedFilePaths.length, selectionAnchorPath, visibleFilePaths])
+
+  const handleFileContextMenu = useCallback((path: string) => {
+    setSelectionAnchorPath(path)
+    setSelectedFilePaths(prev => prev.includes(path) ? prev : [path])
+  }, [])
+
+  const clearFileSelection = useCallback(() => {
+    setSelectedFilePaths([])
+  }, [])
 
   return (
     <div ref={containerRef} className="relative flex-1 overflow-y-auto">
@@ -321,6 +556,11 @@ export function FileManager({
                 item={item}
                 focusSidebar={focusSidebar}
                 forceExpanded={forceExpanded}
+                selectedFilePaths={selectedFilePaths}
+                onFileSelectionClick={handleFileSelectionClick}
+                onFileContextMenu={handleFileContextMenu}
+                onClearFileSelection={clearFileSelection}
+                activeDropTargetFolder={activeDropTargetFolder}
               />
             ))}
           </ul>

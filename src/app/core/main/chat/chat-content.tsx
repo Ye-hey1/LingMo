@@ -1,7 +1,7 @@
 import React from 'react'
 import useChatStore from '@/stores/chat'
 import useTagStore from '@/stores/tag'
-import { ArrowDownToLine, X, Loader2, QuoteIcon } from 'lucide-react'
+import { ArrowDownToLine, X, QuoteIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Chat } from '@/db/chats'
 import ChatPreview from './chat-preview'
@@ -16,12 +16,16 @@ import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { McpToolCallCard } from './mcp-tool-call'
 import { AgentExecutionStatus } from './agent-execution-status'
-import { AgentPanelWithRag } from './agent-panel-with-rag'
-import { CompactToolCalls, CompactThinking } from './compact-tool-calls'
 import { TaskPlanProgress } from './task-plan-progress'
 import { ChatImages } from "./chat-images"
 import { cleanAssistantGeneratedContent } from '@/lib/ai/assistant-content'
-import { extractWebCitationDetails, parseStoredAgentHistory, type MessageCitationDetail } from '@/lib/ai/citations'
+import {
+  extractWebCitationDetails,
+  filterVisibleCitationDetails,
+  filterVisibleRagSources,
+  parseStoredAgentHistory,
+  type MessageCitationDetail,
+} from '@/lib/ai/citations'
 import { highlightTextReact } from '@/lib/highlight'
 import { parseResearchProgressView } from '@/lib/research/progress-status'
 import { motion } from 'framer-motion'
@@ -33,7 +37,6 @@ const USER_SCROLL_GRACE_MS = 300
 const ChatContent = React.memo(function ChatContent() {
   const { chats, init, agentState, loading, chatSearchQuery, chatSearchResults, chatSearchCurrentIndex } = useChatStore()
   const { currentTagId } = useTagStore()
-  const tContent = useTranslations('record.chat.content')
   const [isOnBottom, setIsOnBottom] = useState(true)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
   const wrapperRef = React.useRef<HTMLDivElement>(null)
@@ -269,21 +272,6 @@ const ChatContent = React.memo(function ChatContent() {
     }
   }, [chatSearchCurrentIndex, chatSearchResults])
 
-  // 判断是否应该显示 loading：loading=true 且最后一个 AI 消息还没有内容
-  const shouldShowLoading = useMemo(() => {
-    if (!loading) return false
-    if (agentState.isRunning) return false
-    if (chats.length === 0) return false
-
-    const lastChat = chats[chats.length - 1]
-    // 如果最后一个消息是 system 角色且有内容或思考内容，说明 AI 已经开始输出了
-    if (lastChat?.role === 'system' && (lastChat.content || lastChat.thinking)) {
-      return false
-    }
-
-    return true
-  }, [loading, agentState.isRunning, chats])
-
   return <div ref={wrapperRef} id="chats-wrapper" className="flex-1 relative overflow-y-auto overflow-x-hidden w-full flex flex-col items-end p-4 gap-6 [overflow-anchor:none]">
     <div ref={contentRef} className="w-full flex flex-col items-end gap-6">
       {
@@ -291,16 +279,6 @@ const ChatContent = React.memo(function ChatContent() {
           return <Message key={chat.id} chat={chat} searchQuery={chatSearchQuery} />
         }) : <ChatEmpty />
       }
-
-      {/* Loading 指示器 - 服务器等待时显示 */}
-      {shouldShowLoading && (
-        <div className="flex w-full min-w-0 -mt-6">
-          <div className='text-sm leading-6 flex-1 flex items-center gap-2 text-muted-foreground'>
-            <Loader2 className="size-4 animate-spin" />
-            <span>{tContent('thinking')}</span>
-          </div>
-        </div>
-      )}
 
       <div ref={bottomAnchorRef} className="h-px w-full" />
     </div>
@@ -372,6 +350,10 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     () => cleanAssistantGeneratedContent(agentState.finalAnswerContent || ''),
     [agentState.finalAnswerContent]
   )
+  const visibleThinkingContent = useMemo(
+    () => chat.role === 'system' ? cleanAssistantGeneratedContent(chat.thinking || '') : (chat.thinking || ''),
+    [chat.role, chat.thinking],
+  )
   const researchProgress = useMemo(
     () => chat.role === 'system' ? parseResearchProgressView(content) : null,
     [chat.role, content],
@@ -385,7 +367,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
   const ragSources = useMemo(() => {
     if (!chat.ragSources) return []
     try {
-      return JSON.parse(chat.ragSources) as string[]
+      return filterVisibleRagSources(JSON.parse(chat.ragSources) as string[])
     } catch {
       return []
     }
@@ -395,7 +377,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
   const ragSourceDetails = useMemo(() => {
     if (!chat.ragSourceDetails) return []
     try {
-      return JSON.parse(chat.ragSourceDetails) as MessageCitationDetail[]
+      return filterVisibleCitationDetails(JSON.parse(chat.ragSourceDetails) as MessageCitationDetail[])
     } catch {
       return []
     }
@@ -489,12 +471,13 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
       // 检查 AI 消息是否有实际内容（没有内容时不渲染）
       const hasContent = chat.role === 'system' && (
         !!content ||
-        !!chat.thinking ||
+        !!visibleThinkingContent ||
         (chat.agentHistory && chat.agentHistory.length > 0) ||
         ragSources.length > 0 ||
         citationDetails.length > 0 ||
         mcpToolCalls.length > 0 ||
-        isLiveAgentVisible
+        isLiveAgentVisible ||
+        isResponseStreaming
       )
 
       // 用户消息或有内容的 AI 消息才渲染
@@ -511,29 +494,10 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
             transition={{ duration: 0.2 }}
             className="w-full space-y-2.5"
           >
-            {/* 1. 合并的 RAG 和 Agent 面板 - 只在有 agentHistory 时显示 */}
-            {chat.agentHistory && (
-              <AgentPanelWithRag
-                ragSources={[]}
-                ragSourceDetails={[]}
-                agentHistoryJson={chat.agentHistory}
-              />
-            )}
-
             {/* 2. Agent 实时执行状态 */}
             {isLiveAgentVisible && (
               <div className="space-y-2">
-                {!agentState.isFinalAnswerMode && (agentState.isRunning || agentState.completedSteps?.length > 0 || agentState.thoughtHistory?.length > 0) && (
-                  <AgentExecutionStatus />
-                )}
-                {/* 实时工具调用紧凑展示 */}
-                {agentState.toolCalls && agentState.toolCalls.length > 0 && !agentState.isFinalAnswerMode && (
-                  <CompactToolCalls
-                    toolCalls={agentState.toolCalls}
-                    isStreaming={agentState.isRunning}
-                    grouped={true}
-                  />
-                )}
+                <AgentExecutionStatus />
                 {agentState.isFinalAnswerMode && liveFinalAnswerContent && (
                   <ChatPreview
                     text={liveFinalAnswerContent}
@@ -552,13 +516,15 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
               </div>
             )}
 
-            {/* 4. 思考内容 - 流式模式下自动展开，完成后自动折叠 */}
-            <ChatThinking
-              chat={chat}
-              isStreaming={isResponseStreaming}
-              citationDetails={citationDetails}
-              ragSources={ragSources}
-            />
+            {/* 4. 思考内容 - live Agent 的 thinking 由 AgentExecutionStatus 渲染 */}
+            {!isLiveAgentVisible && (
+              <ChatThinking
+                chat={chat}
+                isStreaming={isResponseStreaming}
+                citationDetails={citationDetails}
+                ragSources={ragSources}
+              />
+            )}
 
             {/* 5. 正式回复内容 */}
             {researchProgress ? (

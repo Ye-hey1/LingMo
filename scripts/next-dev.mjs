@@ -122,6 +122,69 @@ function existsInNext(relativePath) {
   return fs.existsSync(path.join(nextDir, relativePath))
 }
 
+function walkFiles(dir, visitor) {
+  if (!fs.existsSync(dir)) {
+    return
+  }
+
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (entry.name === 'chunks' || entry.name === 'vendor-chunks') {
+        continue
+      }
+      walkFiles(entryPath, visitor)
+      continue
+    }
+
+    if (entry.isFile()) {
+      visitor(entryPath)
+    }
+  }
+}
+
+function getMissingServerChunkReferences() {
+  const serverDir = path.join(nextDir, 'server')
+  const missing = []
+  const seen = new Set()
+  const chunkPatterns = [
+    /require\(["']\.\/((?:chunks|vendor-chunks)\/[^"']+\.js)["']\)/g,
+    /__webpack_require__\.e\(["']((?:chunks|vendor-chunks)\/[^"']+)["']\)/g,
+    /["']((?:chunks|vendor-chunks)\/[^"']+)["']/g,
+  ]
+
+  const normalizeChunkPath = (referencedPath) =>
+    referencedPath.endsWith('.js') ? referencedPath : `${referencedPath}.js`
+
+  walkFiles(serverDir, (filePath) => {
+    if (!filePath.endsWith('.js')) {
+      return
+    }
+
+    const source = fs.readFileSync(filePath, 'utf8')
+    for (const pattern of chunkPatterns) {
+      pattern.lastIndex = 0
+      let match
+      while ((match = pattern.exec(source)) !== null) {
+        const referencedPath = normalizeChunkPath(match[1])
+        const absoluteReferencedPath = path.join(serverDir, referencedPath)
+        if (fs.existsSync(absoluteReferencedPath)) {
+          continue
+        }
+
+        const relativeSource = path.relative(nextDir, filePath).replace(/\\/g, '/')
+        const marker = `${relativeSource}->${referencedPath}:missing`
+        if (!seen.has(marker)) {
+          seen.add(marker)
+          missing.push(marker)
+        }
+      }
+    }
+  })
+
+  return missing
+}
+
 function hasProductionAppRuntime() {
   const appPage = path.join(nextDir, 'server', 'app', 'page.js')
   if (!fs.existsSync(appPage)) {
@@ -130,6 +193,32 @@ function hasProductionAppRuntime() {
 
   const source = fs.readFileSync(appPage, 'utf8')
   return source.includes('app-page.runtime.prod')
+}
+
+function hasKnownMissingVendorChunkRuntimeError() {
+  const vendorDir = path.join(nextDir, 'server', 'vendor-chunks')
+  const knownMissingVendorChunks = [
+    'uuid@11.1.1.js',
+  ]
+
+  return knownMissingVendorChunks.some((fileName) => {
+    const chunkPath = path.join(vendorDir, fileName)
+    if (fs.existsSync(chunkPath)) {
+      return false
+    }
+
+    const serverDir = path.join(nextDir, 'server')
+    let referenced = false
+    walkFiles(serverDir, (filePath) => {
+      if (referenced || !filePath.endsWith('.js')) {
+        return
+      }
+      const source = fs.readFileSync(filePath, 'utf8')
+      referenced = source.includes(`vendor-chunks/${fileName.replace(/\.js$/, '')}`) ||
+        source.includes(`vendor-chunks/${fileName}`)
+    })
+    return referenced
+  })
 }
 
 function getStaleBuildMarkers() {
@@ -150,6 +239,12 @@ function getStaleBuildMarkers() {
   if (hasProductionAppRuntime()) {
     markers.push('server/app/page.js:prod-runtime')
   }
+
+  if (hasKnownMissingVendorChunkRuntimeError()) {
+    markers.push('server/vendor-chunks/uuid@11.1.1.js:missing')
+  }
+
+  markers.push(...getMissingServerChunkReferences())
 
   if (
     fs.existsSync(path.join(nextDir, 'server', 'app')) &&
@@ -172,7 +267,10 @@ function removeNextDir(markers) {
     throw new Error(`Refusing to remove unexpected path: ${resolvedNextDir}`)
   }
 
-  console.warn(`[next-dev] Removing stale .next before dev startup: ${markers.join(', ')}`)
+  const previewLimit = 8
+  const preview = markers.slice(0, previewLimit).join(', ')
+  const suffix = markers.length > previewLimit ? `, ... +${markers.length - previewLimit} more` : ''
+  console.warn(`[next-dev] Removing stale .next before dev startup (${markers.length} stale references): ${preview}${suffix}`)
   fs.rmSync(resolvedNextDir, { recursive: true, force: true })
 }
 

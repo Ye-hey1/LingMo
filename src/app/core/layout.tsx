@@ -26,6 +26,7 @@ import emitter from "@/lib/emitter"
 import { isEditableKeyboardTarget } from "@/lib/is-editable-keyboard-target"
 import { checkIsTauri } from "@/lib/check"
 import { WebRuntimeNotice } from "@/components/web-runtime-notice"
+import { reminderScheduler } from "@/lib/reminders/scheduler"
 
 // 动态导入：非首屏必需的重型组件，减少首屏 bundle 大小
 const SearchDialog = dynamic(() => import('@/components/search-dialog').then(m => ({ default: m.SearchDialog })), { ssr: false })
@@ -112,6 +113,10 @@ export default function RootLayout({
             initSettingData(),
             initUpdateStore(),
           ])
+
+          if (!cancelled) {
+            await reminderScheduler.init()
+          }
 
           // 数据库初始化完成后再初始化向量索引（避免 database locked）
           if (!cancelled) {

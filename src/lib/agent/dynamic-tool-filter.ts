@@ -135,6 +135,8 @@ const DEFAULT_OPTIONS: DynamicFilterOptions = {
     'safe_grep',
     'create_file',
     'get_current_time',
+    'create_reminder',
+    'list_reminders',
     'web_search',
     'web_extract',
   ],

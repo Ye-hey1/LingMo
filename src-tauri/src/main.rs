@@ -4,6 +4,7 @@
 mod ai;
 mod app_setup;
 mod backup;
+mod desktop_notification;
 mod device;
 mod fuzzy_search;
 mod keywords;
@@ -21,6 +22,7 @@ use ai::{
     cancel_ai_request, AiRequestManager,
 };
 use backup::{export_app_data, import_app_data, import_app_data_from_file};
+use desktop_notification::send_desktop_notification;
 use device::get_device_id;
 use fuzzy_search::{fuzzy_search, fuzzy_search_parallel};
 use keywords::rank_keywords;
@@ -59,6 +61,7 @@ fn main() {
         .plugin(tauri_plugin_clipboard::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // 功能插件
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // 注册命令处理器
         .invoke_handler(tauri::generate_handler![
@@ -69,6 +72,7 @@ fn main() {
             export_app_data,
             import_app_data,
             import_app_data_from_file,
+            send_desktop_notification,
             import_skill_zip,
             start_mcp_stdio_server,
             stop_mcp_server,

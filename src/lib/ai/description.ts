@@ -6,6 +6,7 @@ type ImageDescriptionMode = 'brief' | 'structured'
 interface ImageDescriptionOptions {
   mode?: ImageDescriptionMode
   sourceLabel?: string
+  modelKey?: string
 }
 
 /**
@@ -61,7 +62,11 @@ function buildImagePrompt(mode: ImageDescriptionMode, sourceLabel: string) {
  */
 export async function fetchAiDescByImage(base64: string, options?: ImageDescriptionOptions) {
   try {
-    const aiConfig = await getAISettings('imageMethodModel')
+    const aiConfig = (
+      options?.modelKey
+        ? await getAISettings(options.modelKey)
+        : undefined
+    ) || await getAISettings('imageMethodModel')
     const mode = options?.mode || 'brief'
     const sourceLabel = options?.sourceLabel || 'screenshot'
     const descContent = buildImagePrompt(mode, sourceLabel)

@@ -22,6 +22,7 @@ const settingsPageComponents: Record<SettingsDialogPage, ComponentType> = {
   chat: dynamic(() => import("@/app/core/setting/chat/page"), { loading: pageLoadingFallback, ssr: false }),
   editor: dynamic(() => import("@/app/core/setting/editor/page"), { loading: pageLoadingFallback, ssr: false }),
   record: dynamic(() => import("@/app/core/setting/record/page"), { loading: pageLoadingFallback, ssr: false }),
+  reminders: dynamic(() => import("@/app/core/setting/reminders/page"), { loading: pageLoadingFallback, ssr: false }),
   sync: dynamic(() => import("@/app/core/setting/sync/page"), { loading: pageLoadingFallback, ssr: false }),
   imageHosting: dynamic(() => import("@/app/core/setting/imageHosting/page"), { loading: pageLoadingFallback, ssr: false }),
   ai: dynamic(() => import("@/app/core/setting/ai/page"), { loading: pageLoadingFallback, ssr: false }),

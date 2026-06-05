@@ -104,6 +104,20 @@ interface Events {
     } | null;
     restartConversation?: boolean;
   };
+  'chat-message-draft': {
+    content: string;
+    images?: string[];
+    quoteData?: {
+      quote: string;
+      fullContent: string;
+      fileName: string;
+      startLine: number;
+      endLine: number;
+      from: number;
+      to: number;
+      articlePath: string;
+    } | null;
+  };
   'github-stars-send-to-chat': {
     prompt: string;
     quoteData: {

@@ -17,6 +17,7 @@ import { knowledgeGraphTools } from './knowledge-graph-tools'
 import { agentMemoryTools } from './agent-memory-tools'
 import { visualReportTools } from './visual-report-tools'
 import { githubTrendingTools } from './github-trending-tools'
+import { reminderTools } from './reminder-tools'
 
 export const allTools: Tool[] = [
   ...noteTools,
@@ -35,6 +36,7 @@ export const allTools: Tool[] = [
   ...visualReportTools,
   ...agentMemoryTools,
   ...githubTrendingTools,
+  ...reminderTools,
   ...safeTools,
 ]
 
@@ -294,3 +296,4 @@ export * from './activity-tools'
 export * from './agent-memory-tools'
 export * from './visual-report-tools'
 export * from './github-trending-tools'
+export * from './reminder-tools'

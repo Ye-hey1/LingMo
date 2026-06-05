@@ -327,6 +327,28 @@ pre.hljs {
   line-height: 1.6;
 }
 
+.chat-mermaid-error {
+  color: hsl(var(--destructive));
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.chat-mermaid-source {
+  max-height: 220px;
+  max-width: 100%;
+  margin-top: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid hsl(var(--border) / 0.35);
+  border-radius: 6px;
+  background: hsl(var(--muted) / 0.18);
+  padding: 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 /* 控制栏 */
 .mermaid-canvas-controls {
   position: absolute;

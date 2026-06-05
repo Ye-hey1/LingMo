@@ -122,7 +122,7 @@ class SkillManager {
    */
   private async discoverGlobalSkills(): Promise<void> {
     try {
-      const globalSkillRoots = ['skills', 'skills-v2/skills']
+      const globalSkillRoots = ['skills']
 
       for (const root of globalSkillRoots) {
         const skillsDirExists = await this.directoryExists(root, 'global')

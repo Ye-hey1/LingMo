@@ -7,16 +7,19 @@ import useChatStore from '@/stores/chat'
 import useArticleStore from '@/stores/article'
 import { isLinkedFolder, type LinkedResource } from '@/lib/files'
 import {
+  getConcreteToolCompletionBlockReason,
   getAutoFinalAnswerDescriptor,
   shouldRecoverWithAutoFinalAnswer,
 } from './final-answer'
 import {
   isIncompleteStructuredAgentJson,
   isStructuredThoughtOnlyJson,
+  extractVisibleFinalAnswer,
   parseActionInputJson,
   parseStructuredActionJson,
   parseStructuredFinalAnswerJson,
   parseBatchActionJson,
+  sanitizeVisibleAssistantContent,
 } from './parse-action-input'
 import {
   evaluateIntentAwareToolPolicy,
@@ -27,12 +30,18 @@ import { detectAgentLoop } from './loop-detection'
 import { MetricsCollector } from './metrics-collector'
 import { buildAgentSystemPrompt } from './prompt-assembler'
 import {
+  aggressiveTrimForOverflowPreservingSystem,
+  trimMessagesPreservingSystem,
+} from './message-trimmer'
+import { shouldTrimMessages } from './token-budget'
+import {
   buildLoopFallbackAnswer,
   formatToolObservation,
   getSafeGrepConvergenceMessage,
   isTruncatedSafeGrepObservation,
 } from './orchestration'
 import type { SkillMatchSummary } from '@/lib/skills/types'
+import type { AiStreamFinishMetadata } from '@/lib/ai'
 import OpenAI from 'openai'
 
 const WEB_ACCESS_TOOL_NAMES = new Set([
@@ -41,6 +50,10 @@ const WEB_ACCESS_TOOL_NAMES = new Set([
   'web_extract',
   'clip_web_content',
 ])
+
+const MAX_TRUNCATED_STREAM_CONTINUATIONS = 2
+const TRUNCATED_STREAM_CONTINUATION_PROMPT =
+  '你的上一条输出因为达到模型输出长度上限被截断。请从截断处继续，不要重述已经输出的内容，不要添加解释。如果上一条正在输出 JSON 或 final_answer 字符串，只输出能与上一段直接拼接的后续内容。'
 
 type ParseActionResult =
   | { type: 'single'; tool: string; params: Record<string, any> }
@@ -65,6 +78,11 @@ ${lastObservation || 'No previous result'}
 Keep working toward the user request above.
 If the task is completed, respond with Final Answer.
 If you need to continue, provide your next Thought and Action.`
+}
+
+function isLengthTruncatedStream(meta?: AiStreamFinishMetadata) {
+  const reason = meta?.finishReason
+  return meta?.truncated || reason === 'length' || reason === 'max_tokens'
 }
 
 function normalizeLinkedCandidate(candidate: unknown): string {
@@ -202,6 +220,13 @@ function truncatePreviewContent(content: string, maxLength = 5000): string {
   return `${content.slice(0, maxLength)}\n... (${content.length - maxLength} more characters)`
 }
 
+function normalizeThoughtContent(thought: string): string {
+  return thought
+    .replace(/^(?:Thought|思考)\s*[：:]\s*/i, '')
+    .replace(/\{[\s\S]*\}/, '')
+    .trim()
+}
+
 function extractChangedRegionPreview(original: string, modified: string, contextLines = 3) {
   const originalLines = original.split('\n')
   const modifiedLines = modified.split('\n')
@@ -282,6 +307,7 @@ export interface ReActConfig extends BaseAgentConfig {
   }) => Promise<boolean>
   activeSkills?: string[]  // 当前激活的 Skills
   activeSkillMatches?: SkillMatchSummary[]
+  forcedSkillIds?: string[]
   currentQuote?: {
     fileName: string
     startLine: number
@@ -293,6 +319,7 @@ export interface ReActConfig extends BaseAgentConfig {
 }
 
 export class ReActAgent extends BaseAgent {
+  protected declare config: ReActConfig
   private selectedSkills: Set<string> = new Set() // 记录 AI 选择的 Skills
   private taskPlan: TaskPlan | null = null
   private cachedStaticPrompt: string | null = null
@@ -311,6 +338,10 @@ export class ReActAgent extends BaseAgent {
   ): Promise<string> {
     this.resetForNewRun(userInput)
     this.selectedSkills.clear()
+    const forcedSkillIds = Array.from(new Set((this.config.forcedSkillIds || []).filter(Boolean)))
+    for (const skillId of forcedSkillIds) {
+      this.selectedSkills.add(skillId)
+    }
     this.cachedStaticPrompt = null
     this.taskPlan = null
     this.metricsCollector = new MetricsCollector(this.eventBus.getRunId())
@@ -319,7 +350,12 @@ export class ReActAgent extends BaseAgent {
       runId: this.eventBus.getRunId(),
       userInput,
       intentPolicy: this.intentPolicy,
+      forcedSkillIds,
     })
+    if (forcedSkillIds.length > 0) {
+      this.config.onSkillsSelected?.(forcedSkillIds)
+      this.emitEvent('skills.selected', { skillIds: forcedSkillIds, explicit: true })
+    }
 
     let finalAnswer = ''
 
@@ -429,41 +465,28 @@ export class ReActAgent extends BaseAgent {
           }
         }
 
-        const finalAnswerValidation = this.validateFinalAnswerReadiness(userInput, finalAnswer || '')
-        if (!finalAnswerValidation.ok) {
-          const observation = finalAnswerValidation.reason || '最终答案校验未通过，请继续执行实际工具。'
-          this.emitObservation(observation)
-          this.steps.push({
-            thought,
-            action: undefined,
-            observation,
-          })
+        const finalAnswerResult = this.tryAcceptFinalAnswer(userInput, finalAnswer || '', thought)
+        if (!finalAnswerResult.accepted) {
           finalAnswer = ''
           continue
         }
+        finalAnswer = finalAnswerResult.finalAnswer
         break
       }
 
       const structuredFinalAnswer = parseStructuredFinalAnswerJson(thought)
       if (structuredFinalAnswer) {
-        finalAnswer = structuredFinalAnswer
-        const finalAnswerValidation = this.validateFinalAnswerReadiness(userInput, finalAnswer)
-        if (!finalAnswerValidation.ok) {
-          const observation = finalAnswerValidation.reason || '最终答案校验未通过，请继续执行实际工具。'
-          this.emitObservation(observation)
-          this.steps.push({
-            thought,
-            action: undefined,
-            observation,
-          })
+        const finalAnswerResult = this.tryAcceptFinalAnswer(userInput, structuredFinalAnswer, thought)
+        if (!finalAnswerResult.accepted) {
           finalAnswer = ''
           continue
         }
+        finalAnswer = finalAnswerResult.finalAnswer
         break
       }
 
       // 根据当前进展生成不同的提示
-      const hasSuccessfulSteps = this.steps.some(s => s.action && s.observation && !s.observation.includes('失败'))
+      const hasSuccessfulSteps = this.hasSubstantiveSuccessfulAction()
       const reasoningOnlyObservation = hasSuccessfulSteps
         ? '你已经获得了工具执行结果，现在请直接用 Final Answer 输出最终分析报告。格式：\n{"final_answer": "你的完整回答（Markdown 格式）"}'
         : '你只输出了思考内容，没有给出 Action 或 Final Answer。如果需要工具，请输出：\n{"action": "工具名", "action_input": {"参数": "值"}}\n如果可以直接回答，请输出：\n{"final_answer": "你的回答"}'
@@ -471,15 +494,20 @@ export class ReActAgent extends BaseAgent {
         // 如果连续 2 次格式错误且已有工具结果，直接把内容当作 Final Answer
         const consecutiveFormatErrors = this.steps.slice(-2).filter(s => !s.action).length
         if (consecutiveFormatErrors >= 2 && hasSuccessfulSteps) {
-          const content = thought.replace(/^(?:Thought|思考)[：:]\s*/i, '').replace(/\{[\s\S]*\}/, '').trim()
+          const content = normalizeThoughtContent(thought)
           if (content.length > 20) {
-            finalAnswer = content
+            const finalAnswerResult = this.tryAcceptFinalAnswer(userInput, content, thought)
+            if (!finalAnswerResult.accepted) {
+              finalAnswer = ''
+              continue
+            }
+            finalAnswer = finalAnswerResult.finalAnswer
             break
           }
         }
 
-        this.emitObservation(reasoningOnlyObservation)
-        this.steps.push({
+        this.emitObservation(reasoningOnlyObservation, { internal: true, visibility: 'hidden' })
+        this.completeStep({
           thought,
           action: undefined,
           observation: reasoningOnlyObservation,
@@ -489,10 +517,10 @@ export class ReActAgent extends BaseAgent {
 
       // 检查是否是纯思考而没有 Action（说明 AI 认为任务已完成但忘记用 Final Answer 格式）
       if (!thought.includes('Action:') && thought.includes('Thought:') && this.currentIteration > 1) {
-        const thoughtContent = thought.replace(/Thought:\s*/i, '').trim()
+        const thoughtContent = normalizeThoughtContent(thought)
         if (thoughtContent.length > 0 && !thoughtContent.includes('Action:')) {
-          this.emitObservation(reasoningOnlyObservation)
-          this.steps.push({
+          this.emitObservation(reasoningOnlyObservation, { internal: true, visibility: 'hidden' })
+          this.completeStep({
             thought,
             action: undefined,
             observation: reasoningOnlyObservation,
@@ -505,8 +533,8 @@ export class ReActAgent extends BaseAgent {
       if (!action) {
         if (thought.includes('Action:')) {
           const observation = 'Action Input JSON 无法解析。请保持动作不变，并只重新输出一次有效的 JSON 参数。'
-          this.emitObservation(observation)
-          this.steps.push({
+          this.emitObservation(observation, { internal: true, visibility: 'hidden' })
+          this.completeStep({
             thought,
             action: undefined,
             observation,
@@ -514,7 +542,7 @@ export class ReActAgent extends BaseAgent {
           continue
         }
 
-        const thoughtContent = thought.replace(/Thought:\s*/i, '').trim()
+        const thoughtContent = normalizeThoughtContent(thought)
         if (
           thoughtContent &&
           thoughtContent.length > 10 &&
@@ -552,31 +580,48 @@ export class ReActAgent extends BaseAgent {
               const toolResult = await this.act(mentionedTool, autoParams, thought)
               const { truncateObservation } = await import('./safety-guards')
               const truncatedResult = truncateObservation(toolResult)
-              this.emitObservation(truncatedResult)
-              this.steps.push({ thought, action: { tool: mentionedTool, params: autoParams }, observation: truncatedResult })
+              this.emitObservation(truncatedResult, { toolName: mentionedTool })
+              this.completeStep({ thought, action: { tool: mentionedTool, params: autoParams }, observation: truncatedResult })
               continue
             }
 
             // 无法推断参数，提示重新格式化
             const observation = `你提到了要使用 ${mentionedTool}，但没有按格式输出。请直接输出：\n{"action": "${mentionedTool}", "action_input": {"参数名": "参数值"}}`
-            this.emitObservation(observation)
-            this.steps.push({ thought, action: undefined, observation })
+            this.emitObservation(observation, { internal: true, visibility: 'hidden' })
+            this.completeStep({ thought, action: undefined, observation })
             continue
           }
 
-          finalAnswer = thoughtContent
+          const finalAnswerResult = this.tryAcceptFinalAnswer(userInput, thoughtContent, thought)
+          if (!finalAnswerResult.accepted) {
+            finalAnswer = ''
+            continue
+          }
+          finalAnswer = finalAnswerResult.finalAnswer
           break
         }
 
         // 如果是第一次迭代，可能是 AI 没理解用户意图
         // 尝试让 AI 直接回答而不是调用工具
         if (this.currentIteration === 1) {
-          finalAnswer = thoughtContent || '抱歉，我不太理解您的需求。您能详细说明一下吗？'
+          const fallbackAnswer = thoughtContent || '抱歉，我不太理解您的需求。您能详细说明一下吗？'
+          const finalAnswerResult = this.tryAcceptFinalAnswer(userInput, fallbackAnswer, thought)
+          if (!finalAnswerResult.accepted) {
+            finalAnswer = ''
+            continue
+          }
+          finalAnswer = finalAnswerResult.finalAnswer
           break
         }
 
         // 多次迭代后仍然失败，给出提示
-        finalAnswer = thoughtContent || '抱歉，我遇到了一些问题。您能换种方式说明一下您的需求吗？'
+        const fallbackAnswer = thoughtContent || '抱歉，我遇到了一些问题。您能换种方式说明一下您的需求吗？'
+        const finalAnswerResult = this.tryAcceptFinalAnswer(userInput, fallbackAnswer, thought)
+        if (!finalAnswerResult.accepted) {
+          finalAnswer = ''
+          continue
+        }
+        finalAnswer = finalAnswerResult.finalAnswer
         break
       }
 
@@ -594,7 +639,13 @@ export class ReActAgent extends BaseAgent {
             } else {
               // 检测到重复操作，给出警告并结束
               console.warn(`检测到重复操作: ${action.tool}`, action.params)
-              finalAnswer = `操作已完成。${lastStep.observation}`
+              const repeatedActionAnswer = `操作已完成。${lastStep.observation}`
+              const finalAnswerResult = this.tryAcceptFinalAnswer(userInput, repeatedActionAnswer, thought)
+              if (!finalAnswerResult.accepted) {
+                finalAnswer = ''
+                continue
+              }
+              finalAnswer = finalAnswerResult.finalAnswer
               break
             }
           }
@@ -618,7 +669,13 @@ export class ReActAgent extends BaseAgent {
 
           if (sameActionCount >= 5) {
             console.warn(`检测到连续多次执行相同操作: ${action.tool}, 次数: ${sameActionCount}`)
-            finalAnswer = `检测到连续多次执行相同操作，已自动停止。最后操作结果：${lastStep.observation}`
+            const repeatedActionAnswer = `检测到连续多次执行相同操作，已自动停止。最后操作结果：${lastStep.observation}`
+            const finalAnswerResult = this.tryAcceptFinalAnswer(userInput, repeatedActionAnswer, thought)
+            if (!finalAnswerResult.accepted) {
+              finalAnswer = ''
+              continue
+            }
+            finalAnswer = finalAnswerResult.finalAnswer
             break
           }
         }
@@ -648,8 +705,8 @@ export class ReActAgent extends BaseAgent {
           ? batchResults[0].result
           : batchResults.map((r, i) => `### Batch Result ${i + 1}: ${r.tool}\n${r.result}`).join('\n\n---\n\n')
 
-        this.emitObservation(combinedObservation)
-        this.steps.push({
+        this.emitObservation(combinedObservation, { toolName: 'batch' })
+        this.completeStep({
           thought,
           action: { tool: 'batch', params: { actions: action.actions } },
           observation: combinedObservation,
@@ -678,14 +735,14 @@ export class ReActAgent extends BaseAgent {
         const { truncateObservation } = await import('./safety-guards')
         observation = truncateObservation(observation)
 
-        this.emitObservation(observation)
+        this.emitObservation(observation, { toolName: action.tool })
 
         // Invalidate cache after successful write operations
         if (!this.toolCache.isCacheable(action.tool)) {
           this.toolCache.invalidateAll()
         }
 
-        this.steps.push({
+        this.completeStep({
           thought,
           action,
           observation,
@@ -702,7 +759,13 @@ export class ReActAgent extends BaseAgent {
     }
 
     if (!finalAnswer && this.currentIteration >= this.config.maxIterations) {
-      finalAnswer = '已达到最大迭代次数，任务可能未完全完成。'
+      const lastRetryReason = [...this.steps]
+        .reverse()
+        .find(step => !step.action && step.observation)
+        ?.observation
+      finalAnswer = lastRetryReason
+        ? `已达到最大迭代次数，任务未能稳定完成。最近的阻塞原因：${lastRetryReason}`
+        : '已达到最大迭代次数，任务可能未完全完成。'
     }
 
     const result = finalAnswer || '任务执行完成。'
@@ -740,7 +803,7 @@ export class ReActAgent extends BaseAgent {
     // Build or reuse cached static prompt portion (tool descriptions, rules, examples)
     if (!this.cachedStaticPrompt) {
       const toolDescriptions = getToolDescriptions()
-      this.cachedStaticPrompt = `## ReAct Tooling Guide
+      this.cachedStaticPrompt = `## Static Tool Protocol
 
 Use the ReAct loop internally: understand the previous observation, choose the next minimal action, then stop with a final answer once the task is complete.
 One WRITE tool per iteration. Batch up to 3 independent READ tools.
@@ -768,6 +831,15 @@ ${toolDescriptions}
 ## Search Guide
 
 RAG results appear in context automatically. If insufficient: \`search_markdown_files\` (keyword/rag), \`search_marks\` (records). Only use when user explicitly requests search.
+
+## Reminder Guide
+
+- When the user asks to be reminded, notified later, set a timer/countdown, or create a reminder, use \`create_reminder\`.
+- For relative time like "30 分钟后", "in 2 hours", use \`delayMinutes\`.
+- For natural phrases like "半小时后", "明天上午九点", or "tomorrow at 3pm", you may pass \`timeText\` as the original phrase.
+- For absolute time, use \`dueAt\` with the current date from runtime context. If the date or time is genuinely missing, ask only for that missing part.
+- After \`create_reminder\` succeeds, give a short Final Answer confirming the reminder time. Do not continue with extra tools.
+- If the user asks what reminders exist, use \`list_reminders\`. If they ask to cancel or mark one done, use \`cancel_reminder\` or \`complete_reminder\`.
 
 ## Math Formula Guide
 
@@ -876,53 +948,10 @@ Do NOT use square brackets [ ] as delimiters. Use $ or $$ for proper rendering.
         })
       }
 
-      // 调用实际的 LLM API
       try {
-        const { fetchAiStream } = await import('@/lib/ai')
-        let response = ''
-        let lastUpdateLength = 0
-        let lastUpdateTime = 0
-
-        // 传递 AbortSignal 以支持终止，同时传递图片URL（仅在第一次迭代时）
         const imagesForThisIteration = this.currentIteration === 1 ? imageUrls : undefined
-        await fetchAiStream('', (content) => {
-          // 检查是否已终止
-          if (this.stopped) {
-            return
-          }
-
-          response = content
-
-          // 清洗 Thought 流，过滤掉 Action 协议字符和 JSON
-          const cleanThought = this.cleanThoughtStream(content)
-
-          // 自适应节流：最小 30 字符增长 + 150ms 间隔，关键词立即触发
-          const now = Date.now()
-          const hasKeyword = content.includes('Action:') || content.includes('Final Answer:')
-          const charsGrown = cleanThought.length - lastUpdateLength
-          const timeSinceUpdate = now - lastUpdateTime
-
-          if (hasKeyword || (charsGrown > 30 && timeSinceUpdate > 150)) {
-            this.config.onThought?.(cleanThought)
-            this.emitEvent('thought', { content: cleanThought })
-            this.emitEvent('thought.updated', { content: cleanThought })
-            lastUpdateLength = cleanThought.length
-            lastUpdateTime = now
-          }
-        }, this.abortController?.signal, undefined, undefined, undefined, imagesForThisIteration, undefined, this.validateAndFixMessages(messagesForAI))
-
-        // 检查是否已终止
-        if (this.stopped) {
-          throw new Error('USER_STOPPED')
-        }
-
-        // 确保最终内容被更新
-        const finalCleanThought = this.cleanThoughtStream(response)
-        if (finalCleanThought.length !== lastUpdateLength) {
-          this.config.onThought?.(finalCleanThought)
-          this.emitEvent('thought', { content: finalCleanThought })
-          this.emitEvent('thought.updated', { content: finalCleanThought })
-        }
+        const preparedMessagesForAI = await this.prepareMessagesForModel(messagesForAI, systemPrompt)
+        const response = await this.streamMessagesWithRecovery(preparedMessagesForAI, imagesForThisIteration)
 
         // 第一次迭代后，不再根据文本提及自动选择 Skills。
         // 只有显式调用 select_skill 工具才会生效，避免误命中无关 Skill。
@@ -977,42 +1006,88 @@ ${buildIterationUserMessage(this.currentIteration, userInput, lastObservation)}`
     // 调用实际的 LLM API
     try {
       const { fetchAiStream } = await import('@/lib/ai')
-      let response = ''
-      let lastUpdateLength = 0
+      let finalResponse = ''
+      let accumulatedResponse = ''
+      let continuationMessages: OpenAI.Chat.ChatCompletionMessageParam[] | undefined
+      const streamState = {
+        lastUpdateLength: 0,
+        lastUpdateTime: 0,
+        lastFinalAnswerLength: 0,
+      }
 
       // 传递 AbortSignal 以支持终止，同时传递图片URL（仅在第一次迭代时）
       const imagesForThisIteration = this.currentIteration === 1 ? imageUrls : undefined
-      await fetchAiStream(prompt, (content) => {
-        // 检查是否已终止
+      this.emitEvent('model.request.started', {
+        mode: 'prompt',
+        hasContext: Boolean(context),
+        hasImages: Boolean(imagesForThisIteration?.length),
+      })
+
+      for (let continuationAttempt = 0; continuationAttempt <= MAX_TRUNCATED_STREAM_CONTINUATIONS; continuationAttempt += 1) {
+        let response = ''
+        let streamMeta: AiStreamFinishMetadata | undefined
+        const requestImages = continuationAttempt === 0 ? imagesForThisIteration : undefined
+
+        await fetchAiStream(
+          continuationMessages ? '' : prompt,
+          (content) => {
+            // 检查是否已终止
+            if (this.stopped) {
+              return
+            }
+
+            response = content
+            this.emitVisibleModelStreamUpdate(accumulatedResponse + content, streamState, { minChars: 10, minIntervalMs: 120 })
+          },
+          this.abortController?.signal,
+          undefined,
+          undefined,
+          undefined,
+          requestImages,
+          undefined,
+          continuationMessages,
+          undefined,
+          (metadata) => {
+            streamMeta = metadata
+          },
+        )
+
+        finalResponse = accumulatedResponse + response
+
         if (this.stopped) {
-          return
+          throw new Error('USER_STOPPED')
         }
 
-        response = content
+        this.emitVisibleModelStreamUpdate(finalResponse, streamState, { minChars: 0, minIntervalMs: 0, force: true })
 
-        // 清洗 Thought 流，过滤掉 Action 协议字符和 JSON
-        const cleanThought = this.cleanThoughtStream(content)
-
-        // 实时更新，但只在内容有实质性增长时更新（避免频繁更新）
-        if (cleanThought.length - lastUpdateLength > 10 || content.includes('Action:') || content.includes('Final Answer:')) {
-          this.config.onThought?.(cleanThought)
-          this.emitEvent('thought', { content: cleanThought })
-          this.emitEvent('thought.updated', { content: cleanThought })
-          lastUpdateLength = cleanThought.length
+        if (isLengthTruncatedStream(streamMeta) && continuationAttempt < MAX_TRUNCATED_STREAM_CONTINUATIONS) {
+          this.emitEvent('model.response.received', {
+            contentLength: finalResponse.length,
+            finishReason: streamMeta?.finishReason,
+            truncated: true,
+            continuationAttempt,
+          })
+          accumulatedResponse = finalResponse
+          continuationMessages = [
+            { role: 'user', content: prompt },
+            { role: 'assistant', content: accumulatedResponse },
+            { role: 'user', content: TRUNCATED_STREAM_CONTINUATION_PROMPT },
+          ]
+          continue
         }
-      }, this.abortController?.signal, undefined, undefined, undefined, imagesForThisIteration)
+
+        this.emitEvent('model.response.received', {
+          contentLength: finalResponse.length,
+          finishReason: streamMeta?.finishReason,
+          truncated: false,
+          continuationAttempts: continuationAttempt,
+        })
+        break
+      }
       
       // 检查是否已终止
       if (this.stopped) {
         throw new Error('USER_STOPPED')
-      }
-      
-      // 确保最终内容被更新
-      const finalCleanThought = this.cleanThoughtStream(response)
-      if (finalCleanThought.length !== lastUpdateLength) {
-        this.config.onThought?.(finalCleanThought)
-        this.emitEvent('thought', { content: finalCleanThought })
-        this.emitEvent('thought.updated', { content: finalCleanThought })
       }
 
       // 第一次迭代后，不再根据文本提及自动选择 Skills。
@@ -1021,7 +1096,7 @@ ${buildIterationUserMessage(this.currentIteration, userInput, lastObservation)}`
         (this.config as ReActConfig).onSkillsSelected?.([])
       }
 
-      return response
+      return finalResponse
     } catch (error) {
       // 检查是否是因为终止导致的错误
       if (this.stopped || (error instanceof Error && error.name === 'AbortError')) {
@@ -1039,38 +1114,215 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
     }
   }
 
+  private isContextOverflowError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error)
+    return /context length exceeded|maximum context length|prompt is too long|context overflow|context window|too large|exceeds model context|request_too_large|tokens exceed/i.test(message)
+  }
+
+  private async prepareMessagesForModel(
+    messages: OpenAI.Chat.ChatCompletionMessageParam[],
+    systemPrompt: string,
+  ): Promise<OpenAI.Chat.ChatCompletionMessageParam[]> {
+    try {
+      const { getAISettings } = await import('@/lib/ai/utils')
+      const aiConfig = await getAISettings()
+      const modelName = aiConfig?.model || ''
+      if (!modelName) {
+        return messages
+      }
+
+      const trimCheck = shouldTrimMessages(messages as Record<string, any>[], modelName, undefined, aiConfig?.contextWindow)
+      if (!trimCheck.needsTrim) {
+        return messages
+      }
+
+      const trimmed = trimMessagesPreservingSystem(messages as Record<string, any>[], {
+        modelName,
+        systemPrompt,
+        contextWindow: aiConfig?.contextWindow,
+        maxTurns: 12,
+      }) as OpenAI.Chat.ChatCompletionMessageParam[]
+
+      const secondCheck = shouldTrimMessages(trimmed as Record<string, any>[], modelName, undefined, aiConfig?.contextWindow)
+      const finalMessages = secondCheck.needsTrim
+        ? aggressiveTrimForOverflowPreservingSystem(trimmed as Record<string, any>[]) as OpenAI.Chat.ChatCompletionMessageParam[]
+        : trimmed
+
+      this.emitEvent('agent.context.compacted', {
+        strategy: secondCheck.needsTrim ? 'react-aggressive-message-trim' : 'react-message-trim',
+        originalMessageCount: messages.length,
+        trimmedMessageCount: finalMessages.length,
+        currentTokens: trimCheck.currentTokens,
+        maxTokens: trimCheck.maxTokens,
+        contextWindow: trimCheck.contextWindow,
+      })
+
+      return finalMessages
+    } catch (error) {
+      console.warn('[Agent] Failed to trim messages before model call:', error)
+      return messages
+    }
+  }
+
+  private recoverMessagesAfterOverflow(
+    messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  ): OpenAI.Chat.ChatCompletionMessageParam[] {
+    const recovered = aggressiveTrimForOverflowPreservingSystem(
+      messages as Record<string, any>[],
+    ) as OpenAI.Chat.ChatCompletionMessageParam[]
+
+    this.emitEvent('agent.context.compacted', {
+      strategy: 'react-overflow-recovery',
+      originalMessageCount: messages.length,
+      trimmedMessageCount: recovered.length,
+    })
+
+    return recovered
+  }
+
+  private async streamMessagesWithRecovery(
+    messages: OpenAI.Chat.ChatCompletionMessageParam[],
+    imageUrls?: string[],
+  ): Promise<string> {
+    const { fetchAiStream } = await import('@/lib/ai')
+    let activeMessages = messages
+    let recoveredFromOverflow = false
+    let accumulatedResponse = ''
+    let continuationAttempt = 0
+    const streamState = {
+      lastUpdateLength: 0,
+      lastUpdateTime: 0,
+      lastFinalAnswerLength: 0,
+    }
+
+    while (true) {
+      let response = ''
+      let streamMeta: AiStreamFinishMetadata | undefined
+
+      try {
+        this.emitEvent('model.request.started', {
+          mode: 'messages',
+          messageCount: activeMessages.length,
+          recoveredFromOverflow,
+          hasImages: Boolean(imageUrls?.length),
+          continuationAttempt,
+        })
+        await fetchAiStream('', (content) => {
+          if (this.stopped) {
+            return
+          }
+
+          response = content
+          this.emitVisibleModelStreamUpdate(accumulatedResponse + content, streamState)
+        }, this.abortController?.signal, undefined, undefined, undefined, imageUrls, undefined, this.validateAndFixMessages(activeMessages), undefined, (metadata) => {
+          streamMeta = metadata
+        })
+
+        if (this.stopped) {
+          throw new Error('USER_STOPPED')
+        }
+
+        const combinedResponse = accumulatedResponse + response
+        this.emitVisibleModelStreamUpdate(combinedResponse, streamState, { minChars: 0, minIntervalMs: 0, force: true })
+
+        if (isLengthTruncatedStream(streamMeta) && continuationAttempt < MAX_TRUNCATED_STREAM_CONTINUATIONS) {
+          this.emitEvent('model.response.received', {
+            contentLength: combinedResponse.length,
+            recoveredFromOverflow,
+            finishReason: streamMeta?.finishReason,
+            truncated: true,
+            continuationAttempt,
+          })
+          accumulatedResponse = combinedResponse
+          continuationAttempt += 1
+          activeMessages = [
+            ...activeMessages,
+            { role: 'assistant', content: response || combinedResponse },
+            { role: 'user', content: TRUNCATED_STREAM_CONTINUATION_PROMPT },
+          ]
+          imageUrls = undefined
+          continue
+        }
+
+        this.emitEvent('model.response.received', {
+          contentLength: combinedResponse.length,
+          recoveredFromOverflow,
+          finishReason: streamMeta?.finishReason,
+          truncated: false,
+          continuationAttempts: continuationAttempt,
+        })
+
+        return combinedResponse
+      } catch (error) {
+        if (this.stopped || (error instanceof Error && error.name === 'AbortError')) {
+          throw new Error('USER_STOPPED')
+        }
+
+        if (!recoveredFromOverflow && this.isContextOverflowError(error)) {
+          activeMessages = this.recoverMessagesAfterOverflow(activeMessages)
+          recoveredFromOverflow = true
+          accumulatedResponse = ''
+          continuationAttempt = 0
+          continue
+        }
+
+        throw error
+      }
+    }
+  }
+
+  private emitVisibleModelStreamUpdate(
+    rawContent: string,
+    state: { lastUpdateLength: number; lastUpdateTime: number; lastFinalAnswerLength: number },
+    options: { minChars?: number; minIntervalMs?: number; force?: boolean } = {},
+  ) {
+    const visibleFinalAnswer = extractVisibleFinalAnswer(rawContent)
+    const now = Date.now()
+
+    if (visibleFinalAnswer) {
+      const contentGrown = visibleFinalAnswer.length - state.lastFinalAnswerLength
+      const timeSinceUpdate = now - state.lastUpdateTime
+      const shouldUpdate =
+        options.force ||
+        contentGrown > (options.minChars ?? 24) ||
+        timeSinceUpdate > (options.minIntervalMs ?? 140) ||
+        rawContent.includes('}')
+
+      if (shouldUpdate) {
+        this.config.onFinalAnswerRender?.(visibleFinalAnswer)
+        this.emitEvent('final.answer.rendered', {
+          content: visibleFinalAnswer,
+          streaming: true,
+        })
+        state.lastFinalAnswerLength = visibleFinalAnswer.length
+        state.lastUpdateLength = visibleFinalAnswer.length
+        state.lastUpdateTime = now
+      }
+      return
+    }
+
+    const cleanThought = this.cleanThoughtStream(rawContent)
+    const charsGrown = cleanThought.length - state.lastUpdateLength
+    const timeSinceUpdate = now - state.lastUpdateTime
+    const hasKeyword = /Action\s*[:：]|Final\s*Answer\s*[:：]|最终答案/.test(rawContent)
+
+    if (cleanThought && (
+      options.force ||
+      hasKeyword ||
+      (charsGrown > (options.minChars ?? 30) && timeSinceUpdate > (options.minIntervalMs ?? 150))
+    )) {
+      this.config.onThought?.(cleanThought)
+      this.emitEvent('thought', { content: cleanThought })
+      this.emitEvent('thought.updated', { content: cleanThought })
+      state.lastUpdateLength = cleanThought.length
+      state.lastUpdateTime = now
+    }
+  }
+
   private cleanThoughtStream(rawContent: string): string {
     if (!rawContent) return ''
 
-    let cleaned = rawContent
-
-    // 1. 过滤自带思考 R1 / MiniMax 模型输出的 <think>...</think> 标签及其内容
-    cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '')
-    cleaned = cleaned.replace(/<think>[\s\S]*$/, '') // 过滤流式接收中未闭合的 <think>
-
-    // 2. 过滤传统的 ReAct Action 标签及其之后的内容
-    const actionIndex = cleaned.search(/Action\s*[:：]/i)
-    if (actionIndex !== -1) {
-      cleaned = cleaned.slice(0, actionIndex)
-    }
-
-    // 3. 过滤结构化 JSON 格式：遇到 {"action" 时截断，或者匹配 "thought": "..."
-    if (cleaned.trim().startsWith('{') || cleaned.includes('"thought"')) {
-      const thoughtMatch = cleaned.match(/"thought"\s*:\s*"([^"]*)/)
-      if (thoughtMatch && thoughtMatch[1]) {
-        cleaned = thoughtMatch[1]
-      } else {
-        const bracketIndex = cleaned.indexOf('{')
-        if (bracketIndex !== -1) {
-          cleaned = cleaned.slice(0, bracketIndex)
-        }
-      }
-    }
-
-    // 4. 清理冗余的 Thought / 思考 前缀
-    cleaned = cleaned.replace(/^(Thought|思考)\s*[:：]\s*/i, '')
-
-    return cleaned.trim()
+    return sanitizeVisibleAssistantContent(rawContent)
   }
 
   private parseAction(thought: string): ParseActionResult | null {
@@ -1232,6 +1484,13 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         message,
       }
       this.emitToolCall(toolCall)
+      this.emitEvent('tool.execution.finished', {
+        toolName,
+        params,
+        toolCallId: toolCall.id,
+        success: false,
+        error: 'WEB_ACCESS_DISABLED',
+      })
       this.emitEvent('error', {
         source: 'tool',
         toolName,
@@ -1515,10 +1774,20 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         params,
         context: confirmContext,
       })
+      this.emitEvent('confirmation.waiting', {
+        toolName,
+        params,
+        context: confirmContext,
+      })
       const confirmed = await this.config.requestConfirmation(toolName, params, confirmContext)
 
       if (!confirmed) {
         this.emitEvent('approval', {
+          status: 'rejected',
+          toolName,
+          params,
+        })
+        this.emitEvent('confirmation.resolved', {
           status: 'rejected',
           toolName,
           params,
@@ -1538,10 +1807,20 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         toolName,
         params,
       })
+      this.emitEvent('confirmation.resolved', {
+        status: 'confirmed',
+        toolName,
+        params,
+      })
     }
 
     toolCall.status = 'running'
     this.emitToolCall(toolCall)
+    this.emitEvent('tool.execution.started', {
+      toolName,
+      params,
+      toolCallId: toolCall.id,
+    })
 
     try {
       if (this.stopped) {
@@ -1590,6 +1869,14 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
       toolCall.result = result
       this.recordToolResult(toolName, argsHash, result.success)
       this.emitToolCall(toolCall)
+      this.emitEvent('tool.execution.finished', {
+        toolName,
+        params,
+        toolCallId: toolCall.id,
+        success: result.success,
+        message: result.message,
+        error: result.error,
+      })
 
         if (result.success) {
         // 特殊处理 select_skill 工具
@@ -1684,6 +1971,13 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         error: errorStr,
       }
       this.emitToolCall(toolCall)
+      this.emitEvent('tool.execution.finished', {
+        toolName,
+        params,
+        toolCallId: toolCall.id,
+        success: false,
+        error: errorStr,
+      })
       this.emitEvent('error', {
         source: 'tool',
         toolName,
@@ -1942,8 +2236,8 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
     }
     const skillMatchesById = new Map((this.config.activeSkillMatches || []).map(match => [match.id, match]))
 
-    // First iteration: only send brief info (name and description), let AI choose
-    if (this.currentIteration === 1) {
+    // First iteration: only send brief info unless the user explicitly invoked a Skill.
+    if (this.currentIteration === 1 && this.selectedSkills.size === 0) {
       const skillsList: string[] = []
       const skillsDebugInfo: any[] = []
 
@@ -2022,10 +2316,14 @@ After selecting Skill, you will receive complete Skill instructions in next iter
 
       // Send complete Skill information
       let skillText = `### ${skill.metadata.name}\n\n`
+      const fileInfo = skillManager.getSkillFileInfo(skill.metadata.id)
 
       // YAML metadata section
       skillText += `**Metadata**:\n`
       skillText += `- Description: ${skill.metadata.description}\n`
+      if (fileInfo) {
+        skillText += `- Base Directory: ${fileInfo.directory} (${skill.metadata.scope === 'global' ? 'AppData' : 'workspace'})\n`
+      }
       skillText += `- Version: ${skill.metadata.version}\n`
       if (skill.metadata.author) {
         skillText += `- Author: ${skill.metadata.author}\n`
@@ -2040,6 +2338,14 @@ After selecting Skill, you will receive complete Skill instructions in next iter
         skillText += `**Available Scripts**:\n`
         for (const script of skill.scripts) {
           skillText += `  - \`${script.name}\` (${script.type})\n`
+        }
+        skillText += `\n`
+      }
+
+      if (skill.references && skill.references.length > 0) {
+        skillText += `**Available References**:\n`
+        for (const reference of skill.references) {
+          skillText += `  - \`${reference.path}\`\n`
         }
         skillText += `\n`
       }
@@ -2062,9 +2368,14 @@ After selecting Skill, you will receive complete Skill instructions in next iter
       return ''
     }
 
+    const explicitInvocation = (this.config.forcedSkillIds || []).some(skillId => this.selectedSkills.has(skillId))
+    const selectedIntro = explicitInvocation
+      ? 'The user explicitly invoked the following Skills with a slash command. Apply these complete Skill instructions before general behavior.'
+      : 'You selected the following Skills to guide current task:'
+
     const result = `## Selected Skills
 
-You selected the following Skills to guide current task:
+${selectedIntro}
 
 ${skillsList.join('\n---\n\n')}
 
@@ -2073,7 +2384,7 @@ ${skillsList.join('\n---\n\n')}
 1. **Carefully read complete instructions of above Skills**
 2. **Understand Skill requirements, then apply directly to your work**
 3. **Don't ask user for confirmation** - Execute tasks directly following Skill guidance
-4. **Don't try to read additional files** - Skills already contain all necessary information
+4. **Load references only when needed** - Use load_skill_content with the Skill ID for listed references; Skill paths are AppData/workspace resources, not normal notes
 5. **Use actual tools to complete tasks** - Like create_file, update_markdown_file, replace_editor_content, etc.
 
 **⚠️ Important Reminders**:
@@ -2326,6 +2637,46 @@ ${skillsList.join('\n---\n\n')}
     return toolName === 'select_skill' || toolName === 'load_skill_content'
   }
 
+  private hasOnlySupportProgress(): boolean {
+    return this.steps.length > 0 &&
+      this.steps.every((step) => !step.action || this.isSupportOnlyTool(step.action.tool))
+  }
+
+  private recordFinalAnswerRetry(thought: string, reason: string) {
+    this.emitEvent('final.answer.rejected', { reason })
+    this.emitObservation(reason, { internal: true, visibility: 'hidden' })
+    this.completeStep({
+      thought,
+      action: undefined,
+      observation: reason,
+    })
+  }
+
+  private tryAcceptFinalAnswer(userInput: string, finalAnswer: string, thought: string): { accepted: boolean; finalAnswer: string } {
+    const normalized = finalAnswer.trim()
+    if (!normalized) {
+      this.recordFinalAnswerRetry(thought, 'Final Answer 内容为空，请继续完成任务或输出完整最终答案。')
+      return { accepted: false, finalAnswer: '' }
+    }
+
+    const validation = this.validateFinalAnswerReadiness(userInput, normalized)
+    if (!validation.ok) {
+      this.recordFinalAnswerRetry(thought, validation.reason || '最终答案校验未通过，请继续执行实际工具。')
+      return { accepted: false, finalAnswer: '' }
+    }
+
+    return { accepted: true, finalAnswer: normalized }
+  }
+
+  private actionObservationLooksSuccessful(step: ReActStep): boolean {
+    const observation = step.observation || ''
+    if (!observation) {
+      return false
+    }
+
+    return !/失败|错误|出错|阻止|取消|failed|error|blocked|cancelled/i.test(observation)
+  }
+
   private hasSubstantiveSuccessfulAction(): boolean {
     return this.steps.some((step) => {
       const toolName = step.action?.tool
@@ -2333,12 +2684,7 @@ ${skillsList.join('\n---\n\n')}
         return false
       }
 
-      const observation = step.observation || ''
-      if (!observation) {
-        return false
-      }
-
-      return !observation.includes('失败') && !observation.includes('错误') && !observation.includes('阻止')
+      return this.actionObservationLooksSuccessful(step)
     })
   }
 
@@ -2354,6 +2700,27 @@ ${skillsList.join('\n---\n\n')}
     return /^(create_|update_|delete_|rename_|move_|copy_)/.test(toolName)
   }
 
+  private isConcreteCompletionTool(toolName?: string): boolean {
+    if (!toolName || this.isSupportOnlyTool(toolName)) {
+      return false
+    }
+
+    return this.isMutationTool(toolName) ||
+      toolName === 'execute_skill_script' ||
+      toolName === 'safe_write_file' ||
+      /diagram|visual_report|export|render|pptx|pdf|docx|xlsx/i.test(toolName)
+  }
+
+  private hasConcreteSuccessfulAction(): boolean {
+    return this.steps.some((step) => {
+      if (!this.isConcreteCompletionTool(step.action?.tool)) {
+        return false
+      }
+
+      return this.actionObservationLooksSuccessful(step)
+    })
+  }
+
   private hasSuccessfulMutationAction(): boolean {
     return this.steps.some((step) => {
       const toolName = step.action?.tool
@@ -2361,12 +2728,7 @@ ${skillsList.join('\n---\n\n')}
         return false
       }
 
-      const observation = step.observation || ''
-      if (!observation) {
-        return false
-      }
-
-      return !observation.includes('失败') && !observation.includes('错误') && !observation.includes('阻止')
+      return this.actionObservationLooksSuccessful(step)
     })
   }
 
@@ -2374,11 +2736,21 @@ ${skillsList.join('\n---\n\n')}
     const normalizedInput = userInput.toLowerCase()
     const normalizedAnswer = finalAnswer.toLowerCase()
     const actionLikeRequest = this.intentPolicy.allowWrite || this.intentPolicy.allowExecute || this.intentPolicy.allowDestructive
-    const hasOnlySupportSteps = this.steps.length > 0 && this.steps.every((step) => this.isSupportOnlyTool(step.action?.tool))
+    const hasOnlySupportSteps = this.hasOnlySupportProgress()
     const claimsExecution = /已生成|已创建|已保存|已完成|已导出|已验证|成功使用|generated|created|saved|exported|verified|completed/.test(finalAnswer)
     const claimsEditApplied = /已修改|已更新|已改为|已改回|已删除|已移动|已重命名|已复制|现在为|已经是|updated|changed|modified|deleted|moved|renamed|copied/.test(finalAnswer)
     const requestedArtifact = /生成|创建|制作|导出|保存|输出|pptx|pdf|docx|xlsx|文件|演示文稿|generate|create|export|save|file|presentation/.test(normalizedInput)
     const requestedEdit = /修改|编辑|改成|改为|改回|替换|删除|移动|重命名|复制|插入|rewrite|edit|modify|change|replace|delete|move|rename|copy|insert/.test(normalizedInput)
+
+    const concreteBlockReason = getConcreteToolCompletionBlockReason({
+      userInput,
+      actionLikeRequest,
+      hasConcreteSuccessfulAction: this.hasConcreteSuccessfulAction(),
+      hasOnlySupportProgress: hasOnlySupportSteps,
+    })
+    if (concreteBlockReason) {
+      return { ok: false, reason: concreteBlockReason }
+    }
 
     if (actionLikeRequest && requestedArtifact && claimsExecution && !this.hasSubstantiveSuccessfulAction()) {
       return {

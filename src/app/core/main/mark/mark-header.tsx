@@ -10,6 +10,7 @@ import { ControlFile } from "./control-file"
 import { ControlLink } from "./control-link"
 import { ControlRecording } from "./control-recording"
 import { ControlTodo } from "./control-todo"
+import { ControlRecognition } from "./control-recognition"
 import useMarkStore from "@/stores/mark"
 import useSettingStore from "@/stores/setting"
 import {
@@ -188,6 +189,8 @@ function SortableToolbarItem({ id }: SortableToolbarItemProps) {
         return <ControlScan />
       case 'image':
         return <ControlImage />
+      case 'recognition':
+        return <ControlRecognition />
       case 'link':
         return <ControlLink />
       case 'file':

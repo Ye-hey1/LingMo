@@ -1,12 +1,11 @@
 import { ReActAgent, ReActConfig } from './react'
-import { FunctionCallAgent, FunctionCallAgentConfig } from './function-call-agent'
-import { AgentEvent, ToolCall, ReActStep } from './types'
+import { AgentActivity, AgentEvent, ToolCall, ReActStep } from './types'
+import { replayAgentEvents } from './event-bus'
 import useChatStore from '@/stores/chat'
 import { skillManager } from '@/lib/skills'
 import { useSkillsStore } from '@/stores/skills'
 import { reloadMcpTools } from './tools'
 import OpenAI from 'openai'
-import { getModelCapabilityProfile } from '@/lib/ai/model-capabilities'
 import type { SkillMatchSummary } from '@/lib/skills/types'
 import {
   SnapshotManager,
@@ -18,6 +17,12 @@ import {
 } from './enhanced-resume'
 import { formatFriendlyError } from './friendly-errors'
 import { getDirectAgentReply } from './orchestration'
+import {
+  extractVisibleFinalAnswer,
+  isInternalAgentInstruction,
+  sanitizeVisibleAssistantContent,
+} from './parse-action-input'
+import { isSupportOnlyObservationText, isSupportOnlyToolName } from './support-tools'
 
 export interface AgentHandlerConfig {
   activeChatId?: number
@@ -31,6 +36,7 @@ export interface AgentHandlerConfig {
   onFinalAnswerRender?: (markdownContent: string) => void  // 当检测到 Final Answer 时立即渲染 Markdown
   formatAutoFinalAnswer?: (key: string, values?: Record<string, string>) => string
   requestConfirmation?: (toolName: string, params: Record<string, any>) => Promise<boolean>
+  forcedSkillIds?: string[]
   currentQuote?: {
     fileName: string
     startLine: number
@@ -41,13 +47,199 @@ export interface AgentHandlerConfig {
   }
 }
 
+function getBaseToolName(toolName: string) {
+  return toolName.includes('__') ? toolName.split('__').pop()! : toolName
+}
+
+function formatToolLabel(toolName?: string) {
+  if (!toolName) return ''
+  return getBaseToolName(toolName)
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function summarizeParams(params?: Record<string, any>) {
+  if (!params) return undefined
+
+  const preferred = params.filePath || params.path || params.folderPath || params.query || params.url || params.name || params.skillId
+  if (typeof preferred === 'string' && preferred.trim()) {
+    const normalized = preferred.replace(/\\/g, '/')
+    const short = normalized.includes('/')
+      ? normalized.split('/').slice(-2).join('/')
+      : normalized
+    return short.length > 80 ? `${short.slice(0, 80)}...` : short
+  }
+
+  const firstString = Object.values(params).find((value): value is string =>
+    typeof value === 'string' && value.trim().length > 0
+  )
+  if (firstString) {
+    return firstString.length > 80 ? `${firstString.slice(0, 80)}...` : firstString
+  }
+
+  const keys = Object.keys(params)
+  return keys.length > 0 ? keys.slice(0, 3).join(', ') : undefined
+}
+
+function summarizeText(value?: string, maxLength = 120) {
+  const cleaned = (value || '').replace(/\s+/g, ' ').trim()
+  if (!cleaned) return undefined
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned
+}
+
 export class AgentHandler {
-  private agent: ReActAgent | FunctionCallAgent | null = null
+  private agent: ReActAgent | null = null
   private config: AgentHandlerConfig
   private executing = false
 
   constructor(config: AgentHandlerConfig) {
     this.config = config
+  }
+
+  private createActivity(
+    label: string,
+    phase: AgentActivity['phase'],
+    detail?: string,
+    options: Partial<Pick<AgentActivity, 'iteration' | 'toolName' | 'outputChars' | 'inputTokens' | 'outputTokens'>> = {},
+  ): AgentActivity {
+    return {
+      phase,
+      label,
+      detail,
+      startedAt: Date.now(),
+      ...options,
+    }
+  }
+
+  private getActivityFromEvent(event: AgentEvent): AgentActivity | undefined {
+    const payload = event.payload || {}
+    const toolName = typeof payload.toolName === 'string'
+      ? payload.toolName
+      : typeof payload.tool === 'string'
+        ? payload.tool
+        : undefined
+
+    switch (event.type) {
+      case 'agent.started':
+        return this.createActivity('Preparing agent', 'preparing', undefined, { iteration: event.iteration })
+      case 'agent.planning':
+        return this.createActivity('Planning task', 'planning', undefined, { iteration: event.iteration })
+      case 'iteration.started':
+      case 'model.request.started':
+        return this.createActivity('Thinking', 'thinking', undefined, { iteration: event.iteration })
+      case 'model.response.received':
+        return this.createActivity(
+          'Reading model response',
+          'thinking',
+          payload.truncated ? '正在续写被截断的输出' : undefined,
+          {
+            iteration: event.iteration,
+            outputChars: typeof payload.contentLength === 'number' ? payload.contentLength : undefined,
+            inputTokens: typeof payload.inputTokens === 'number' ? payload.inputTokens : undefined,
+            outputTokens: typeof payload.outputTokens === 'number' ? payload.outputTokens : undefined,
+          }
+        )
+      case 'thought':
+      case 'thought.updated':
+        return this.createActivity(
+          'Reasoning',
+          'thinking',
+          summarizeText(String(payload.content || '')),
+          {
+            iteration: event.iteration,
+            outputChars: typeof payload.content === 'string' ? payload.content.length : undefined,
+          }
+        )
+      case 'action':
+      case 'action.parsed':
+        if (isSupportOnlyToolName(toolName)) {
+          return undefined
+        }
+        return this.createActivity(
+          `Preparing ${formatToolLabel(toolName) || 'tool'}`,
+          'tool',
+          summarizeParams(payload.params),
+          { iteration: event.iteration, toolName }
+        )
+      case 'tool.updated': {
+        const toolCall = payload.toolCall as ToolCall | undefined
+        if (!toolCall?.toolName) return undefined
+        if (isSupportOnlyToolName(toolCall.toolName)) return undefined
+
+        if (toolCall.status === 'error') {
+          return this.createActivity(
+            `Failed ${formatToolLabel(toolCall.toolName)}`,
+            'error',
+            summarizeText(toolCall.result?.error || toolCall.result?.message),
+            { iteration: event.iteration, toolName: toolCall.toolName }
+          )
+        }
+
+        if (toolCall.status === 'success') {
+          return this.createActivity(
+            `Finished ${formatToolLabel(toolCall.toolName)}`,
+            'tool',
+            summarizeText(toolCall.result?.message || (typeof toolCall.result?.data === 'string' ? toolCall.result.data : undefined)) || summarizeParams(toolCall.params),
+            { iteration: event.iteration, toolName: toolCall.toolName }
+          )
+        }
+
+        return this.createActivity(
+          `Running ${formatToolLabel(toolCall.toolName)}`,
+          'tool',
+          summarizeParams(toolCall.params),
+          { iteration: event.iteration, toolName: toolCall.toolName }
+        )
+      }
+      case 'tool.execution.started':
+        if (isSupportOnlyToolName(toolName)) return undefined
+        return this.createActivity(`Running ${formatToolLabel(toolName) || 'tool'}`, 'tool', summarizeParams(payload.params), { iteration: event.iteration, toolName })
+      case 'tool.execution.finished':
+        if (isSupportOnlyToolName(toolName)) return undefined
+        return this.createActivity(
+          `${payload.success === false ? 'Failed' : 'Finished'} ${formatToolLabel(toolName) || 'tool'}`,
+          payload.success === false ? 'error' : 'tool',
+          summarizeText(String(payload.result || payload.message || payload.error || '')),
+          { iteration: event.iteration, toolName }
+        )
+      case 'step.completed':
+        if (isSupportOnlyToolName(String(payload.toolName || ''))) return undefined
+        return this.createActivity(
+          payload.toolName ? `Completed ${formatToolLabel(String(payload.toolName))}` : 'Completed step',
+          payload.success === false ? 'error' : 'thinking',
+          summarizeText(String(payload.observation || '')),
+          { iteration: event.iteration, toolName }
+        )
+      case 'approval':
+      case 'confirmation.waiting':
+        if (payload.status === 'requested' || event.type === 'confirmation.waiting') {
+          return this.createActivity(`Waiting for ${formatToolLabel(toolName) || 'confirmation'}`, 'waiting-confirmation', summarizeParams(payload.params), { iteration: event.iteration, toolName })
+        }
+        return undefined
+      case 'final':
+      case 'final.answer.rendered':
+        return this.createActivity('Writing answer', 'answering', undefined, { iteration: event.iteration })
+      case 'final.answer.rejected':
+        return this.createActivity(
+          'Continuing work',
+          'thinking',
+          summarizeText(String(payload.reason || 'Final answer was not ready yet')),
+          { iteration: event.iteration },
+        )
+      case 'skills.selected': {
+        const skillIds = Array.isArray(payload.skillIds) ? payload.skillIds.filter((id): id is string => typeof id === 'string') : []
+        return this.createActivity('Selected skill', 'preparing', skillIds.slice(0, 2).join(', '), { iteration: event.iteration })
+      }
+      case 'agent.completed':
+        return this.createActivity('Done', 'completed', undefined, { iteration: event.iteration })
+      case 'agent.stopped':
+        return this.createActivity('Stopped', 'completed', undefined, { iteration: event.iteration })
+      case 'error':
+        return this.createActivity('Execution error', 'error', summarizeText(String(payload.friendlyMessage || payload.error || '')), { iteration: event.iteration, toolName })
+      default:
+        return undefined
+    }
   }
 
   private handleAgentEvent(event: AgentEvent) {
@@ -59,6 +251,7 @@ export class AgentHandler {
     const currentIteration = event.type === 'iteration.started' && typeof event.iteration === 'number'
       ? event.iteration
       : store.agentState.currentIteration
+    const hiddenEvent = event.payload?.internal === true || event.payload?.visibility === 'hidden'
 
     // Handle task plan events
     let taskPlan = store.agentState.taskPlan
@@ -67,7 +260,7 @@ export class AgentHandler {
         ...event.payload.plan,
         completedStepIndex: -1,
       }
-    } else if (event.type === 'observation.created' && taskPlan && taskPlan.isComplex) {
+    } else if (event.type === 'observation.created' && taskPlan && taskPlan.isComplex && !hiddenEvent) {
       // Observation created means the current iteration's tool finished
       // Only advance if this observation relates to the next unfinished step
       const nextStepIndex = taskPlan.completedStepIndex + 1
@@ -100,12 +293,27 @@ export class AgentHandler {
       }
     }
 
+    const nextAgentEvents = [...agentEvents, event].slice(-500)
+    const replay = replayAgentEvents(nextAgentEvents)
+    const activity = hiddenEvent ? undefined : this.getActivityFromEvent(event)
+
+    if (event.type === 'final.answer.rejected') {
+      store.setAgentState({
+        isFinalAnswerMode: false,
+        finalAnswerContent: undefined,
+        currentThought: '',
+        activity: activity || this.createActivity('Continuing work', 'thinking', undefined, { iteration: event.iteration }),
+      })
+    }
+
     store.setAgentState({
-      agentEvents: [...agentEvents, event].slice(-500),
+      agentEvents: nextAgentEvents,
       agentRunId: event.runId || store.agentState.agentRunId,
       agentEventCursor: event.sequence || store.agentState.agentEventCursor,
       currentIteration,
       agentContextSnapshot: snapshot || store.agentState.agentContextSnapshot,
+      activity: activity || store.agentState.activity,
+      telemetry: replay.telemetry,
       taskPlan,
     })
     this.config.onEvent?.(event)
@@ -129,9 +337,13 @@ export class AgentHandler {
     store.setAgentState({
       activeChatId: this.config.activeChatId,
       isRunning: true,
+      activity: this.createActivity('Preparing agent', 'preparing'),
     })
 
-    const directReply = getDirectAgentReply(userInput, imageUrls)
+    const forcedSkillIds = this.normalizeSkillIds(this.config.forcedSkillIds)
+    const directReply = forcedSkillIds.length === 0
+      ? getDirectAgentReply(userInput, imageUrls)
+      : null
     if (directReply) {
       store.setAgentState({
         isRunning: false,
@@ -139,6 +351,7 @@ export class AgentHandler {
         currentIteration: 0,
         isFinalAnswerMode: true,
         finalAnswerContent: directReply,
+        activity: this.createActivity('Writing answer', 'answering'),
       })
       await this.persistRunSummary(userInput, directReply, [], false)
       this.config.onFinalAnswerRender?.(directReply)
@@ -149,6 +362,9 @@ export class AgentHandler {
 
     // 确保 MCP Store 已初始化
     try {
+      store.setAgentState({
+        activity: this.createActivity('Loading tools', 'preparing'),
+      })
       const { useMcpStore } = await import('@/stores/mcp')
       const mcpStore = useMcpStore.getState()
       if (!mcpStore.initialized) {
@@ -160,6 +376,9 @@ export class AgentHandler {
 
     // 预加载 MCP 工具（仅在未加载时加载，避免重复）
     try {
+      store.setAgentState({
+        activity: this.createActivity('Loading tools', 'preparing'),
+      })
       const { getAllToolsSync } = await import('./tools')
       const currentTools = getAllToolsSync()
       // 只有当没有 MCP 工具时才重新加载
@@ -170,13 +389,29 @@ export class AgentHandler {
       console.error('[Agent Handler] Failed to reload MCP tools:', error)
     }
 
-    // 获取与当前请求相关的 Skills 候选（让 AI 自己决定是否选择）
-    const skillMatches = await this.getAvailableSkills(userInput)
+    // 获取与当前请求相关的 Skills 候选。显式 /skill 调用优先于自动匹配。
+    const forcedSkillMatches = await this.getForcedSkillMatches(forcedSkillIds)
+    store.setAgentState({
+      activity: this.createActivity('Selecting skills', 'loading-skills'),
+    })
+    const autoSkillMatches = await this.getAvailableSkills(userInput)
+    const skillMatches = this.mergeSkillMatches([...forcedSkillMatches, ...autoSkillMatches])
     const activeSkills = skillMatches.map(skill => skill.id)
+    const forcedActiveSkillIds = forcedSkillMatches.map(skill => skill.id)
     // 获取 Skills 的详细信息用于 UI 显示
     const skillsInfo = await this.getSkillsInfo(skillMatches)
     // 将加载的 Skills 信息存储到状态中，用于 UI 显示
-    store.setAgentState({ loadedSkills: skillsInfo })
+    store.setAgentState({
+      loadedSkills: skillsInfo,
+      selectedSkills: forcedActiveSkillIds.length > 0 ? forcedActiveSkillIds : undefined,
+      activity: this.createActivity(
+        skillsInfo.length > 0 ? 'Skills ready' : 'No matching skill',
+        'loading-skills',
+        skillsInfo.length > 0
+          ? skillsInfo.slice(0, 3).map(skill => skill.name).join(', ')
+          : undefined
+      ),
+    })
 
     // 智能联网判断：当检测到时效性问题时，自动启用联网搜索
     // 即使 UI 上的联网按钮未开启
@@ -196,6 +431,7 @@ export class AgentHandler {
       webSearchEnabled: effectiveWebSearchEnabled,
       activeSkills,
       activeSkillMatches: skillMatches,
+      forcedSkillIds: forcedActiveSkillIds,
       onIterationStart: () => {
         // 在新迭代开始时，将完整的 ReAct 循环保存到历史，然后清空当前状态
         const currentState = useChatStore.getState()
@@ -257,6 +493,9 @@ export class AgentHandler {
             currentObservation: undefined,
             currentStepStartTime: Date.now(),  // 记录新步骤的开始时间
             isThinking: true,  // 标记正在等待 AI 生成新的思考
+            activity: this.createActivity('Thinking', 'thinking', undefined, {
+              iteration: currentState.agentState.currentIteration + 1,
+            }),
             // Reset Final Answer mode for new iteration
             isFinalAnswerMode: false,
             finalAnswerContent: undefined
@@ -264,33 +503,60 @@ export class AgentHandler {
         }
       },
       onThought: (thought: string) => {
-        // Detect Final Answer in streaming content for immediate rendering
-        const faMatch = thought.match(/Final Answer:\s*([\s\S]*)/i) ||
-                        thought.match(/Final Answer：\s*([\s\S]*)/i) ||
-                        thought.match(/最终答案[：:]\s*([\s\S]*)/i)
-        if (faMatch && faMatch[1].trim().length > 0) {
-          const finalAnswerContent = faMatch[1].trim()
+        const finalAnswerContent = extractVisibleFinalAnswer(thought)
+        const visibleThought = sanitizeVisibleAssistantContent(thought)
+
+        if (finalAnswerContent) {
           store.setAgentState({
-            currentThought: thought,
+            currentThought: '',
             isThinking: false,
             isFinalAnswerMode: true,
-            finalAnswerContent
+            finalAnswerContent,
+            activity: this.createActivity('Writing answer', 'answering', undefined, {
+              iteration: useChatStore.getState().agentState.currentIteration,
+            }),
           })
           this.config.onFinalAnswerRender?.(finalAnswerContent)
-        } else {
+        } else if (visibleThought) {
           store.setAgentState({
-            currentThought: thought,
-            isThinking: false
+            currentThought: visibleThought,
+            isThinking: false,
+            activity: this.createActivity('Reasoning', 'thinking', summarizeText(visibleThought), {
+              iteration: useChatStore.getState().agentState.currentIteration,
+            }),
           })
         }
-        this.config.onThought?.(thought)
+        if (visibleThought || finalAnswerContent) {
+          this.config.onThought?.(finalAnswerContent || visibleThought)
+        }
       },
       onAction: (action, params) => {
-        store.setAgentState({ currentAction: `${action}(${JSON.stringify(params)})` })
+        store.setAgentState({
+          currentAction: `${action}(${JSON.stringify(params)})`,
+          activity: this.createActivity(`Preparing ${formatToolLabel(action)}`, 'tool', summarizeParams(params), {
+            iteration: useChatStore.getState().agentState.currentIteration,
+            toolName: action,
+          }),
+        })
         this.config.onAction?.(action, params)
       },
       onObservation: (observation) => {
-        store.setAgentState({ currentObservation: observation })
+        const currentAction = useChatStore.getState().agentState.currentAction
+        const currentToolName = currentAction?.match(/^(\w+)\(/)?.[1]
+        if (
+          isInternalAgentInstruction(observation) ||
+          isSupportOnlyToolName(currentToolName) ||
+          isSupportOnlyObservationText(observation)
+        ) {
+          return
+        }
+
+        store.setAgentState({
+          currentObservation: observation,
+          activity: this.createActivity('Processing result', 'thinking', summarizeText(observation), {
+            iteration: useChatStore.getState().agentState.currentIteration,
+          }),
+        })
         this.config.onObservation?.(observation)
       },
       onEvent: (event) => {
@@ -322,34 +588,11 @@ export class AgentHandler {
     // 在开始执行前设置当前步骤的开始时间（确保第一次思考也有耗时）
     store.setAgentState({
       isThinking: true,
-      currentStepStartTime: Date.now()
+      currentStepStartTime: Date.now(),
+      activity: this.createActivity('Thinking', 'thinking'),
     })
 
-    // 选择 Agent 模式：优先使用 Function Calling（更稳定），降级到 ReAct
-    const useFunctionCalling = await this.shouldUseFunctionCalling()
-
-    if (useFunctionCalling) {
-      // Function Calling 模式 — 通过 API 级别的 tool_calls 调用工具
-      const fcConfig: FunctionCallAgentConfig = {
-        maxIterations: 15,
-        webSearchEnabled: effectiveWebSearchEnabled,
-        onIterationStart: reactConfig.onIterationStart,
-        onThought: reactConfig.onThought,
-        onAction: reactConfig.onAction,
-        onObservation: reactConfig.onObservation,
-        onToolCall: reactConfig.onToolCall,
-        onEvent: reactConfig.onEvent,
-        onFinalAnswerRender: reactConfig.onFinalAnswerRender,
-        requestConfirmation: reactConfig.requestConfirmation,
-        activeSkills,
-        activeSkillMatches: skillMatches,
-        currentQuote: this.config.currentQuote,
-      }
-      this.agent = new FunctionCallAgent(fcConfig)
-    } else {
-      // ReAct 模式 — 文本解析（降级方案）
-      this.agent = new ReActAgent(reactConfig)
-    }
+    this.agent = new ReActAgent(reactConfig)
 
     try {
       const result = await this.agent.run(userInput, contextOrMessages, imageUrls)
@@ -360,6 +603,7 @@ export class AgentHandler {
         isRunning: false,
         completedSteps: steps,
         currentIteration: this.agent.getCurrentIteration(),
+        activity: this.createActivity('Done', 'completed'),
       })
       await this.persistRunSummary(userInput, result, steps, false)
       this.config.onComplete?.(result, steps, false)
@@ -393,6 +637,7 @@ export class AgentHandler {
           isRunning: false,
           completedSteps: steps,
           currentIteration: this.agent.getCurrentIteration(),
+          activity: this.createActivity('Stopped', 'completed'),
         })
         await this.persistRunSummary(userInput, '', steps, true)
         // 调用 onComplete，传入空结果和已产生的步骤，标记为已停止
@@ -401,7 +646,10 @@ export class AgentHandler {
         return ''
       }
 
-      store.setAgentState({ isRunning: false })
+      store.setAgentState({
+        isRunning: false,
+        activity: this.createActivity('Execution error', 'error'),
+      })
       this.executing = false
 
       // 使用友好的错误消息
@@ -533,20 +781,48 @@ export class AgentHandler {
     }
   }
 
-  /**
-   * 判断是否应该使用 Function Calling 模式
-   * 条件：模型支持 function calling（大多数现代模型都支持）
-   */
-  private async shouldUseFunctionCalling(): Promise<boolean> {
-    try {
-      const { getAISettings } = await import('@/lib/ai/utils')
-      const aiConfig = await getAISettings()
-      if (!aiConfig) return false
+  private normalizeSkillIds(skillIds?: string[]): string[] {
+    return Array.from(new Set(
+      (skillIds || [])
+        .map(id => id.trim())
+        .filter(Boolean)
+    ))
+  }
 
-      const capabilities = getModelCapabilityProfile(aiConfig)
-      return capabilities.supportsFunctionCalling && !capabilities.prefersTextReAct
-    } catch {
-      return false
+  private mergeSkillMatches(skillMatches: SkillMatchSummary[]): SkillMatchSummary[] {
+    const matchesById = new Map<string, SkillMatchSummary>()
+    for (const match of skillMatches) {
+      if (!matchesById.has(match.id)) {
+        matchesById.set(match.id, match)
+      }
+    }
+    return Array.from(matchesById.values())
+  }
+
+  private async getForcedSkillMatches(skillIds: string[]): Promise<SkillMatchSummary[]> {
+    if (skillIds.length === 0) {
+      return []
+    }
+
+    try {
+      const skillsStore = useSkillsStore.getState()
+      await skillsStore.initSkills()
+
+      return skillIds
+        .map(skillId => skillManager.getSkill(skillId))
+        .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill))
+        .map(skill => ({
+          id: skill.metadata.id,
+          name: skill.metadata.name,
+          description: skill.metadata.description,
+          score: 1,
+          confidence: 'high' as const,
+          reasons: ['用户通过 /skill 显式调用'],
+          matchedSignals: [],
+        }))
+    } catch (error) {
+      console.error('[Skills Debug] Failed to load forced skills:', error)
+      return []
     }
   }
 
@@ -592,14 +868,12 @@ export class AgentHandler {
     confidence?: 'high' | 'medium' | 'low'
     reasons?: string[]
   }>> {
-    const skillsStore = useSkillsStore.getState()
-
-    // 如果 Skills 功能未启用，返回空数组
-    if (!skillsStore.enabled || !skillsStore.autoMatch) {
+    if (!skillMatches?.length) {
       return []
     }
 
     try {
+      const skillsStore = useSkillsStore.getState()
       // 确保 Skill 管理器已初始化
       await skillsStore.initSkills()
       return (skillMatches || [])

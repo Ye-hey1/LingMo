@@ -3,6 +3,7 @@ import { Store } from '@tauri-apps/plugin-store'
 import MD5 from 'crypto-js/md5.js'
 
 import type { AiConfig } from '@/app/core/setting/config'
+import { normalizeProviderDisplayTitle } from './provider-display'
 
 const UPGRADE_LINK_CONFIGURATION_KEY = 'sLwoVGPpyngsYyubAk2V8g'
 const UPGRADE_LINK_ACCESS_KEY = 'wHi8Tkuc5i6v1UCAuVk48A'
@@ -25,6 +26,7 @@ export interface ProviderTemplateCache {
 function mapBuiltinTemplates(templates: AiConfig[]): AiConfig[] {
   return templates.map((template) => ({
     ...template,
+    title: normalizeProviderDisplayTitle(template.title),
     templateKey: template.templateKey || template.key,
     templateSource: 'builtin' as const,
   }))
@@ -142,7 +144,7 @@ function normalizeProviderTemplatesPayload(payload: unknown): AiConfig[] {
     .filter((item) => isValidUrl(item.baseURL))
     .map((item) => ({
       key: String(item.key).trim(),
-      title: String(item.title).trim(),
+      title: normalizeProviderDisplayTitle(String(item.title).trim()),
       baseURL: String(item.baseURL).trim(),
       icon: isNonEmptyString(item.icon) ? item.icon.trim() : undefined,
       apiKeyUrl: isValidUrl(item.apiKeyUrl) ? item.apiKeyUrl.trim() : undefined,

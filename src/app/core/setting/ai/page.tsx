@@ -32,6 +32,7 @@ import { OpenBroswer } from "@/components/open-broswer"
 import ModelCard from "./model-card"
 import CreateConfig from "./create"
 import { getCachedProviderTemplates, getProviderTemplateMatch, loadProviderTemplates } from "@/lib/ai/provider-templates-runtime"
+import { getConfiguredProviderDisplayTitle, normalizeProviderConfigTitle } from "@/lib/ai/provider-display"
 import { cn } from "@/lib/utils"
 import { createOpenAIClient } from "@/lib/ai/utils"
 import { inferModelContextWindow } from "@/lib/ai/context-window"
@@ -171,12 +172,46 @@ export default function AiPage() {
 
   const hasAnyProviderResult = filteredOfficialTemplates.length > 0 || customModelConfigs.length > 0
 
+  const getBuiltinProviderFallback = (config: AiConfig | undefined) => {
+    if (!config) {
+      return undefined
+    }
+
+    return builtinProviderTemplates.find((template) => {
+      if (config.templateKey && config.templateKey === template.key) {
+        return true
+      }
+      if (config.key === template.key) {
+        return true
+      }
+      return normalizeBaseUrl(config.baseURL) === normalizeBaseUrl(template.baseURL)
+    })
+  }
+
   const getConfigIcon = (config: AiConfig) => {
-    return getProviderTemplateMatch(config, providerTemplates)?.icon || config.icon
+    return getProviderTemplateMatch(config, providerTemplates)?.icon || config.icon || getBuiltinProviderFallback(config)?.icon
   }
 
   const getConfigModelCount = (config: AiConfig) => {
     return config.models?.length || 0
+  }
+
+  const getProviderDisplayTitle = (config: AiConfig | undefined) => {
+    const providerTemplate = getProviderTemplateMatch(config, providerTemplates)
+    const builtinProviderTemplate = getBuiltinProviderFallback(config)
+    return getConfiguredProviderDisplayTitle(config, providerTemplate) || getConfiguredProviderDisplayTitle(config, builtinProviderTemplate)
+  }
+
+  const getConfigListTitle = (config: AiConfig | undefined) => {
+    return getProviderDisplayTitle(config) || config?.baseURL?.trim() || '未命名配置'
+  }
+
+  const getCurrentProviderDisplayTitle = () => {
+    if (!currentConfig) {
+      return t('selectConfig')
+    }
+
+    return getConfigListTitle(currentConfig) || t('selectConfig')
   }
 
   const findConfigByTemplate = (template: AiConfig) => {
@@ -489,6 +524,7 @@ export default function AiPage() {
     setTestingConnection(true)
     try {
       const candidates = buildBaseUrlCandidates(rawBaseUrl)
+      const modelType = targetModelConfig?.modelType || inferModelTypeFromId(pickedModel)
 
       let lastError = ''
       for (const candidate of candidates) {
@@ -497,23 +533,37 @@ export default function AiPage() {
             ...currentConfig,
             baseURL: candidate,
             model: pickedModel,
-            modelType: targetModelConfig?.modelType || inferModelTypeFromId(pickedModel),
+            modelType,
             temperature: targetModelConfig?.temperature,
             topP: targetModelConfig?.topP,
             enableStream: false,
           })
-          await openai.chat.completions.create({
-            model: pickedModel,
-            messages: [{ role: 'user', content: 'ping' }],
-            max_tokens: 8,
-          })
+
+          // 根据模型类型选择对应的测试端点
+          if (modelType === 'stt' || modelType === 'embedding' || modelType === 'rerank' || modelType === 'tts') {
+            // 非对话模型：通过 models.list() 验证连通性和 API Key 有效性
+            const modelList = await openai.models.list()
+            const found = modelList.data?.some((m: any) => m.id === pickedModel)
+            if (!found) {
+              throw new Error(`API 连通但未找到模型 ${pickedModel}，请确认模型名称是否正确。`)
+            }
+          } else {
+            // Chat / 图像 / 视频模型：用 chat completions 测试
+            await openai.chat.completions.create({
+              model: pickedModel,
+              messages: [{ role: 'user', content: 'ping' }],
+              max_tokens: 8,
+            })
+          }
 
           await updateAiConfig({
             ...currentConfig,
             baseURL: candidate,
           })
 
-          const message = `模型 ${pickedModel} 测试通过。`
+          const testLabel = modelType === 'stt' || modelType === 'embedding' || modelType === 'rerank' || modelType === 'tts'
+            ? '连接' : '模型'
+          const message = `${testLabel} ${pickedModel} 测试通过。`
           setApiTestFeedback({ type: 'success', message })
           setTestModelPickerOpen(false)
           return
@@ -579,7 +629,9 @@ export default function AiPage() {
     const linkedConfig = findConfigByTemplate(template)
     const isSelected = Boolean(linkedConfig && selectedAiConfig === linkedConfig.key)
     const isEnabled = linkedConfig ? linkedConfig.enabled !== false : false
-    const providerIcon = template.icon || linkedConfig?.icon
+    const providerIcon = getConfigIcon(template) || (linkedConfig ? getConfigIcon(linkedConfig) : undefined)
+    const providerTitle = getConfigListTitle(template)
+    const modelCount = linkedConfig ? getConfigModelCount(linkedConfig) : 0
 
     return (
       <button
@@ -593,36 +645,34 @@ export default function AiPage() {
           void createConfigFromOfficialTemplate(template)
         }}
         className={cn(
-          'w-full rounded-lg border p-3 text-left transition-colors',
+          'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-all',
           isSelected
-            ? 'border-primary/70 bg-primary/5'
-            : 'border-border hover:border-primary/40 hover:bg-muted/40'
+            ? 'bg-primary/8 ring-1 ring-primary/25'
+            : 'hover:bg-muted/50'
         )}
       >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-background">
-              {providerIcon ? (
-                <Image src={providerIcon} alt={template.title} width={20} height={20} className="size-5 rounded" />
-              ) : (
-                <BotMessageSquare className="size-4 text-muted-foreground" />
-              )}
-            </div>
-            <span className="line-clamp-1 text-sm font-medium">{template.title}</span>
-          </div>
-
-          <span
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium leading-none',
-              isEnabled
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                : 'border-slate-200 bg-slate-50 text-slate-600'
-            )}
-          >
-            <span className={cn('h-1.5 w-1.5 rounded-full', isEnabled ? 'bg-emerald-500' : 'bg-slate-400')} />
-            {isEnabled ? '已开启' : '已关闭'}
-          </span>
+        <div className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+          isSelected ? 'bg-primary/10' : 'bg-muted/60'
+        )}>
+          {providerIcon ? (
+            <Image src={providerIcon} alt={providerTitle} width={18} height={18} className="size-[18px] rounded" />
+          ) : (
+            <BotMessageSquare className="size-4 text-muted-foreground" />
+          )}
         </div>
+        <div className="min-w-0 flex-1">
+          <span className={cn('line-clamp-1 text-[13px] font-medium', !isSelected && 'text-foreground/90')}>{providerTitle}</span>
+          {linkedConfig && modelCount > 0 && (
+            <span className="text-[11px] text-muted-foreground/70">{modelCount} 个模型</span>
+          )}
+        </div>
+        {linkedConfig && (
+          <span className={cn(
+            'h-1.5 w-1.5 shrink-0 rounded-full',
+            isEnabled ? 'bg-emerald-500' : 'bg-slate-300'
+          )} />
+        )}
       </button>
     )
   }
@@ -631,6 +681,7 @@ export default function AiPage() {
     const isSelected = selectedAiConfig === item.key
     const modelCount = getConfigModelCount(item)
     const providerIcon = getConfigIcon(item)
+    const providerTitle = getConfigListTitle(item)
 
     return (
       <button
@@ -638,36 +689,34 @@ export default function AiPage() {
         type="button"
         onClick={() => setSelectedAiConfig(item.key)}
         className={cn(
-          'w-full rounded-lg border p-3 text-left transition-colors',
+          'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-all',
           isSelected
-            ? 'border-primary/70 bg-primary/5'
-            : 'border-border hover:border-primary/40 hover:bg-muted/40'
+            ? 'bg-primary/8 ring-1 ring-primary/25'
+            : 'hover:bg-muted/50'
         )}
       >
-        <div className="mb-2 flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded bg-background">
-            {providerIcon ? (
-              <Image src={providerIcon} alt={item.title} width={20} height={20} className="size-5 rounded" />
-            ) : (
-              <BotMessageSquare className="size-4 text-muted-foreground" />
-            )}
-          </div>
-          <span className="line-clamp-1 text-sm font-medium">{item.title}</span>
+        <div className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+          isSelected ? 'bg-primary/10' : 'bg-muted/60'
+        )}>
+          {providerIcon ? (
+            <Image src={providerIcon} alt={providerTitle} width={18} height={18} className="size-[18px] rounded" />
+          ) : (
+            <BotMessageSquare className="size-4 text-muted-foreground" />
+          )}
         </div>
-
-        <div className="line-clamp-1 text-xs text-muted-foreground">{item.baseURL || '未设置 BaseURL'}</div>
-
-        <div className="mt-2 flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">{modelCount} 个模型</span>
-          <span
-            className={cn(
-              'rounded px-1.5 py-0.5',
-              isConfigUsable(item) ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-            )}
-          >
-            {isConfigUsable(item) ? '已就绪' : '待完善'}
-          </span>
+        <div className="min-w-0 flex-1">
+          <span className={cn('line-clamp-1 text-[13px] font-medium', !isSelected && 'text-foreground/90')}>{providerTitle}</span>
+          {modelCount > 0 ? (
+            <span className="text-[11px] text-muted-foreground/70">{modelCount} 个模型</span>
+          ) : (
+            <span className="text-[11px] text-amber-600/70">待配置</span>
+          )}
         </div>
+        <span className={cn(
+          'h-1.5 w-1.5 shrink-0 rounded-full',
+          isConfigUsable(item) ? 'bg-emerald-500' : 'bg-amber-400'
+        )} />
       </button>
     )
   }
@@ -683,18 +732,17 @@ export default function AiPage() {
       <div
         key={`custom-group-${group.key}`}
         className={cn(
-          'rounded-lg border p-2',
-          hasSelected ? 'border-primary/60 bg-primary/5' : 'border-border bg-card/60'
+          'rounded-lg',
+          hasSelected && 'ring-1 ring-primary/20'
         )}
       >
-        <div className="mb-2 px-1 text-[11px] text-muted-foreground">{group.baseURL || '未设置 BaseURL'}</div>
-
-        <div className="space-y-1">
+        <div className="space-y-0.5">
           {group.items.map((item) => {
             const isSelected = selectedAiConfig === item.key
             const isEnabled = item.enabled !== false
             const modelCount = getConfigModelCount(item)
             const providerIcon = getConfigIcon(item)
+            const providerTitle = getConfigListTitle(item)
 
             return (
               <button
@@ -702,36 +750,34 @@ export default function AiPage() {
                 type="button"
                 onClick={() => setSelectedAiConfig(item.key)}
                 className={cn(
-                  'flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left transition-colors',
-                  isSelected ? 'bg-primary/10' : 'hover:bg-muted/60'
+                  'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-all',
+                  isSelected
+                    ? 'bg-primary/8 ring-1 ring-primary/25'
+                    : 'hover:bg-muted/50'
                 )}
               >
-                <div className="flex min-w-0 items-center gap-2">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-background">
-                    {providerIcon ? (
-                      <Image src={providerIcon} alt={item.title} width={20} height={20} className="size-5 rounded" />
-                    ) : (
-                      <BotMessageSquare className="size-4 text-muted-foreground" />
-                    )}
-                  </div>
-
-                  <div className="min-w-0">
-                    <div className="line-clamp-1 text-sm font-medium">{item.title}</div>
-                    <div className="text-xs text-muted-foreground">{modelCount} 个模型</div>
-                  </div>
-                </div>
-
-                <span
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium leading-none',
-                    isEnabled
-                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                      : 'border-slate-200 bg-slate-50 text-slate-600'
+                <div className={cn(
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+                  isSelected ? 'bg-primary/10' : 'bg-muted/60'
+                )}>
+                  {providerIcon ? (
+                    <Image src={providerIcon} alt={providerTitle} width={18} height={18} className="size-[18px] rounded" />
+                  ) : (
+                    <BotMessageSquare className="size-4 text-muted-foreground" />
                   )}
-                >
-                  <span className={cn('h-1.5 w-1.5 rounded-full', isEnabled ? 'bg-emerald-500' : 'bg-slate-400')} />
-                  {isEnabled ? '已开启' : '已关闭'}
-                </span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <span className={cn('line-clamp-1 text-[13px] font-medium', !isSelected && 'text-foreground/90')}>{providerTitle}</span>
+                  {modelCount > 0 ? (
+                    <span className="text-[11px] text-muted-foreground/70">{modelCount} 个模型</span>
+                  ) : (
+                    <span className="text-[11px] text-amber-600/70">待配置</span>
+                  )}
+                </div>
+                <span className={cn(
+                  'h-1.5 w-1.5 shrink-0 rounded-full',
+                  isEnabled ? 'bg-emerald-500' : 'bg-slate-300'
+                )} />
               </button>
             )
           })}
@@ -811,12 +857,13 @@ export default function AiPage() {
   }
 
   const updateAiConfig = async (config: AiConfig) => {
+    const normalizedConfig = normalizeProviderConfigTitle(config)
     const store = await Store.load('store.json')
     const aiModelListInStore = (await store.get<AiConfig[]>('aiModelList')) || []
-    const index = aiModelListInStore.findIndex((item) => item.key === config.key)
+    const index = aiModelListInStore.findIndex((item) => item.key === normalizedConfig.key)
 
     if (index >= 0) {
-      aiModelListInStore[index] = config
+      aiModelListInStore[index] = normalizedConfig
       await store.set('aiModelList', aiModelListInStore)
       setAiModelList(aiModelListInStore)
     }
@@ -948,19 +995,19 @@ export default function AiPage() {
           <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
             <aside className="rounded-xl border bg-card/70 p-3">
               <div className="mb-3 flex items-center justify-between gap-2">
-                <div className="text-sm font-semibold">{t('modelConfigTitle')}</div>
-                <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                <div className="text-sm font-medium">{t('modelConfigTitle')}</div>
+                <span className="rounded-full bg-muted/80 px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">
                   {allModelConfigs.length}
                 </span>
               </div>
 
-              <div className="relative mb-3">
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <div className="relative mb-2.5">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/60" />
                 <Input
                   value={providerSearch}
                   onChange={(e) => setProviderSearch(e.target.value)}
-                  placeholder="搜索服务商或地址"
-                  className="pl-9"
+                  placeholder="搜索"
+                  className="h-8 pl-8 text-xs"
                 />
               </div>
 
@@ -974,29 +1021,29 @@ export default function AiPage() {
 
               <div className="max-h-[62vh] overflow-y-auto pr-1">
                 {!hasAnyProviderResult ? (
-                  <div className="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">
-                    没有匹配的服务商配置
+                  <div className="py-8 text-center text-xs text-muted-foreground/50">
+                    无匹配结果
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <div className="px-1 text-xs font-medium text-muted-foreground">模型供应商</div>
+                  <div className="space-y-3">
+                    <div className="space-y-0.5">
+                      <div className="px-1 pb-1 text-[11px] font-medium text-muted-foreground/50">供应商</div>
                       {filteredOfficialTemplates.length > 0 ? (
                         filteredOfficialTemplates.map((item) => renderOfficialTemplateItem(item))
                       ) : (
-                        <div className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">
-                          暂无匹配的官方模板
+                        <div className="py-4 text-center text-xs text-muted-foreground/50">
+                          无匹配
                         </div>
                       )}
                     </div>
 
-                    <div className="space-y-2">
-                      <div className="px-1 text-xs font-medium text-muted-foreground">自定义</div>
+                    <div className="space-y-0.5">
+                      <div className="px-1 pb-1 text-[11px] font-medium text-muted-foreground/50">自定义</div>
                       {customModelConfigs.length > 0 ? (
                         groupedCustomModelConfigs.map((group) => renderGroupedCustomConfigItem(group))
                       ) : (
-                        <div className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">
-                          暂无匹配的自定义配置
+                        <div className="py-4 text-center text-xs text-muted-foreground/50">
+                          无匹配
                         </div>
                       )}
                     </div>
@@ -1009,22 +1056,28 @@ export default function AiPage() {
               {currentConfig ? (
                 <div className="space-y-5 text-[13px]">
                   <div className="rounded-xl border bg-background/60 p-4">
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="line-clamp-1 text-lg font-semibold">
-                            {currentConfig.title || t('selectConfig')}
+                          <h3 className="line-clamp-1 text-base font-semibold">
+                            {getCurrentProviderDisplayTitle()}
                           </h3>
-                          <span
-                            className={cn(
-                              'rounded px-1.5 py-0.5 text-xs',
+                          <span className={cn(
+                            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium leading-none',
+                            currentConfig.enabled === false
+                              ? 'bg-zinc-100 text-zinc-500'
+                              : isConfigUsable(currentConfig)
+                                ? 'bg-emerald-50 text-emerald-600'
+                                : 'bg-amber-50 text-amber-600'
+                          )}>
+                            <span className={cn(
+                              'h-1.5 w-1.5 rounded-full',
                               currentConfig.enabled === false
-                                ? 'bg-zinc-200 text-zinc-700'
+                                ? 'bg-zinc-400'
                                 : isConfigUsable(currentConfig)
-                                  ? 'bg-emerald-100 text-emerald-700'
-                                  : 'bg-amber-100 text-amber-700'
-                            )}
-                          >
+                                  ? 'bg-emerald-500'
+                                  : 'bg-amber-400'
+                            )} />
                             {currentConfig.enabled === false
                               ? '已关闭'
                               : isConfigUsable(currentConfig)
@@ -1032,13 +1085,14 @@ export default function AiPage() {
                                 : '待完善'}
                           </span>
                         </div>
-                        <p className="mt-1 break-all text-xs text-muted-foreground">
-                          {currentConfig.baseURL || '请先填写 BaseURL'}
-                        </p>
+                        {currentConfig.baseURL && (
+                          <p className="mt-1 truncate text-xs text-muted-foreground/60">
+                            {currentConfig.baseURL}
+                          </p>
+                        )}
                       </div>
 
-                      <div className="flex shrink-0 items-center gap-2 pt-0.5">
-                        <span className="text-xs text-muted-foreground">启用</span>
+                      <div className="flex shrink-0 items-center gap-3">
                         <Switch
                           checked={currentConfig.enabled !== false}
                           onCheckedChange={setCurrentConfigEnabled}
@@ -1048,10 +1102,10 @@ export default function AiPage() {
                             type="button"
                             size="icon"
                             variant="ghost"
-                            className="h-8 w-8 rounded-md text-destructive/90 hover:bg-destructive/10 hover:text-destructive"
+                            className="h-8 w-8 rounded-md text-muted-foreground/50 hover:bg-destructive/10 hover:text-destructive"
                             onClick={deleteCurrentCustomConfig}
-                            aria-label="删除自定义配置"
-                            title="删除自定义配置"
+                            aria-label="删除配置"
+                            title="删除配置"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -1069,73 +1123,74 @@ export default function AiPage() {
                     </FormItem>
                   )}
 
-                  {!currentProviderTemplate && (
-                    <FormItem title="BaseURL">
-                      <Input
-                        value={currentConfig.baseURL || ''}
-                        onChange={(e) => updateAiConfig({ ...currentConfig, baseURL: e.target.value })}
-                        onBlur={(e) => {
-                          const normalized = normalizeApiBaseUrl(e.target.value)
-                          if (normalized !== (currentConfig.baseURL || '')) {
-                            updateAiConfig({ ...currentConfig, baseURL: normalized })
-                          }
-                        }}
-                      />
-                    </FormItem>
-                  )}
+                  <FormItem title="BaseURL" desc={currentProviderTemplate ? '修改后将覆盖默认地址，留空可恢复默认。' : undefined}>
+                    <Input
+                      value={currentConfig.baseURL || ''}
+                      onChange={(e) => updateAiConfig({ ...currentConfig, baseURL: e.target.value })}
+                      onBlur={(e) => {
+                        const normalized = normalizeApiBaseUrl(e.target.value)
+                        if (normalized !== (currentConfig.baseURL || '')) {
+                          updateAiConfig({ ...currentConfig, baseURL: normalized })
+                        }
+                      }}
+                    />
+                  </FormItem>
 
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-semibold">API 密钥</p>
+                      <p className="text-sm font-medium">API 密钥</p>
                       {currentApiKeyUrl && (
                         <OpenBroswer
                           type="link"
                           url={currentApiKeyUrl}
-                          title="获取密钥"
-                          className="text-xs text-primary no-underline hover:underline"
+                          title="获取密钥 →"
+                          className="text-xs text-primary/70 no-underline hover:text-primary hover:underline"
                         />
                       )}
                     </div>
 
-                    <div className="flex items-center gap-1.5 rounded-md border bg-background p-1">
-                      <Input
-                        className="h-9 min-w-0 border-0 bg-transparent shadow-none focus-visible:ring-1 focus-visible:ring-ring/30"
-                        value={currentConfig.apiKey || ''}
-                        type={apiKeyVisible ? 'text' : 'password'}
-                        onChange={(e) => updateAiConfig({ ...currentConfig, apiKey: e.target.value })}
-                      />
-
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => setApiKeyVisible(!apiKeyVisible)}
-                      >
-                        {apiKeyVisible ? <Eye /> : <EyeOff />}
-                      </Button>
-
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 px-3 text-xs"
-                        onClick={openTestModelPicker}
-                        disabled={testingConnection}
-                      >
-                        {testingConnection ? <LoaderCircle className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
-                        测试
-                      </Button>
+                    <div className="flex items-center gap-1.5">
+                      <div className="relative flex-1">
+                        <Input
+                          value={currentConfig.apiKey || ''}
+                          type={apiKeyVisible ? 'text' : 'password'}
+                          onChange={(e) => updateAiConfig({ ...currentConfig, apiKey: e.target.value })}
+                          placeholder="sk-..."
+                          className="h-9 pr-20"
+                        />
+                        <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => setApiKeyVisible(!apiKeyVisible)}
+                            title={apiKeyVisible ? '隐藏密钥' : '显示密钥'}
+                          >
+                            {apiKeyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-primary/80 hover:text-primary"
+                            onClick={openTestModelPicker}
+                            disabled={testingConnection}
+                          >
+                            {testingConnection ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : null}
+                            测试
+                          </Button>
+                        </div>
+                      </div>
                     </div>
 
-                    <p className="text-xs text-muted-foreground">密钥仅保存在当前配置中，可随时修改。</p>
                     {apiTestFeedback && (
                       <div
                         className={cn(
                           'rounded-md border px-3 py-2 text-xs',
                           apiTestFeedback.type === 'success'
-                            ? 'border-primary/30 bg-primary/10 text-foreground'
-                            : 'border-destructive/30 bg-destructive/10 text-destructive'
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                            : 'border-destructive/30 bg-destructive/5 text-destructive'
                         )}
                       >
                         {apiTestFeedback.message}
@@ -1143,9 +1198,8 @@ export default function AiPage() {
                     )}
                   </div>
 
-                  {!currentProviderTemplate && (
-                    <FormItem title={t('customHeaders')} desc={t('customHeadersDesc')}>
-                      <div className="space-y-2">
+                  <FormItem title={t('customHeaders')} desc={t('customHeadersDesc')}>
+                    <div className="space-y-2">
                         {headerPairs.map((pair, index) => (
                           <div key={pair.id} className="flex items-center gap-2">
                             <Input
@@ -1207,71 +1261,75 @@ export default function AiPage() {
                         </Button>
                       </div>
                     </FormItem>
-                  )}
 
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold">模型</p>
-                        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground">
+                        <p className="text-sm font-medium">模型</p>
+                        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-muted px-1.5 text-[11px] tabular-nums text-muted-foreground">
                           {currentConfig.models?.length || 0}
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1">
                         <Button
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-8 px-1 text-xs text-primary"
+                          className="h-7 gap-1 px-2 text-xs text-primary/80 hover:text-primary"
                           onClick={fetchModelList}
                           disabled={fetchingModelList}
                         >
-                          {fetchingModelList ? <LoaderCircle className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
-                          {fetchingModelList ? '获取中...' : '获取模型列表'}
+                          {fetchingModelList ? <LoaderCircle className="h-3 w-3 animate-spin" /> : null}
+                          {fetchingModelList ? '获取中...' : '拉取模型'}
                         </Button>
+                        <span className="h-4 w-px bg-border" />
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7 text-primary"
+                          className="h-7 w-7 text-primary/80 hover:text-primary"
                           onClick={addNewModel}
+                          title="手动添加模型"
                         >
-                          <Plus className="h-4 w-4" />
+                          <Plus className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </div>
 
-                    <div className="space-y-3 rounded-xl border bg-background/50 p-3 md:p-4">
+                    {currentConfig.models && currentConfig.models.length > 0 && getModelTypeFilterOptions().length > 2 && (
+                      <div className="flex flex-wrap gap-1">
+                        {getModelTypeFilterOptions().map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={cn(
+                              'rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors',
+                              currentModelTypeFilter === option.value
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted/60 text-muted-foreground hover:bg-muted'
+                            )}
+                            onClick={() => setCurrentModelTypeFilter(option.value as 'all' | ModelType)}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="rounded-xl border bg-background/50 p-3">
                       {modelFetchFeedback && (
                         <div
                           className={cn(
                             'rounded-md border px-3 py-2 text-xs',
                             modelFetchFeedback.type === 'success'
-                              ? 'border-primary/30 bg-primary/10 text-foreground'
-                              : 'border-destructive/30 bg-destructive/10 text-destructive'
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              : 'border-destructive/30 bg-destructive/5 text-destructive'
                           )}
                         >
                           {modelFetchFeedback.message}
                         </div>
                       )}
-
-                      <div className="flex flex-wrap gap-2">
-                        {currentConfig.models && currentConfig.models.length > 0 && (
-                          getModelTypeFilterOptions().map((option) => (
-                            <Button
-                              key={option.value}
-                              type="button"
-                              size="sm"
-                              className="h-8 text-xs"
-                              variant={currentModelTypeFilter === option.value ? 'default' : 'outline'}
-                              onClick={() => setCurrentModelTypeFilter(option.value as 'all' | ModelType)}
-                            >
-                              {option.label}
-                            </Button>
-                          ))
-                        )}
-                      </div>
 
                       {filteredCurrentModels.length > 0 ? (
                         <div className="max-h-[46vh] overflow-y-auto pr-1">
@@ -1293,16 +1351,16 @@ export default function AiPage() {
                           </Accordion>
                         </div>
                       ) : (
-                        <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
-                          当前筛选下没有模型
+                        <div className="py-6 text-center text-xs text-muted-foreground/40">
+                          暂无模型
                         </div>
                       )}
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="flex h-[320px] items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-                  请先在左侧选择一个模型服务商
+                <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground/40">
+                  ← 选择一个服务商
                 </div>
               )}
             </section>
@@ -1313,13 +1371,13 @@ export default function AiPage() {
       <Dialog open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
         <DialogContent
           showCloseButton={false}
-          className="max-w-2xl origin-center scale-[0.6] p-0"
+          className="max-w-xl p-0"
         >
           <DialogHeader className="border-b px-4 py-3">
             <div className="flex items-center justify-between">
-              <DialogTitle className="text-[24px] leading-none md:text-[24px]">模型列表</DialogTitle>
-              <DialogClose className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-                <X className="h-7 w-7" />
+              <DialogTitle>选择模型</DialogTitle>
+              <DialogClose className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                <X className="h-4 w-4" />
                 <span className="sr-only">关闭</span>
               </DialogClose>
             </div>
@@ -1330,17 +1388,17 @@ export default function AiPage() {
               <Input
                 value={modelPickerQuery}
                 onChange={(e) => setModelPickerQuery(e.target.value)}
-                placeholder="搜索模型 ID 或名称"
-                className="h-12 text-[22px] leading-tight placeholder:text-[20px] md:text-[22px]"
+                placeholder="搜索模型 ID"
+                className="h-9"
               />
-              <span className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[18px] text-muted-foreground">
+              <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
                 已选 {modelDraftList.length}
               </span>
               {modelDraftList.length > 0 && (
                 <Button
                   type="button"
                   variant="ghost"
-                  className="h-12 px-3 text-[18px] text-muted-foreground"
+                  className="h-9 px-2 text-xs text-muted-foreground"
                   onClick={() => setModelDraftList([])}
                 >
                   清空
@@ -1348,8 +1406,8 @@ export default function AiPage() {
               )}
             </div>
 
-            <ScrollArea className="h-[420px] rounded-md border">
-              <div className="space-y-1 p-2">
+            <ScrollArea className="h-[380px] rounded-md border">
+              <div className="space-y-0.5 p-1.5">
                 {filteredPickerCandidates.length > 0 ? (
                   filteredPickerCandidates.map((item) => {
                     const normalized = item.toLowerCase()
@@ -1360,13 +1418,13 @@ export default function AiPage() {
                       <div
                         key={item}
                         className={cn(
-                          'flex items-center justify-between gap-3 rounded-md border px-3 py-3 text-[22px] transition-colors',
-                          selected ? 'border-emerald-200 bg-emerald-50/70' : 'border-transparent hover:bg-muted/50'
+                          'flex items-center justify-between gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                          selected ? 'bg-emerald-50/70' : 'hover:bg-muted/50'
                         )}
                       >
                         <div className="min-w-0">
                           <div className="line-clamp-1 font-medium">{item}</div>
-                          <div className="text-[18px] text-muted-foreground">{getModelTypeLabel(modelType)}</div>
+                          <div className="text-xs text-muted-foreground">{getModelTypeLabel(modelType)}</div>
                         </div>
 
                         <Button
@@ -1374,7 +1432,7 @@ export default function AiPage() {
                           size="icon"
                           variant="outline"
                           className={cn(
-                            'h-12 w-12 shrink-0 rounded-md',
+                            'h-7 w-7 shrink-0 rounded-md',
                             selected
                               ? 'border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive'
                               : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground'
@@ -1387,23 +1445,21 @@ export default function AiPage() {
                             }
                           }}
                         >
-                          {selected ? <Minus className="h-7 w-7" /> : <Plus className="h-7 w-7" />}
+                          {selected ? <Minus className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
                         </Button>
                       </div>
                     )
                   })
                 ) : (
-                  <div className="p-3 text-[18px] text-muted-foreground">没有匹配的候选模型</div>
+                  <div className="p-3 text-sm text-muted-foreground">没有匹配的候选模型</div>
                 )}
               </div>
             </ScrollArea>
           </div>
 
           <DialogFooter className="border-t px-4 py-3">
-            <Button variant="outline" className="h-12 px-5 text-[20px]" onClick={() => setModelPickerOpen(false)}>
-              取消
-            </Button>
-            <Button className="h-12 px-5 text-[20px]" onClick={saveModelDraft}>应用变更</Button>
+            <Button variant="outline" onClick={() => setModelPickerOpen(false)}>取消</Button>
+            <Button onClick={saveModelDraft}>应用变更</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

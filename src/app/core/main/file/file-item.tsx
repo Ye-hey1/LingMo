@@ -1,6 +1,16 @@
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, ContextMenuShortcut } from "@/components/ui/enhanced-context-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+} from "@/components/ui/enhanced-context-menu";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ToastAction } from "@/components/ui/toast";
 import useArticleStore, { DirTree } from "@/stores/article";
 import { BaseDirectory, exists, readTextFile, remove, rename, writeTextFile } from "@tauri-apps/plugin-fs";
 import { Copy, File, FileDown, FileUp, FolderOpen, LoaderCircle, RefreshCwOff, Trash2, Star, Sparkles, FileType2 } from "lucide-react"
@@ -28,7 +38,7 @@ import { deleteFile as deleteGiteaFile } from "@/lib/sync/gitea";
 import { s3Delete } from "@/lib/sync/s3";
 import { webdavDelete } from "@/lib/sync/webdav";
 import { getSyncRepoName } from "@/lib/sync/repo-utils";
-import { generateUniqueFilename } from "@/lib/default-filename";
+import { generateCopyFilename, generateUniqueFilename } from "@/lib/default-filename";
 import { MobileActionMenu, MobileMenuItem, MobileSeparator } from "./mobile-action-menu";
 import { useIsMobile } from "@/hooks/use-mobile";
 import useSettingStore from "@/stores/setting";
@@ -43,7 +53,7 @@ import { sanitizeFileName } from "@/lib/sync/filename-utils";
 import useFavoritesStore from "@/stores/favorites";
 import { isGeneratedFile, getFileManagerIconSize, stopRenameInputPropagation } from "./file-browser-utils";
 import { getFileSystemMetadata } from "@/lib/file-activity";
-import { clearFileKnowledgeIndexes, moveWorkspaceEntryToTrash } from "@/lib/file-trash";
+import { clearFileKnowledgeIndexes, moveWorkspaceEntryToTrash, restoreWorkspaceTrashEntry } from "@/lib/file-trash";
 
 type Platform = 'macos' | 'windows' | 'linux' | 'unknown'
 
@@ -54,6 +64,297 @@ type FilePointerDragState = {
   startY: number
   dragging: boolean
   removeListeners: () => void
+}
+
+type MoveTargetFolder = {
+  path: string
+  name: string
+  depth: number
+}
+
+type MoveConflictStrategy = 'rename' | 'overwrite'
+
+type MoveRecord = {
+  from: string
+  to: string
+}
+
+function collectMoveTargetFolders(tree: DirTree[], sourceFolderPaths: Set<string>): MoveTargetFolder[] {
+  const targets: MoveTargetFolder[] = []
+
+  if (!sourceFolderPaths.has('')) {
+    targets.push({ path: '', name: '默认工作区', depth: 0 })
+  }
+
+  const visit = (items: DirTree[], depth: number) => {
+    for (const node of items) {
+      if (!node.isDirectory) {
+        continue
+      }
+
+      const folderPath = computedParentPath(node)
+      if (node.isLocale && !sourceFolderPaths.has(folderPath) && !isInSkillsFolder(folderPath)) {
+        targets.push({
+          path: folderPath,
+          name: node.name,
+          depth,
+        })
+      }
+
+      if (node.children?.length) {
+        visit(node.children, depth + 1)
+      }
+    }
+  }
+
+  visit(tree, 0)
+  return targets
+}
+
+function getFileParentPath(filePath: string) {
+  return filePath.includes('/') ? filePath.split('/').slice(0, -1).join('/') : ''
+}
+
+function getFileNameFromPath(filePath: string) {
+  return filePath.split('/').pop() || filePath
+}
+
+function collectMovableFilePaths(tree: DirTree[], selectedPaths: string[]) {
+  const selected = new Set(selectedPaths)
+  const paths: string[] = []
+
+  const visit = (items: DirTree[]) => {
+    for (const node of items) {
+      const nodePath = computedParentPath(node)
+      if (node.isFile && node.isLocale && selected.has(nodePath)) {
+        paths.push(nodePath)
+      }
+
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    }
+  }
+
+  visit(tree)
+  return paths
+}
+
+function collectSourceFolderPaths(paths: string[]) {
+  return new Set(paths.map(getFileParentPath))
+}
+
+const RECENT_MOVE_FOLDERS_KEY = 'fileManagerRecentMoveFolders'
+
+async function workspacePathExists(relativePath: string) {
+  const { getFilePathOptions } = await import('@/lib/workspace')
+  const options = await getFilePathOptions(relativePath)
+  return options.baseDir
+    ? await exists(options.path, { baseDir: options.baseDir })
+    : await exists(options.path)
+}
+
+async function countMoveConflicts(filePaths: string[], targetFolder: string) {
+  let count = 0
+  for (const filePath of filePaths) {
+    const sourceFolder = getFileParentPath(filePath)
+    if (sourceFolder === targetFolder) {
+      continue
+    }
+
+    const targetPath = targetFolder
+      ? `${targetFolder}/${getFileNameFromPath(filePath)}`
+      : getFileNameFromPath(filePath)
+
+    if (targetPath !== filePath && await workspacePathExists(targetPath)) {
+      count += 1
+    }
+  }
+  return count
+}
+
+function readRecentMoveFolders() {
+  if (typeof window === 'undefined') return []
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RECENT_MOVE_FOLDERS_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function rememberRecentMoveFolder(path: string) {
+  if (typeof window === 'undefined') return
+  const next = [path, ...readRecentMoveFolders().filter(item => item !== path)].slice(0, 8)
+  localStorage.setItem(RECENT_MOVE_FOLDERS_KEY, JSON.stringify(next))
+}
+
+function MoveToDialog({
+  open,
+  onOpenChange,
+  filePaths,
+  targets,
+  onConfirm,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  filePaths: string[]
+  targets: MoveTargetFolder[]
+  onConfirm: (targetFolder: string, strategy: MoveConflictStrategy) => Promise<void>
+}) {
+  const [query, setQuery] = useState('')
+  const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [recentPaths, setRecentPaths] = useState<string[]>([])
+  const [conflictCount, setConflictCount] = useState<number | null>(null)
+  const [strategy, setStrategy] = useState<MoveConflictStrategy>('rename')
+  const [moving, setMoving] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setQuery('')
+    setSelectedPath(null)
+    setConflictCount(null)
+    setStrategy('rename')
+    setMoving(false)
+    setRecentPaths(readRecentMoveFolders())
+  }, [open])
+
+  const orderedTargets = useMemo(() => {
+    const targetByPath = new Map(targets.map(target => [target.path, target]))
+    const recentTargets = recentPaths
+      .map(path => targetByPath.get(path))
+      .filter((target): target is MoveTargetFolder => Boolean(target))
+    const recentSet = new Set(recentTargets.map(target => target.path))
+    return [
+      ...recentTargets,
+      ...targets.filter(target => !recentSet.has(target.path)),
+    ]
+  }, [recentPaths, targets])
+
+  const visibleTargets = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase()
+    if (!normalizedQuery) return orderedTargets
+    return orderedTargets.filter(target =>
+      target.name.toLowerCase().includes(normalizedQuery)
+      || target.path.toLowerCase().includes(normalizedQuery)
+    )
+  }, [orderedTargets, query])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!open || selectedPath === null) {
+      setConflictCount(null)
+      return
+    }
+
+    setConflictCount(null)
+    void countMoveConflicts(filePaths, selectedPath).then(count => {
+      if (!cancelled) {
+        setConflictCount(count)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [filePaths, open, selectedPath])
+
+  async function handleConfirm() {
+    if (selectedPath === null || moving) return
+    setMoving(true)
+    try {
+      await onConfirm(selectedPath, strategy)
+      rememberRecentMoveFolder(selectedPath)
+      onOpenChange(false)
+    } finally {
+      setMoving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl gap-3 p-0">
+        <DialogHeader className="border-b px-5 py-4">
+          <DialogTitle>移动到</DialogTitle>
+          <DialogDescription>
+            选择目标文件夹，确认后移动 {filePaths.length} 个文件。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="px-5">
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索文件夹名称或路径"
+            className="h-9"
+          />
+        </div>
+        <div className="max-h-72 overflow-y-auto px-5">
+          <div className="space-y-1 py-1">
+            {visibleTargets.length > 0 ? (
+              visibleTargets.map(target => {
+                const isSelected = selectedPath === target.path
+                const isRecent = recentPaths.includes(target.path)
+                return (
+                  <button
+                    key={target.path || '__root__'}
+                    type="button"
+                    className={`flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-accent ${isSelected ? 'bg-accent text-accent-foreground' : ''}`}
+                    style={{ paddingLeft: `${0.5 + target.depth * 0.75}rem` }}
+                    onClick={() => setSelectedPath(target.path)}
+                  >
+                    <FolderOpen className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {target.path || target.name}
+                    </span>
+                    {isRecent ? (
+                      <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        最近
+                      </span>
+                    ) : null}
+                  </button>
+                )
+              })
+            ) : (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                没有匹配的文件夹
+              </div>
+            )}
+          </div>
+        </div>
+        {selectedPath !== null && conflictCount !== null && conflictCount > 0 ? (
+          <div className="mx-5 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+            <div className="text-sm font-medium">检测到 {conflictCount} 个同名文件</div>
+            <div className="mt-2 flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={strategy === 'rename' ? 'default' : 'outline'}
+                onClick={() => setStrategy('rename')}
+              >
+                自动重命名
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={strategy === 'overwrite' ? 'default' : 'outline'}
+                onClick={() => setStrategy('overwrite')}
+              >
+                覆盖
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        <DialogFooter className="border-t px-5 py-4">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            取消
+          </Button>
+          <Button type="button" disabled={selectedPath === null || moving} onClick={handleConfirm}>
+            {moving ? '移动中...' : '确认移动'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 function shouldAutoSyncOnInitialRead(options?: { isNewFile?: boolean }) {
@@ -167,10 +468,25 @@ function FileNameLabel({ name, title, textSize }: { name: string; title?: string
   )
 }
 
-export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?: () => void }) {
+export function FileItem({
+  item,
+  focusSidebar,
+  selectedFilePaths = [],
+  onFileSelectionClick,
+  onFileContextMenu,
+  onClearFileSelection,
+}: {
+  item: DirTree
+  focusSidebar?: () => void
+  selectedFilePaths?: string[]
+  onFileSelectionClick?: (event: React.MouseEvent<HTMLElement>, path: string) => boolean
+  onFileContextMenu?: (path: string) => void
+  onClearFileSelection?: () => void
+}) {
   const [isEditing, setIsEditing] = useState(item.isEditing)
   const [name, setName] = useState(item.name)
   const [isComposing, setIsComposing] = useState(false)
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const pointerDragRef = useRef<FilePointerDragState | null>(null)
   const suppressNextClickRef = useRef(false)
@@ -187,6 +503,10 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     cleanTabsByDeletedFolder,
     syncOpenTabsForPathChange,
     flushPendingSaveForPath,
+    moveLocalEntry,
+    removeLocalEntry,
+    upsertLocalEntry,
+    ensurePathExpanded,
   } = useArticleStore()
   const { setClipboardItem, clipboardItem, clipboardOperation } = useClipboardStore()
   const { centerPanelVisible } = useSidebarStore()
@@ -249,6 +569,26 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
 
   const isRoot = path.split('/').length === 1
   const folderPath = path.includes('/') ? path.split('/').slice(0, -1).join('/') : ''
+  const isBatchSelected = selectedFilePaths.includes(path)
+  const movableSelectedFilePaths = useMemo(
+    () => collectMovableFilePaths(fileTree, selectedFilePaths),
+    [fileTree, selectedFilePaths]
+  )
+  const moveFilePaths = useMemo(() => {
+    if (isBatchSelected && movableSelectedFilePaths.length > 1) {
+      return movableSelectedFilePaths
+    }
+
+    if (item.isLocale && item.isFile) {
+      return [path]
+    }
+
+    return []
+  }, [isBatchSelected, item.isFile, item.isLocale, movableSelectedFilePaths, path])
+  const moveTargetFolders = useMemo(
+    () => collectMoveTargetFolders(fileTree, collectSourceFolderPaths(moveFilePaths)),
+    [fileTree, moveFilePaths]
+  )
   // No cloneDeep is needed because getCurrentFolder only reads data here.
   const currentFolder = getCurrentFolder(folderPath, fileTree)
 
@@ -476,12 +816,19 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     finishGlobalPointerDrag(event.nativeEvent, 'cancel')
   }
 
-  function handleFileRowClick() {
+  function handleFileRowClick(event: React.MouseEvent<HTMLElement>) {
     if (suppressNextClickRef.current) {
       suppressNextClickRef.current = false
       return
     }
+    if (onFileSelectionClick?.(event, path)) {
+      return
+    }
     void handleSelectFile()
+  }
+
+  function handleFileContextMenu() {
+    onFileContextMenu?.(path)
   }
 
   async function handleDeleteFile() {
@@ -497,7 +844,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         const currentPath = computedParentPath(item)
 
         await flushPendingSaveForPath(currentPath)
-        await moveWorkspaceEntryToTrash({ relativePath: currentPath, kind: 'file' })
+        const trashEntry = await moveWorkspaceEntryToTrash({ relativePath: currentPath, kind: 'file' })
 
         if (currentFolder) {
           const cacheTree = cloneDeep(fileTree)
@@ -554,7 +901,36 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         }
 
         await cleanTabsByDeletedFile(currentPath)
-        toast({ title: '已移入回收站' })
+        toast({
+          title: '已移入回收站',
+          duration: 6000,
+          action: (
+            <ToastAction
+              altText="撤销删除"
+              onClick={async () => {
+                try {
+                  const restored = await restoreWorkspaceTrashEntry(trashEntry.id)
+                  upsertLocalEntry(restored.restoredPath, false)
+                  const restoredParent = getFileParentPath(restored.restoredPath)
+                  if (restoredParent) {
+                    await ensurePathExpanded(restoredParent)
+                  }
+                  toast({ title: '已撤销删除' })
+                } catch (error) {
+                  console.error('Undo delete failed:', error)
+                  await loadFileTree({ skipRemoteSync: true })
+                  toast({
+                    title: '撤销删除失败',
+                    description: error instanceof Error ? error.message : String(error),
+                    variant: 'destructive',
+                  })
+                }
+              }}
+            >
+              撤销
+            </ToastAction>
+          ),
+        })
       } catch (error) {
         console.error('Delete file failed:', error)
         // 文件不存在时静默刷新文件树即可，不需要弹窗提示
@@ -848,6 +1224,33 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
         // Select and read the file after it is created.
         readArticle(newPath, '', shouldAutoSyncOnInitialRead({ isNewFile: operation === 'create' }))
         setIsEditing(false)
+        if (operation === 'rename') {
+          toast({
+            title: '已重命名',
+            duration: 6000,
+            action: (
+              <ToastAction
+                altText="撤销重命名"
+                onClick={async () => {
+                  try {
+                    await moveFileToRelativePath(targetRelativePath, path, 'rename')
+                    toast({ title: '已撤销重命名' })
+                  } catch (error) {
+                    console.error('Undo rename failed:', error)
+                    await loadFileTree({ skipRemoteSync: true })
+                    toast({
+                      title: '撤销重命名失败',
+                      description: error instanceof Error ? error.message : String(error),
+                      variant: 'destructive',
+                    })
+                  }
+                }}
+              >
+                撤销
+              </ToastAction>
+            ),
+          })
+        }
       } catch (error) {
         console.error('Rename file failed:', error)
         setName(originalName)
@@ -1121,6 +1524,132 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
     }
   }
 
+  async function moveFileToRelativePath(
+    sourcePath: string,
+    desiredTargetPath: string,
+    strategy: MoveConflictStrategy,
+  ): Promise<MoveRecord | null> {
+    if (!sourcePath || sourcePath === desiredTargetPath) {
+      return null
+    }
+
+    const { getFilePathOptions, getWorkspacePath } = await import('@/lib/workspace')
+    const workspace = await getWorkspacePath()
+    const targetFolder = getFileParentPath(desiredTargetPath)
+    const desiredName = getFileNameFromPath(desiredTargetPath)
+    let finalTargetPath = desiredTargetPath
+
+    if (await workspacePathExists(finalTargetPath)) {
+      if (strategy === 'rename') {
+        const finalName = await generateCopyFilename(targetFolder, desiredName)
+        finalTargetPath = targetFolder ? `${targetFolder}/${finalName}` : finalName
+      } else {
+        await flushPendingSaveForPath(finalTargetPath)
+        const targetOptions = await getFilePathOptions(finalTargetPath)
+        if (workspace.isCustom) {
+          await remove(targetOptions.path)
+        } else {
+          await remove(targetOptions.path, { baseDir: targetOptions.baseDir })
+        }
+        removeLocalEntry(finalTargetPath)
+        await cleanTabsByDeletedFile(finalTargetPath)
+        await clearFileKnowledgeIndexes([finalTargetPath])
+      }
+    }
+
+    await flushPendingSaveForPath(sourcePath)
+
+    const oldPathOptions = await getFilePathOptions(sourcePath)
+    const newPathOptions = await getFilePathOptions(finalTargetPath)
+
+    if (workspace.isCustom) {
+      await rename(oldPathOptions.path, newPathOptions.path)
+    } else {
+      await rename(oldPathOptions.path, newPathOptions.path, {
+        newPathBaseDir: newPathOptions.baseDir,
+        oldPathBaseDir: oldPathOptions.baseDir,
+      })
+    }
+
+    const movedInTree = moveLocalEntry(sourcePath, finalTargetPath)
+    if (targetFolder) {
+      await ensurePathExpanded(targetFolder)
+    }
+    if (!movedInTree) {
+      await loadFileTree({ skipRemoteSync: true })
+    }
+
+    await syncOpenTabsForPathChange(sourcePath, finalTargetPath)
+
+    const currentActivePath = useArticleStore.getState().activeFilePath
+    if (currentActivePath === sourcePath || currentActivePath === finalTargetPath) {
+      setActiveFilePath(finalTargetPath)
+    }
+
+    return { from: sourcePath, to: finalTargetPath }
+  }
+
+  async function undoMoveRecords(records: MoveRecord[]) {
+    try {
+      for (const record of [...records].reverse()) {
+        await moveFileToRelativePath(record.to, record.from, 'rename')
+      }
+      toast({ title: '已撤销移动' })
+    } catch (error) {
+      console.error('Undo move failed:', error)
+      await loadFileTree({ skipRemoteSync: true })
+      toast({
+        title: '撤销移动失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
+  }
+
+  async function handleMoveToFolder(targetFolder: string, strategy: MoveConflictStrategy) {
+    const uniquePaths = Array.from(new Set(moveFilePaths))
+    if (uniquePaths.length === 0) return
+
+    try {
+      const records: MoveRecord[] = []
+      for (const sourcePath of uniquePaths) {
+        if (getFileParentPath(sourcePath) === targetFolder) {
+          continue
+        }
+
+        const targetRelativePath = targetFolder
+          ? `${targetFolder}/${getFileNameFromPath(sourcePath)}`
+          : getFileNameFromPath(sourcePath)
+        const record = await moveFileToRelativePath(sourcePath, targetRelativePath, strategy)
+        if (record) {
+          records.push(record)
+        }
+      }
+
+      if (records.length === 0) return
+
+      onClearFileSelection?.()
+      toast({
+        title: `已移动 ${records.length} 个文件`,
+        description: targetFolder || '默认工作区',
+        duration: 6000,
+        action: (
+          <ToastAction altText="撤销移动" onClick={() => void undoMoveRecords(records)}>
+            撤销
+          </ToastAction>
+        ),
+      })
+    } catch (error) {
+      console.error('Move file failed:', error)
+      await loadFileTree({ skipRemoteSync: true })
+      toast({
+        title: '移动失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
+  }
+
   async function handleEditEnd() {
     if (currentFolder && currentFolder.children) {
       const index = currentFolder?.children?.findIndex(item => item.name === '')
@@ -1206,13 +1735,15 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className={`${path === activeFilePath ? 'file-manange-item active' : 'file-manange-item'} ${!isRoot ? 'file-manager-child-item' : ''} ${!item.isDirectory && item.name !== '' ? 'is-draggable-file' : ''} group/file`}
+            className={`${path === activeFilePath ? 'file-manange-item active' : 'file-manange-item'} ${isBatchSelected ? 'selected' : ''} ${!isRoot ? 'file-manager-child-item' : ''} ${!item.isDirectory && item.name !== '' ? 'is-draggable-file' : ''} group/file`}
+            data-file-manager-file-path={path}
             draggable={false}
             onPointerDown={handlePointerDragDown}
             onPointerMove={handlePointerDragMove}
             onPointerUp={handlePointerDragEnd}
             onPointerCancel={handlePointerDragCancel}
             onClick={handleFileRowClick}
+            onContextMenu={handleFileContextMenu}
           >
             {
               isEditing ?
@@ -1249,7 +1780,7 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
                 draggable={false}
                 title={fileMetadataTitle}
                 className={`${!item.isLocale || isCut ? 'opacity-50' : ''} flex min-w-0 flex-1 select-none items-center justify-between gap-1 dark:hover:text-white`}>
-                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-start gap-1.5">
+                <div className="file-manager-row-main flex min-w-0 flex-1 select-none items-center gap-1">
                   <span className={item.parent ? 'size-0' : `${iconSize} ml-1`}></span>
                   <div className="file-manager-icon-anchor relative flex items-center">
                     {renderFavoriteButton()}
@@ -1272,6 +1803,9 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
                     </MobileMenuItem>
                     <MobileMenuItem disabled={!clipboardItem} onClick={handlePasteFile}>
                       {t('context.paste')}
+                    </MobileMenuItem>
+                    <MobileMenuItem disabled={moveFilePaths.length === 0 || moveTargetFolders.length === 0} onClick={() => setMoveDialogOpen(true)}>
+                      移动到...
                     </MobileMenuItem>
                     <MobileSeparator />
                     {canLayout && (
@@ -1333,6 +1867,15 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
               <Kbd>{modKey}V</Kbd>
             </ContextMenuShortcut>
           </ContextMenuItem>
+          <ContextMenuItem
+            inset
+            disabled={moveFilePaths.length === 0 || moveTargetFolders.length === 0}
+            onClick={() => setMoveDialogOpen(true)}
+            menuType="file"
+          >
+            <FolderOpen className="mr-2 h-4 w-4" />
+            移动到...
+          </ContextMenuItem>
           {(canLayout || canExportPdf) && (
             <>
               <ContextMenuSeparator />
@@ -1371,6 +1914,13 @@ export function FileItem({ item, focusSidebar }: { item: DirTree; focusSidebar?:
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+      <MoveToDialog
+        open={moveDialogOpen}
+        onOpenChange={setMoveDialogOpen}
+        filePaths={moveFilePaths}
+        targets={moveTargetFolders}
+        onConfirm={handleMoveToFolder}
+      />
     </>
   )
 }

@@ -1,7 +1,7 @@
 import { Store } from '@tauri-apps/plugin-store'
 import { create } from 'zustand'
 import { getVersion } from '@tauri-apps/api/app'
-import { AiConfig, mergeProviderTemplateModels } from '@/app/core/setting/config'
+import { AiConfig, builtinProviderTemplates, mergeProviderTemplateModels } from '@/app/core/setting/config'
 import { GitlabInstanceType } from '@/lib/sync/gitlab.types'
 import { GiteaInstanceType } from '@/lib/sync/gitea.types'
 import { CustomThemeColors } from '@/types/theme'
@@ -10,6 +10,8 @@ import { getNormalizedImageHosting } from '@/lib/image-hosting-config'
 import { normalizeSpeechMode } from '@/lib/speech/preferences'
 import type { SpeechMode } from '@/lib/speech/types'
 import { DEFAULT_OUTLINE_POSITION, normalizeOutlinePosition, type OutlinePosition } from '@/lib/outline-preferences'
+import { DEFAULT_REMINDER_SETTINGS } from '@/lib/reminders/types'
+import { normalizeProviderConfigTitle } from '@/lib/ai/provider-display'
 
 const REMOVED_BUILTIN_MODEL_KEYS = new Set([
   'note-gen-free',
@@ -127,9 +129,34 @@ function isRemovedBuiltinAiConfig(config: AiConfig) {
 
 async function removeBuiltinLingMoModelSettings(store: Store) {
   const aiModelList = ((await store.get('aiModelList')) as AiConfig[]) || []
+
+  // 1) 移除已知内置配置
+  // 2) 清理幽灵配置：baseURL 匹配官方模板但没有 templateKey 的旧配置
+  const officialUrls = new Set<string>()
+  for (const tpl of builtinProviderTemplates) {
+    const url = tpl.baseURL?.trim().replace(/\/+$/, '').toLowerCase()
+    if (url) officialUrls.add(url)
+  }
+  // 智谱 AI 变体 URL
+  const zhipuTpl = builtinProviderTemplates.find(t => t.key === 'zhipu')
+  if (zhipuTpl?.baseURL) {
+    officialUrls.add(zhipuTpl.baseURL.trim().replace(/\/+$/, '').toLowerCase())
+    officialUrls.add(zhipuTpl.baseURL.trim().replace(/\/+$/, '').replace('/api/paas/v4', '/api/coding/paas/v4').toLowerCase())
+  }
+
   const cleanedAiModelList = aiModelList
-    .filter((config) => !isRemovedBuiltinAiConfig(config))
-    .map((config) => mergeProviderTemplateModels(config).config)
+    .filter((config) => {
+      // 保留有 templateKey 或 templateSource 的配置
+      if (config.templateKey || config.templateSource === 'builtin' || config.templateSource === 'remote') return true
+      // 移除已知内置配置
+      if (isRemovedBuiltinAiConfig(config)) return false
+      // 幽灵配置：baseURL 匹配官方模板但没有 templateKey
+      const normUrl = (config.baseURL || '').trim().replace(/\/+$/, '').toLowerCase()
+      if (normUrl && officialUrls.has(normUrl) && !config.templateKey) return false
+      // 保留真正的自定义配置
+      return true
+    })
+    .map((config) => mergeProviderTemplateModels(normalizeProviderConfigTitle(config)).config)
   let changed = cleanedAiModelList.length !== aiModelList.length ||
     cleanedAiModelList.some((config, index) => JSON.stringify(config) !== JSON.stringify(aiModelList[index]))
 
@@ -536,6 +563,18 @@ interface SettingState {
   // 编辑器 AI 灰字补全
   aiCompletionEnabled: boolean
   setAiCompletionEnabled: (enabled: boolean) => Promise<void>
+
+  // 桌面提醒
+  reminderEnabled: boolean
+  setReminderEnabled: (enabled: boolean) => Promise<void>
+  reminderAllowAgentCreate: boolean
+  setReminderAllowAgentCreate: (enabled: boolean) => Promise<void>
+  reminderDefaultAdvanceMinutes: number
+  setReminderDefaultAdvanceMinutes: (minutes: number) => Promise<void>
+  reminderShowContext: boolean
+  setReminderShowContext: (enabled: boolean) => Promise<void>
+  reminderTitlePrefix: string
+  setReminderTitlePrefix: (prefix: string) => Promise<void>
 }
 
 export interface ChatToolbarItem {
@@ -577,6 +616,31 @@ const useSettingStore = create<SettingState>((set, get) => ({
     const savedAiCompletionEnabled = await store.get<boolean>('aiCompletionEnabled')
     if (savedAiCompletionEnabled !== undefined && savedAiCompletionEnabled !== null) {
       set({ aiCompletionEnabled: savedAiCompletionEnabled })
+    }
+
+    const savedReminderEnabled = await store.get<boolean>('reminderEnabled')
+    if (savedReminderEnabled !== undefined && savedReminderEnabled !== null) {
+      set({ reminderEnabled: savedReminderEnabled })
+    }
+
+    const savedReminderAllowAgentCreate = await store.get<boolean>('reminderAllowAgentCreate')
+    if (savedReminderAllowAgentCreate !== undefined && savedReminderAllowAgentCreate !== null) {
+      set({ reminderAllowAgentCreate: savedReminderAllowAgentCreate })
+    }
+
+    const savedReminderDefaultAdvanceMinutes = await store.get<number>('reminderDefaultAdvanceMinutes')
+    if (savedReminderDefaultAdvanceMinutes !== undefined && savedReminderDefaultAdvanceMinutes !== null) {
+      set({ reminderDefaultAdvanceMinutes: Math.min(1440, Math.max(0, Math.floor(savedReminderDefaultAdvanceMinutes))) })
+    }
+
+    const savedReminderShowContext = await store.get<boolean>('reminderShowContext')
+    if (savedReminderShowContext !== undefined && savedReminderShowContext !== null) {
+      set({ reminderShowContext: savedReminderShowContext })
+    }
+
+    const savedReminderTitlePrefix = await store.get<string>('reminderTitlePrefix')
+    if (savedReminderTitlePrefix !== undefined && savedReminderTitlePrefix !== null && savedReminderTitlePrefix.trim()) {
+      set({ reminderTitlePrefix: savedReminderTitlePrefix.trim() })
     }
 
     const { aiModelList: finalAiModelList } = await removeBuiltinLingMoModelSettings(store)
@@ -1405,9 +1469,10 @@ const useSettingStore = create<SettingState>((set, get) => ({
     { id: 'recording', enabled: true, order: 1 },
     { id: 'scan', enabled: true, order: 2 },
     { id: 'image', enabled: true, order: 3 },
-    { id: 'link', enabled: true, order: 4 },
-    { id: 'file', enabled: true, order: 5 },
-    { id: 'todo', enabled: true, order: 6 },
+    { id: 'recognition', enabled: true, order: 4 },
+    { id: 'link', enabled: true, order: 5 },
+    { id: 'file', enabled: true, order: 6 },
+    { id: 'todo', enabled: true, order: 7 },
   ],
   setRecordToolbarConfig: async (config: RecordToolbarItem[]) => {
     set({ recordToolbarConfig: config })
@@ -1499,6 +1564,60 @@ const useSettingStore = create<SettingState>((set, get) => ({
     set({ aiCompletionEnabled: enabled })
     const store = await Store.load('store.json');
     await store.set('aiCompletionEnabled', enabled)
+    await store.save()
+  },
+
+  // 桌面提醒
+  reminderEnabled: DEFAULT_REMINDER_SETTINGS.reminderEnabled,
+  setReminderEnabled: async (enabled: boolean) => {
+    set({ reminderEnabled: enabled })
+    const store = await Store.load('store.json')
+    await store.set('reminderEnabled', enabled)
+    await store.save()
+
+    try {
+      const { reminderScheduler } = await import('@/lib/reminders/scheduler')
+      if (enabled) {
+        await reminderScheduler.refresh()
+      } else {
+        await reminderScheduler.disable()
+      }
+    } catch (error) {
+      console.warn('[SettingStore] Failed to refresh reminder scheduler:', error)
+    }
+  },
+
+  reminderAllowAgentCreate: DEFAULT_REMINDER_SETTINGS.reminderAllowAgentCreate,
+  setReminderAllowAgentCreate: async (enabled: boolean) => {
+    set({ reminderAllowAgentCreate: enabled })
+    const store = await Store.load('store.json')
+    await store.set('reminderAllowAgentCreate', enabled)
+    await store.save()
+  },
+
+  reminderDefaultAdvanceMinutes: DEFAULT_REMINDER_SETTINGS.reminderDefaultAdvanceMinutes,
+  setReminderDefaultAdvanceMinutes: async (minutes: number) => {
+    const normalized = Math.min(1440, Math.max(0, Math.floor(Number(minutes) || 0)))
+    set({ reminderDefaultAdvanceMinutes: normalized })
+    const store = await Store.load('store.json')
+    await store.set('reminderDefaultAdvanceMinutes', normalized)
+    await store.save()
+  },
+
+  reminderShowContext: DEFAULT_REMINDER_SETTINGS.reminderShowContext,
+  setReminderShowContext: async (enabled: boolean) => {
+    set({ reminderShowContext: enabled })
+    const store = await Store.load('store.json')
+    await store.set('reminderShowContext', enabled)
+    await store.save()
+  },
+
+  reminderTitlePrefix: DEFAULT_REMINDER_SETTINGS.reminderTitlePrefix,
+  setReminderTitlePrefix: async (prefix: string) => {
+    const normalized = prefix.trim() || DEFAULT_REMINDER_SETTINGS.reminderTitlePrefix
+    set({ reminderTitlePrefix: normalized })
+    const store = await Store.load('store.json')
+    await store.set('reminderTitlePrefix', normalized)
     await store.save()
   },
 }))

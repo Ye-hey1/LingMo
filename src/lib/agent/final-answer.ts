@@ -18,9 +18,51 @@ const CONTINUATION_FAILURE_PATTERNS = [
   /Unable to complete task/i,
 ]
 
+const CONCRETE_ARTIFACT_REQUEST_PATTERN =
+  /生成|创建|制作|新建|导出|保存|绘制|画一|画个|画出|可视化|图表|思维导图|导图|流程图|架构图|白板|文件|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e|create|generate|export|save|file|presentation/i
+
+const CONCRETE_ARTIFACT_DIRECTIVE_PATTERN =
+  /(?:生成|创建|制作|新建|导出|保存|绘制|画一|画个|画出|可视化).{0,30}(?:图表|思维导图|导图|流程图|架构图|白板|文件|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw)|(?:图表|思维导图|导图|流程图|架构图|白板|文件|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw).{0,30}(?:生成|创建|制作|新建|导出|保存|绘制)|\b(?:create|generate|export|save|visuali[sz]e).{0,40}(?:diagram|mind\s*map|mindmap|flowchart|file|presentation|pptx|pdf|docx|xlsx)\b/i
+
+const DIAGRAM_ARTIFACT_REQUEST_PATTERN =
+  /绘制|画一|画个|画出|可视化|图表|思维导图|导图|流程图|架构图|白板|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e/i
+
+function getConcreteToolHint(userInput: string): string {
+  if (DIAGRAM_ARTIFACT_REQUEST_PATTERN.test(userInput)) {
+    return '对于图表/思维导图/Excalidraw 任务，请继续输出 JSON Action，优先使用 create_diagram_from_outline；需要空白或自定义画布时使用 create_diagram_file。'
+  }
+
+  return '请继续输出 JSON Action，调用 create_file、replace_editor_content、create_diagram_from_outline 或其他实际工具完成任务。'
+}
+
 export function shouldRecoverWithAutoFinalAnswer(thought: string): boolean {
   const normalized = thought.trim()
   return CONTINUATION_FAILURE_PATTERNS.some((pattern) => pattern.test(normalized))
+}
+
+export function isConcreteArtifactRequest(userInput: string, actionLikeRequest: boolean): boolean {
+  return CONCRETE_ARTIFACT_DIRECTIVE_PATTERN.test(userInput) ||
+    (actionLikeRequest && CONCRETE_ARTIFACT_REQUEST_PATTERN.test(userInput))
+}
+
+export function getConcreteToolCompletionBlockReason(input: {
+  userInput: string
+  actionLikeRequest: boolean
+  hasConcreteSuccessfulAction: boolean
+  hasOnlySupportProgress: boolean
+}): string | null {
+  if (!isConcreteArtifactRequest(input.userInput, input.actionLikeRequest)) {
+    return null
+  }
+
+  if (input.hasConcreteSuccessfulAction) {
+    return null
+  }
+
+  const toolHint = getConcreteToolHint(input.userInput)
+  return input.hasOnlySupportProgress
+    ? `仅完成了 Skill 选择或说明读取，尚未真正执行创建/编辑/图表工具。不能把说明文字当作最终完成结果。${toolHint}`
+    : `尚未获得创建/编辑/图表/导出类工具成功结果，不能把文件、图表、导出或可视化任务判定为已完成。${toolHint}`
 }
 
 export function getAutoFinalAnswerDescriptor(
