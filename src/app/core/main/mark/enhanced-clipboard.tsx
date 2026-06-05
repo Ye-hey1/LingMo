@@ -1418,12 +1418,12 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
               {t('record.mark.enhancedClipboard.actions.translate')}
             </button>
             <Select value={targetLanguage} onValueChange={setTargetLanguage}>
-              <SelectTrigger className="h-7 w-[80px] shrink-0 text-[11px] px-1.5">
+              <SelectTrigger className="h-6 w-[72px] shrink-0 border-0 bg-muted/30 px-1.5 text-[11px] shadow-none ring-0 shadow ring-offset-0 focus:ring-0 focus:shadow-none [&>svg]:size-3">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="border-0 shadow-sm rounded">
                 {LANGUAGE_OPTIONS.map((language) => (
-                  <SelectItem key={language} value={language}>{language}</SelectItem>
+                  <SelectItem key={language} value={language} className="text-xs py-1">{language}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

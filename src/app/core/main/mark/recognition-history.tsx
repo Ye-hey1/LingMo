@@ -321,29 +321,25 @@ export function RecognitionHistory({
                     </label>
                     <div className="flex flex-wrap items-center gap-2">
                       {selectedIds.size > 0 && (
-                        <Button
+                        <button
                           type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 text-xs"
+                          className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                           onClick={() => setSelectedIds(new Set())}
                         >
-                          <X className="size-3.5" />
+                          <X className="size-3" />
                           {t('record.mark.recognitionHistory.selection.clear')}
-                        </Button>
+                        </button>
                       )}
-                      <Button
+                      <button
                         type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 text-xs"
+                        className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                         onClick={() => handleExport(selectedIds.size > 0 ? selectedItems : filteredHistory)}
                       >
-                        <Download className="size-3.5" />
+                        <Download className="size-3" />
                         {selectedIds.size > 0
                           ? t('record.mark.recognitionHistory.export.selected', { count: selectedIds.size })
                           : t('record.mark.recognitionHistory.export.filtered')}
-                      </Button>
+                      </button>
                     </div>
                   </div>
                 </div>
