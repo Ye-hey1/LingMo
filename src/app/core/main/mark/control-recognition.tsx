@@ -59,7 +59,7 @@ export function ControlRecognition() {
       <PopoverContent
         align="start"
         side="bottom"
-        className="max-h-[calc(100vh-56px)] w-[min(820px,calc(100vw-24px))] overflow-y-auto p-3"
+        className="max-h-[calc(100vh-56px)] w-[min(520px,calc(100vw-24px))] overflow-y-auto p-3"
       >
         <EnhancedClipboard />
       </PopoverContent>

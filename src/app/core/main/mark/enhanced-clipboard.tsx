@@ -1338,268 +1338,209 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
           </TabsList>
         </div>
 
-        <TabsContent value="workbench" className="mt-3">
-          <div className="grid gap-3 lg:grid-cols-[245px_minmax(0,1fr)]">
-            <div className="space-y-3">
-              <section className="rounded-lg border border-border/60 bg-muted/15 p-3">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-xs font-medium">
-                    {sourceKind === 'image' ? (
-                      <ImageIcon className="size-3.5 text-primary" />
-                    ) : (
-                      <FileText className="size-3.5 text-primary" />
-                    )}
-                    {t('record.mark.enhancedClipboard.source.title')}
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-7"
-                    onClick={handleClear}
-                    disabled={isBusy || !hasDraft}
-                    title={t('record.mark.enhancedClipboard.source.clear')}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </Button>
-                </div>
+        <TabsContent value="workbench" className="mt-2 space-y-2">
+          {/* Toolbar: input + actions in one row */}
+          <div className="flex items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-7 shrink-0"
+              onClick={handleReadClipboard}
+              disabled={isBusy}
+              title={t('record.mark.enhancedClipboard.source.clipboard')}
+            >
+              {processingAction === 'clipboard' ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <ClipboardPaste className="size-3.5" />
+              )}
+            </Button>
+            <ClipboardDropzone
+              onImageDrop={handleImageDrop}
+              onTextDrop={handleTextDrop}
+              className="rounded flex-1"
+              compact
+            />
+            <div className="mx-1 h-4 w-px bg-border" />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              onClick={() => recognizeImage()}
+              disabled={isBusy || !draftImage || !enableImageRecognition}
+              title={t('record.mark.enhancedClipboard.actions.recognize')}
+            >
+              {processingAction === 'recognize' ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <ImageIcon className="size-3.5" />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              onClick={handleOrganize}
+              disabled={isBusy || !canProcessText}
+              title={t('record.mark.enhancedClipboard.actions.organize')}
+            >
+              {processingAction === 'organize' ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Wand2 className="size-3.5" />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              onClick={handleGenerateTags}
+              disabled={isBusy || !draftContent.trim()}
+              title={t('record.mark.enhancedClipboard.actions.tag')}
+            >
+              {processingAction === 'tag' ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Tag className="size-3.5" />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              onClick={handleGenerateTitle}
+              disabled={isBusy || !draftContent.trim()}
+              title={t('record.mark.enhancedClipboard.actions.title')}
+            >
+              {processingAction === 'title' ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="size-3.5" />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              onClick={handleTranslate}
+              disabled={isBusy || !draftContent.trim()}
+              title={t('record.mark.enhancedClipboard.actions.translate')}
+            >
+              {processingAction === 'translate' ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Languages className="size-3.5" />
+              )}
+            </Button>
+            <Select value={targetLanguage} onValueChange={setTargetLanguage}>
+              <SelectTrigger className="h-7 w-20 shrink-0 text-[11px]" />
+              <SelectContent>
+                {LANGUAGE_OPTIONS.map((language) => (
+                  <SelectItem key={language} value={language}>{language}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex-1" />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              onClick={handleClear}
+              disabled={isBusy || !hasDraft}
+              title={t('record.mark.enhancedClipboard.source.clear')}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          </div>
 
-                <div className="grid grid-cols-1 gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="justify-start"
-                    onClick={handleReadClipboard}
-                    disabled={isBusy}
-                  >
-                    {processingAction === 'clipboard' ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <ClipboardPaste className="size-3.5" />
-                    )}
-                    {t('record.mark.enhancedClipboard.source.clipboard')}
-                  </Button>
-                  <ClipboardDropzone
-                    onImageDrop={handleImageDrop}
-                    onTextDrop={handleTextDrop}
-                    className="rounded-lg"
-                    compact
-                  />
-                </div>
-
-                <div className="mt-3 overflow-hidden rounded-md border border-border/50 bg-background">
-                  {draftImage ? (
-                    <div className="space-y-2 p-2">
-                      <div className="relative aspect-video overflow-hidden rounded bg-muted">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={draftImage.dataUrl}
-                          alt=""
-                          className="h-full w-full object-contain"
-                        />
-                      </div>
-                      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                        <span className="truncate">{sourceLabel}</span>
-                        <span className="shrink-0">{draftImage.sizeLabel}</span>
-                      </div>
-                    </div>
-                  ) : sourceText ? (
-                    <div className="max-h-28 overflow-y-auto p-3 text-xs leading-relaxed text-muted-foreground">
-                      <p className="whitespace-pre-wrap break-words">
-                        {truncate(sourceText, 260)}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="flex min-h-24 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-muted-foreground">
-                      <ClipboardPaste className="size-5" />
-                      {t('record.mark.enhancedClipboard.source.empty')}
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              <section className="rounded-lg border border-border/60 bg-background p-3">
-                <div className="mb-3 flex items-center gap-2 text-xs font-medium">
-                  <Sparkles className="size-3.5 text-primary" />
-                  {t('record.mark.enhancedClipboard.actions.process')}
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => recognizeImage()}
-                    disabled={isBusy || !draftImage || !enableImageRecognition}
-                  >
-                    {processingAction === 'recognize' ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <ImageIcon className="size-3.5" />
-                    )}
-                    {t('record.mark.enhancedClipboard.actions.recognize')}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleOrganize}
-                    disabled={isBusy || !canProcessText}
-                  >
-                    {processingAction === 'organize' ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Wand2 className="size-3.5" />
-                    )}
-                    {t('record.mark.enhancedClipboard.actions.organize')}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleGenerateTags}
-                    disabled={isBusy || !draftContent.trim()}
-                  >
-                    {processingAction === 'tag' ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Tag className="size-3.5" />
-                    )}
-                    {t('record.mark.enhancedClipboard.actions.tag')}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleGenerateTitle}
-                    disabled={isBusy || !draftContent.trim()}
-                  >
-                    {processingAction === 'title' ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Sparkles className="size-3.5" />
-                    )}
-                    {t('record.mark.enhancedClipboard.actions.title')}
-                  </Button>
-                </div>
-                <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-                  <Select value={targetLanguage} onValueChange={setTargetLanguage}>
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {LANGUAGE_OPTIONS.map((language) => (
-                        <SelectItem key={language} value={language}>
-                          {language}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleTranslate}
-                    disabled={isBusy || !draftContent.trim()}
-                  >
-                    {processingAction === 'translate' ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Languages className="size-3.5" />
-                    )}
-                    {t('record.mark.enhancedClipboard.actions.translate')}
-                  </Button>
-                </div>
-              </section>
-
-
+          {/* Image preview (compact) */}
+          {draftImage && (
+            <div className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/30 px-2 py-1.5">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={draftImage.dataUrl} alt="" className="size-8 rounded object-cover" />
+              <span className="truncate text-[11px] text-muted-foreground">{draftImage.fileName}</span>
+              <span className="shrink-0 text-[11px] text-muted-foreground">{draftImage.sizeLabel}</span>
             </div>
+          )}
 
-            <section className="flex min-w-0 flex-col rounded-lg border border-border/60 bg-background">
-              <div className="border-b border-border/60 p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2 text-xs font-medium">
-                    <FileText className="size-3.5 text-primary" />
-                    {t('record.mark.enhancedClipboard.draft.content')}
-                  </div>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {t('record.mark.enhancedClipboard.draft.source', { source: sourceLabel })}
-                  </span>
-                </div>
-                <Input
-                  value={draftTitle}
-                  onChange={(event) => setDraftTitle(event.target.value)}
-                  placeholder={t('record.mark.enhancedClipboard.draft.titlePlaceholder')}
-                  className="h-8 text-sm"
-                />
-                {draftTags.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {draftTags.map((item) => (
-                      <span
-                        key={item}
-                        className="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-[11px] text-primary"
-                      >
-                        #{item}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
+          {/* Tags */}
+          {draftTags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {draftTags.map((item) => (
+                <span
+                  key={item}
+                  className="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-1.5 py-px text-[11px] text-primary"
+                >
+                  #{item}
+                </span>
+              ))}
+            </div>
+          )}
 
-              <div className="min-h-0 flex-1 p-3">
-                <Textarea
-                  value={draftContent}
-                  onChange={(event) => handleDraftContentChange(event.target.value)}
-                  placeholder={t('record.mark.enhancedClipboard.draft.contentPlaceholder')}
-                  className="min-h-[330px] resize-none border-border/60 text-sm leading-relaxed"
-                />
-              </div>
+          {/* Draft */}
+          <div className="space-y-1.5">
+            <Input
+              value={draftTitle}
+              onChange={(event) => setDraftTitle(event.target.value)}
+              placeholder={t('record.mark.enhancedClipboard.draft.titlePlaceholder')}
+              className="h-7 text-sm"
+            />
+            <Textarea
+              value={draftContent}
+              onChange={(event) => handleDraftContentChange(event.target.value)}
+              placeholder={t('record.mark.enhancedClipboard.draft.contentPlaceholder')}
+              className="min-h-[180px] resize-none border-border/40 text-sm leading-relaxed"
+            />
+          </div>
 
-              <div className="flex flex-col gap-3 border-t border-border/60 p-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-[11px] text-muted-foreground">
-                  {t('record.mark.enhancedClipboard.draft.characters', { count: draftCharacterCount })}
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleCopyImage}
-                    disabled={isBusy || !draftImage}
-                  >
-                    <ImageIcon className="size-3.5" />
-                    {t('record.mark.enhancedClipboard.actions.copyImage')}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleCopyDraftText}
-                    disabled={isBusy || !draftContent.trim()}
-                  >
-                    {processingAction === 'copy' ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Copy className="size-3.5" />
-                    )}
-                    {t('record.mark.enhancedClipboard.actions.copyText')}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={handleImportRecord}
-                    disabled={isBusy || !hasDraft}
-                  >
-                    {processingAction === 'import' ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <ArrowDownToLine className="size-3.5" />
-                    )}
-                    {t('record.mark.enhancedClipboard.actions.import')}
-                  </Button>
-                </div>
-              </div>
-            </section>
+          {/* Footer: char count + actions */}
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-muted-foreground">
+              {t('record.mark.enhancedClipboard.draft.characters', { count: draftCharacterCount })}
+            </span>
+            <div className="flex items-center gap-1">
+              {latestUndo && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7"
+                  onClick={handleUndo}
+                  disabled={isBusy}
+                  title={latestUndo.label}
+                >
+                  <Undo2 className="size-3.5" />
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                onClick={handleCopyDraftText}
+                disabled={isBusy || !draftContent.trim()}
+                title={t('record.mark.enhancedClipboard.actions.copyText')}
+              >
+                <Copy className="size-3.5" />
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 gap-1 text-xs"
+                onClick={handleImportRecord}
+                disabled={isBusy || !hasDraft}
+              >
+                <ArrowDownToLine className="size-3.5" />
+                {t('record.mark.enhancedClipboard.actions.import')}
+              </Button>
+            </div>
           </div>
         </TabsContent>
 
