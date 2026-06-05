@@ -1512,50 +1512,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
                 </div>
               </section>
 
-              <section className="rounded-lg border border-border/60 bg-background p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-xs font-medium">
-                    <CheckCircle2 className="size-3.5 text-primary" />
-                    {t('record.mark.enhancedClipboard.workflow.title')}
-                  </div>
-                  {latestUndo && (
-                    <button
-                      type="button"
-                      onClick={handleUndo}
-                      disabled={isBusy}
-                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-                    >
-                      <Undo2 className="size-3" />
-                      {latestUndo.label}
-                    </button>
-                  )}
-                </div>
-                {/* Compact progress pills */}
-                <div className="flex flex-wrap items-center gap-1">
-                  {WORKFLOW_STEPS.map((step, idx) => {
-                    const stepState = workflowSteps[step]
-                    const isLast = idx === WORKFLOW_STEPS.length - 1
-                    return (
-                      <div key={step} className="flex items-center gap-1">
-                        <div
-                          className={cn(
-                            'inline-flex items-center gap-0.5 rounded-full px-1.5 py-px text-[10px] font-medium leading-tight transition-colors',
-                            stepState.status === 'done' && 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-                            stepState.status === 'running' && 'bg-primary/15 text-primary',
-                            stepState.status === 'failed' && 'bg-destructive/15 text-destructive',
-                            stepState.status === 'idle' && 'bg-muted/50 text-muted-foreground/50',
-                          )}
-                          title={stepState.error || t(`record.mark.enhancedClipboard.workflow.steps.${step}`)}
-                        >
-                          {stepState.status === 'running' && <Loader2 className="size-2.5 animate-spin" />}
-                          {t(`record.mark.enhancedClipboard.workflow.steps.${step}`)}
-                        </div>
-                        {!isLast && <span className="text-[10px] text-muted-foreground/30">›</span>}
-                      </div>
-                    )
-                  })}
-                </div>
-              </section>
+
             </div>
 
             <section className="flex min-w-0 flex-col rounded-lg border border-border/60 bg-background">
