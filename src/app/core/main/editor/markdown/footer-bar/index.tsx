@@ -1,8 +1,8 @@
 'use client'
 
 import { Editor } from '@tiptap/react'
-import { Network, Keyboard, Feather, Link2, GitBranch, X, FileText, ArrowRight, Sparkles, Loader2, Check } from 'lucide-react'
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { Network, Keyboard, Feather, Link2, GitBranch, FileText, ArrowRight, Sparkles, Loader2, Check, X } from 'lucide-react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { WordCount } from './word-count'
 import { FileCreatedAt } from './file-created-at'
 import { CopyButton } from './copy-button'
@@ -16,11 +16,6 @@ import { isMobileDevice } from '@/lib/check'
 import { KNOWLEDGE_GRAPH_TAB_PATH } from '@/app/core/main/knowledge/knowledge-graph-constants'
 import emitter from '@/lib/emitter'
 import { cn } from '@/lib/utils'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
 import { useNoteIndexStore } from '@/stores/note-index'
 import { extractWikiLinks } from '@/lib/wikilink-extension'
 import { findBacklinkSuggestions, applyBacklinks, type BacklinkSuggestion } from '@/lib/auto-backlink'
@@ -61,16 +56,14 @@ export function FooterBar({ editor }: FooterBarProps) {
           <WordCount editor={editor} />
         </div>
         <div className="shrink-0 flex items-center gap-1">
-          <Popover open={backlinksOpen} onOpenChange={setBacklinksOpen}>
-            <PopoverTrigger asChild>
-              <IconButton title="反向链接">
-                <Link2 className="size-3" />
-              </IconButton>
-            </PopoverTrigger>
-            <PopoverContent side="top" align="end" className="w-80 p-0">
-              <BacklinksPanelContent onClose={() => setBacklinksOpen(false)} />
-            </PopoverContent>
-          </Popover>
+          <button
+            type="button"
+            className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            onClick={() => setBacklinksOpen(true)}
+            title="反向链接"
+          >
+            <Link2 className="size-3" />
+          </button>
           <button
             type="button"
             className={cn(
@@ -108,27 +101,29 @@ export function FooterBar({ editor }: FooterBarProps) {
 
       {/* Right group */}
       <div className="flex items-center gap-0.5 shrink-0">
-        <Popover open={backlinksOpen} onOpenChange={setBacklinksOpen}>
-          <PopoverTrigger asChild>
+        <FloatingPanel
+          open={backlinksOpen}
+          onOpenChange={setBacklinksOpen}
+          trigger={
             <IconButton title="反向链接">
               <Link2 className="size-3" />
             </IconButton>
-          </PopoverTrigger>
-          <PopoverContent side="top" align="end" className="w-80 max-h-[340px] overflow-y-auto p-0 rounded-lg">
-            <BacklinksPanelContent onClose={() => setBacklinksOpen(false)} />
-          </PopoverContent>
-        </Popover>
+          }
+        >
+          <BacklinksPanelContent onClose={() => setBacklinksOpen(false)} />
+        </FloatingPanel>
 
-        <Popover open={relatedOpen} onOpenChange={setRelatedOpen}>
-          <PopoverTrigger asChild>
+        <FloatingPanel
+          open={relatedOpen}
+          onOpenChange={setRelatedOpen}
+          trigger={
             <IconButton title="相关笔记">
               <GitBranch className="size-3" />
             </IconButton>
-          </PopoverTrigger>
-          <PopoverContent side="top" align="end" className="w-80 max-h-[340px] overflow-y-auto p-0 rounded-lg">
-            <RelatedNotesPanelContent onClose={() => setRelatedOpen(false)} />
-          </PopoverContent>
-        </Popover>
+          }
+        >
+          <RelatedNotesPanelContent onClose={() => setRelatedOpen(false)} />
+        </FloatingPanel>
 
         <Separator />
 
@@ -165,17 +160,96 @@ export function FooterBar({ editor }: FooterBarProps) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// FloatingPanel: portal-based popup anchored above trigger
+// ---------------------------------------------------------------------------
+
+import React from 'react'
+import { createPortal } from 'react-dom'
+
+function FloatingPanel({
+  open,
+  onOpenChange,
+  trigger,
+  children,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  trigger: React.ReactNode
+  children: React.ReactNode
+}) {
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  // Position the panel above the trigger
+  useEffect(() => {
+    if (!open || !wrapperRef.current || !panelRef.current) return
+    const rect = wrapperRef.current.getBoundingClientRect()
+    const panel = panelRef.current
+    panel.style.position = 'fixed'
+    panel.style.bottom = `${window.innerHeight - rect.top + 4}px`
+    panel.style.right = `${window.innerWidth - rect.right}px`
+  }, [open])
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (
+        panelRef.current && !panelRef.current.contains(e.target as Node) &&
+        wrapperRef.current && !wrapperRef.current.contains(e.target as Node)
+      ) {
+        onOpenChange(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open, onOpenChange])
+
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onOpenChange(false)
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [open, onOpenChange])
+
+  return (
+    <>
+      <div ref={wrapperRef} className="contents">
+        <div onClick={() => onOpenChange(!open)}>
+          {trigger}
+        </div>
+      </div>
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          className="z-[99999] w-80 max-h-[340px] overflow-y-auto rounded-lg border bg-popover text-popover-foreground shadow-lg animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 duration-150"
+        >
+          {children}
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
+
 function Separator() {
   return <span className="h-3 w-px bg-border/60 mx-0.5" />
 }
 
-function IconButton({ children, title, onClick }: { children: React.ReactNode; title: string; onClick?: () => void }) {
+function IconButton({ children, title, onClick, className }: { children: React.ReactNode; title: string; onClick?: () => void; className?: string }) {
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
-      className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className={cn(
+        'h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+        className,
+      )}
     >
       {children}
     </button>
@@ -183,7 +257,7 @@ function IconButton({ children, title, onClick }: { children: React.ReactNode; t
 }
 
 // ---------------------------------------------------------------------------
-// Popover: Backlinks
+// Panel: Backlinks
 // ---------------------------------------------------------------------------
 
 function BacklinksPanelContent({ onClose }: { onClose: () => void }) {
@@ -330,7 +404,7 @@ function BacklinksPanelContent({ onClose }: { onClose: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// Popover: Related Notes
+// Panel: Related Notes
 // ---------------------------------------------------------------------------
 
 interface SemanticNote {
