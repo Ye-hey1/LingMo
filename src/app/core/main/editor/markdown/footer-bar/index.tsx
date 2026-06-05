@@ -1,8 +1,8 @@
 'use client'
 
 import { Editor } from '@tiptap/react'
-import { Network, Keyboard, Feather, Link2, GitBranch, FileText, ArrowRight, Sparkles, Loader2, Check, X } from 'lucide-react'
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { Network, Keyboard, Feather, Link2, GitBranch, FileText, ArrowRight, Sparkles, Loader2, Check } from 'lucide-react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { WordCount } from './word-count'
 import { FileCreatedAt } from './file-created-at'
 import { CopyButton } from './copy-button'
@@ -16,6 +16,11 @@ import { isMobileDevice } from '@/lib/check'
 import { KNOWLEDGE_GRAPH_TAB_PATH } from '@/app/core/main/knowledge/knowledge-graph-constants'
 import emitter from '@/lib/emitter'
 import { cn } from '@/lib/utils'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import { useNoteIndexStore } from '@/stores/note-index'
 import { extractWikiLinks } from '@/lib/wikilink-extension'
 import { findBacklinkSuggestions, applyBacklinks, type BacklinkSuggestion } from '@/lib/auto-backlink'
@@ -40,9 +45,6 @@ export function FooterBar({ editor }: FooterBarProps) {
   } = useSettingStore()
   const isMobile = isMobileDevice()
 
-  const [backlinksOpen, setBacklinksOpen] = useState(false)
-  const [relatedOpen, setRelatedOpen] = useState(false)
-
   const handleLocateGraph = useCallback(() => {
     if (!activeFilePath) return
     emitter.emit('graph-locate-node' as any, { path: activeFilePath })
@@ -56,14 +58,20 @@ export function FooterBar({ editor }: FooterBarProps) {
           <WordCount editor={editor} />
         </div>
         <div className="shrink-0 flex items-center gap-1">
-          <button
-            type="button"
-            className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            onClick={() => setBacklinksOpen(true)}
-            title="反向链接"
-          >
-            <Link2 className="size-3" />
-          </button>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                title="反向链接"
+                className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Link2 className="size-3" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="end" sideOffset={6} className="w-80 max-h-[340px] overflow-y-auto p-0 rounded-lg">
+              <BacklinksPanelContent />
+            </PopoverContent>
+          </Popover>
           <button
             type="button"
             className={cn(
@@ -101,29 +109,35 @@ export function FooterBar({ editor }: FooterBarProps) {
 
       {/* Right group */}
       <div className="flex items-center gap-0.5 shrink-0">
-        <FloatingPanel
-          open={backlinksOpen}
-          onOpenChange={setBacklinksOpen}
-          trigger={
-            <IconButton title="反向链接">
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              title="反向链接"
+              className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
               <Link2 className="size-3" />
-            </IconButton>
-          }
-        >
-          <BacklinksPanelContent onClose={() => setBacklinksOpen(false)} />
-        </FloatingPanel>
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="end" sideOffset={6} className="w-80 max-h-[340px] overflow-y-auto p-0 rounded-lg">
+            <BacklinksPanelContent />
+          </PopoverContent>
+        </Popover>
 
-        <FloatingPanel
-          open={relatedOpen}
-          onOpenChange={setRelatedOpen}
-          trigger={
-            <IconButton title="相关笔记">
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              title="相关笔记"
+              className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
               <GitBranch className="size-3" />
-            </IconButton>
-          }
-        >
-          <RelatedNotesPanelContent onClose={() => setRelatedOpen(false)} />
-        </FloatingPanel>
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="end" sideOffset={6} className="w-80 max-h-[340px] overflow-y-auto p-0 rounded-lg">
+            <RelatedNotesPanelContent />
+          </PopoverContent>
+        </Popover>
 
         <Separator />
 
@@ -160,96 +174,17 @@ export function FooterBar({ editor }: FooterBarProps) {
   )
 }
 
-// ---------------------------------------------------------------------------
-// FloatingPanel: portal-based popup anchored above trigger
-// ---------------------------------------------------------------------------
-
-import React from 'react'
-import { createPortal } from 'react-dom'
-
-function FloatingPanel({
-  open,
-  onOpenChange,
-  trigger,
-  children,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  trigger: React.ReactNode
-  children: React.ReactNode
-}) {
-  const wrapperRef = useRef<HTMLDivElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-
-  // Position the panel above the trigger
-  useEffect(() => {
-    if (!open || !wrapperRef.current || !panelRef.current) return
-    const rect = wrapperRef.current.getBoundingClientRect()
-    const panel = panelRef.current
-    panel.style.position = 'fixed'
-    panel.style.bottom = `${window.innerHeight - rect.top + 4}px`
-    panel.style.right = `${window.innerWidth - rect.right}px`
-  }, [open])
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: MouseEvent) => {
-      if (
-        panelRef.current && !panelRef.current.contains(e.target as Node) &&
-        wrapperRef.current && !wrapperRef.current.contains(e.target as Node)
-      ) {
-        onOpenChange(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open, onOpenChange])
-
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onOpenChange(false)
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [open, onOpenChange])
-
-  return (
-    <>
-      <div ref={wrapperRef} className="contents">
-        <div onClick={() => onOpenChange(!open)}>
-          {trigger}
-        </div>
-      </div>
-      {open && createPortal(
-        <div
-          ref={panelRef}
-          className="z-[99999] w-80 max-h-[340px] overflow-y-auto rounded-lg border bg-popover text-popover-foreground shadow-lg animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 duration-150"
-        >
-          {children}
-        </div>,
-        document.body
-      )}
-    </>
-  )
-}
-
 function Separator() {
   return <span className="h-3 w-px bg-border/60 mx-0.5" />
 }
 
-function IconButton({ children, title, onClick, className }: { children: React.ReactNode; title: string; onClick?: () => void; className?: string }) {
+function IconButton({ children, title, onClick }: { children: React.ReactNode; title: string; onClick?: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
-      className={cn(
-        'h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-        className,
-      )}
+      className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
       {children}
     </button>
@@ -257,10 +192,10 @@ function IconButton({ children, title, onClick, className }: { children: React.R
 }
 
 // ---------------------------------------------------------------------------
-// Panel: Backlinks
+// Popover: Backlinks
 // ---------------------------------------------------------------------------
 
-function BacklinksPanelContent({ onClose }: { onClose: () => void }) {
+function BacklinksPanelContent() {
   const activeFilePath = useArticleStore((s) => s.activeFilePath)
   const setActiveFilePath = useArticleStore((s) => s.setActiveFilePath)
   const getBacklinks = useNoteIndexStore((s) => s.getBacklinks)
@@ -304,6 +239,10 @@ function BacklinksPanelContent({ onClose }: { onClose: () => void }) {
   }, [activeFilePath, aiSuggestions])
 
   const totalLinks = backlinks.length + outgoingLinks.length
+
+  const navigateTo = useCallback((path: string) => {
+    setActiveFilePath(path)
+  }, [setActiveFilePath])
 
   return (
     <div>
@@ -360,7 +299,7 @@ function BacklinksPanelContent({ onClose }: { onClose: () => void }) {
           <div className="mb-1">
             <div className="px-2 pt-1 pb-0.5 text-[11px] font-medium text-muted-foreground">入链 ({backlinks.length})</div>
             {backlinks.map((bl, i) => (
-              <button key={`bl-${i}`} className="flex w-full items-start gap-2 px-2 py-1 text-left text-xs hover:bg-accent/50 rounded transition-colors" onClick={() => { setActiveFilePath(bl.sourcePath); onClose() }}>
+              <button key={`bl-${i}`} className="flex w-full items-start gap-2 px-2 py-1 text-left text-xs hover:bg-accent/50 rounded transition-colors" onClick={() => navigateTo(bl.sourcePath)}>
                 <FileText className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium truncate">{bl.sourceName}</div>
@@ -376,7 +315,7 @@ function BacklinksPanelContent({ onClose }: { onClose: () => void }) {
             <div className="px-2 pt-1 pb-0.5 text-[11px] font-medium text-muted-foreground">出链 ({outgoingLinks.length})</div>
             {outgoingLinks.map((target, i) => (
               <button key={`ol-${i}`} className="flex w-full items-start gap-2 px-2 py-1 text-left text-xs hover:bg-accent/50 rounded transition-colors" onClick={() => {
-                const { fileTree, setActiveFilePath } = useArticleStore.getState()
+                const { fileTree } = useArticleStore.getState()
                 const findFile = (items: any[], prefix = ''): string | null => {
                   for (const item of items) {
                     const itemPath = prefix ? `${prefix}/${item.name}` : item.name
@@ -386,7 +325,7 @@ function BacklinksPanelContent({ onClose }: { onClose: () => void }) {
                   return null
                 }
                 const found = findFile(fileTree)
-                if (found) { setActiveFilePath(found); onClose() }
+                if (found) navigateTo(found)
               }}>
                 <ArrowRight className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1 font-medium truncate">{target}</div>
@@ -404,7 +343,7 @@ function BacklinksPanelContent({ onClose }: { onClose: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// Panel: Related Notes
+// Popover: Related Notes
 // ---------------------------------------------------------------------------
 
 interface SemanticNote {
@@ -413,7 +352,7 @@ interface SemanticNote {
   preview: string
 }
 
-function RelatedNotesPanelContent({ onClose }: { onClose: () => void }) {
+function RelatedNotesPanelContent() {
   const activeFilePath = useArticleStore((s) => s.activeFilePath)
   const setActiveFilePath = useArticleStore((s) => s.setActiveFilePath)
   const [notes, setNotes] = useState<SemanticNote[]>([])
@@ -470,7 +409,7 @@ function RelatedNotesPanelContent({ onClose }: { onClose: () => void }) {
             <button
               key={`rn-${i}`}
               className="flex w-full items-start gap-2 px-2 py-1 text-left text-xs hover:bg-accent/50 rounded transition-colors"
-              onClick={() => { setActiveFilePath(note.filename); onClose() }}
+              onClick={() => setActiveFilePath(note.filename)}
             >
               <FileText className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
