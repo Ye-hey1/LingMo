@@ -47,6 +47,7 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
     setRerankingModel,
     setCondenseModel,
     setInspirationModel,
+    setPromptEnhancerModel,
   } = useSettingStore()
   const [model, setModel] = useState<string>('')
   const [open, setOpen] = React.useState(false)
@@ -65,6 +66,7 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
       case 'reranking': return 'rerankingModel'
       case 'condense': return 'condenseModel'
       case 'inspiration': return 'inspirationModel'
+      case 'promptEnhancer': return 'promptEnhancerModel'
       default: return `${modelKey}Model`
     }
   }
@@ -83,6 +85,7 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
       case 'reranking': setRerankingModel(primaryModel); break
       case 'condense': setCondenseModel(primaryModel); break
       case 'inspiration': setInspirationModel(primaryModel); break
+      case 'promptEnhancer': setPromptEnhancerModel(primaryModel); break
     }
   }
 

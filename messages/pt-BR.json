@@ -1238,6 +1238,13 @@
           "desc": "Gere sugestões de prompt rápidas para ajudar os usuários a iniciar conversas"
         }
       },
+      "promptEnhancer": {
+        "title": "Aprimorador de Prompt",
+        "model": {
+          "title": "Modelo do Aprimorador de Prompt",
+          "desc": "Usado para aprimorar prompts com um clique. Se vazio, usa o modelo principal de chat."
+        }
+      },
       "conversationTitle": {
         "title": "会话标题",
         "model": {

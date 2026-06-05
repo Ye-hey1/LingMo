@@ -40,6 +40,7 @@ const MODEL_SELECTION_KEYS = [
   'sttModel',
   'condenseModel',
   'inspirationModel',
+  'promptEnhancerModel',
 ]
 
 type ModelSelectionPredicate = (
@@ -342,6 +343,9 @@ interface SettingState {
 
   inspirationModel: string
   setInspirationModel: (inspirationModel: string) => Promise<void>
+
+  promptEnhancerModel: string
+  setPromptEnhancerModel: (promptEnhancerModel: string) => Promise<void>
 
   tavilyApiKey: string
   setTavilyApiKey: (apiKey: string) => Promise<void>
@@ -845,6 +849,13 @@ const useSettingStore = create<SettingState>((set, get) => ({
     const store = await Store.load('store.json');
     await store.set('inspirationModel', inspirationModel)
     set({ inspirationModel })
+  },
+
+  promptEnhancerModel: '',
+  setPromptEnhancerModel: async (promptEnhancerModel) => {
+    const store = await Store.load('store.json');
+    await store.set('promptEnhancerModel', promptEnhancerModel)
+    set({ promptEnhancerModel })
   },
 
   tavilyApiKey: '',

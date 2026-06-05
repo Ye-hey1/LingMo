@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { CalendarPlus } from 'lucide-react'
 import useArticleStore from '@/stores/article'
 import { formatFileActivityTime, getFileSystemMetadata } from '@/lib/file-activity'
 
@@ -40,11 +39,10 @@ export function FileCreatedAt() {
 
   return (
     <span
-      className="hidden h-5 items-center gap-1 rounded px-1.5 text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:inline-flex"
+      className="hidden h-5 items-center px-1 text-[11px] tabular-nums text-muted-foreground/60 md:inline-flex"
       title={`创建时间：${createdAt}`}
     >
-      <CalendarPlus className="size-3" />
-      <span>{formatCompactCreatedAt(createdAt)}</span>
+      {formatCompactCreatedAt(createdAt)}
     </span>
   )
 }

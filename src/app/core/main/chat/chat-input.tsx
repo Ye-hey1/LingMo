@@ -999,6 +999,7 @@ ${exec.prompt}`
 
       const enhanced = await enhanceChatPrompt({
         userInput: input,
+        chatMode,
         currentFilePath: activeFilePath,
         currentArticle,
         linkedResources,

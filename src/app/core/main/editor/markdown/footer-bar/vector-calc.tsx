@@ -44,15 +44,14 @@ export function VectorCalc({
       <button
         onClick={() => onToggleAICompletion(!aiCompletionEnabled)}
         className={cn(
-          'flex items-center gap-0.5 px-1.5 rounded transition-colors',
+          'h-5 w-5 flex items-center justify-center rounded transition-colors',
           aiCompletionEnabled
-            ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
-            : 'hover:bg-[hsl(var(--muted))]'
+            ? 'text-[#1677ff] bg-[#1677ff]/10'
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
         )}
         title={aiCompletionEnabled ? 'AI 补全已启用' : 'AI 补全已禁用'}
       >
-        <Sparkles size={10} />
-        <span>AI</span>
+        <Sparkles size={12} />
       </button>
 
       {/* Vector Database Status */}
@@ -65,15 +64,14 @@ export function VectorCalc({
           onClick={handleVectorProcess}
           disabled={isProcessing}
           className={cn(
-            'flex items-center gap-0.5 px-1.5 rounded transition-colors',
+            'h-5 w-5 flex items-center justify-center rounded transition-colors',
             isProcessing
               ? 'opacity-50 cursor-wait'
-              : 'hover:bg-[hsl(var(--muted))]'
+              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
           )}
-          title="点击重新计算向量"
+          title="知识库向量"
         >
-          <Database size={10} className={cn(isProcessing && 'animate-spin')} />
-          <span>知识库</span>
+          <Database size={12} className={cn(isProcessing && 'animate-spin')} />
         </button>
 
         {/* Hover tooltip */}

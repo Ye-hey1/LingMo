@@ -1395,6 +1395,13 @@
           "title": "Quick Prompt Generator",
           "desc": "Generate quick prompt suggestions to help users start conversations"
         }
+      },
+      "promptEnhancer": {
+        "title": "Prompt Enhancer",
+        "model": {
+          "title": "Prompt Enhancer Model",
+          "desc": "Used for one-click prompt enhancement. Falls back to the primary chat model when empty."
+        }
       }
     },
     "ai": {

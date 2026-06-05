@@ -59,8 +59,7 @@ import { getImageAltText } from '@/lib/image-editor-actions'
 import { toMarkdownImagePath } from '@/lib/markdown-image-path'
 import { MdEditor } from './markdown/md-editor-wrapper'
 
-const BacklinksPanel = dynamic(() => import('./markdown/backlinks-panel').then(m => m.BacklinksPanel), { ssr: false })
-const RelatedNotesPanel = dynamic(() => import('@/lib/related-notes').then(m => m.RelatedNotesPanel), { ssr: false })
+// BacklinksPanel and RelatedNotesPanel are now integrated into the footer bar as popovers
 const ImageEditor = dynamic(() => import('./image/image-editor').then(m => m.ImageEditor), { ssr: false })
 const PdfViewer = dynamic(() => import('./pdf/pdf-viewer').then(m => m.PdfViewer), { ssr: false })
 const DiagramEditor = dynamic(() => import('./diagram/diagram-editor').then(m => m.DiagramEditor), { ssr: false })
@@ -852,20 +851,14 @@ export function EditorLayout() {
           </Suspense>
         )}
         {itemType === 'markdown' && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <Suspense fallback={<div className="flex-1" />}>
-                <MdEditor
-                  key={tab.id}
-                  tabContentsRef={tabContentsRef}
-                  filePath={tab.path}
-                />
-              </Suspense>
-            </div>
-            <div className="shrink-0">
-              <BacklinksPanel />
-              <RelatedNotesPanel />
-            </div>
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <Suspense fallback={<div className="flex-1" />}>
+              <MdEditor
+                key={tab.id}
+                tabContentsRef={tabContentsRef}
+                filePath={tab.path}
+              />
+            </Suspense>
           </div>
         )}
         {itemType === 'unknown' && (

@@ -33,11 +33,10 @@ export function WordCount({ editor }: WordCountProps) {
 
   return (
     <span
-      className="inline-flex h-5 items-center gap-1 rounded px-1.5 text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className="inline-flex h-5 items-center px-1 text-[11px] tabular-nums text-muted-foreground"
       title={`字符数：${characters}`}
     >
-      <Type className="size-3" />
-      <span>{characters}</span>
+      {characters}
     </span>
   )
 }

@@ -13,8 +13,11 @@ interface PromptQuoteContext {
   fullContent: string
 }
 
+export type EnhancePromptMode = 'chat' | 'agent' | 'research'
+
 interface EnhanceChatPromptOptions {
   userInput: string
+  chatMode?: EnhancePromptMode
   currentFilePath?: string
   currentArticle?: string
   linkedResources?: LinkedResource[]
@@ -31,6 +34,38 @@ const QUOTE_CHAR_LIMIT = 3000
 const RAG_CONTEXT_CHAR_LIMIT = 4200
 const MAX_LINKED_FILES = 5
 const MAX_KEYWORDS = 8
+
+const MODE_REWRITE_GUIDES: Record<EnhancePromptMode, string> = {
+  chat: [
+    'Target mode: Chat.',
+    'Goal: make the question clearer while keeping a light, conversational feel.',
+    'Format: use a compact prompt with these sections only when useful:',
+    '问题：the clarified question or request.',
+    '可参考：current note, quote, linked resources, or knowledge base context that should guide the answer.',
+    '回答偏好：tone, depth, examples, comparison, or step-by-step needs inferred from the request.',
+    'Avoid heavy execution language such as plans, verification commands, or tool workflows unless the user explicitly asks.',
+  ].join('\n'),
+  agent: [
+    'Target mode: Agent.',
+    'Goal: turn the request into an executable task prompt for an Agent that may inspect context and use tools.',
+    'Format the enhanced prompt with these sections:',
+    '目标：state the concrete outcome.',
+    '上下文：list relevant current note, selected quote, linked files, knowledge base snippets, skills, and enabled tools.',
+    '执行步骤：give concise steps the Agent should follow, including inspection before action when needed.',
+    '验收标准：state how the user can tell the task is complete.',
+    '约束：preserve user intent, avoid unrelated changes, mention unavailable capabilities only as constraints.',
+  ].join('\n'),
+  research: [
+    'Target mode: Research.',
+    'Goal: turn the request into a research-ready prompt with clear scope and evidence requirements.',
+    'Format the enhanced prompt with these sections:',
+    '研究范围：define the question boundaries and what to compare or investigate.',
+    '时间要求：state freshness requirements when implied; if not specified, ask for current information only when web search is enabled or necessary.',
+    '来源要求：describe source quality, citation, and cross-check expectations.',
+    '输出格式：state the expected report structure, tables, bullets, citations, or conclusion format.',
+    '注意事项：include assumptions, missing context, and what should not be overclaimed.',
+  ].join('\n'),
+}
 
 function truncateText(text: string, maxLength: number): string {
   const normalized = text.trim()
@@ -195,8 +230,16 @@ function buildCapabilityContext(options: EnhanceChatPromptOptions): string {
   return `<app_capabilities>\n${capabilities.map(item => `- ${item}`).join('\n')}\n</app_capabilities>`
 }
 
+function buildModeContext(mode: EnhancePromptMode): string {
+  return `<target_mode>\n${MODE_REWRITE_GUIDES[mode]}\n</target_mode>`
+}
+
 async function buildEnhancerContext(options: EnhanceChatPromptOptions): Promise<string> {
-  const sections: string[] = [buildCapabilityContext(options)]
+  const mode = options.chatMode || 'agent'
+  const sections: string[] = [
+    buildModeContext(mode),
+    buildCapabilityContext(options),
+  ]
 
   if (options.currentFilePath && options.currentArticle) {
     sections.push([
@@ -235,7 +278,7 @@ export async function enhanceChatPrompt(options: EnhanceChatPromptOptions): Prom
   }
 
   try {
-    const aiConfig = await getAISettings('primaryModel')
+    const aiConfig = await getAISettings('promptEnhancerModel') || await getAISettings('primaryModel')
     if (!aiConfig || await validateAIService(aiConfig.baseURL) === null) {
       throw new Error('AI service not configured')
     }
@@ -251,9 +294,11 @@ export async function enhanceChatPrompt(options: EnhanceChatPromptOptions): Prom
         {
           role: 'system',
           content: [
-            'You are a prompt enhancer for a note-taking AI Agent.',
-            'Rewrite the user request into a clear, actionable prompt that can be sent directly to the Agent.',
-            'Do not solve the task. Do not invent requirements. Do not mention unavailable context.',
+            'You are LingMo prompt enhancement engine for a note-first AI workspace.',
+            'Rewrite the user request into a clearer prompt that can be sent directly in the current mode.',
+            'Infer useful structure from the request semantics and provided context, but never change the user intent.',
+            'Do not solve the task. Do not invent facts, files, requirements, or available capabilities.',
+            'Use the target mode format exactly enough to make the next AI response orderly.',
             'Use the same language as the user request unless the user clearly asks otherwise.',
             'Output only the enhanced prompt text. No title, no markdown fence, no explanation.',
           ].join('\n'),
@@ -271,10 +316,11 @@ export async function enhanceChatPrompt(options: EnhanceChatPromptOptions): Prom
             '',
             '<rewrite_rules>',
             '- Preserve the user intent exactly.',
-            '- Add concrete context from current note, selected quote, linked files, knowledge base snippets, enabled web search, and Skills when relevant.',
-            '- Structure the result with a short objective, context to use, expected output, and constraints only if they help.',
+            '- Add concrete context from current note, selected quote, linked files, knowledge base snippets, enabled web search, and Skills only when relevant.',
+            '- Follow the target mode guide: Chat stays light, Agent becomes executable, Research becomes evidence-oriented.',
             '- Make the prompt concise enough to edit in the input box.',
             '- Prefer note-app terminology: current note, linked notes, selected quote, knowledge base, Agent tools.',
+            '- If critical information is missing, include a short “需要补充：” or equivalent line instead of inventing the answer.',
             '</rewrite_rules>',
           ].join('\n'),
         },
