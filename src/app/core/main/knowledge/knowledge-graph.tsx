@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   GitBranch,
   FileText,
+  Hash,
   Link,
   LocateFixed,
   Palette,
@@ -1756,17 +1757,31 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
             <div>
               <div className="text-[13px] font-semibold tracking-tight">图谱设置</div>
               <div className="text-[11px] text-muted-foreground dark:text-muted-foreground">
-                {graphData.nodes.length} 个节点 · {graphData.edges.filter(e => e.type === 'wikilink').length} 条链接
-                {graphData.edges.some(e => e.type === 'semantic') && ` · ${graphData.edges.filter(e => e.type === 'semantic').length} 条语义关联`}
-                {graphData.edges.some(e => e.type === 'keyword') && ` · ${graphData.edges.filter(e => e.type === 'keyword').length} 条关键词关联`}
-                {graphData.edges.some(e => e.type === 'llm') && ` · ${graphData.edges.filter(e => e.type === 'llm').length} 条深度关联`}
+                {viewMode === 'relations' ? (
+                  <>
+                    {graphData.nodes.length} 个节点 · {graphData.edges.filter(e => e.type === 'wikilink').length} 条链接
+                    {graphData.edges.some(e => e.type === 'semantic') && ` · ${graphData.edges.filter(e => e.type === 'semantic').length} 条语义关联`}
+                    {graphData.edges.some(e => e.type === 'keyword') && ` · ${graphData.edges.filter(e => e.type === 'keyword').length} 条关键词关联`}
+                    {graphData.edges.some(e => e.type === 'llm') && ` · ${graphData.edges.filter(e => e.type === 'llm').length} 条深度关联`}
+                  </>
+                ) : (
+                  <>
+                    {keywordClusterGraph.clusters.length} 个主题 · {keywordClusterGraph.keywordNodes.length} 个关键词
+                  </>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-1">
               <button
                 className="rounded-full p-1.5 text-muted-foreground/70 transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:hover:bg-muted dark:hover:text-foreground"
                 title="恢复默认"
-                onClick={() => setSettings(DEFAULT_SETTINGS)}
+                onClick={() => {
+                  if (viewMode === 'keywords') {
+                    setKeywordSettings(DEFAULT_KEYWORD_SETTINGS)
+                  } else {
+                    setSettings(DEFAULT_SETTINGS)
+                  }
+                }}
               >
                 <RefreshCw className="h-3.5 w-3.5" />
               </button>
@@ -1780,20 +1795,32 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-1 border-b border-border/70 p-1.5 dark:border-border/50">
-            {SETTINGS_PANELS.map(panel => (
-              <PanelTab
-                key={panel.key}
-                active={activeSettingsPanel === panel.key}
-                label={panel.label}
-                icon={panel.icon}
-                onClick={() => setActiveSettingsPanel(panel.key)}
-              />
-            ))}
-          </div>
+          {viewMode === 'relations' ? (
+            <div className="grid grid-cols-4 gap-1 border-b border-border/70 p-1.5 dark:border-border/50">
+              {SETTINGS_PANELS.map(panel => (
+                <PanelTab
+                  key={panel.key}
+                  active={activeSettingsPanel === panel.key}
+                  label={panel.label}
+                  icon={panel.icon}
+                  onClick={() => setActiveSettingsPanel(panel.key)}
+                />
+              ))}
+            </div>
+          ) : null}
 
           <div className="max-h-[360px] overflow-y-auto p-3">
-            {activeSettingsPanel === 'filter' && (
+            {viewMode === 'keywords' && (
+              <SettingSection icon={SlidersHorizontal} title="关键词聚类">
+                <RangeRow label="最小文章数" value={keywordSettings.minKeywordNoteCount} min={1} max={5} step={1} onChange={value => updateKeywordSettings('minKeywordNoteCount', value)} />
+                <RangeRow label="每簇关键词数" value={keywordSettings.maxKeywordsPerCluster} min={8} max={60} step={1} onChange={value => updateKeywordSettings('maxKeywordsPerCluster', value)} />
+                <RangeRow label="主题数量上限" value={keywordSettings.maxClusters} min={4} max={20} step={1} onChange={value => updateKeywordSettings('maxClusters', value)} />
+                <ToggleRow label="显示零散主题" checked={keywordSettings.includeIsolated} onChange={value => updateKeywordSettings('includeIsolated', value)} />
+                <ToggleRow label="显示关键词标签" checked={keywordSettings.showLabels} onChange={value => updateKeywordSettings('showLabels', value)} />
+              </SettingSection>
+            )}
+
+            {viewMode === 'relations' && activeSettingsPanel === 'filter' && (
               <SettingSection icon={SlidersHorizontal} title="筛选">
                 <ToggleRow label="显示孤立节点" checked={settings.showIsolated} onChange={value => updateSettings('showIsolated', value)} />
                 <ToggleRow label="只看当前笔记邻域" checked={settings.focusLinkedOnly} onChange={value => updateSettings('focusLinkedOnly', value)} />
@@ -1889,7 +1916,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
               </SettingSection>
             )}
 
-            {activeSettingsPanel === 'color' && (
+            {viewMode === 'relations' && activeSettingsPanel === 'color' && (
               <SettingSection icon={Palette} title="颜色调色板">
                 <ColorField label="主题强调色" value={settings.colors.accent} onChange={value => updateColor('accent', value)} />
                 <ColorField label="当前节点" value={settings.colors.current} onChange={value => updateColor('current', value)} />
@@ -1900,7 +1927,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
               </SettingSection>
             )}
 
-            {activeSettingsPanel === 'appearance' && (
+            {viewMode === 'relations' && activeSettingsPanel === 'appearance' && (
               <SettingSection icon={GitBranch} title="外观">
                 <ToggleRow label="显示节点名称" checked={settings.showLabels} onChange={value => updateSettings('showLabels', value)} />
                 <ToggleRow label="显示节点标签" checked={settings.showTags} onChange={value => updateSettings('showTags', value)} />
@@ -1910,7 +1937,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
               </SettingSection>
             )}
 
-            {activeSettingsPanel === 'force' && (
+            {viewMode === 'relations' && activeSettingsPanel === 'force' && (
               <SettingSection icon={SlidersHorizontal} title="力度">
                 <RangeRow label="节点间排斥力" value={settings.repulsion} min={5} max={20} step={0.5} onChange={value => { updateSettings('repulsion', value); wakeSimulation() }} />
                 <RangeRow label="相连节点吸引力" value={settings.attraction} min={0.3} max={1.5} step={0.05} onChange={value => { updateSettings('attraction', value); wakeSimulation() }} />
@@ -2173,13 +2200,25 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
         )
       ) : (
         <>
-          <KeywordClusterCanvas
-            graph={keywordClusterGraph}
-            selectedId={keywordSelection?.id ?? null}
-            onSelect={setKeywordSelection}
-            onOpenNote={handleOpenInEditor}
-            showLabels={keywordSettings.showLabels}
-          />
+          {keywordClusterGraph.keywordNodes.length === 0 && !keywordTopicsLoading ? (
+            <div className="relative z-[1] flex h-full flex-col items-center justify-center px-8 text-center">
+              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl border bg-background text-muted-foreground dark:border-border/50 dark:bg-background">
+                <Hash className="h-5 w-5" />
+              </div>
+              <div className="text-sm font-medium">还没有关键词索引</div>
+              <div className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
+                保存 Markdown 笔记后，LingMo 会自动提取关键词并用于聚类视图。
+              </div>
+            </div>
+          ) : (
+            <KeywordClusterCanvas
+              graph={keywordClusterGraph}
+              selectedId={keywordSelection?.id ?? null}
+              onSelect={setKeywordSelection}
+              onOpenNote={handleOpenInEditor}
+              showLabels={keywordSettings.showLabels}
+            />
+          )}
           {keywordTopicsLoading ? (
             <div className="absolute left-1/2 top-1/2 z-[2] -translate-x-1/2 -translate-y-1/2 rounded-full border border-border/70 bg-background/85 px-3 py-1.5 text-[12px] text-muted-foreground shadow-sm backdrop-blur-sm">
               正在加载关键词...
