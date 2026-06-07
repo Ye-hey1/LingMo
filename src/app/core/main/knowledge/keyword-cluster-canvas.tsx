@@ -50,7 +50,7 @@ export function KeywordClusterCanvas({
 
   const fitGraph = useCallback(() => {
     const canvas = canvasRef.current
-    if (!canvas || graph.clusters.length === 0) return
+    if (!canvas || (graph.clusters.length === 0 && graph.keywordNodes.length === 0)) return
     const rect = canvas.getBoundingClientRect()
     const bounds = getGraphBounds(graph)
     const width = Math.max(bounds.right - bounds.left, 1)
@@ -249,18 +249,18 @@ function drawEdges(
 ) {
   const focusId = hovered?.id ?? selectedId
   for (const edge of graph.edges) {
-    if (edge.type === 'keyword-cooccurrence' && !isFocusedEdge(edge.source, edge.target, focusId)) continue
+    const active = isFocusedEdge(edge.source, edge.target, focusId)
+    if (edge.type === 'keyword-cooccurrence' && !active && (edge.noteCount ?? 0) < 3) continue
     const source = getNodePosition(graph, keywordById, edge.source)
     const target = getNodePosition(graph, keywordById, edge.target)
     if (!source || !target) continue
-    const active = isFocusedEdge(edge.source, edge.target, focusId)
     ctx.beginPath()
     ctx.moveTo(source.x, source.y)
     ctx.lineTo(target.x, target.y)
     ctx.strokeStyle = edge.type === 'cluster-keyword'
       ? withAlpha(source.color ?? '#64748b', active ? 0.42 : 0.16)
-      : `rgba(100, 116, 139, ${active ? 0.34 : 0.12})`
-    ctx.lineWidth = edge.type === 'cluster-keyword' ? 1.1 : Math.min(2.5, 0.5 + edge.weight * 0.4)
+      : `rgba(79, 70, 229, ${active ? 0.34 : 0.1})`
+    ctx.lineWidth = edge.type === 'cluster-keyword' ? 1.1 : Math.min(2.5, 0.5 + (edge.noteCount ?? 1) * 0.35)
     ctx.stroke()
   }
 }
@@ -282,10 +282,10 @@ function drawClusters(
     ctx.globalAlpha = dimmed ? 0.32 : 1
     ctx.beginPath()
     ctx.arc(cluster.x, cluster.y, cluster.radius, 0, Math.PI * 2)
-    ctx.fillStyle = withAlpha(cluster.color, active ? 0.12 : 0.06)
+    ctx.fillStyle = withAlpha(cluster.color, active ? 0.1 : 0.045)
     ctx.fill()
-    ctx.lineWidth = active ? 3 : 1.5
-    ctx.strokeStyle = withAlpha(cluster.color, active ? 0.78 : 0.38)
+    ctx.lineWidth = active ? 3.2 : 2
+    ctx.strokeStyle = withAlpha(cluster.color, active ? 0.82 : 0.5)
     ctx.stroke()
     if (active) {
       ctx.beginPath()
@@ -295,13 +295,13 @@ function drawClusters(
       ctx.stroke()
     }
     ctx.fillStyle = getTextColor()
-    ctx.font = '600 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    ctx.font = '700 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     drawFittedText(ctx, cluster.label, cluster.x, cluster.y - 7, Math.max(44, cluster.radius * 1.45))
     ctx.font = '11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     ctx.fillStyle = getMutedTextColor()
-    ctx.fillText(`${cluster.noteCount} 篇 · ${cluster.keywords.length} 词`, cluster.x, cluster.y + 14)
+    ctx.fillText(`${cluster.noteCount} 篇 / ${cluster.keywords.length} 词`, cluster.x, cluster.y + 14)
     ctx.restore()
   }
 }
@@ -319,17 +319,17 @@ function drawKeywords(
 
   for (const keyword of graph.keywordNodes) {
     const cluster = graph.clusters.find(item => item.id === keyword.clusterId)
-    const color = cluster?.color ?? '#64748b'
-    const active = keyword.id === hovered?.id || keyword.id === selectedId || keyword.clusterId === focusClusterId
+    const color = cluster?.color ?? freeKeywordColor(keyword)
+    const active = keyword.id === hovered?.id || keyword.id === selectedId || Boolean(focusClusterId && keyword.clusterId === focusClusterId)
     const dimmed = Boolean(focusClusterId) && !active
     ctx.save()
     ctx.globalAlpha = dimmed ? 0.28 : 1
     ctx.beginPath()
     ctx.arc(keyword.x, keyword.y, keyword.radius, 0, Math.PI * 2)
-    ctx.fillStyle = withAlpha(color, active ? 0.9 : 0.72)
+    ctx.fillStyle = withAlpha(color, active ? 0.95 : keyword.clusterId ? 0.78 : 0.72)
     ctx.fill()
-    ctx.lineWidth = active ? 2.2 : 1
-    ctx.strokeStyle = withAlpha('#ffffff', active ? 0.85 : 0.5)
+    ctx.lineWidth = active ? 2.2 : keyword.clusterId ? 1 : 0.8
+    ctx.strokeStyle = withAlpha('#ffffff', active ? 0.9 : 0.48)
     ctx.stroke()
     if (showLabels || active) {
       ctx.font = `${active ? 600 : 500} 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
@@ -340,7 +340,7 @@ function drawKeywords(
       ctx.fillStyle = getLabelBackground()
       roundRect(ctx, keyword.x - width / 2, keyword.y + keyword.radius + 5, width, 20, 6)
       ctx.fill()
-      ctx.fillStyle = active ? color : getTextColor()
+      ctx.fillStyle = active ? color : keyword.clusterId ? getTextColor() : getMutedTextColor()
       ctx.fillText(label, keyword.x, keyword.y + keyword.radius + 9)
     }
     ctx.restore()
@@ -357,7 +357,7 @@ function getNodePosition(
   const keyword = keywordById.get(id)
   if (!keyword) return null
   const keywordCluster = graph.clusters.find(item => item.id === keyword.clusterId)
-  return { x: keyword.x, y: keyword.y, color: keywordCluster?.color }
+  return { x: keyword.x, y: keyword.y, color: keywordCluster?.color ?? freeKeywordColor(keyword) }
 }
 
 function getGraphBounds(graph: KeywordClusterGraph) {
@@ -421,6 +421,20 @@ function withAlpha(color: string, alpha: number) {
 
 function trimLabel(label: string, limit: number) {
   return label.length > limit ? `${label.slice(0, limit - 1)}...` : label
+}
+
+function freeKeywordColor(keyword: KeywordClusterKeyword) {
+  const palette = ['#14b8a6', '#06b6d4', '#f59e0b', '#64748b', '#84cc16']
+  return palette[Math.abs(hashString(keyword.keyword)) % palette.length]
+}
+
+function hashString(input: string) {
+  let hash = 0
+  for (let index = 0; index < input.length; index++) {
+    hash = (hash << 5) - hash + input.charCodeAt(index)
+    hash |= 0
+  }
+  return hash
 }
 
 function distanceBetween(x1: number, y1: number, x2: number, y2: number) {

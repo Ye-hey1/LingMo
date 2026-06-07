@@ -4,6 +4,7 @@ import type { DirTree } from '@/stores/article'
 export interface KeywordClusterOptions {
   topKeywordsPerNote: number
   minKeywordNoteCount: number
+  minCooccurrenceNoteCount: number
   maxClusters: number
   maxKeywordsPerCluster: number
   includeIsolated: boolean
@@ -33,7 +34,7 @@ export interface KeywordCluster {
 export interface KeywordClusterKeyword {
   id: string
   keyword: string
-  clusterId: string
+  clusterId: string | null
   notePaths: string[]
   totalWeight: number
   avgWeight: number
@@ -55,6 +56,7 @@ export interface KeywordClusterEdge {
   target: string
   type: 'cluster-keyword' | 'keyword-cooccurrence'
   weight: number
+  noteCount?: number
 }
 
 export type KeywordClusterSelection =
@@ -77,6 +79,7 @@ interface NoteKeyword {
 const DEFAULT_OPTIONS: KeywordClusterOptions = {
   topKeywordsPerNote: 12,
   minKeywordNoteCount: 1,
+  minCooccurrenceNoteCount: 2,
   maxClusters: 14,
   maxKeywordsPerCluster: 30,
   includeIsolated: true,
@@ -124,25 +127,27 @@ export function buildKeywordClusterGraph(
   const keywordAggregates = collectKeywordAggregates(noteKeywords, resolvedOptions)
   const noteIndex = buildNoteIndex(noteKeywords, keywordAggregates)
   const cooccurrenceEdges = buildCooccurrenceEdges(noteKeywords, keywordAggregates, resolvedOptions)
-  const components = normalizeComponents(
+  const components = normalizeThemeComponents(
     buildConnectedComponents(keywordAggregates, cooccurrenceEdges),
     keywordAggregates,
     cooccurrenceEdges,
     resolvedOptions,
   )
   const clusters = buildClusters(components, keywordAggregates, resolvedOptions)
-  const keywordNodes = buildKeywordNodes(clusters, keywordAggregates, resolvedOptions)
+  const keywordNodes = buildKeywordNodes(clusters, keywordAggregates, cooccurrenceEdges, resolvedOptions)
   const keywordIndex = new Map<string, KeywordClusterKeyword>()
   for (const node of keywordNodes) {
     keywordIndex.set(node.keyword, node)
   }
 
-  const clusterKeywordEdges: KeywordClusterEdge[] = keywordNodes.map(node => ({
-    source: node.clusterId,
-    target: node.id,
-    type: 'cluster-keyword',
-    weight: Math.max(node.avgWeight, 0.1),
-  }))
+  const clusterKeywordEdges: KeywordClusterEdge[] = keywordNodes
+    .filter((node): node is KeywordClusterKeyword & { clusterId: string } => Boolean(node.clusterId))
+    .map(node => ({
+      source: node.clusterId,
+      target: node.id,
+      type: 'cluster-keyword',
+      weight: Math.max(node.avgWeight, 0.1),
+    }))
 
   return {
     clusters,
@@ -285,6 +290,7 @@ function buildCooccurrenceEdges(
   options: KeywordClusterOptions,
 ): KeywordClusterEdge[] {
   const edgeWeights = new Map<string, number>()
+  const edgeNoteCounts = new Map<string, number>()
   for (const keywords of noteKeywords.values()) {
     const usable = keywords
       .filter(keyword => aggregates.has(keyword.normalized))
@@ -296,16 +302,20 @@ function buildCooccurrenceEdges(
         const [source, target] = [a.normalized, b.normalized].sort()
         const key = `${source}\u0000${target}`
         edgeWeights.set(key, (edgeWeights.get(key) ?? 0) + Math.min(a.weight, b.weight))
+        edgeNoteCounts.set(key, (edgeNoteCounts.get(key) ?? 0) + 1)
       }
     }
   }
 
   const weights = Array.from(edgeWeights.values()).sort((a, b) => a - b)
   const median = weights.length ? weights[Math.floor(weights.length / 2)] : 0
-  const threshold = weights.length > 8 ? Math.max(0.18, median * 0.7) : 0
+  const threshold = weights.length > 8 ? Math.max(0.35, median * 1.05) : 0.35
 
   return Array.from(edgeWeights.entries())
-    .filter(([, weight]) => weight >= threshold)
+    .filter(([key, weight]) => {
+      const noteCount = edgeNoteCounts.get(key) ?? 0
+      return noteCount >= options.minCooccurrenceNoteCount && weight >= threshold
+    })
     .map(([key, weight]) => {
       const [source, target] = key.split('\u0000')
       return {
@@ -313,9 +323,10 @@ function buildCooccurrenceEdges(
         target,
         type: 'keyword-cooccurrence' as const,
         weight,
+        noteCount: edgeNoteCounts.get(key) ?? 0,
       }
     })
-    .sort((a, b) => b.weight - a.weight || a.source.localeCompare(b.source) || a.target.localeCompare(b.target))
+    .sort((a, b) => (b.noteCount ?? 0) - (a.noteCount ?? 0) || b.weight - a.weight || a.source.localeCompare(b.source) || a.target.localeCompare(b.target))
 }
 
 function buildConnectedComponents(
@@ -350,33 +361,27 @@ function buildConnectedComponents(
   return components.sort((a, b) => componentScore(b, aggregates) - componentScore(a, aggregates) || a[0].localeCompare(b[0]))
 }
 
-function normalizeComponents(
+function normalizeThemeComponents(
   components: string[][],
   aggregates: Map<string, KeywordAggregate>,
   edges: KeywordClusterEdge[],
   options: KeywordClusterOptions,
 ): string[][] {
-  const isolated: string[] = []
-  const connected: string[][] = []
-  for (const component of components) {
-    if (component.length === 1) isolated.push(component[0])
-    else connected.push(component)
-  }
+  const strongComponents = components.filter(component => {
+    if (component.length < 2) return false
+    const notePaths = new Set<string>()
+    for (const normalized of component) {
+      for (const path of aggregates.get(normalized)?.noteWeights.keys() ?? []) {
+        notePaths.add(path)
+      }
+    }
+    return notePaths.size >= options.minCooccurrenceNoteCount
+  })
 
-  const splitComponents = connected.flatMap(component => splitOversizedComponent(component, aggregates, edges, options))
+  const splitComponents = strongComponents.flatMap(component => splitOversizedComponent(component, aggregates, edges, options))
   let normalized = splitComponents
     .filter(component => component.length > 0)
     .sort((a, b) => componentScore(b, aggregates) - componentScore(a, aggregates) || a[0].localeCompare(b[0]))
-
-  const isolatedSorted = sortKeywordsBySignal(isolated, aggregates)
-  if (options.includeIsolated && isolatedSorted.length > 0) {
-    const canKeepSeparate = normalized.length < Math.max(1, options.maxClusters)
-    if (canKeepSeparate) {
-      normalized.push(isolatedSorted)
-    } else {
-      normalized[normalized.length - 1] = sortKeywordsBySignal([...normalized[normalized.length - 1], ...isolatedSorted], aggregates)
-    }
-  }
 
   normalized = normalized.map(component => component.slice(0, Math.max(1, options.maxKeywordsPerCluster)))
 
@@ -429,9 +434,7 @@ function buildClusters(
     const sorted = sortKeywordsBySignal(component, aggregates).slice(0, Math.max(1, options.maxKeywordsPerCluster))
     const notePaths = Array.from(new Set(sorted.flatMap(normalized => Array.from(aggregates.get(normalized)?.noteWeights.keys() ?? []))))
       .sort()
-    const label = sorted.length === 1 && components.length > 1
-      ? aggregates.get(sorted[0])?.keyword ?? '零散主题'
-      : buildClusterLabel(sorted, aggregates, index === components.length - 1 && component.length > 1)
+    const label = buildClusterLabel(sorted, aggregates)
     const position = clusterPosition(index, components.length)
     return {
       id: `cluster-${index}-${slugify(label)}`,
@@ -451,9 +454,11 @@ function buildClusters(
 function buildKeywordNodes(
   clusters: KeywordCluster[],
   aggregates: Map<string, KeywordAggregate>,
+  edges: KeywordClusterEdge[],
   options: KeywordClusterOptions,
 ): KeywordClusterKeyword[] {
   const nodes: KeywordClusterKeyword[] = []
+  const assigned = new Set<string>()
   for (const cluster of clusters) {
     const sorted = cluster.keywords
       .map(keyword => normalizeKeyword(keyword))
@@ -461,6 +466,7 @@ function buildKeywordNodes(
       .slice(0, Math.max(1, options.maxKeywordsPerCluster))
     sorted.forEach((normalized, index) => {
       const aggregate = aggregates.get(normalized)!
+      assigned.add(normalized)
       const angle = (index / Math.max(sorted.length, 1)) * Math.PI * 2 + ((index % 2) * 0.18)
       const orbit = cluster.radius + 24 + Math.floor(index / 8) * 16
       const avgWeight = aggregate.totalWeight / Math.max(aggregate.noteWeights.size, 1)
@@ -478,16 +484,37 @@ function buildKeywordNodes(
       })
     })
   }
+
+  const freeKeywords = sortKeywordsBySignal(
+    Array.from(aggregates.keys()).filter(normalized => !assigned.has(normalized)),
+    aggregates,
+  )
+  freeKeywords.forEach((normalized, index) => {
+    const aggregate = aggregates.get(normalized)!
+    const position = freeKeywordPosition(index, freeKeywords.length, clusters, edges, normalized)
+    const avgWeight = aggregate.totalWeight / Math.max(aggregate.noteWeights.size, 1)
+    nodes.push({
+      id: `keyword-${slugify(normalized)}`,
+      keyword: aggregate.keyword,
+      clusterId: null,
+      notePaths: Array.from(aggregate.noteWeights.keys()).sort(),
+      totalWeight: aggregate.totalWeight,
+      avgWeight,
+      noteCount: aggregate.noteWeights.size,
+      x: position.x,
+      y: position.y,
+      radius: Math.max(3.5, Math.min(11, 3 + Math.sqrt(aggregate.totalWeight) * 2.4 + aggregate.noteWeights.size * 0.8)),
+    })
+  })
   return nodes
 }
 
-function buildClusterLabel(sorted: string[], aggregates: Map<string, KeywordAggregate>, fallbackIsolated: boolean) {
-  if (fallbackIsolated && sorted.length > 3) return '零散主题'
+function buildClusterLabel(sorted: string[], aggregates: Map<string, KeywordAggregate>) {
   const labels = sorted
     .map(normalized => aggregates.get(normalized)?.keyword ?? normalized)
     .filter(keyword => keyword.length <= 18)
     .slice(0, 2)
-  return labels.length > 0 ? labels.join(' / ') : '零散主题'
+  return labels.length > 0 ? labels.join(' / ') : '主题'
 }
 
 function normalizeKeyword(keyword: string) {
@@ -542,12 +569,62 @@ function getEdgeWeight(a: string, b: string, edges: KeywordClusterEdge[]) {
 function clusterPosition(index: number, total: number) {
   if (index === 0) return { x: 0, y: 0 }
   const goldenAngle = Math.PI * (3 - Math.sqrt(5))
-  const radius = 210 + Math.sqrt(index) * 82 + total * 7
+  const radius = 230 + Math.sqrt(index) * 92 + total * 8
   const angle = index * goldenAngle
   return {
     x: Math.cos(angle) * radius,
     y: Math.sin(angle) * radius,
   }
+}
+
+function freeKeywordPosition(
+  index: number,
+  total: number,
+  clusters: KeywordCluster[],
+  edges: KeywordClusterEdge[],
+  normalized: string,
+) {
+  const nearestCluster = findNearestClusterByEdges(normalized, clusters, edges)
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5))
+  const ring = Math.floor(index / 18)
+
+  if (nearestCluster) {
+    const angle = index * goldenAngle + ring * 0.23
+    const radius = nearestCluster.radius + 118 + (index % 9) * 20 + ring * 42
+    return {
+      x: nearestCluster.x + Math.cos(angle) * radius,
+      y: nearestCluster.y + Math.sin(angle) * radius,
+    }
+  }
+
+  const angle = index * goldenAngle
+  const radius = 340 + Math.sqrt(index + 1) * 58 + Math.min(total, 80) * 2.5
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius,
+  }
+}
+
+function findNearestClusterByEdges(
+  normalized: string,
+  clusters: KeywordCluster[],
+  edges: KeywordClusterEdge[],
+) {
+  let best: KeywordCluster | null = null
+  let bestScore = 0
+  for (const cluster of clusters) {
+    const clusterKeywords = new Set(cluster.keywords.map(keyword => normalizeKeyword(keyword)))
+    const score = edges.reduce((sum, edge) => {
+      if (edge.source === normalized && clusterKeywords.has(edge.target)) return sum + edge.weight
+      if (edge.target === normalized && clusterKeywords.has(edge.source)) return sum + edge.weight
+      return sum
+    }, 0)
+    if (score > bestScore) {
+      best = cluster
+      bestScore = score
+    }
+  }
+  return best
 }
 
 function getKeywordNodeByNormalized(nodes: KeywordClusterKeyword[], normalized: string) {

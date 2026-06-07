@@ -37,6 +37,7 @@ test('buildKeywordClusterGraph filters deleted files and creates traceable clust
   const graph = buildKeywordClusterGraph(topics, fileTree, {
     topKeywordsPerNote: 12,
     minKeywordNoteCount: 1,
+    minCooccurrenceNoteCount: 1,
     maxClusters: 12,
     maxKeywordsPerCluster: 30,
     includeIsolated: true,
@@ -46,4 +47,29 @@ test('buildKeywordClusterGraph filters deleted files and creates traceable clust
   assert.ok(graph.clusters.length > 0)
   assert.ok(graph.keywordNodes.some((node) => node.keyword === 'AI 写作'))
   assert.ok(graph.noteIndex.has('AI.md'))
+})
+
+test('buildKeywordClusterGraph keeps weak keywords as free visible points instead of a loose bucket', () => {
+  const topics = [
+    { filename: 'AI.md', keyword: 'AI Agent', weight: 0.9, source: 'textrank', updated_at: 1 },
+    { filename: 'AI.md', keyword: '规划', weight: 0.8, source: 'textrank', updated_at: 1 },
+    { filename: 'Product.md', keyword: 'AI Agent', weight: 0.9, source: 'textrank', updated_at: 1 },
+    { filename: 'Product.md', keyword: '规划', weight: 0.75, source: 'textrank', updated_at: 1 },
+    { filename: 'Archive/Old.md', keyword: '孤立关键词', weight: 0.6, source: 'textrank', updated_at: 1 },
+  ]
+
+  const graph = buildKeywordClusterGraph(topics, fileTree, {
+    topKeywordsPerNote: 12,
+    minKeywordNoteCount: 1,
+    minCooccurrenceNoteCount: 2,
+    maxClusters: 12,
+    maxKeywordsPerCluster: 30,
+    includeIsolated: true,
+  })
+
+  assert.ok(graph.clusters.some((cluster) => cluster.keywords.includes('AI Agent')))
+  const loose = graph.keywordNodes.find((node) => node.keyword === '孤立关键词')
+  assert.ok(loose)
+  assert.equal(loose.clusterId, null)
+  assert.equal(graph.clusters.some((cluster) => cluster.label === '零散主题'), false)
 })

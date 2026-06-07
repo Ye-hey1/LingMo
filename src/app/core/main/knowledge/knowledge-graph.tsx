@@ -224,6 +224,7 @@ type KeywordClusterSettings = KeywordClusterOptions & {
 const DEFAULT_KEYWORD_SETTINGS: KeywordClusterSettings = {
   topKeywordsPerNote: 12,
   minKeywordNoteCount: 1,
+  minCooccurrenceNoteCount: 2,
   maxClusters: 14,
   maxKeywordsPerCluster: 30,
   includeIsolated: true,
@@ -1813,9 +1814,9 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
             {viewMode === 'keywords' && (
               <SettingSection icon={SlidersHorizontal} title="关键词聚类">
                 <RangeRow label="最小文章数" value={keywordSettings.minKeywordNoteCount} min={1} max={5} step={1} onChange={value => updateKeywordSettings('minKeywordNoteCount', value)} />
-                <RangeRow label="每簇关键词数" value={keywordSettings.maxKeywordsPerCluster} min={8} max={60} step={1} onChange={value => updateKeywordSettings('maxKeywordsPerCluster', value)} />
+                <RangeRow label="主题共现文章数" value={keywordSettings.minCooccurrenceNoteCount} min={1} max={5} step={1} onChange={value => updateKeywordSettings('minCooccurrenceNoteCount', value)} />
+                <RangeRow label="每主题关键词数" value={keywordSettings.maxKeywordsPerCluster} min={8} max={60} step={1} onChange={value => updateKeywordSettings('maxKeywordsPerCluster', value)} />
                 <RangeRow label="主题数量上限" value={keywordSettings.maxClusters} min={4} max={20} step={1} onChange={value => updateKeywordSettings('maxClusters', value)} />
-                <ToggleRow label="显示零散主题" checked={keywordSettings.includeIsolated} onChange={value => updateKeywordSettings('includeIsolated', value)} />
                 <ToggleRow label="显示关键词标签" checked={keywordSettings.showLabels} onChange={value => updateKeywordSettings('showLabels', value)} />
               </SettingSection>
             )}
