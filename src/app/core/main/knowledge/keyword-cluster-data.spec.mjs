@@ -40,7 +40,6 @@ test('buildKeywordClusterGraph filters deleted files and creates traceable clust
     minCooccurrenceNoteCount: 1,
     maxClusters: 12,
     maxKeywordsPerCluster: 30,
-    includeIsolated: true,
   })
 
   assert.equal(graph.keywordIndex.has('幽灵关键词'), false)
@@ -64,7 +63,6 @@ test('buildKeywordClusterGraph keeps weak keywords as free visible points instea
     minCooccurrenceNoteCount: 2,
     maxClusters: 12,
     maxKeywordsPerCluster: 30,
-    includeIsolated: true,
   })
 
   assert.ok(graph.clusters.some((cluster) => cluster.keywords.includes('AI Agent')))

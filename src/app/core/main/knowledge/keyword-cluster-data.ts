@@ -7,7 +7,6 @@ export interface KeywordClusterOptions {
   minCooccurrenceNoteCount: number
   maxClusters: number
   maxKeywordsPerCluster: number
-  includeIsolated: boolean
 }
 
 export interface KeywordClusterGraph {
@@ -82,7 +81,6 @@ const DEFAULT_OPTIONS: KeywordClusterOptions = {
   minCooccurrenceNoteCount: 2,
   maxClusters: 14,
   maxKeywordsPerCluster: 30,
-  includeIsolated: true,
 }
 
 const CLUSTER_COLORS = [

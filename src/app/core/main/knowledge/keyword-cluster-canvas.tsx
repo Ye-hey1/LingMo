@@ -41,6 +41,7 @@ export function KeywordClusterCanvas({
   })
   const [view, setView] = useState<ViewTransform>({ zoom: 1, pan: { x: 0, y: 0 } })
   const [hovered, setHovered] = useState<KeywordClusterSelection | null>(null)
+  const animationStartRef = useRef(0)
 
   const keywordById = useMemo(() => {
     const index = new Map<string, KeywordClusterKeyword>()
@@ -67,13 +68,21 @@ export function KeywordClusterCanvas({
 
   useEffect(() => {
     fitGraph()
+    animationStartRef.current = 0
   }, [fitGraph])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+    let rafId = 0
+    let cancelled = false
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-    const render = () => {
+    const render = (now: number) => {
+      if (!animationStartRef.current) animationStartRef.current = now
+      const elapsed = reducedMotion ? 900 : now - animationStartRef.current
+      const progress = reducedMotion ? 1 : easeOutCubic(clamp(elapsed / 720, 0, 1))
+      const pulse = reducedMotion ? 0 : Math.sin(now / 820) * 0.5 + 0.5
       const rect = canvas.getBoundingClientRect()
       const dpr = window.devicePixelRatio || 1
       const width = Math.max(1, Math.floor(rect.width * dpr))
@@ -90,16 +99,25 @@ export function KeywordClusterCanvas({
       ctx.clearRect(0, 0, rect.width, rect.height)
       ctx.fillStyle = getCanvasBackground()
       ctx.fillRect(0, 0, rect.width, rect.height)
+      drawBackdrop(ctx, rect.width, rect.height, progress)
       ctx.translate(rect.width / 2 + view.pan.x, rect.height / 2 + view.pan.y)
       ctx.scale(view.zoom, view.zoom)
 
-      drawEdges(ctx, graph, keywordById, hovered, selectedId)
-      drawClusters(ctx, graph, hovered, selectedId)
-      drawKeywords(ctx, graph, hovered, selectedId, showLabels)
+      drawEdges(ctx, graph, keywordById, hovered, selectedId, progress)
+      drawClusters(ctx, graph, hovered, selectedId, progress, pulse)
+      drawKeywords(ctx, graph, hovered, selectedId, showLabels, progress, pulse)
       ctx.restore()
+
+      if (!cancelled && !reducedMotion && (progress < 1 || hovered || selectedId)) {
+        rafId = requestAnimationFrame(render)
+      }
     }
 
-    render()
+    rafId = requestAnimationFrame(render)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(rafId)
+    }
   }, [graph, hovered, keywordById, selectedId, showLabels, view])
 
   const toWorldPoint = useCallback((clientX: number, clientY: number) => {
@@ -246,21 +264,28 @@ function drawEdges(
   keywordById: Map<string, KeywordClusterKeyword>,
   hovered: KeywordClusterSelection | null,
   selectedId: string | null,
+  progress: number,
 ) {
   const focusId = hovered?.id ?? selectedId
   for (const edge of graph.edges) {
-    const active = isFocusedEdge(edge.source, edge.target, focusId)
-    if (edge.type === 'keyword-cooccurrence' && !active && (edge.noteCount ?? 0) < 3) continue
+    if (edge.type === 'keyword-cooccurrence' && !isFocusedEdge(edge.source, edge.target, focusId)) continue
     const source = getNodePosition(graph, keywordById, edge.source)
     const target = getNodePosition(graph, keywordById, edge.target)
     if (!source || !target) continue
+    const active = isFocusedEdge(edge.source, edge.target, focusId)
     ctx.beginPath()
     ctx.moveTo(source.x, source.y)
-    ctx.lineTo(target.x, target.y)
+    if (edge.type === 'cluster-keyword') {
+      const midX = (source.x + target.x) / 2
+      const midY = (source.y + target.y) / 2
+      ctx.quadraticCurveTo(midX, midY, target.x, target.y)
+    } else {
+      ctx.lineTo(target.x, target.y)
+    }
     ctx.strokeStyle = edge.type === 'cluster-keyword'
-      ? withAlpha(source.color ?? '#64748b', active ? 0.42 : 0.16)
-      : `rgba(79, 70, 229, ${active ? 0.34 : 0.1})`
-    ctx.lineWidth = edge.type === 'cluster-keyword' ? 1.1 : Math.min(2.5, 0.5 + (edge.noteCount ?? 1) * 0.35)
+      ? withAlpha(source.color ?? '#64748b', (active ? 0.38 : 0.12) * progress)
+      : `rgba(100, 116, 139, ${(active ? 0.36 : 0.1) * progress})`
+    ctx.lineWidth = edge.type === 'cluster-keyword' ? 0.95 : Math.min(2.2, 0.45 + edge.weight * 0.34)
     ctx.stroke()
   }
 }
@@ -270,6 +295,8 @@ function drawClusters(
   graph: KeywordClusterGraph,
   hovered: KeywordClusterSelection | null,
   selectedId: string | null,
+  progress: number,
+  pulse: number,
 ) {
   const focusClusterId = hovered?.type === 'keyword'
     ? graph.keywordNodes.find(keyword => keyword.id === hovered.id)?.clusterId
@@ -278,30 +305,43 @@ function drawClusters(
   for (const cluster of graph.clusters) {
     const active = cluster.id === focusClusterId || cluster.id === selectedId
     const dimmed = Boolean(focusClusterId) && !active
+    const enter = getStaggeredProgress(progress, cluster.id, 0.24)
+    const radius = cluster.radius * (0.92 + enter * 0.08) + (active ? 2 + pulse * 4 : pulse * 1.2)
     ctx.save()
-    ctx.globalAlpha = dimmed ? 0.32 : 1
+    ctx.globalAlpha = (dimmed ? 0.32 : 1) * enter
+    ctx.shadowColor = withAlpha(cluster.color, active ? 0.22 : 0.08)
+    ctx.shadowBlur = active ? 18 : 7
     ctx.beginPath()
-    ctx.arc(cluster.x, cluster.y, cluster.radius, 0, Math.PI * 2)
-    ctx.fillStyle = withAlpha(cluster.color, active ? 0.1 : 0.045)
+    ctx.arc(cluster.x, cluster.y, radius, 0, Math.PI * 2)
+    ctx.fillStyle = withAlpha(cluster.color, active ? 0.105 : 0.045)
     ctx.fill()
-    ctx.lineWidth = active ? 3.2 : 2
-    ctx.strokeStyle = withAlpha(cluster.color, active ? 0.82 : 0.5)
+    ctx.shadowBlur = 0
+    ctx.lineWidth = active ? 2.4 : 1.25
+    ctx.strokeStyle = withAlpha(cluster.color, active ? 0.72 : 0.34)
     ctx.stroke()
+    ctx.setLineDash([6, 9])
+    ctx.lineDashOffset = -pulse * 8
+    ctx.beginPath()
+    ctx.arc(cluster.x, cluster.y, radius + 14, 0, Math.PI * 2)
+    ctx.strokeStyle = withAlpha(cluster.color, active ? 0.22 : 0.12)
+    ctx.lineWidth = 1
+    ctx.stroke()
+    ctx.setLineDash([])
     if (active) {
       ctx.beginPath()
-      ctx.arc(cluster.x, cluster.y, cluster.radius + 8, 0, Math.PI * 2)
-      ctx.strokeStyle = withAlpha(cluster.color, 0.2)
-      ctx.lineWidth = 8
+      ctx.arc(cluster.x, cluster.y, radius + 24 + pulse * 5, 0, Math.PI * 2)
+      ctx.strokeStyle = withAlpha(cluster.color, 0.12)
+      ctx.lineWidth = 10
       ctx.stroke()
     }
     ctx.fillStyle = getTextColor()
-    ctx.font = '700 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    ctx.font = '650 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    drawFittedText(ctx, cluster.label, cluster.x, cluster.y - 7, Math.max(44, cluster.radius * 1.45))
-    ctx.font = '11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    drawFittedText(ctx, cluster.label, cluster.x, cluster.y - 8, Math.max(58, cluster.radius * 1.55))
+    ctx.font = '500 11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     ctx.fillStyle = getMutedTextColor()
-    ctx.fillText(`${cluster.noteCount} 篇 / ${cluster.keywords.length} 词`, cluster.x, cluster.y + 14)
+    ctx.fillText(`${cluster.noteCount} 篇 · ${cluster.keywords.length} 词`, cluster.x, cluster.y + 14)
     ctx.restore()
   }
 }
@@ -312,39 +352,69 @@ function drawKeywords(
   hovered: KeywordClusterSelection | null,
   selectedId: string | null,
   showLabels: boolean,
+  progress: number,
+  pulse: number,
 ) {
   const focusClusterId = hovered?.type === 'cluster'
     ? hovered.id
     : graph.keywordNodes.find(keyword => keyword.id === (hovered?.id ?? selectedId))?.clusterId
+  const hasClusterFocus = Boolean(focusClusterId)
 
   for (const keyword of graph.keywordNodes) {
     const cluster = graph.clusters.find(item => item.id === keyword.clusterId)
-    const color = cluster?.color ?? freeKeywordColor(keyword)
-    const active = keyword.id === hovered?.id || keyword.id === selectedId || Boolean(focusClusterId && keyword.clusterId === focusClusterId)
-    const dimmed = Boolean(focusClusterId) && !active
+    const color = cluster?.color ?? getFreeKeywordColor()
+    const active = keyword.id === hovered?.id || keyword.id === selectedId || (hasClusterFocus && keyword.clusterId === focusClusterId)
+    const dimmed = hasClusterFocus && !active
+    const enter = getStaggeredProgress(progress, keyword.id, 0.42)
+    const radius = keyword.radius * (0.72 + enter * 0.28) + (active ? 1.4 + pulse * 1.4 : 0)
     ctx.save()
-    ctx.globalAlpha = dimmed ? 0.28 : 1
+    ctx.globalAlpha = (dimmed ? 0.24 : 1) * enter
+    ctx.shadowColor = withAlpha(color, active ? 0.3 : 0.12)
+    ctx.shadowBlur = active ? 12 : 5
     ctx.beginPath()
-    ctx.arc(keyword.x, keyword.y, keyword.radius, 0, Math.PI * 2)
-    ctx.fillStyle = withAlpha(color, active ? 0.95 : keyword.clusterId ? 0.78 : 0.72)
+    ctx.arc(keyword.x, keyword.y, radius, 0, Math.PI * 2)
+    ctx.fillStyle = withAlpha(color, active ? 0.9 : keyword.clusterId ? 0.68 : 0.5)
     ctx.fill()
-    ctx.lineWidth = active ? 2.2 : keyword.clusterId ? 1 : 0.8
-    ctx.strokeStyle = withAlpha('#ffffff', active ? 0.9 : 0.48)
+    ctx.shadowBlur = 0
+    ctx.lineWidth = active ? 2 : 0.9
+    ctx.strokeStyle = keyword.clusterId
+      ? withAlpha('#ffffff', active ? 0.88 : 0.54)
+      : withAlpha(color, active ? 0.5 : 0.26)
     ctx.stroke()
     if (showLabels || active) {
-      ctx.font = `${active ? 600 : 500} 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
+      ctx.font = `${active ? 650 : 520} ${active ? 12.5 : 11.5}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
       const label = trimLabel(keyword.keyword, active ? 18 : 12)
-      const width = ctx.measureText(label).width + 10
-      ctx.fillStyle = getLabelBackground()
-      roundRect(ctx, keyword.x - width / 2, keyword.y + keyword.radius + 5, width, 20, 6)
+      const width = ctx.measureText(label).width + 12
+      const labelY = keyword.y + radius + 7
+      ctx.fillStyle = getLabelBackground(active)
+      roundRect(ctx, keyword.x - width / 2, labelY, width, 21, 7)
       ctx.fill()
-      ctx.fillStyle = active ? color : keyword.clusterId ? getTextColor() : getMutedTextColor()
-      ctx.fillText(label, keyword.x, keyword.y + keyword.radius + 9)
+      ctx.strokeStyle = withAlpha(color, active ? 0.22 : 0.09)
+      ctx.lineWidth = 0.8
+      ctx.stroke()
+      ctx.fillStyle = active ? color : getKeywordTextColor()
+      ctx.fillText(label, keyword.x, labelY + 4.3)
     }
     ctx.restore()
   }
+}
+
+function drawBackdrop(ctx: CanvasRenderingContext2D, width: number, height: number, progress: number) {
+  ctx.save()
+  ctx.globalAlpha = 0.9 * progress
+  const gradient = ctx.createRadialGradient(width * 0.5, height * 0.48, 40, width * 0.5, height * 0.5, Math.max(width, height) * 0.68)
+  if (isDarkMode()) {
+    gradient.addColorStop(0, 'rgba(39,39,42,0.28)')
+    gradient.addColorStop(1, 'rgba(9,9,11,0)')
+  } else {
+    gradient.addColorStop(0, 'rgba(244,244,245,0.82)')
+    gradient.addColorStop(1, 'rgba(255,255,255,0)')
+  }
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, width, height)
+  ctx.restore()
 }
 
 function getNodePosition(
@@ -357,7 +427,7 @@ function getNodePosition(
   const keyword = keywordById.get(id)
   if (!keyword) return null
   const keywordCluster = graph.clusters.find(item => item.id === keyword.clusterId)
-  return { x: keyword.x, y: keyword.y, color: keywordCluster?.color ?? freeKeywordColor(keyword) }
+  return { x: keyword.x, y: keyword.y, color: keywordCluster?.color ?? getFreeKeywordColor() }
 }
 
 function getGraphBounds(graph: KeywordClusterGraph) {
@@ -423,20 +493,6 @@ function trimLabel(label: string, limit: number) {
   return label.length > limit ? `${label.slice(0, limit - 1)}...` : label
 }
 
-function freeKeywordColor(keyword: KeywordClusterKeyword) {
-  const palette = ['#14b8a6', '#06b6d4', '#f59e0b', '#64748b', '#84cc16']
-  return palette[Math.abs(hashString(keyword.keyword)) % palette.length]
-}
-
-function hashString(input: string) {
-  let hash = 0
-  for (let index = 0; index < input.length; index++) {
-    hash = (hash << 5) - hash + input.charCodeAt(index)
-    hash |= 0
-  }
-  return hash
-}
-
 function distanceBetween(x1: number, y1: number, x2: number, y2: number) {
   const dx = x2 - x1
   const dy = y2 - y1
@@ -447,24 +503,54 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
+function easeOutCubic(value: number) {
+  return 1 - Math.pow(1 - value, 3)
+}
+
+function getStaggeredProgress(progress: number, id: string, spread: number) {
+  const delay = (hashString(id) % 100) / 100 * spread
+  return easeOutCubic(clamp((progress - delay) / Math.max(0.1, 1 - delay), 0, 1))
+}
+
+function hashString(input: string) {
+  let hash = 0
+  for (let index = 0; index < input.length; index++) {
+    hash = (hash << 5) - hash + input.charCodeAt(index)
+    hash |= 0
+  }
+  return Math.abs(hash)
+}
+
+function isDarkMode() {
+  return typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+}
+
 function getCanvasBackground() {
   if (typeof document === 'undefined') return '#ffffff'
-  return document.documentElement.classList.contains('dark') ? '#09090b' : '#ffffff'
+  return isDarkMode() ? '#09090b' : '#ffffff'
 }
 
 function getTextColor() {
   if (typeof document === 'undefined') return '#18181b'
-  return document.documentElement.classList.contains('dark') ? '#f4f4f5' : '#18181b'
+  return isDarkMode() ? '#f4f4f5' : '#18181b'
 }
 
 function getMutedTextColor() {
   if (typeof document === 'undefined') return '#71717a'
-  return document.documentElement.classList.contains('dark') ? '#a1a1aa' : '#71717a'
+  return isDarkMode() ? '#a1a1aa' : '#71717a'
 }
 
-function getLabelBackground() {
-  if (typeof document === 'undefined') return 'rgba(255,255,255,0.82)'
-  return document.documentElement.classList.contains('dark')
-    ? 'rgba(24,24,27,0.78)'
-    : 'rgba(255,255,255,0.82)'
+function getKeywordTextColor() {
+  if (typeof document === 'undefined') return '#27272a'
+  return isDarkMode() ? '#e4e4e7' : '#27272a'
+}
+
+function getFreeKeywordColor() {
+  return isDarkMode() ? '#94a3b8' : '#475569'
+}
+
+function getLabelBackground(active = false) {
+  if (typeof document === 'undefined') return 'rgba(255,255,255,0.9)'
+  if (isDarkMode()) return active ? 'rgba(24,24,27,0.92)' : 'rgba(24,24,27,0.78)'
+  return active ? 'rgba(255,255,255,0.96)' : 'rgba(255,255,255,0.84)'
 }

@@ -227,7 +227,6 @@ const DEFAULT_KEYWORD_SETTINGS: KeywordClusterSettings = {
   minCooccurrenceNoteCount: 2,
   maxClusters: 14,
   maxKeywordsPerCluster: 30,
-  includeIsolated: true,
   showLabels: true,
 }
 
