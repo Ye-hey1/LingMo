@@ -26,6 +26,8 @@ import useArticleStore from '@/stores/article'
 import { useNoteIndexStore, type Backlink } from '@/stores/note-index'
 import { useKnowledgeGraphTagsStore, type GraphTagGroup } from '@/stores/knowledge-graph-tags'
 import { DetailPanel } from './detail-panel'
+import { KeywordClusterCanvas } from './keyword-cluster-canvas'
+import { KeywordClusterDetailPanel } from './keyword-cluster-detail-panel'
 import { buildQuadTree, computeBarnesHutForce, computeBounds } from './quadtree'
 import emitter from '@/lib/emitter'
 import {
@@ -35,6 +37,12 @@ import {
   parseGraphTagDrop,
 } from '@/lib/knowledge-graph-tags'
 import type { DirTree } from '@/stores/article'
+import type { NoteTopic } from '@/db/note-topics'
+import {
+  buildKeywordClusterGraph,
+  type KeywordClusterOptions,
+  type KeywordClusterSelection,
+} from './keyword-cluster-data'
 
 function cosineSimilarity(vecA: number[], vecB: number[]): number {
   const len = Math.min(vecA.length, vecB.length)
@@ -78,6 +86,7 @@ function buildSemanticEdges(
 
 type NodeKind = 'current' | 'hub' | 'linked' | 'note'
 type SettingsPanel = 'filter' | 'color' | 'appearance' | 'force'
+type KnowledgeGraphViewMode = 'relations' | 'keywords'
 
 interface GraphNode {
   id: string
@@ -205,6 +214,19 @@ const DEFAULT_SETTINGS: GraphSettings = {
   semanticThreshold: 0.78,
   showKeywordEdges: false,
   showLLMEdges: false,
+}
+
+type KeywordClusterSettings = KeywordClusterOptions & {
+  showLabels: boolean
+}
+
+const DEFAULT_KEYWORD_SETTINGS: KeywordClusterSettings = {
+  topKeywordsPerNote: 12,
+  minKeywordNoteCount: 1,
+  maxClusters: 14,
+  maxKeywordsPerCluster: 30,
+  includeIsolated: true,
+  showLabels: true,
 }
 
 const SETTINGS_PANELS: Array<{ key: SettingsPanel; label: string; icon: typeof SlidersHorizontal }> = [
@@ -869,6 +891,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
   const { fileTree, setActiveFilePath } = useArticleStore()
   const { backlinks, buildIndex, isBuilding, isIndexed } = useNoteIndexStore()
   const { tagGroups, initTagGroups, addTagGroup: addStoredTagGroup, removeTagGroup: removeStoredTagGroup } = useKnowledgeGraphTagsStore()
+  const [viewMode, setViewMode] = useState<KnowledgeGraphViewMode>('relations')
   const [hoveredNode, setHoveredNode] = useState<string | null>(null)
   const [, setHoveredNodePos] = useState<{ x: number; y: number } | null>(null)
   const [zoom, setZoom] = useState(1)
@@ -889,6 +912,10 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
   const [timeThreshold, setTimeThreshold] = useState<number | null>(null)
   const [isScrubbing, setIsScrubbing] = useState(false)
   const [isComputingRelations, setIsComputingRelations] = useState(false)
+  const [keywordTopics, setKeywordTopics] = useState<NoteTopic[]>([])
+  const [keywordTopicsLoading, setKeywordTopicsLoading] = useState(false)
+  const [keywordSelection, setKeywordSelection] = useState<KeywordClusterSelection | null>(null)
+  const [keywordSettings, setKeywordSettings] = useState<KeywordClusterSettings>(DEFAULT_KEYWORD_SETTINGS)
   const clickTimerRef = useRef<number | null>(null)
   const lastClickedNodeRef = useRef<string | null>(null)
 
@@ -969,6 +996,10 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
     () => applyGraphFilters(baseGraphData, settings, tagGroups, focusPath),
     [baseGraphData, focusPath, settings.activeTagGroupId, settings.focusLinkedOnly, settings.minConnections, settings.showIsolated, settings.showSemanticEdges, tagGroups],
   )
+  const keywordClusterGraph = useMemo(
+    () => buildKeywordClusterGraph(keywordTopics, fileTree, keywordSettings),
+    [fileTree, keywordSettings, keywordTopics],
+  )
 
   // Timeline: 按 modifiedAt 时间排序（如果有的话），否则退回到文件索引顺序
   const timelineSortedNodes = useMemo(() => {
@@ -1003,6 +1034,35 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
     !settings.showIsolated ||
     settings.showSemanticEdges
   const palette = settings.colors
+
+  useEffect(() => {
+    if (viewMode !== 'keywords') return
+
+    let cancelled = false
+    const loadKeywordTopics = async () => {
+      setKeywordTopicsLoading(true)
+      try {
+        const { getAllTopics } = await import('@/db/note-topics')
+        const topics = await getAllTopics()
+        if (!cancelled) setKeywordTopics(topics)
+      } catch {
+        if (!cancelled) setKeywordTopics([])
+      } finally {
+        if (!cancelled) setKeywordTopicsLoading(false)
+      }
+    }
+
+    void loadKeywordTopics()
+    return () => { cancelled = true }
+  }, [fileTree, viewMode])
+
+  useEffect(() => {
+    if (!keywordSelection) return
+    const stillExists = keywordSelection.type === 'cluster'
+      ? keywordClusterGraph.clusters.some(cluster => cluster.id === keywordSelection.id)
+      : keywordClusterGraph.keywordNodes.some(keyword => keyword.id === keywordSelection.id)
+    if (!stillExists) setKeywordSelection(null)
+  }, [keywordClusterGraph, keywordSelection])
 
   useEffect(() => {
     if (!isIndexed && !isBuilding && fileTree.length > 0) {
@@ -1064,6 +1124,10 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
       needsSimulationRef.current = true
       animationRef.current = requestAnimationFrame(renderRef.current)
     }
+  }, [])
+
+  const updateKeywordSettings = useCallback(<K extends keyof KeywordClusterSettings>(key: K, value: KeywordClusterSettings[K]) => {
+    setKeywordSettings(current => ({ ...current, [key]: value }))
   }, [])
 
   const updateColor = useCallback((key: keyof GraphPalette, value: string) => {
@@ -1543,6 +1607,16 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
     setHighlightedNode(null)
   }, [setActiveFilePath])
 
+  const handleLocateInRelationGraph = useCallback((path: string) => {
+    setViewMode('relations')
+    setKeywordSelection(null)
+    setSelectedNode(path)
+    setDetailPanelOpen(true)
+    requestAnimationFrame(() => {
+      emitter.emit('graph-locate-node' as any, { path })
+    })
+  }, [])
+
   const resetView = useCallback(() => {
     setZoom(1)
     setPan({ x: 0, y: 0 })
@@ -1605,46 +1679,67 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,rgba(217,119,6,0.07),transparent_24%),radial-gradient(circle_at_82%_20%,rgba(120,113,108,0.10),transparent_22%)]" />
 
       <div className="absolute left-3 top-3 z-[2] flex items-center gap-1 rounded-full border border-border/70 bg-background/72 p-1 shadow-md backdrop-blur-sm dark:border-border/50 dark:bg-background/72">
-        <button
-          className="relative inline-flex h-8 w-8 items-center justify-center rounded-full text-foreground/80 transition hover:bg-muted focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-foreground/80 dark:hover:bg-muted"
-          title={isReplaying ? '暂停回放' : '时间回放'}
-          onClick={handleReplayButton}
-        >
-          {isReplaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-          <span
-            className="absolute bottom-1 left-1/2 h-0.5 -translate-x-1/2 rounded-full transition-[width]"
-            style={{ width: `${Math.max(8, replayProgress * 24)}px`, backgroundColor: palette.accent }}
-          />
-        </button>
-        <button
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
-          title="重放"
-          onClick={restartReplay}
-        >
-          <RefreshCw className="h-4 w-4" />
-        </button>
-        <span className="mx-0.5 h-5 w-px bg-border dark:bg-white/10" />
-        <button
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
-          title="缩小"
-          onClick={() => setZoom(value => clamp(value / 1.18, MIN_ZOOM, MAX_ZOOM))}
-        >
-          <ZoomOut className="h-4 w-4" />
-        </button>
-        <button
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
-          title="放大"
-          onClick={() => setZoom(value => clamp(value * 1.18, MIN_ZOOM, MAX_ZOOM))}
-        >
-          <ZoomIn className="h-4 w-4" />
-        </button>
-        <button
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
-          title="复位视图"
-          onClick={resetView}
-        >
-          <LocateFixed className="h-4 w-4" />
-        </button>
+        <div className="flex rounded-full bg-muted/70 p-0.5 dark:bg-muted/70">
+          <button
+            type="button"
+            className={`h-7 rounded-full px-3 text-[12px] transition active:scale-[0.97] ${viewMode === 'relations' ? 'bg-foreground text-background shadow-sm dark:bg-foreground dark:text-background' : 'text-muted-foreground hover:text-foreground'}`}
+            onClick={() => setViewMode('relations')}
+          >
+            关系图谱
+          </button>
+          <button
+            type="button"
+            className={`h-7 rounded-full px-3 text-[12px] transition active:scale-[0.97] ${viewMode === 'keywords' ? 'bg-foreground text-background shadow-sm dark:bg-foreground dark:text-background' : 'text-muted-foreground hover:text-foreground'}`}
+            onClick={() => setViewMode('keywords')}
+          >
+            关键词聚类
+          </button>
+        </div>
+        {viewMode === 'relations' && (
+          <>
+            <span className="mx-0.5 h-5 w-px bg-border dark:bg-white/10" />
+            <button
+              className="relative inline-flex h-8 w-8 items-center justify-center rounded-full text-foreground/80 transition hover:bg-muted focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-foreground/80 dark:hover:bg-muted"
+              title={isReplaying ? '暂停回放' : '时间回放'}
+              onClick={handleReplayButton}
+            >
+              {isReplaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              <span
+                className="absolute bottom-1 left-1/2 h-0.5 -translate-x-1/2 rounded-full transition-[width]"
+                style={{ width: `${Math.max(8, replayProgress * 24)}px`, backgroundColor: palette.accent }}
+              />
+            </button>
+            <button
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
+              title="重放"
+              onClick={restartReplay}
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
+            <span className="mx-0.5 h-5 w-px bg-border dark:bg-white/10" />
+            <button
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
+              title="缩小"
+              onClick={() => setZoom(value => clamp(value / 1.18, MIN_ZOOM, MAX_ZOOM))}
+            >
+              <ZoomOut className="h-4 w-4" />
+            </button>
+            <button
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
+              title="放大"
+              onClick={() => setZoom(value => clamp(value * 1.18, MIN_ZOOM, MAX_ZOOM))}
+            >
+              <ZoomIn className="h-4 w-4" />
+            </button>
+            <button
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/30 active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
+              title="复位视图"
+              onClick={resetView}
+            >
+              <LocateFixed className="h-4 w-4" />
+            </button>
+          </>
+        )}
         <span className="mx-0.5 h-5 w-px bg-border dark:bg-white/10" />
         <button
           className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition active:scale-[0.96] ${settingsOpen ? 'bg-foreground text-background dark:bg-foreground dark:text-background' : 'text-muted-foreground hover:bg-muted hover:text-foreground dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'}`}
@@ -1831,7 +1926,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
       )}
 
       {/* Timeline scrubber — 只在回放或拖动时显示 */}
-      {timeRange && (isReplaying || isScrubbing || timeThreshold !== null) && (
+      {viewMode === 'relations' && timeRange && (isReplaying || isScrubbing || timeThreshold !== null) && (
         <div className="absolute bottom-3 left-1/2 z-[3] -translate-x-1/2 w-[calc(100%-2rem)] max-w-[640px]">
           <div className="flex items-center gap-2.5 rounded-full border border-border/60 bg-background/88 px-4 py-2 shadow-sm backdrop-blur-sm dark:border-border/40 dark:bg-background/88 animate-in fade-in slide-in-from-bottom-2 duration-200">
             {/* 播放/暂停按钮 */}
@@ -1900,185 +1995,208 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
         </div>
       )}
 
-      {graphData.nodes.length === 0 ? (
-        <div className="relative z-[1] flex h-full flex-col items-center justify-center px-8 text-center">
-          <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl border bg-background text-muted-foreground dark:border-border/50 dark:bg-background">
-            <GitBranch className="h-5 w-5" />
+      {viewMode === 'relations' ? (
+        graphData.nodes.length === 0 ? (
+          <div className="relative z-[1] flex h-full flex-col items-center justify-center px-8 text-center">
+            <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl border bg-background text-muted-foreground dark:border-border/50 dark:bg-background">
+              <GitBranch className="h-5 w-5" />
+            </div>
+            <div className="text-sm font-medium">
+              {baseGraphData.nodes.length > 0 && hasGraphFilters ? '当前筛选没有匹配节点' : '还没有可生成的 Markdown 节点'}
+            </div>
+            <div className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
+              {baseGraphData.nodes.length > 0 && hasGraphFilters
+                ? '当前标签、邻域或关系数筛选隐藏了全部节点，清除筛选后可恢复显示。'
+                : '创建或打开 Markdown 笔记后，图谱会根据双链关系自动生成。'}
+            </div>
+            {baseGraphData.nodes.length > 0 && hasGraphFilters ? (
+              <button
+                type="button"
+                className="mt-4 rounded-full bg-foreground px-4 py-2 text-xs font-medium text-background transition hover:bg-foreground/80 active:scale-[0.98] dark:bg-foreground dark:text-background dark:hover:bg-foreground/80"
+                onClick={resetGraphFilters}
+              >
+                清除筛选
+              </button>
+            ) : null}
           </div>
-          <div className="text-sm font-medium">
-            {baseGraphData.nodes.length > 0 && hasGraphFilters ? '当前筛选没有匹配节点' : '还没有可生成的 Markdown 节点'}
-          </div>
-          <div className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-            {baseGraphData.nodes.length > 0 && hasGraphFilters
-              ? '当前标签、邻域或关系数筛选隐藏了全部节点，清除筛选后可恢复显示。'
-              : '创建或打开 Markdown 笔记后，图谱会根据双链关系自动生成。'}
-          </div>
-          {baseGraphData.nodes.length > 0 && hasGraphFilters ? (
-            <button
-              type="button"
-              className="mt-4 rounded-full bg-foreground px-4 py-2 text-xs font-medium text-background transition hover:bg-foreground/80 active:scale-[0.98] dark:bg-foreground dark:text-background dark:hover:bg-foreground/80"
-              onClick={resetGraphFilters}
-            >
-              清除筛选
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <>
-          <canvas
-            ref={canvasRef}
-            className="relative h-full w-full"
-            onMouseMove={handleMouseMove}
-            onMouseDown={handleMouseDown}
-            onMouseUp={stopDragging}
-            onMouseLeave={stopDragging}
-            onWheel={handleWheel}
-            onClick={handleClick}
-            onDoubleClick={(e) => { e.preventDefault() }}
-            onContextMenu={handleContextMenu}
-          />
+        ) : (
+          <>
+            <canvas
+              ref={canvasRef}
+              className="relative h-full w-full"
+              onMouseMove={handleMouseMove}
+              onMouseDown={handleMouseDown}
+              onMouseUp={stopDragging}
+              onMouseLeave={stopDragging}
+              onWheel={handleWheel}
+              onClick={handleClick}
+              onDoubleClick={(e) => { e.preventDefault() }}
+              onContextMenu={handleContextMenu}
+            />
 
-          {/* Context menu */}
-          {contextMenu && (
-            <div
-              className="fixed z-50 min-w-[180px] rounded-xl border border-border/80 bg-background/95 py-1 shadow-lg backdrop-blur-sm dark:border-border/50 dark:bg-background/95"
-              style={{ left: contextMenu.x, top: contextMenu.y }}
-            >
-              <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
-                onClick={() => handleOpenInEditor(contextMenu.nodeId)}
+            {contextMenu && (
+              <div
+                className="fixed z-50 min-w-[180px] rounded-xl border border-border/80 bg-background/95 py-1 shadow-lg backdrop-blur-sm dark:border-border/50 dark:bg-background/95"
+                style={{ left: contextMenu.x, top: contextMenu.y }}
               >
-                <FileText className="h-3.5 w-3.5" />
-                打开笔记
-              </button>
-              <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
-                onClick={() => {
-                  setSelectedNode(contextMenu.nodeId)
-                  setDetailPanelOpen(true)
-                  setContextMenu(null)
-                }}
-              >
-                <PanelRightOpen className="h-3.5 w-3.5" />
-                在详情面板查看
-              </button>
-              {focusPath && focusPath !== contextMenu.nodeId && (
                 <button
                   className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
-                  onClick={() => handleCreateLinkFromGraph(focusPath, contextMenu.nodeId)}
+                  onClick={() => handleOpenInEditor(contextMenu.nodeId)}
                 >
-                  <Link className="h-3.5 w-3.5" />
-                  链接到当前笔记
+                  <FileText className="h-3.5 w-3.5" />
+                  打开笔记
                 </button>
-              )}
-              <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-amber-600 transition hover:bg-muted dark:text-amber-400 dark:hover:bg-muted"
-                onClick={() => {
-                  setActiveFilePath(contextMenu.nodeId)
-                  setContextMenu(null)
-                  setHighlightedNode(null)
-                }}
-              >
-                <LocateFixed className="h-3.5 w-3.5" />
-                聚焦此节点
-              </button>
-              <div className="my-1 border-t border-border/60 dark:border-border/50" />
-              <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
-                onClick={() => {
-                  if (highlightedNode === contextMenu.nodeId) {
-                    setHighlightedNode(null)
-                  } else {
-                    setHighlightedNode(contextMenu.nodeId)
-                  }
-                  setContextMenu(null)
-                }}
-              >
-                {highlightedNode === contextMenu.nodeId ? (
-                  <>
-                    <EyeOff className="h-3.5 w-3.5" />
-                    取消高亮关联
-                  </>
-                ) : (
-                  <>
-                    <Eye className="h-3.5 w-3.5" />
-                    高亮关联节点
-                  </>
+                <button
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
+                  onClick={() => {
+                    setSelectedNode(contextMenu.nodeId)
+                    setDetailPanelOpen(true)
+                    setContextMenu(null)
+                  }}
+                >
+                  <PanelRightOpen className="h-3.5 w-3.5" />
+                  在详情面板查看
+                </button>
+                {focusPath && focusPath !== contextMenu.nodeId && (
+                  <button
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
+                    onClick={() => handleCreateLinkFromGraph(focusPath, contextMenu.nodeId)}
+                  >
+                    <Link className="h-3.5 w-3.5" />
+                    链接到当前笔记
+                  </button>
                 )}
-              </button>
-              <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
-                onClick={() => {
-                  void navigator.clipboard.writeText(contextMenu.nodeId)
-                  setContextMenu(null)
-                }}
-              >
-                <Copy className="h-3.5 w-3.5" />
-                复制节点路径
-              </button>
-              <div className="my-1 border-t border-border/60 dark:border-border/50" />
-              <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-muted-foreground transition hover:bg-muted dark:text-muted-foreground dark:hover:bg-muted"
-                onClick={() => {
-                  resetView()
-                  setContextMenu(null)
-                }}
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                重置视图
-              </button>
+                <button
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-amber-600 transition hover:bg-muted dark:text-amber-400 dark:hover:bg-muted"
+                  onClick={() => {
+                    setActiveFilePath(contextMenu.nodeId)
+                    setContextMenu(null)
+                    setHighlightedNode(null)
+                  }}
+                >
+                  <LocateFixed className="h-3.5 w-3.5" />
+                  聚焦此节点
+                </button>
+                <div className="my-1 border-t border-border/60 dark:border-border/50" />
+                <button
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
+                  onClick={() => {
+                    if (highlightedNode === contextMenu.nodeId) {
+                      setHighlightedNode(null)
+                    } else {
+                      setHighlightedNode(contextMenu.nodeId)
+                    }
+                    setContextMenu(null)
+                  }}
+                >
+                  {highlightedNode === contextMenu.nodeId ? (
+                    <>
+                      <EyeOff className="h-3.5 w-3.5" />
+                      取消高亮关联
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="h-3.5 w-3.5" />
+                      高亮关联节点
+                    </>
+                  )}
+                </button>
+                <button
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-foreground/80 transition hover:bg-muted dark:text-foreground/80 dark:hover:bg-muted"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(contextMenu.nodeId)
+                    setContextMenu(null)
+                  }}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  复制节点路径
+                </button>
+                <div className="my-1 border-t border-border/60 dark:border-border/50" />
+                <button
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-muted-foreground transition hover:bg-muted dark:text-muted-foreground dark:hover:bg-muted"
+                  onClick={() => {
+                    resetView()
+                    setContextMenu(null)
+                  }}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  重置视图
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="absolute right-3 top-3 z-[2] inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/70 bg-background/72 text-muted-foreground shadow-md backdrop-blur-sm transition hover:bg-muted hover:text-foreground active:scale-[0.96] dark:border-border/50 dark:bg-background/72 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
+              title={detailPanelOpen ? '关闭详情' : '节点详情'}
+              onClick={() => setDetailPanelOpen(v => !v)}
+            >
+              {detailPanelOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+            </button>
+
+            {detailPanelOpen && selectedNode && (() => {
+              const node = graphRef.current.nodeIndex.get(selectedNode)
+              if (!node) return null
+              const relatedEdges = graphRef.current.edges.filter(e => e.source === selectedNode || e.target === selectedNode)
+              const relatedNodes = relatedEdges.map(e => {
+                const isSource = e.source === selectedNode
+                const otherId = isSource ? e.target : e.source
+                const otherNode = graphRef.current.nodeIndex.get(otherId)
+                if (!otherNode) return null
+                return {
+                  node: otherNode,
+                  edge: e,
+                  isOutgoing: isSource,
+                }
+              }).filter(Boolean).sort((a, b) => (b?.edge.weight || 0) - (a?.edge.weight || 0))
+              return (
+                <DetailPanel
+                  node={node}
+                  selectedNode={selectedNode}
+                  relatedNodes={relatedNodes}
+                  graphRef={graphRef}
+                  settings={settings}
+                  zoom={zoom}
+                  canvasRef={canvasRef}
+                  palette={palette}
+                  onClose={() => setDetailPanelOpen(false)}
+                  onSelectNode={(nodeId) => setSelectedNode(nodeId)}
+                  onPan={(newPan) => setPan(newPan)}
+                  onOpenNote={(path) => {
+                    setActiveFilePath(path)
+                    setHighlightedNode(null)
+                  }}
+                />
+              )
+            })()}
+          </>
+        )
+      ) : (
+        <>
+          <KeywordClusterCanvas
+            graph={keywordClusterGraph}
+            selectedId={keywordSelection?.id ?? null}
+            onSelect={setKeywordSelection}
+            onOpenNote={handleOpenInEditor}
+            showLabels={keywordSettings.showLabels}
+          />
+          {keywordTopicsLoading ? (
+            <div className="absolute left-1/2 top-1/2 z-[2] -translate-x-1/2 -translate-y-1/2 rounded-full border border-border/70 bg-background/85 px-3 py-1.5 text-[12px] text-muted-foreground shadow-sm backdrop-blur-sm">
+              正在加载关键词...
             </div>
-          )}
-
-          {/* Detail Panel Toggle */}
-          <button
-            type="button"
-            className="absolute right-3 top-3 z-[2] inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/70 bg-background/72 text-muted-foreground shadow-md backdrop-blur-sm transition hover:bg-muted hover:text-foreground active:scale-[0.96] dark:border-border/50 dark:bg-background/72 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground"
-            title={detailPanelOpen ? '关闭详情' : '节点详情'}
-            onClick={() => setDetailPanelOpen(v => !v)}
-          >
-            {detailPanelOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
-          </button>
-
-          {/* Right Detail Panel */}
-          {detailPanelOpen && selectedNode && (() => {
-            const node = graphRef.current.nodeIndex.get(selectedNode)
-            if (!node) return null
-            const relatedEdges = graphRef.current.edges.filter(e => e.source === selectedNode || e.target === selectedNode)
-            const relatedNodes = relatedEdges.map(e => {
-              const isSource = e.source === selectedNode
-              const otherId = isSource ? e.target : e.source
-              const otherNode = graphRef.current.nodeIndex.get(otherId)
-              if (!otherNode) return null
-              return {
-                node: otherNode,
-                edge: e,
-                isOutgoing: isSource,
-              }
-            }).filter(Boolean).sort((a, b) => (b?.edge.weight || 0) - (a?.edge.weight || 0))
-            return (
-              <DetailPanel
-                node={node}
-                selectedNode={selectedNode}
-                relatedNodes={relatedNodes}
-                graphRef={graphRef}
-                settings={settings}
-                zoom={zoom}
-                canvasRef={canvasRef}
-                palette={palette}
-                onClose={() => setDetailPanelOpen(false)}
-                onSelectNode={(nodeId) => setSelectedNode(nodeId)}
-                onPan={(newPan) => setPan(newPan)}
-                onOpenNote={(path) => {
-                  setActiveFilePath(path)
-                  setHighlightedNode(null)
-                }}
-              />
-            )
-          })()}
+          ) : null}
+          {keywordSelection ? (
+            <KeywordClusterDetailPanel
+              graph={keywordClusterGraph}
+              selection={keywordSelection}
+              onClose={() => setKeywordSelection(null)}
+              onOpenNote={handleOpenInEditor}
+              onLocateInRelationGraph={handleLocateInRelationGraph}
+            />
+          ) : null}
         </>
       )}
-      <style jsx global>{`
+      <style>{`
         .timeline-slider::-webkit-slider-thumb {
           -webkit-appearance: none;
           appearance: none;
