@@ -338,10 +338,7 @@ function drawClusters(
     ctx.font = '650 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    drawFittedText(ctx, cluster.label, cluster.x, cluster.y - 8, Math.max(58, cluster.radius * 1.55))
-    ctx.font = '500 11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-    ctx.fillStyle = getMutedTextColor()
-    ctx.fillText(`${cluster.noteCount} 篇 · ${cluster.keywords.length} 词`, cluster.x, cluster.y + 14)
+    drawFittedText(ctx, cluster.label, cluster.x, cluster.y, Math.max(58, cluster.radius * 1.55))
     ctx.restore()
   }
 }
@@ -533,11 +530,6 @@ function getCanvasBackground() {
 function getTextColor() {
   if (typeof document === 'undefined') return '#18181b'
   return isDarkMode() ? '#f4f4f5' : '#18181b'
-}
-
-function getMutedTextColor() {
-  if (typeof document === 'undefined') return '#71717a'
-  return isDarkMode() ? '#a1a1aa' : '#71717a'
 }
 
 function getKeywordTextColor() {

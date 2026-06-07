@@ -111,31 +111,25 @@ function ClusterDetail({
           <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: cluster.color }} />
           <div className="min-w-0 flex-1">
             <div className="truncate text-[14px] font-semibold leading-tight text-foreground">{cluster.label}</div>
-            <div className="mt-1 flex flex-wrap gap-1.5">
-              <Metric label={`${cluster.noteCount} 篇文章`} />
-              <Metric label={`${cluster.keywords.length} 个关键词`} />
-              <Metric label={`权重 ${cluster.totalWeight.toFixed(1)}`} />
-            </div>
           </div>
         </div>
       </div>
 
-      <Section icon={Hash} title="关键词排名">
+      <Section icon={Hash} title="主题关键词">
         <div className="flex flex-wrap gap-1.5">
           {keywords.slice(0, 18).map(keyword => (
             <span
               key={keyword.id}
-              className="inline-flex items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[10px] text-foreground/80 dark:border-border/60 dark:bg-muted"
-              title={`${keyword.noteCount} 篇，权重 ${keyword.totalWeight.toFixed(3)}`}
+              className="inline-flex max-w-[8.5rem] items-center rounded-md border border-border/70 bg-background px-2 py-0.5 text-[10px] text-foreground/80 dark:border-border/60 dark:bg-muted"
+              title={keyword.keyword}
             >
-              <span className="max-w-[8rem] truncate">{keyword.keyword}</span>
-              <span className="text-muted-foreground">{keyword.noteCount}</span>
+              <span className="truncate">{keyword.keyword}</span>
             </span>
           ))}
         </div>
       </Section>
 
-      <Section icon={FileText} title={`相关文章 (${notes.length})`}>
+      <Section icon={FileText} title="相关文章">
         <NoteList
           notes={notes}
           onOpenNote={onOpenNote}
@@ -175,11 +169,6 @@ function KeywordDetail({
     <>
       <div className="border-b border-border/50 px-4 py-3 dark:border-border/30">
         <div className="mb-1.5 text-[14px] font-semibold leading-tight text-foreground">{keyword.keyword}</div>
-        <div className="flex flex-wrap gap-1.5">
-          <Metric label={`${keyword.noteCount} 篇文章`} />
-          <Metric label={`总权重 ${keyword.totalWeight.toFixed(2)}`} />
-          <Metric label={`均值 ${keyword.avgWeight.toFixed(2)}`} />
-        </div>
       </div>
 
       {cooccurring.length > 0 ? (
@@ -188,18 +177,17 @@ function KeywordDetail({
             {cooccurring.slice(0, 16).map(item => (
               <span
                 key={item.keyword.id}
-                className="inline-flex items-center gap-1 rounded-md bg-muted/80 px-1.5 py-0.5 text-[10px] text-foreground/80 dark:bg-muted"
-                title={`共现权重 ${item.weight.toFixed(3)}`}
+                className="inline-flex max-w-[8.5rem] items-center rounded-md bg-muted/80 px-2 py-0.5 text-[10px] text-foreground/80 dark:bg-muted"
+                title={item.keyword.keyword}
               >
-                <span className="max-w-[8rem] truncate">{item.keyword.keyword}</span>
-                <span className="text-muted-foreground">{item.weight.toFixed(1)}</span>
+                <span className="truncate">{item.keyword.keyword}</span>
               </span>
             ))}
           </div>
         </Section>
       ) : null}
 
-      <Section icon={FileText} title={`包含文章 (${notes.length})`}>
+      <Section icon={FileText} title="包含文章">
         <NoteList
           notes={notes}
           onOpenNote={onOpenNote}
@@ -257,7 +245,6 @@ function NoteList({
           >
             <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground/85">{note.label}</span>
-            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{note.score.toFixed(1)}</span>
           </button>
           {note.keywords.length > 0 ? (
             <div className="mt-1.5 flex flex-wrap gap-1">
@@ -285,10 +272,3 @@ function NoteList({
   )
 }
 
-function Metric({ label }: { label: string }) {
-  return (
-    <span className="rounded-md bg-muted/80 px-2 py-0.5 text-[10px] text-muted-foreground dark:bg-muted dark:text-muted-foreground">
-      {label}
-    </span>
-  )
-}

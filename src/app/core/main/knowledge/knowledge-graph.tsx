@@ -1765,9 +1765,7 @@ export function KnowledgeGraph({ focusPath }: KnowledgeGraphProps) {
                     {graphData.edges.some(e => e.type === 'llm') && ` · ${graphData.edges.filter(e => e.type === 'llm').length} 条深度关联`}
                   </>
                 ) : (
-                  <>
-                    {keywordClusterGraph.clusters.length} 个主题 · {keywordClusterGraph.keywordNodes.length} 个关键词
-                  </>
+                  <>按关键词共现生成主题拓扑</>
                 )}
               </div>
             </div>
