@@ -161,6 +161,10 @@ try {
     validateSkillContent,
     validateSkillYamlMetadata,
   } = await importTsModule('src/lib/skills/validator.ts')
+  const {
+    resolveSkillRuntimeProfile,
+    skillRuntimeNeedsAgentMode,
+  } = await importTsModule('src/lib/skills/runtime-profile.ts')
 
   assert.equal(deriveIntentPolicy('帮我完善当前图表').allowWrite, true)
   assert.equal(deriveIntentPolicy('AI 能进行操作吗？').allowWrite, false)
@@ -472,6 +476,11 @@ try {
   assert.ok(pptxMatch.score > writingMatch.score)
   assert.ok(pptxMatch.reasons.some(reason => reason.includes('描述') || reason.includes('使用场景') || reason.includes('参考文件')))
 
+  assert.equal(resolveSkillRuntimeProfile(pptxSkill).profile, 'agent')
+  assert.equal(resolveSkillRuntimeProfile(writingSkill).profile, 'writer')
+  assert.equal(skillRuntimeNeedsAgentMode(resolveSkillRuntimeProfile(pptxSkill).profile), true)
+  assert.equal(skillRuntimeNeedsAgentMode(resolveSkillRuntimeProfile(writingSkill).profile), false)
+
   const parsedRuntimeSkill = parseSkillFile(`---
 name: writing-skills
 description: writing support
@@ -515,6 +524,29 @@ contextPolicy:
   assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /runtimeProfile: writer/)
   assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /capabilities: generate_text revise_text/)
   const githubStarToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/github-star-tools.ts'), 'utf8')
+  assert.equal(resolveSkillRuntimeProfile({
+    metadata: {
+      id: 'writing-skills',
+      name: 'writing-skills',
+      description: 'writing support',
+      runtimeProfile: 'writer',
+      scope: 'project',
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    instructions: 'Write an article outline and draft.',
+    scripts: [],
+    references: [],
+    assets: [],
+  }).profile, 'writer')
+
+  const slashBridgeSource = await readFile(join(repoRoot, 'src/lib/ai-doc-commands/slash-bridge.ts'), 'utf8')
+  assert.match(slashBridgeSource, /resolveSkillRuntimeProfile/)
+  assert.match(slashBridgeSource, /skillRuntimeNeedsAgentMode\(runtime\.profile\)/)
+  assert.match(slashBridgeSource, /skill\.metadata\.runtimeProfile/)
+  assert.match(slashBridgeSource, /skill\.metadata\.capabilities/)
+  assert.doesNotMatch(slashBridgeSource, /function skillNeedsAgentMode/)
+  assert.doesNotMatch(slashBridgeSource, /create\|modify\|edit\|update\|delete\|move\|rename\|copy\|save\|export\|execute\|run/)
   for (const toolName of [
     'github_sync_starred',
     'github_list_starred',

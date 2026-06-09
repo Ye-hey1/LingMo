@@ -15,11 +15,13 @@ import type { LucideIcon } from 'lucide-react'
 import {
   AI_DOC_COMMANDS,
   CATEGORY_LABELS,
-  type AiDocCommand,
-  type AiDocCommandId,
   type CommandCategory,
 } from '@/lib/ai-doc-commands'
 import { skillManager } from '@/lib/skills'
+import {
+  resolveSkillRuntimeProfile,
+  skillRuntimeNeedsAgentMode,
+} from '@/lib/skills/runtime-profile'
 import type { SkillContent } from '@/lib/skills/types'
 
 // ---------------------------------------------------------------------------
@@ -70,22 +72,28 @@ async function getSkillSlashItems(): Promise<SlashCommandItem[]> {
   await skillManager.initialize()
   const skills = skillManager.getUserInvocableSkills()
 
-  cachedSkillItems = skills.map((skill) => ({
-    id: `skill:${skill.metadata.id}`,
-    title: skill.metadata.name,
-    description: skill.metadata.description || '',
-    icon: Sparkles,
-    category: 'skill' as const,
-    source: 'skill' as SlashCommandSource,
-    executionMode: 'agent' as const,
-    searchTerms: [
-      skill.metadata.id,
-      skill.metadata.name,
-      skill.metadata.description,
-      ...(skill.metadata.author ? [skill.metadata.author] : []),
-    ].filter(Boolean),
-    skillContent: skill,
-  }))
+  cachedSkillItems = skills.map((skill) => {
+    const runtime = resolveSkillRuntimeProfile(skill)
+
+    return {
+      id: `skill:${skill.metadata.id}`,
+      title: skill.metadata.name,
+      description: skill.metadata.description || '',
+      icon: Sparkles,
+      category: 'skill' as const,
+      source: 'skill' as SlashCommandSource,
+      executionMode: skillRuntimeNeedsAgentMode(runtime.profile) ? 'agent' as const : 'chat' as const,
+      searchTerms: [
+        skill.metadata.id,
+        skill.metadata.name,
+        skill.metadata.description,
+        skill.metadata.runtimeProfile,
+        ...(skill.metadata.capabilities || []),
+        ...(skill.metadata.author ? [skill.metadata.author] : []),
+      ].filter((term): term is string => Boolean(term)),
+      skillContent: skill,
+    }
+  })
 
   cacheTimestamp = now
   return cachedSkillItems
