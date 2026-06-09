@@ -167,6 +167,18 @@ try {
   assert.equal(getToolRiskLevel('delete_markdown_file', 'note'), 'high')
   assert.equal(getToolRiskLevel('safe_read_file', 'filesystem'), 'low')
   assert.equal(getToolRiskLevel('safe_write_file', 'filesystem'), 'medium')
+  assert.equal(getToolRiskLevel('github_sync_starred', 'web'), 'low')
+  assert.equal(getToolRiskLevel('github_list_starred', 'web'), 'low')
+  assert.equal(getToolRiskLevel('github_summarize_recent_stars', 'web'), 'low')
+  assert.equal(getToolRiskLevel('github_search_my_stars', 'web'), 'low')
+  assert.equal(getToolRiskLevel('github_list_star_releases', 'web'), 'low')
+  assert.equal(getToolRiskLevel('github_list_my_forks', 'web'), 'low')
+  assert.equal(getToolRiskLevel('github_mark_release_read', 'web'), 'low')
+  assert.equal(getToolRiskLevel('github_star_repo', 'web'), 'medium')
+  assert.equal(getToolRiskLevel('github_update_star_category', 'web'), 'medium')
+  assert.equal(getToolRiskLevel('github_update_star_notes_tags', 'web'), 'medium')
+  assert.equal(getToolRiskLevel('github_subscribe_star_releases', 'web'), 'medium')
+  assert.equal(getToolRiskLevel('github_unstar_repo', 'web'), 'high')
 
   assert.deepEqual(
     evaluateIntentAwareToolPolicy({
@@ -181,6 +193,22 @@ try {
       toolName: 'delete_markdown_file',
       category: 'note',
       intentPolicy: deriveIntentPolicy('不要删除，只总结'),
+    }).allowed,
+    false,
+  )
+  assert.deepEqual(
+    evaluateIntentAwareToolPolicy({
+      toolName: 'github_star_repo',
+      category: 'web',
+      intentPolicy: deriveIntentPolicy('帮我 Star facebook/react'),
+    }),
+    { allowed: true, requiresConfirmation: true },
+  )
+  assert.equal(
+    evaluateIntentAwareToolPolicy({
+      toolName: 'github_unstar_repo',
+      category: 'web',
+      intentPolicy: deriveIntentPolicy('只总结我的 GitHub Star，不要删除'),
     }).allowed,
     false,
   )
