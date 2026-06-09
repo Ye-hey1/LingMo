@@ -559,6 +559,10 @@ contextPolicy:
   assert.match(harnessTypesSource, /export interface ApprovalRequest/)
   const runIdSource = await readFile(join(repoRoot, 'src/lib/agent-harness/run-id.ts'), 'utf8')
   assert.match(runIdSource, /export function createAgentRunId/)
+  const vfsSource = await readFile(join(repoRoot, 'src/lib/agent-harness/vfs.ts'), 'utf8')
+  assert.match(vfsSource, /export async function writeAgentVfsText/)
+  assert.match(vfsSource, /export async function readAgentVfsText/)
+  assert.match(vfsSource, /agent:\/\//)
 
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
   assert.match(chatInputSource, /buildWriterSkillInstruction/)
