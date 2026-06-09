@@ -38,10 +38,21 @@ import {
   isValidGithubFullName,
   toGithubStarAgentRepositoryItems,
   type GithubStarAgentListFilters,
+  type GithubStarRecentSummary,
   type GithubStarRecentSummaryOptions,
 } from './agent-summary'
 
 const SYNC_PAGE_DELAY_MS = 120
+
+export interface GithubStarRecentSummaryForAgentOptions extends GithubStarRecentSummaryOptions {
+  refresh?: boolean
+  maxSyncPages?: number
+  signal?: AbortSignal
+}
+
+export interface GithubStarRecentSummaryForAgentResult extends GithubStarRecentSummary {
+  sync: Awaited<ReturnType<typeof syncGithubStarredForAgent>> | null
+}
 
 function delay(ms: number) {
   return new Promise(resolve => globalThis.setTimeout(resolve, ms))
@@ -146,12 +157,27 @@ export async function listGithubStarredForAgent(filters: GithubStarAgentListFilt
   }
 }
 
-export async function summarizeRecentGithubStarsForAgent(options: GithubStarRecentSummaryOptions = {}) {
+export async function summarizeRecentGithubStarsForAgent(
+  options: GithubStarRecentSummaryForAgentOptions = {},
+): Promise<GithubStarRecentSummaryForAgentResult> {
+  let sync: Awaited<ReturnType<typeof syncGithubStarredForAgent>> | null = null
+  if (options.refresh) {
+    sync = await syncGithubStarredForAgent({
+      maxPages: Number(options.maxSyncPages) || 0,
+      signal: options.signal,
+    })
+  }
+
   const { repositories, categoryResolver } = await loadRepositoriesWithCategories()
-  return buildRecentStarsSummary(repositories, {
+  const summary = buildRecentStarsSummary(repositories, {
     ...options,
     categoryResolver,
   })
+
+  return {
+    ...summary,
+    sync,
+  }
 }
 
 export async function searchMyGithubStarsForAgent(

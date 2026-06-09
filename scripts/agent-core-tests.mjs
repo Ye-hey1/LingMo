@@ -481,6 +481,9 @@ try {
   ]) {
     assert.match(githubStarToolsSource, new RegExp(`name:\\s*['"]${toolName}['"]`))
   }
+  assert.match(githubStarToolsSource, /name:\s*['"]refresh['"]/)
+  assert.match(githubStarToolsSource, /refresh:\s*params\.refresh !== false/)
+  assert.match(githubStarToolsSource, /已先同步 GitHub Star/)
 
   const toolIndexSource = await readFile(join(repoRoot, 'src/lib/agent/tools/index.ts'), 'utf8')
   assert.match(toolIndexSource, /import \{ githubStarTools \} from '\.\/github-star-tools'/)
