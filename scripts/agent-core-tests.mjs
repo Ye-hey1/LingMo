@@ -567,6 +567,10 @@ contextPolicy:
   assert.match(toolRuntimeSource, /export async function executeHarnessTool/)
   assert.match(toolRuntimeSource, /ToolObservation/)
   assert.match(toolRuntimeSource, /retryable/)
+  const approvalSource = await readFile(join(repoRoot, 'src/lib/agent-harness/approval-gate.ts'), 'utf8')
+  assert.match(approvalSource, /export function shouldInterruptForTool/)
+  assert.match(approvalSource, /approvalScope/)
+  assert.match(approvalSource, /diffPreview/)
 
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
   assert.match(chatInputSource, /buildWriterSkillInstruction/)
