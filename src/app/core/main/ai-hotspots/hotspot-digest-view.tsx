@@ -1,8 +1,9 @@
 'use client'
 
-import { Copy, FileText, Loader2, Save } from 'lucide-react'
+import { Copy, FileText, Loader2, Save, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 
 export type HotspotDigestScope = 'current' | '24h' | '7d' | 'favorites' | 'unread'
 
@@ -38,37 +39,52 @@ export function HotspotDigestView({
   ]
 
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-        {scopes.map(scope => (
-          <div key={scope.value} className="rounded-md border bg-background p-2">
-            <button
-              type="button"
-              className="block w-full rounded px-1 py-1 text-left transition-colors hover:bg-muted/50"
-              disabled={isGenerating || isSaving}
-              onClick={() => onGenerate(scope.value)}
-            >
-              <div className="text-[11px] text-muted-foreground">{scope.label}</div>
-              <div className="mt-1 text-base font-semibold tabular-nums">{scope.count}</div>
-            </button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mt-1 h-7 w-full px-2 text-xs"
-              disabled={isGenerating || isSaving}
-              onClick={() => onSave(scope.value)}
-            >
-              {isSaving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
-              保存
-            </Button>
-          </div>
-        ))}
-      </div>
+    <div className="grid min-h-[520px] gap-3 lg:grid-cols-[260px_minmax(0,1fr)]">
+      <section className="rounded-md border bg-background">
+        <div className="flex h-10 items-center gap-2 border-b px-3">
+          <Sparkles className="size-4 text-muted-foreground" />
+          <span className="text-sm font-medium">摘要范围</span>
+        </div>
+        <div className="grid gap-1 p-2">
+          {scopes.map(scope => (
+            <div key={scope.value} className="rounded-md border bg-muted/10 p-2">
+              <button
+                type="button"
+                className="block w-full rounded px-2 py-1.5 text-left transition-colors hover:bg-muted/50"
+                disabled={isGenerating || isSaving}
+                onClick={() => onGenerate(scope.value)}
+              >
+                <div className="text-xs font-medium text-foreground">{scope.label}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  <span className="font-semibold tabular-nums text-foreground">{scope.count}</span>
+                  <span className="ml-1">条可整理</span>
+                </div>
+              </button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-1 h-7 w-full px-2 text-xs"
+                disabled={isGenerating || isSaving}
+                onClick={() => onSave(scope.value)}
+              >
+                {isSaving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+                保存为笔记
+              </Button>
+            </div>
+          ))}
+        </div>
+      </section>
 
-      <div className="rounded-md border bg-background">
+      <section className="flex min-h-0 flex-col overflow-hidden rounded-md border bg-background">
         <div className="flex h-10 items-center gap-2 border-b px-3">
           <FileText className="size-4 text-muted-foreground" />
           <span className="text-sm font-medium">Markdown 预览</span>
+          {isGenerating ? (
+            <span className="ml-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" />
+              生成中
+            </span>
+          ) : null}
           <Button
             variant="ghost"
             size="sm"
@@ -84,9 +100,12 @@ export function HotspotDigestView({
           readOnly
           value={markdown}
           placeholder="点击上方范围生成摘要预览，或直接保存为工作区 Markdown。"
-          className="min-h-[360px] resize-none rounded-none border-0 bg-muted/20 font-mono text-xs leading-5 shadow-none focus-visible:ring-0"
+          className={cn(
+            'min-h-0 flex-1 resize-none rounded-none border-0 bg-muted/20 font-mono text-xs leading-5 shadow-none focus-visible:ring-0',
+            !markdown && 'text-muted-foreground',
+          )}
         />
-      </div>
+      </section>
     </div>
   )
 }

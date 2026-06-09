@@ -3,20 +3,25 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AlertCircle,
+  BookOpenCheck,
+  Bookmark,
   Clipboard,
+  Clock,
   Heart,
+  Layers3,
   Loader2,
   Newspaper,
   RefreshCcw,
   Rss,
   Settings,
   Sparkles,
+  Tag,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { toast } from '@/hooks/use-toast'
 import emitter from '@/lib/emitter'
-import type { AiHotspotView } from '@/lib/ai-hotspots'
+import type { AiHotspotItem, AiHotspotSourceStatus, AiHotspotView } from '@/lib/ai-hotspots'
 import { createAiHotspotChatContext } from '@/lib/ai-hotspots/chat-context'
 import { cn } from '@/lib/utils'
 import useArticleStore from '@/stores/article'
@@ -27,7 +32,50 @@ import { HotspotFilterBar } from './hotspot-filter-bar'
 import { HotspotList } from './hotspot-list'
 import { HotspotSettingsDialog } from './hotspot-settings-dialog'
 import { HotspotSourceView } from './hotspot-source-view'
-import { getSourceHealthText } from './hotspot-utils'
+import { formatHotspotTime, getPrimaryHotspotTag, getSourceHealthText } from './hotspot-utils'
+
+type TopicOption = {
+  key: string
+  label: string
+  count: number
+}
+
+function normalizeTopic(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function getTopicKeyForItem(item: AiHotspotItem) {
+  return normalizeTopic(getPrimaryHotspotTag(item))
+}
+
+function itemMatchesTopic(item: AiHotspotItem, activeTopic: string) {
+  if (activeTopic === 'all') return true
+  const tags = item.tags.length > 0 ? item.tags : [getPrimaryHotspotTag(item)]
+  return tags.some(tag => normalizeTopic(tag) === activeTopic)
+}
+
+function buildTopicOptions(items: AiHotspotItem[]): TopicOption[] {
+  const counts = new Map<string, TopicOption>()
+
+  for (const item of items) {
+    const tags = item.tags.length > 0 ? item.tags : [getPrimaryHotspotTag(item)]
+    for (const tag of tags.slice(0, 6)) {
+      const key = normalizeTopic(tag)
+      if (!key) continue
+
+      const existing = counts.get(key)
+      if (existing) {
+        existing.count += 1
+      } else {
+        counts.set(key, { key, label: tag.trim(), count: 1 })
+      }
+    }
+  }
+
+  return Array.from(counts.values())
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
+    .slice(0, 10)
+}
 
 function formatRefreshTime(value: string | null) {
   if (!value) return '尚未刷新'
@@ -38,11 +86,13 @@ function formatRefreshTime(value: string | null) {
 
 function ViewPill({
   active,
+  count,
   icon,
   label,
   onClick,
 }: {
   active?: boolean
+  count?: number
   icon: ReactNode
   label: string
   onClick: () => void
@@ -61,7 +111,216 @@ function ViewPill({
     >
       {icon}
       {label}
+      {typeof count === 'number' ? (
+        <span className={cn(
+          'ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] tabular-nums',
+          active ? 'bg-background/15 text-background' : 'bg-muted text-muted-foreground',
+        )}>
+          {count}
+        </span>
+      ) : null}
     </button>
+  )
+}
+
+function MetricTile({
+  icon,
+  label,
+  value,
+}: {
+  icon: ReactNode
+  label: string
+  value: number | string
+}) {
+  return (
+    <div className="rounded-md border bg-background px-3 py-2">
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        {icon}
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-semibold tabular-nums text-foreground">{value}</div>
+    </div>
+  )
+}
+
+function TopicButton({
+  active,
+  count,
+  label,
+  onClick,
+}: {
+  active: boolean
+  count: number
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      className={cn(
+        'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors',
+        active
+          ? 'bg-foreground text-background'
+          : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground',
+      )}
+      onClick={onClick}
+    >
+      <Tag className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className={cn(
+        'rounded-full px-1.5 py-0.5 text-[10px] tabular-nums',
+        active ? 'bg-background/15 text-background' : 'bg-background text-muted-foreground',
+      )}>
+        {count}
+      </span>
+    </button>
+  )
+}
+
+function SourceHealthRow({ source }: { source: AiHotspotSourceStatus }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs">
+      <span className={cn('size-2 shrink-0 rounded-full', source.ok ? 'bg-emerald-500' : 'bg-destructive')} />
+      <span className="min-w-0 flex-1 truncate text-foreground">{source.sourceName}</span>
+      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{source.itemCount}</span>
+    </div>
+  )
+}
+
+function HotspotInsightPanel({
+  activeTopic,
+  favoriteCount,
+  items,
+  lastRefreshAt,
+  onTopicChange,
+  savedCount,
+  sources,
+  topicOptions,
+  unreadCount,
+  visibleItems,
+}: {
+  activeTopic: string
+  favoriteCount: number
+  items: AiHotspotItem[]
+  lastRefreshAt: string | null
+  onTopicChange: (topic: string) => void
+  savedCount: number
+  sources: AiHotspotSourceStatus[]
+  topicOptions: TopicOption[]
+  unreadCount: number
+  visibleItems: AiHotspotItem[]
+}) {
+  const okSourceCount = sources.filter(source => source.ok).length
+  const topSources = sources
+    .slice()
+    .sort((left, right) => Number(right.ok) - Number(left.ok) || right.itemCount - left.itemCount)
+    .slice(0, 6)
+  const readingQueue = visibleItems
+    .filter(item => !item.isRead)
+    .slice(0, 4)
+  const activeTopicLabel = activeTopic === 'all'
+    ? '全部分类'
+    : topicOptions.find(topic => topic.key === activeTopic)?.label || '当前分类'
+
+  return (
+    <aside className="hidden min-h-0 w-[320px] shrink-0 flex-col overflow-hidden border-l bg-muted/10 xl:flex">
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="space-y-4 p-4">
+          <section className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Layers3 className="size-4 text-muted-foreground" />
+                热点概览
+              </div>
+              <span className="text-[11px] text-muted-foreground" title={formatRefreshTime(lastRefreshAt)}>
+                {formatRefreshTime(lastRefreshAt)}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <MetricTile icon={<Newspaper className="size-3.5" />} label="当前" value={visibleItems.length} />
+              <MetricTile icon={<BookOpenCheck className="size-3.5" />} label="未读" value={unreadCount} />
+              <MetricTile icon={<Heart className="size-3.5" />} label="收藏" value={favoriteCount} />
+              <MetricTile icon={<Bookmark className="size-3.5" />} label="已保存" value={savedCount} />
+            </div>
+          </section>
+
+          <section className="rounded-md border bg-background p-2">
+            <div className="mb-2 flex items-center justify-between gap-2 px-1">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Tag className="size-4 text-muted-foreground" />
+                分类聚合
+              </div>
+              <span className="text-[11px] text-muted-foreground">{activeTopicLabel}</span>
+            </div>
+            <div className="space-y-1">
+              <TopicButton
+                active={activeTopic === 'all'}
+                count={items.length}
+                label="全部分类"
+                onClick={() => onTopicChange('all')}
+              />
+              {topicOptions.map(topic => (
+                <TopicButton
+                  key={topic.key}
+                  active={activeTopic === topic.key}
+                  count={topic.count}
+                  label={topic.label}
+                  onClick={() => onTopicChange(topic.key)}
+                />
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-md border bg-background p-2">
+            <div className="mb-2 flex items-center justify-between gap-2 px-1">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Rss className="size-4 text-muted-foreground" />
+                来源健康
+              </div>
+              <span className="text-[11px] text-muted-foreground">{okSourceCount}/{sources.length}</span>
+            </div>
+            {topSources.length > 0 ? (
+              <div className="space-y-0.5">
+                {topSources.map(source => (
+                  <SourceHealthRow key={source.sourceId} source={source} />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-md bg-muted/30 px-3 py-6 text-center text-xs leading-5 text-muted-foreground">
+                刷新后会显示每个来源的可用状态。
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-md border bg-background p-3">
+            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+              <Clock className="size-4 text-muted-foreground" />
+              待读建议
+            </div>
+            {readingQueue.length > 0 ? (
+              <div className="space-y-3">
+                {readingQueue.map(item => (
+                  <div key={item.id} className="min-w-0">
+                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <span className="rounded bg-muted px-1.5 py-0.5">{getTopicKeyForItem(item).slice(0, 12)}</span>
+                      <span>{formatHotspotTime(item.publishedAt || item.lastSeenAt)}</span>
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-xs font-medium leading-5 text-foreground">
+                      {item.title}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-md bg-muted/30 px-3 py-5 text-center text-xs leading-5 text-muted-foreground">
+                当前列表没有未读热点。
+              </div>
+            )}
+          </section>
+        </div>
+      </ScrollArea>
+    </aside>
   )
 }
 
@@ -100,16 +359,22 @@ export function AiHotspotsWorkspace() {
   const [isGeneratingDigest, setIsGeneratingDigest] = useState(false)
   const [isSavingDigest, setIsSavingDigest] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [activeTopic, setActiveTopic] = useState('all')
 
   useEffect(() => {
     void load()
   }, [load])
 
-  const favoriteItems = useMemo(
+  const baseFavoriteItems = useMemo(
     () => filteredItems.filter(item => item.isFavorite),
     [filteredItems],
   )
-  const visibleItems = view === 'favorites' ? favoriteItems : filteredItems
+  const baseListItems = view === 'favorites' ? baseFavoriteItems : filteredItems
+  const topicOptions = useMemo(() => buildTopicOptions(baseListItems), [baseListItems])
+  const visibleItems = useMemo(
+    () => baseListItems.filter(item => itemMatchesTopic(item, activeTopic)),
+    [activeTopic, baseListItems],
+  )
   const favoriteCount = items.filter(item => item.isFavorite).length
   const unreadCount = items.filter(item => !item.isRead).length
   const savedCount = items.filter(item => Boolean(item.savedNotePath)).length
@@ -121,6 +386,7 @@ export function AiHotspotsWorkspace() {
     filters.sourceId !== 'all' ||
     filters.status !== 'all',
   )
+  const hasTopicFilter = activeTopic !== 'all'
   const headerStatusText = isRefreshing
     ? '刷新中'
     : sources.length > 0
@@ -130,6 +396,14 @@ export function AiHotspotsWorkspace() {
   const favoriteEmptyDescription = favoriteCount > 0 && hasActiveFilters
     ? '调整搜索、来源或状态筛选后再看看。'
     : '在最新列表点亮星标后，会集中显示在这里。'
+  const showInsightPanel = view === 'latest' || view === 'favorites'
+
+  useEffect(() => {
+    if (activeTopic === 'all') return
+    if (!topicOptions.some(topic => topic.key === activeTopic)) {
+      setActiveTopic('all')
+    }
+  }, [activeTopic, topicOptions])
 
   const handleViewChange = (nextView: AiHotspotView) => {
     setView(nextView)
@@ -231,15 +505,20 @@ export function AiHotspotsWorkspace() {
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
-        <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background px-4">
+        <div className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-muted-foreground">
           <Newspaper className="size-4" />
         </div>
-        <span className="text-sm font-semibold tracking-tight">AI 热点</span>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold tracking-tight">AI 热点</div>
+          <div className="hidden truncate text-[11px] text-muted-foreground sm:block">
+            聚合、筛选并沉淀到笔记
+          </div>
+        </div>
 
         <div className="ml-3 hidden items-center gap-0.5 md:flex">
-          <ViewPill active={view === 'latest'} icon={<Newspaper className="size-3" />} label="最新" onClick={() => handleViewChange('latest')} />
-          <ViewPill active={view === 'favorites'} icon={<Heart className="size-3" />} label="收藏" onClick={() => handleViewChange('favorites')} />
+          <ViewPill active={view === 'latest'} count={filteredItems.length} icon={<Newspaper className="size-3" />} label="最新" onClick={() => handleViewChange('latest')} />
+          <ViewPill active={view === 'favorites'} count={favoriteCount} icon={<Heart className="size-3" />} label="收藏" onClick={() => handleViewChange('favorites')} />
           <ViewPill active={view === 'digest'} icon={<Clipboard className="size-3" />} label="日报" onClick={() => handleViewChange('digest')} />
           <ViewPill active={view === 'sources'} icon={<Rss className="size-3" />} label="来源" onClick={() => handleViewChange('sources')} />
         </div>
@@ -271,8 +550,8 @@ export function AiHotspotsWorkspace() {
       </header>
 
       <div className="flex shrink-0 gap-0.5 overflow-x-auto border-b bg-background px-2 py-1 md:hidden">
-        <ViewPill active={view === 'latest'} icon={<Newspaper className="size-3" />} label="最新" onClick={() => handleViewChange('latest')} />
-        <ViewPill active={view === 'favorites'} icon={<Heart className="size-3" />} label="收藏" onClick={() => handleViewChange('favorites')} />
+        <ViewPill active={view === 'latest'} count={filteredItems.length} icon={<Newspaper className="size-3" />} label="最新" onClick={() => handleViewChange('latest')} />
+        <ViewPill active={view === 'favorites'} count={favoriteCount} icon={<Heart className="size-3" />} label="收藏" onClick={() => handleViewChange('favorites')} />
         <ViewPill active={view === 'digest'} icon={<Clipboard className="size-3" />} label="日报" onClick={() => handleViewChange('digest')} />
         <ViewPill active={view === 'sources'} icon={<Rss className="size-3" />} label="来源" onClick={() => handleViewChange('sources')} />
       </div>
@@ -291,58 +570,85 @@ export function AiHotspotsWorkspace() {
         </div>
       ) : null}
 
-      {view === 'latest' || view === 'favorites' ? (
+      {showInsightPanel ? (
         <HotspotFilterBar
           filters={filters}
           items={items}
           sources={sources}
+          activeTopic={activeTopic}
           onFiltersChange={setFilters}
+          onTopicChange={setActiveTopic}
+          topicTotalCount={baseListItems.length}
+          topicOptions={topicOptions}
         />
       ) : null}
 
-      <ScrollArea className="min-h-0 flex-1 bg-muted/20">
-        <main className="mx-auto w-full max-w-5xl px-4 py-4 lg:px-5">
-          {view === 'latest' || view === 'favorites' ? (
-            <HotspotList
-              items={visibleItems}
-              isLoading={isLoading}
-              isRefreshing={isRefreshing}
-              hasCachedItems={items.length > 0}
-              hasActiveFilters={hasActiveFilters || view === 'favorites'}
-              emptyTitle={view === 'favorites' ? favoriteEmptyTitle : undefined}
-              emptyDescription={view === 'favorites' ? favoriteEmptyDescription : undefined}
-              refreshMessage={refreshProgress?.message}
-              onRefresh={handleRefresh}
-              onToggleFavorite={handleToggleFavorite}
-              onMarkRead={handleMarkRead}
-              onSaveAsNote={(id) => void handleSaveAsNote(id)}
-              onSendToChat={(id) => sendItemToChat(id, 'discuss')}
-              onDeepDive={(id) => sendItemToChat(id, 'deep-dive')}
-            />
-          ) : view === 'digest' ? (
-            <HotspotDigestView
-              currentCount={filteredItems.length}
-              favoriteCount={favoriteCount}
-              unreadCount={unreadCount}
-              markdown={digestMarkdown}
-              isGenerating={isGeneratingDigest}
-              isSaving={isSavingDigest}
-              onGenerate={(scope) => void handleGenerateDigest(scope)}
-              onSave={(scope) => void handleSaveDigest(scope)}
-              onCopy={() => void handleCopyDigest()}
-            />
-          ) : (
-            <HotspotSourceView
-              sources={sources}
-              userFeeds={userFeeds}
-              isRefreshing={isRefreshing}
-              onRefresh={handleRefresh}
-              onToggleUserFeed={async (id, enabled) => updateUserFeed(id, { enabled })}
-              onDeleteUserFeed={deleteUserFeed}
-            />
-          )}
-        </main>
-      </ScrollArea>
+      <div className={cn(
+        'grid min-h-0 flex-1 grid-cols-1 overflow-hidden',
+        showInsightPanel && 'xl:grid-cols-[minmax(0,1fr)_320px]',
+      )}>
+        <ScrollArea className="min-h-0 flex-1 bg-muted/20">
+          <main className="mx-auto w-full max-w-5xl px-4 py-4 lg:px-5">
+            {showInsightPanel ? (
+              <HotspotList
+                activeTopicLabel={activeTopic === 'all' ? '' : topicOptions.find(topic => topic.key === activeTopic)?.label || '当前分类'}
+                items={visibleItems}
+                isLoading={isLoading}
+                isRefreshing={isRefreshing}
+                hasCachedItems={items.length > 0}
+                hasActiveFilters={hasActiveFilters || hasTopicFilter || view === 'favorites'}
+                emptyTitle={view === 'favorites' ? favoriteEmptyTitle : undefined}
+                emptyDescription={view === 'favorites' ? favoriteEmptyDescription : undefined}
+                refreshMessage={refreshProgress?.message}
+                totalCount={baseListItems.length}
+                onClearTopic={() => setActiveTopic('all')}
+                onRefresh={handleRefresh}
+                onToggleFavorite={handleToggleFavorite}
+                onMarkRead={handleMarkRead}
+                onSaveAsNote={(id) => void handleSaveAsNote(id)}
+                onSendToChat={(id) => sendItemToChat(id, 'discuss')}
+                onDeepDive={(id) => sendItemToChat(id, 'deep-dive')}
+              />
+            ) : view === 'digest' ? (
+              <HotspotDigestView
+                currentCount={filteredItems.length}
+                favoriteCount={favoriteCount}
+                unreadCount={unreadCount}
+                markdown={digestMarkdown}
+                isGenerating={isGeneratingDigest}
+                isSaving={isSavingDigest}
+                onGenerate={(scope) => void handleGenerateDigest(scope)}
+                onSave={(scope) => void handleSaveDigest(scope)}
+                onCopy={() => void handleCopyDigest()}
+              />
+            ) : (
+              <HotspotSourceView
+                sources={sources}
+                userFeeds={userFeeds}
+                isRefreshing={isRefreshing}
+                onRefresh={handleRefresh}
+                onToggleUserFeed={async (id, enabled) => updateUserFeed(id, { enabled })}
+                onDeleteUserFeed={deleteUserFeed}
+              />
+            )}
+          </main>
+        </ScrollArea>
+
+        {showInsightPanel ? (
+          <HotspotInsightPanel
+            activeTopic={activeTopic}
+            favoriteCount={favoriteCount}
+            items={baseListItems}
+            lastRefreshAt={lastRefreshAt}
+            onTopicChange={setActiveTopic}
+            savedCount={savedCount}
+            sources={sources}
+            topicOptions={topicOptions}
+            unreadCount={unreadCount}
+            visibleItems={visibleItems}
+          />
+        ) : null}
+      </div>
 
       <div className="flex h-7 shrink-0 items-center gap-2 overflow-hidden border-t bg-muted/30 px-2 text-[11px] text-muted-foreground">
         <Sparkles className="size-3 shrink-0" />
