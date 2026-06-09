@@ -19,6 +19,7 @@ import {
   getPersistentApprovalOptions,
   recordPersistentApprovalHistory,
 } from "@/lib/agent"
+import { AgentOrchestrator } from "@/lib/agent-harness/orchestrator"
 import { ImageAttachment } from "./image-attachments"
 import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
 import {
@@ -1430,7 +1431,15 @@ export const ChatSend = forwardRef<{
     const effectiveMode = options?.modeOverride || chatMode
     const effectiveRoute = options?.routeOverride || effectiveMode
     if (effectiveRoute === 'writer' || effectiveRoute === 'advisor') {
-      await handleWriterMode(imageUrls, effectiveInstruction, options)
+      const orchestrator = new AgentOrchestrator()
+      await orchestrator.run({
+        userInput: requestText,
+        route: effectiveRoute,
+        writerExecutor: async () => {
+          await handleWriterMode(imageUrls, effectiveInstruction, options)
+          return ''
+        },
+      })
     } else if (effectiveRoute === 'chat') {
       await handleChatMode(imageUrls, effectiveInstruction, options)
     } else if (effectiveRoute === 'research') {

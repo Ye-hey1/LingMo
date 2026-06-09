@@ -579,6 +579,10 @@ contextPolicy:
   assert.match(snapshotSource, /export async function saveRunSnapshot/)
   assert.match(snapshotSource, /export async function loadRunSnapshot/)
   assert.match(snapshotSource, /agent-harness-runs\.json/)
+  const orchestratorSource = await readFile(join(repoRoot, 'src/lib/agent-harness/orchestrator.ts'), 'utf8')
+  assert.match(orchestratorSource, /export class AgentOrchestrator/)
+  assert.match(orchestratorSource, /route/)
+  assert.match(orchestratorSource, /legacyAgentExecutor/)
 
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
   assert.match(chatInputSource, /buildWriterSkillInstruction/)
