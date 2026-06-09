@@ -12,6 +12,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test:agent": "node scripts/agent-core-tests.mjs",
+    "test:github-stars-agent": "node scripts/github-star-agent-service-tests.mjs",
     "test:output-workshop": "node scripts/output-workshop-tests.mjs",
     "test:research": "node scripts/research-eval.mjs",
     "check": "pnpm typecheck && pnpm lint",
