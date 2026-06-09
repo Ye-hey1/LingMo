@@ -17,6 +17,15 @@ function toMjsRelativePath(relativePath) {
 function resolveRelativeDependency(currentRelativePath, specifier) {
   const currentDir = dirname(join(repoRoot, currentRelativePath))
   const basePath = resolve(currentDir, specifier)
+  return resolveDependencyPath(basePath)
+}
+
+function resolveAliasDependency(specifier) {
+  if (!specifier.startsWith('@/')) return null
+  return resolveDependencyPath(resolve(repoRoot, 'src', specifier.slice(2)))
+}
+
+function resolveDependencyPath(basePath) {
   const candidates = [
     basePath,
     `${basePath}.ts`,
@@ -51,15 +60,16 @@ function rewriteSpecifier(currentRelativePath, dependencyRelativePath) {
 async function rewriteLocalImports(output, relativePath) {
   const dependencies = new Set()
   const rewrite = (match, prefix, specifier, suffix) => {
-    if (!specifier.startsWith('.')) return match
-    const dependencyRelativePath = resolveRelativeDependency(relativePath, specifier)
+    const dependencyRelativePath = specifier.startsWith('.')
+      ? resolveRelativeDependency(relativePath, specifier)
+      : resolveAliasDependency(specifier)
     if (!dependencyRelativePath) return match
     dependencies.add(dependencyRelativePath)
     return `${prefix}${rewriteSpecifier(relativePath, dependencyRelativePath)}${suffix}`
   }
 
-  let rewritten = output.replace(/(from\s+['"])(\.{1,2}\/[^'"]+)(['"])/g, rewrite)
-  rewritten = rewritten.replace(/(import\s*\(\s*['"])(\.{1,2}\/[^'"]+)(['"]\s*\))/g, rewrite)
+  let rewritten = output.replace(/(from\s+['"])(\.{1,2}\/[^'"]+|@\/[^'"]+)(['"])/g, rewrite)
+  rewritten = rewritten.replace(/(import\s*\(\s*['"])(\.{1,2}\/[^'"]+|@\/[^'"]+)(['"]\s*\))/g, rewrite)
 
   for (const dependency of dependencies) {
     await compileTsModule(dependency)
@@ -142,11 +152,15 @@ try {
     item({ id: 'new', title: 'OpenAI update', url: 'https://x.com/a?utm_source=rss', publishedAt: '2026-06-09T00:00:00.000Z' }),
   ]).map(item => item.id), ['new'])
   assert.deepEqual(classifyHotspotTags('OpenAI 发布新模型和 Agent SDK'), ['模型发布', '开发工具'])
-  assert.equal(buildHotspotDigestMarkdown({
+  const digestMarkdown = buildHotspotDigestMarkdown({
     date: '2026-06-09',
     title: 'AI 热点日报',
     items: [item({ title: 'OpenAI 发布新模型', url: 'https://openai.com/news', sourceName: 'OpenAI' })],
-  }).includes('[OpenAI 发布新模型](https://openai.com/news)'), true)
+  })
+  assert.match(digestMarkdown, /^# AI 热点日报 2026-06-09/m)
+  assert.match(digestMarkdown, /^## 速览$/m)
+  assert.match(digestMarkdown, /^- \[OpenAI 发布新模型\]\(https:\/\/openai\.com\/news\) - OpenAI$/m)
+  assert.match(digestMarkdown, /^## 来源$/m)
 
   console.log('ai hotspots core tests passed')
 } finally {
