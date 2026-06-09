@@ -136,11 +136,16 @@ try {
   const {
     classifyHotspotTags,
     dedupeHotspotItems,
+    filterHotspotsByWindow,
     isAiHotspotRelated,
+    scoreHotspotItem,
   } = await importTsModule('src/lib/ai-hotspots/rules.ts')
   const {
     buildHotspotDigestMarkdown,
   } = await importTsModule('src/lib/ai-hotspots/digest.ts')
+  const {
+    shouldAutoRefreshAiHotspots,
+  } = await importTsModule('src/lib/ai-hotspots/refresh-policy.ts')
 
   assert.equal(normalizeHotspotUrl('https://example.com/a?utm_source=x#top'), 'https://example.com/a')
   assert.equal(normalizeHotspotTitle('  GPT-5  发布！ '), 'gpt5发布')
@@ -160,14 +165,64 @@ try {
     item({ id: 'empty-b', title: '   ', url: '   ', publishedAt: '2026-06-09T00:00:00.000Z' }),
   ]).map(item => item.id), ['empty-b', 'empty-a'])
   assert.deepEqual(classifyHotspotTags('OpenAI 发布新模型和 Agent SDK'), ['模型发布', '开发工具'])
+  assert.equal(scoreHotspotItem(item({
+    sourceId: 'aihot',
+    title: 'OpenAI releases new GPT agent model',
+    tags: ['模型发布', '开发工具'],
+  })) > scoreHotspotItem(item({
+    sourceId: 'generic',
+    title: 'General technology market note',
+    tags: [],
+  })), true)
+
+  const now = new Date('2026-06-09T12:00:00.000Z')
+  const windowItems = [
+    item({ id: 'recent', publishedAt: '2026-06-09T00:00:00.000Z' }),
+    item({ id: 'week', publishedAt: '2026-06-04T12:00:00.000Z' }),
+    item({ id: 'stale', publishedAt: '2026-05-30T12:00:00.000Z' }),
+    item({ id: 'future', publishedAt: '2026-06-10T12:00:00.000Z' }),
+  ]
+  assert.deepEqual(filterHotspotsByWindow(windowItems, '24h', now).map(item => item.id), ['recent'])
+  assert.deepEqual(filterHotspotsByWindow(windowItems, '7d', now).map(item => item.id), ['recent', 'week'])
+
+  assert.equal(shouldAutoRefreshAiHotspots({
+    autoRefreshOnOpen: false,
+    lastRefreshAt: null,
+    cooldownMinutes: 30,
+    now,
+  }), false)
+  assert.equal(shouldAutoRefreshAiHotspots({
+    autoRefreshOnOpen: true,
+    lastRefreshAt: null,
+    cooldownMinutes: 30,
+    now,
+  }), true)
+  assert.equal(shouldAutoRefreshAiHotspots({
+    autoRefreshOnOpen: true,
+    lastRefreshAt: '2026-06-09T11:45:00.000Z',
+    cooldownMinutes: 30,
+    now,
+  }), false)
+  assert.equal(shouldAutoRefreshAiHotspots({
+    autoRefreshOnOpen: true,
+    lastRefreshAt: '2026-06-09T11:00:00.000Z',
+    cooldownMinutes: 30,
+    now,
+  }), true)
+
   const digestMarkdown = buildHotspotDigestMarkdown({
     date: '2026-06-09',
     title: 'AI 热点日报',
-    items: [item({ title: 'OpenAI 发布新模型', url: 'https://openai.com/news', sourceName: 'OpenAI' })],
+    items: [
+      item({ title: 'OpenAI 发布新模型', url: 'https://openai.com/news', sourceName: 'OpenAI', tags: ['模型发布'] }),
+      item({ title: 'Agent SDK 更新', url: 'https://example.com/sdk', sourceName: 'SDK News', tags: ['开发工具'] }),
+    ],
   })
   assert.match(digestMarkdown, /^# AI 热点日报 2026-06-09/m)
   assert.match(digestMarkdown, /^## 速览$/m)
   assert.match(digestMarkdown, /^- \[OpenAI 发布新模型\]\(https:\/\/openai\.com\/news\) - OpenAI$/m)
+  assert.match(digestMarkdown, /^## 模型发布$/m)
+  assert.match(digestMarkdown, /^## 开发工具$/m)
   assert.match(digestMarkdown, /^## 来源$/m)
 
   console.log('ai hotspots core tests passed')
