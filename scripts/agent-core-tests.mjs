@@ -563,6 +563,10 @@ contextPolicy:
   assert.match(vfsSource, /export async function writeAgentVfsText/)
   assert.match(vfsSource, /export async function readAgentVfsText/)
   assert.match(vfsSource, /agent:\/\//)
+  const toolRuntimeSource = await readFile(join(repoRoot, 'src/lib/agent-harness/tool-runtime.ts'), 'utf8')
+  assert.match(toolRuntimeSource, /export async function executeHarnessTool/)
+  assert.match(toolRuntimeSource, /ToolObservation/)
+  assert.match(toolRuntimeSource, /retryable/)
 
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
   assert.match(chatInputSource, /buildWriterSkillInstruction/)

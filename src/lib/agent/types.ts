@@ -23,6 +23,8 @@ export interface ToolExecutionContext {
   abortSignal?: AbortSignal
   runId?: string
   iteration?: number
+  stepId?: string
+  toolCallId?: string
   userInput?: string
 }
 
