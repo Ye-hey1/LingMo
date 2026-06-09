@@ -9,6 +9,8 @@ import {
   ParsedSkillFile,
   SkillYamlMetadata,
   ScriptType,
+  SkillContextPolicy,
+  SkillRuntimeProfile,
   SCRIPT_EXTENSIONS,
   SCRIPT_SHEBANG,
 } from './types'
@@ -69,6 +71,7 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
 
   const lines = yamlContent.split('\n')
   let inMetadataSection = false
+  let inContextPolicySection = false
 
   for (const line of lines) {
     const trimmed = line.trim()
@@ -76,6 +79,26 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
     // 跳过空行和注释
     if (!trimmed || trimmed.startsWith('#')) {
       continue
+    }
+
+    // 如果在 contextPolicy 部分中，处理缩进的键值对
+    if (inContextPolicySection) {
+      const contextPolicyIndent = line.match(/^(\s+)/)?.[1]?.length || 0
+      if (contextPolicyIndent > 0) {
+        const colonIndex = trimmed.indexOf(':')
+        if (colonIndex > 0) {
+          const key = trimmed.slice(0, colonIndex).trim()
+          const value = trimmed.slice(colonIndex + 1).trim()
+
+          metadata.contextPolicy = {
+            ...metadata.contextPolicy,
+            [key]: parseValue(value),
+          } as SkillContextPolicy
+          continue
+        }
+      } else {
+        inContextPolicySection = false
+      }
     }
 
     // 检查是否进入 metadata 部分
@@ -112,11 +135,13 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
       }
     }
 
-    // 检测 allowedTools 的 YAML 列表格式: allowedTools: 后跟 - item 行
-    if ((trimmed.startsWith('allowedTools:') || trimmed.startsWith('allowed-tools:')) &&
+    // 检测数组字段的 YAML 列表格式: key: 后跟 - item 行
+    if ((trimmed.startsWith('allowedTools:') ||
+         trimmed.startsWith('allowed-tools:') ||
+         trimmed.startsWith('capabilities:')) &&
         !trimmed.includes(': ') && !trimmed.includes(':[')) {
       // 这是列表格式的开始，收集后续的 - item 行
-      const tools: string[] = []
+      const values: string[] = []
       const currentLineIndex = lines.indexOf(line)
       const currentIndent = line.match(/^(\s+)/)?.[1]?.length || 0
 
@@ -132,15 +157,19 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
         }
 
         if (nextTrimmed.startsWith('- ')) {
-          const tool = nextTrimmed.replace(/^- /, '').trim().replace(/['"]/g, '')
-          if (tool) {
-            tools.push(tool)
+          const item = nextTrimmed.replace(/^- /, '').trim().replace(/['"]/g, '')
+          if (item) {
+            values.push(item)
           }
         }
       }
 
-      if (tools.length > 0) {
-        metadata.allowedTools = tools
+      if (values.length > 0) {
+        if (trimmed.startsWith('capabilities:')) {
+          metadata.capabilities = values
+        } else {
+          metadata.allowedTools = values
+        }
         continue
       }
     }
@@ -200,6 +229,22 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
       case 'userInvocable':
         metadata.userInvocable = parseBoolean(value)
         break
+      case 'runtimeProfile':
+      case 'runtime-profile':
+        metadata.runtimeProfile = parseValue(value) as SkillRuntimeProfile
+        break
+      case 'capabilities':
+        metadata.capabilities = parseStringArray(value)
+        break
+      case 'contextPolicy':
+      case 'context-policy':
+        if (value) {
+          metadata.contextPolicy = parseContextPolicy(value)
+        } else {
+          metadata.contextPolicy = {}
+          inContextPolicySection = true
+        }
+        break
     }
   }
 
@@ -216,6 +261,52 @@ function parseValue(value: string): string {
     return value.slice(1, -1)
   }
   return value
+}
+
+/**
+ * 解析字符串数组字段
+ */
+function parseStringArray(value: string): string[] {
+  const trimmed = value.trim()
+  if (!trimmed) return []
+
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    return trimmed
+      .slice(1, -1)
+      .split(',')
+      .map(item => item.trim().replace(/['"]/g, ''))
+      .filter(Boolean)
+  }
+
+  return trimmed
+    .split(/\s+/)
+    .map(item => item.trim().replace(/['"]/g, ''))
+    .filter(Boolean)
+}
+
+/**
+ * 解析 contextPolicy 的简单行内对象格式
+ */
+function parseContextPolicy(value: string): SkillContextPolicy {
+  const trimmed = value.trim()
+  if (!trimmed) return {}
+
+  const objectContent = trimmed.startsWith('{') && trimmed.endsWith('}')
+    ? trimmed.slice(1, -1)
+    : trimmed
+
+  const policy: Record<string, string> = {}
+  for (const part of objectContent.split(',')) {
+    const colonIndex = part.indexOf(':')
+    if (colonIndex === -1) continue
+    const key = part.slice(0, colonIndex).trim()
+    const itemValue = part.slice(colonIndex + 1).trim()
+    if (key && itemValue) {
+      policy[key] = parseValue(itemValue)
+    }
+  }
+
+  return policy as SkillContextPolicy
 }
 
 /**
@@ -325,6 +416,24 @@ export function serializeSkillFile(
 
   if (metadata.model) {
     yamlLines.push(`model: ${metadata.model}`)
+  }
+
+  if (metadata.runtimeProfile) {
+    yamlLines.push(`runtimeProfile: ${metadata.runtimeProfile}`)
+  }
+
+  if (metadata.capabilities && metadata.capabilities.length > 0) {
+    yamlLines.push(`capabilities: ${metadata.capabilities.join(' ')}`)
+  }
+
+  if (metadata.contextPolicy && Object.keys(metadata.contextPolicy).length > 0) {
+    yamlLines.push(`contextPolicy:`)
+    if (metadata.contextPolicy.load) {
+      yamlLines.push(`  load: ${metadata.contextPolicy.load}`)
+    }
+    if (metadata.contextPolicy.references) {
+      yamlLines.push(`  references: ${metadata.contextPolicy.references}`)
+    }
   }
 
   if (metadata.userInvocable !== undefined) {

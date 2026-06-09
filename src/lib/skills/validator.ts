@@ -7,6 +7,8 @@
 
 import {
   SkillContent,
+  SkillContextPolicy,
+  SkillRuntimeProfile,
   SkillYamlMetadata,
   ValidationResult,
   ValidationError,
@@ -21,6 +23,23 @@ import {
 // ============================================================================
 // 验证函数
 // ============================================================================
+
+const VALID_RUNTIME_PROFILES = new Set<SkillRuntimeProfile>([
+  'writer',
+  'advisor',
+  'agent',
+  'workflow',
+])
+
+const VALID_CONTEXT_LOAD_POLICIES = new Set<NonNullable<SkillContextPolicy['load']>>([
+  'summary-first',
+  'full',
+])
+
+const VALID_CONTEXT_REFERENCE_POLICIES = new Set<NonNullable<SkillContextPolicy['references']>>([
+  'on-demand',
+  'eager',
+])
 
 /**
  * 验证 Skill YAML 元数据 (符合官方规范)
@@ -140,6 +159,48 @@ export function validateSkillYamlMetadata(metadata: SkillYamlMetadata): Validati
     })
   }
 
+  // 验证运行时画像
+  if (metadata.runtimeProfile && !VALID_RUNTIME_PROFILES.has(metadata.runtimeProfile)) {
+    errors.push({
+      field: 'runtimeProfile',
+      message: 'runtimeProfile must be one of writer, advisor, agent, workflow',
+      severity: 'error',
+    })
+  }
+
+  // 验证能力声明
+  if (metadata.capabilities) {
+    const invalidCapabilities = metadata.capabilities.filter(
+      capability => typeof capability !== 'string' || capability.trim().length === 0
+    )
+    if (invalidCapabilities.length > 0) {
+      errors.push({
+        field: 'capabilities',
+        message: 'capabilities must be a non-empty string array',
+        severity: 'error',
+      })
+    }
+  }
+
+  // 验证上下文策略
+  if (metadata.contextPolicy?.load &&
+      !VALID_CONTEXT_LOAD_POLICIES.has(metadata.contextPolicy.load)) {
+    errors.push({
+      field: 'contextPolicy.load',
+      message: 'contextPolicy.load must be one of summary-first, full',
+      severity: 'error',
+    })
+  }
+
+  if (metadata.contextPolicy?.references &&
+      !VALID_CONTEXT_REFERENCE_POLICIES.has(metadata.contextPolicy.references)) {
+    errors.push({
+      field: 'contextPolicy.references',
+      message: 'contextPolicy.references must be one of on-demand, eager',
+      severity: 'error',
+    })
+  }
+
   return {
     valid: errors.length === 0,
     errors,
@@ -169,6 +230,9 @@ export function validateSkillContent(skill: SkillContent): ValidationResult {
     author: skill.metadata.author,
     model: skill.metadata.model,
     userInvocable: skill.metadata.userInvocable,
+    runtimeProfile: skill.metadata.runtimeProfile,
+    capabilities: skill.metadata.capabilities,
+    contextPolicy: skill.metadata.contextPolicy,
   })
   errors.push(...metadataResult.errors)
   warnings.push(...metadataResult.warnings)

@@ -153,6 +153,14 @@ try {
   const {
     calculateSkillMatchScore,
   } = await importTsModule('src/lib/skills/matcher.ts')
+  const {
+    parseSkillFile,
+    serializeSkillFile,
+  } = await importTsModule('src/lib/skills/parser.ts')
+  const {
+    validateSkillContent,
+    validateSkillYamlMetadata,
+  } = await importTsModule('src/lib/skills/validator.ts')
 
   assert.equal(deriveIntentPolicy('帮我完善当前图表').allowWrite, true)
   assert.equal(deriveIntentPolicy('AI 能进行操作吗？').allowWrite, false)
@@ -464,6 +472,48 @@ try {
   assert.ok(pptxMatch.score > writingMatch.score)
   assert.ok(pptxMatch.reasons.some(reason => reason.includes('描述') || reason.includes('使用场景') || reason.includes('参考文件')))
 
+  const parsedRuntimeSkill = parseSkillFile(`---
+name: writing-skills
+description: writing support
+runtimeProfile: writer
+capabilities: [generate_text, revise_text]
+contextPolicy:
+  load: summary-first
+  references: on-demand
+---
+# Writing Skills
+`)
+  assert.equal(parsedRuntimeSkill.metadata.runtimeProfile, 'writer')
+  assert.deepEqual(parsedRuntimeSkill.metadata.capabilities, ['generate_text', 'revise_text'])
+  assert.deepEqual(parsedRuntimeSkill.metadata.contextPolicy, {
+    load: 'summary-first',
+    references: 'on-demand',
+  })
+  assert.equal(validateSkillYamlMetadata(parsedRuntimeSkill.metadata).valid, true)
+  assert.equal(validateSkillYamlMetadata({
+    name: 'writing-skills',
+    description: 'writing support',
+    runtimeProfile: 'invalid-profile',
+  }).valid, false)
+  assert.equal(validateSkillContent({
+    metadata: {
+      id: 'writing-skills',
+      name: 'writing-skills',
+      description: 'writing support',
+      runtimeProfile: 'writer',
+      capabilities: ['generate_text'],
+      contextPolicy: { load: 'summary-first', references: 'on-demand' },
+      scope: 'project',
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    instructions: 'Use this Skill to draft, revise, and polish long-form writing with visible prose.',
+    scripts: [],
+    references: [],
+    assets: [],
+  }).valid, true)
+  assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /runtimeProfile: writer/)
+  assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /capabilities: generate_text revise_text/)
   const githubStarToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/github-star-tools.ts'), 'utf8')
   for (const toolName of [
     'github_sync_starred',

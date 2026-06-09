@@ -300,6 +300,9 @@ class SkillManager {
           : typeof parsed.metadata.allowedTools === 'string'
             ? parsed.metadata.allowedTools.split(/\s+/).filter(v => v.length > 0)
             : undefined,
+        runtimeProfile: parsed.metadata.runtimeProfile,
+        capabilities: parsed.metadata.capabilities,
+        contextPolicy: parsed.metadata.contextPolicy,
         userInvocable: parsed.metadata.userInvocable ?? DEFAULT_USER_INVOCABLE,
         enabled: DEFAULT_SKILL_ENABLED,
         createdAt: now,

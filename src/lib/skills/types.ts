@@ -20,6 +20,19 @@ export type SkillScope = 'global' | 'project'
 export type ScriptType = 'python' | 'bash' | 'javascript' | 'node' | 'shell'
 
 /**
+ * Skill 运行时画像
+ */
+export type SkillRuntimeProfile = 'writer' | 'advisor' | 'agent' | 'workflow'
+
+/**
+ * Skill 上下文加载策略
+ */
+export interface SkillContextPolicy {
+  load?: 'summary-first' | 'full'
+  references?: 'on-demand' | 'eager'
+}
+
+/**
  * Skill 脚本文件
  */
 export interface SkillScript {
@@ -72,6 +85,9 @@ export interface SkillMetadata {
   // 执行配置 (扩展字段)
   model?: string                // 指定使用的模型
   allowedTools?: string[]       // 允许使用的工具 (无需权限确认)
+  runtimeProfile?: SkillRuntimeProfile  // 运行时画像，用于选择 writer/advisor/agent/workflow 执行路径
+  capabilities?: string[]       // Skill 能力声明，用于运行时路由和 UI 展示
+  contextPolicy?: SkillContextPolicy  // 上下文加载策略
 
   // 可见性控制 (扩展字段)
   userInvocable?: boolean       // 是否在斜杠菜单显示
@@ -121,6 +137,9 @@ export interface SkillYamlMetadata {
   author?: string
   model?: string
   userInvocable?: boolean
+  runtimeProfile?: SkillRuntimeProfile
+  capabilities?: string[]
+  contextPolicy?: SkillContextPolicy
 
   // 依赖声明
   dependencies?: SkillDependency[]
