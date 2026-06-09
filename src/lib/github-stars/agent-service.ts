@@ -43,6 +43,7 @@ import {
 } from './agent-summary'
 
 const SYNC_PAGE_DELAY_MS = 120
+const DEFAULT_RECENT_SUMMARY_SYNC_PAGES = 2
 
 export interface GithubStarRecentSummaryForAgentOptions extends GithubStarRecentSummaryOptions {
   refresh?: boolean
@@ -163,7 +164,7 @@ export async function summarizeRecentGithubStarsForAgent(
   let sync: Awaited<ReturnType<typeof syncGithubStarredForAgent>> | null = null
   if (options.refresh) {
     sync = await syncGithubStarredForAgent({
-      maxPages: Number(options.maxSyncPages) || 0,
+      maxPages: options.maxSyncPages ?? DEFAULT_RECENT_SUMMARY_SYNC_PAGES,
       signal: options.signal,
     })
   }

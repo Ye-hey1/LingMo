@@ -483,6 +483,7 @@ try {
   }
   assert.match(githubStarToolsSource, /name:\s*['"]refresh['"]/)
   assert.match(githubStarToolsSource, /refresh:\s*params\.refresh !== false/)
+  assert.match(githubStarToolsSource, /maxSyncPages:\s*numberParam\(params\.max_sync_pages,\s*2,\s*1,\s*1000\)/)
   assert.match(githubStarToolsSource, /已先同步 GitHub Star/)
 
   const toolIndexSource = await readFile(join(repoRoot, 'src/lib/agent/tools/index.ts'), 'utf8')

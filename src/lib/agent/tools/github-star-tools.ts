@@ -186,7 +186,7 @@ export const githubSummarizeRecentStarsTool: Tool = {
     { name: 'range_days', type: 'number', description: 'Recent range in days. Default 7.', required: false, default: 7 },
     { name: 'limit', type: 'number', description: 'Max repositories included in summary. Default 50, max 200.', required: false, default: 50 },
     { name: 'refresh', type: 'boolean', description: 'Sync latest GitHub Stars before summarizing. Default true.', required: false, default: true },
-    { name: 'max_sync_pages', type: 'number', description: 'Optional max pages to sync before summarizing. Leave empty or 0 to sync all pages.', required: false, default: 0 },
+    { name: 'max_sync_pages', type: 'number', description: 'Optional max pages to sync before summarizing. Default 2 for fast recent summaries; use github_sync_starred for a full sync.', required: false, default: 2 },
   ],
   execute: async (params, context) => {
     try {
@@ -195,7 +195,7 @@ export const githubSummarizeRecentStarsTool: Tool = {
         rangeDays: numberParam(params.range_days, 7, 1, 365),
         limit: numberParam(params.limit, 50, 1, 200),
         refresh: params.refresh !== false,
-        maxSyncPages: numberParam(params.max_sync_pages, 0, 0, 1000),
+        maxSyncPages: numberParam(params.max_sync_pages, 2, 1, 1000),
         signal: context?.abortSignal,
       })
       return {
