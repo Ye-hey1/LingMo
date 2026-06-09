@@ -22,7 +22,7 @@ import {
   resolveSkillRuntimeProfile,
   skillRuntimeNeedsAgentMode,
 } from '@/lib/skills/runtime-profile'
-import type { SkillContent } from '@/lib/skills/types'
+import type { SkillContent, SkillRuntimeProfile } from '@/lib/skills/types'
 
 // ---------------------------------------------------------------------------
 // 统一类型
@@ -45,6 +45,10 @@ export interface SlashCommandItem {
   source: SlashCommandSource
   /** 需要 agent 模式 */
   executionMode?: 'chat' | 'agent'
+  /** Skill 运行时画像 */
+  runtimeProfile?: SkillRuntimeProfile
+  /** Skill 运行时画像解析原因 */
+  runtimeProfileReason?: string
   /** 搜索词 */
   searchTerms: string[]
   /** 原始 Skill（仅 source=skill） */
@@ -83,6 +87,8 @@ async function getSkillSlashItems(): Promise<SlashCommandItem[]> {
       category: 'skill' as const,
       source: 'skill' as SlashCommandSource,
       executionMode: skillRuntimeNeedsAgentMode(runtime.profile) ? 'agent' as const : 'chat' as const,
+      runtimeProfile: runtime.profile,
+      runtimeProfileReason: runtime.reason,
       searchTerms: [
         skill.metadata.id,
         skill.metadata.name,

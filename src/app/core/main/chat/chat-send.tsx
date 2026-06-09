@@ -65,6 +65,8 @@ export interface ChatSendOptions {
   temperature?: number
   forcedSkillIds?: string[]
   displayText?: string
+  modeOverride?: 'chat' | 'agent' | 'research'
+  routeOverride?: 'writer' | 'advisor' | 'agent' | 'workflow' | 'chat' | 'research'
 }
 
 const MIN_AUTO_EXTRACT_CHAR_COUNT = 500
@@ -670,6 +672,10 @@ export const ChatSend = forwardRef<{
     } finally {
       abortControllerRef.current = null
     }
+  }
+
+  async function handleWriterMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions) {
+    await handleChatMode(imageUrls, instructionOverride, options)
   }
 
   async function executeDeepResearch(
@@ -1421,9 +1427,13 @@ export const ChatSend = forwardRef<{
 
     setLoading(true)
     let keepLoading = false
-    if (chatMode === 'chat') {
+    const effectiveMode = options?.modeOverride || chatMode
+    const effectiveRoute = options?.routeOverride || effectiveMode
+    if (effectiveRoute === 'writer' || effectiveRoute === 'advisor') {
+      await handleWriterMode(imageUrls, effectiveInstruction, options)
+    } else if (effectiveRoute === 'chat') {
       await handleChatMode(imageUrls, effectiveInstruction, options)
-    } else if (chatMode === 'research') {
+    } else if (effectiveRoute === 'research') {
       await handleClarifiedResearchMode(effectiveInstruction)
       keepLoading = abortControllerRef.current !== null
     } else {

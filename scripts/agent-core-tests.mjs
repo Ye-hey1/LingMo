@@ -547,6 +547,21 @@ contextPolicy:
   assert.match(slashBridgeSource, /skill\.metadata\.capabilities/)
   assert.doesNotMatch(slashBridgeSource, /function skillNeedsAgentMode/)
   assert.doesNotMatch(slashBridgeSource, /create\|modify\|edit\|update\|delete\|move\|rename\|copy\|save\|export\|execute\|run/)
+
+  const writerExecutorSource = await readFile(join(repoRoot, 'src/lib/agent/writer-executor.ts'), 'utf8')
+  assert.match(writerExecutorSource, /export async function runWriterSkill/)
+  assert.match(writerExecutorSource, /Do not use ReAct JSON/)
+
+  const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
+  assert.match(chatInputSource, /buildWriterSkillInstruction/)
+  assert.match(chatInputSource, /routeOverride:\s*slashCommand\.runtimeProfile/)
+  assert.match(chatInputSource, /const isAgentSkill = slashCommand\.executionMode === 'agent'/)
+
+  const chatSendSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-send.tsx'), 'utf8')
+  assert.match(chatSendSource, /routeOverride\?: 'writer' \| 'advisor' \| 'agent' \| 'workflow' \| 'chat' \| 'research'/)
+  assert.match(chatSendSource, /handleWriterMode/)
+  assert.match(chatSendSource, /const effectiveRoute = options\?\.routeOverride \|\| effectiveMode/)
+  assert.match(chatSendSource, /const effectiveMode = options\?\.modeOverride \|\| chatMode/)
   for (const toolName of [
     'github_sync_starred',
     'github_list_starred',
