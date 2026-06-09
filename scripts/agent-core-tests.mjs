@@ -575,6 +575,10 @@ contextPolicy:
   assert.match(contextEngineSource, /export function buildContextPack/)
   assert.match(contextEngineSource, /priority/)
   assert.match(contextEngineSource, /deferred/)
+  const snapshotSource = await readFile(join(repoRoot, 'src/lib/agent-harness/run-snapshot-store.ts'), 'utf8')
+  assert.match(snapshotSource, /export async function saveRunSnapshot/)
+  assert.match(snapshotSource, /export async function loadRunSnapshot/)
+  assert.match(snapshotSource, /agent-harness-runs\.json/)
 
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
   assert.match(chatInputSource, /buildWriterSkillInstruction/)
