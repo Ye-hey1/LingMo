@@ -212,6 +212,7 @@ export async function initAllDatabases() {
   const { initNoteTopicsDb } = await import('./note-topics')
   const { initNoteRelationsDb } = await import('./note-relations')
   const { initGithubStarsDb } = await import('./github-stars')
+  const { initAiHotspotsDb } = await import('./ai-hotspots')
   const { initNoteHistoryDb } = await import('./history')
 
   // 先确保基础表存在，再做依赖这些表的初始化。
@@ -229,4 +230,5 @@ export async function initAllDatabases() {
   await initNoteTopicsDb()
   await initNoteRelationsDb()
   await initGithubStarsDb()
+  await initAiHotspotsDb()
 }
