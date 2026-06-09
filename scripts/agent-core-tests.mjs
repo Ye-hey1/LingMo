@@ -464,6 +464,29 @@ try {
   assert.ok(pptxMatch.score > writingMatch.score)
   assert.ok(pptxMatch.reasons.some(reason => reason.includes('描述') || reason.includes('使用场景') || reason.includes('参考文件')))
 
+  const githubStarToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/github-star-tools.ts'), 'utf8')
+  for (const toolName of [
+    'github_sync_starred',
+    'github_list_starred',
+    'github_summarize_recent_stars',
+    'github_search_my_stars',
+    'github_list_star_releases',
+    'github_list_my_forks',
+    'github_star_repo',
+    'github_unstar_repo',
+    'github_update_star_category',
+    'github_update_star_notes_tags',
+    'github_subscribe_star_releases',
+    'github_mark_release_read',
+  ]) {
+    assert.match(githubStarToolsSource, new RegExp(`name:\\s*['"]${toolName}['"]`))
+  }
+
+  const toolIndexSource = await readFile(join(repoRoot, 'src/lib/agent/tools/index.ts'), 'utf8')
+  assert.match(toolIndexSource, /import \{ githubStarTools \} from '\.\/github-star-tools'/)
+  assert.match(toolIndexSource, /\.\.\.githubStarTools/)
+  assert.match(toolIndexSource, /export \* from '\.\/github-star-tools'/)
+
   console.log('agent core tests passed')
 } finally {
   await rm(tempDir, { recursive: true, force: true })
