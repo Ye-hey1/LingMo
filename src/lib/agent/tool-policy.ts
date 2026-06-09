@@ -32,6 +32,7 @@ export const HIGH_RISK_TOOLS = new Set([
   'clear_chats',
   'clear_all_memories',
   'delete_memory',
+  'github_unstar_repo',
 ])
 
 export const MEDIUM_RISK_TOOLS = new Set([
@@ -60,6 +61,10 @@ export const MEDIUM_RISK_TOOLS = new Set([
   'update_diagram_file',
   'create_visual_report',
   'safe_write_file',
+  'github_star_repo',
+  'github_update_star_category',
+  'github_update_star_notes_tags',
+  'github_subscribe_star_releases',
 ])
 
 export const LOW_RISK_WRITE_TOOLS = new Set([
@@ -100,6 +105,13 @@ export const READ_ONLY_TOOLS = new Set([
   'suggest_links_for_note',
   'list_agent_run_summaries',
   'list_reminders',
+  'github_sync_starred',
+  'github_list_starred',
+  'github_summarize_recent_stars',
+  'github_search_my_stars',
+  'github_list_star_releases',
+  'github_list_my_forks',
+  'github_mark_release_read',
 ])
 
 const writePatterns = [
