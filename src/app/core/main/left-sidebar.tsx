@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, Brain, Files, Github, Highlighter, LayoutTemplate, Network, Settings, Star, WalletCards } from 'lucide-react'
+import { ArrowLeft, Brain, Files, Github, Highlighter, LayoutTemplate, Network, Newspaper, Settings, Star, WalletCards } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -18,6 +18,7 @@ import { OutputWorkshopModal } from '@/components/output-workshop-modal'
 import emitter from '@/lib/emitter'
 
 import { FileActions } from './file/file-actions'
+import { AI_HOTSPOTS_TAB_PATH } from './ai-hotspots/ai-hotspots-constants'
 import { FLASHCARD_TAB_PATH } from './flashcard/flashcard-constants'
 import { GITHUB_STARS_TAB_PATH } from './github-stars/github-stars-constants'
 import { KNOWLEDGE_GRAPH_TAB_PATH } from './knowledge/knowledge-graph-constants'
@@ -144,6 +145,13 @@ export function LeftSidebarRail() {
     }
   }
 
+  const openAiHotspots = async () => {
+    setActiveFilePath(AI_HOTSPOTS_TAB_PATH)
+    if (!centerPanelVisible) {
+      await toggleCenterPanel()
+    }
+  }
+
   return (
     <TooltipProvider>
       <aside className="left-sidebar-rail">
@@ -175,7 +183,7 @@ export function LeftSidebarRail() {
           <SidebarRailButton
             active={activeFilePath === MEMORY_TAB_PATH}
             icon={<Brain className="size-4" />}
-            label="记忆"
+            label="记忆管理"
             onClick={() => {
               void openMemoryManager()
             }}
@@ -189,9 +197,17 @@ export function LeftSidebarRail() {
             }}
           />
           <SidebarRailButton
+            active={activeFilePath === AI_HOTSPOTS_TAB_PATH}
+            icon={<Newspaper className="size-4" />}
+            label="AI 热点"
+            onClick={() => {
+              void openAiHotspots()
+            }}
+          />
+          <SidebarRailButton
             active={outputWorkshopOpen}
             icon={<LayoutTemplate className="size-4" />}
-            label="输出工坊"
+            label="智能排版"
             onClick={() => {
               setOutputWorkshopOpen(true)
             }}
