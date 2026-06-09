@@ -65,6 +65,11 @@ export class YouTubeFetcher extends BaseAiHotspotFetcher {
       })
     )
 
+    const failedChannels = results.filter((result) => result.error)
+    if (failedChannels.length === results.length) {
+      throw new Error(`All YouTube feeds failed: ${failedChannels.map((failed) => failed.channel.name).join(', ')}`)
+    }
+
     return results.flatMap(({ channel, videos }) => {
       return videos.map((video) => this.createItem({
         feedName: channel.name,
@@ -78,6 +83,13 @@ export class YouTubeFetcher extends BaseAiHotspotFetcher {
           thumbnail: video.thumbnail,
           views: video.views,
           description: video.description,
+          failedChannelCount: failedChannels.length,
+          failedChannels: failedChannels.map((failed) => ({
+            id: failed.channel.id,
+            name: failed.channel.name,
+            channelId: failed.channel.channelId,
+            error: failed.error,
+          })),
         },
       }))
     })

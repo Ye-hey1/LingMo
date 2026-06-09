@@ -22,7 +22,7 @@ function getErrorMessage(error: unknown) {
 export class DefaultRssFetcher extends BaseAiHotspotFetcher {
   sourceId = 'default-rss'
   sourceName = 'Default RSS'
-  kind: 'rss' = 'rss'
+  kind = 'rss' as const
 
   async fetch() {
     const results = await Promise.all(
@@ -46,6 +46,10 @@ export class DefaultRssFetcher extends BaseAiHotspotFetcher {
     )
 
     const failedFeeds = results.filter((result) => result.error)
+    if (failedFeeds.length === results.length) {
+      throw new Error(`All default RSS feeds failed: ${failedFeeds.map((failed) => failed.feed.name).join(', ')}`)
+    }
+
     return results.flatMap((result) => result.items.map((item) => ({
       ...item,
       meta: {

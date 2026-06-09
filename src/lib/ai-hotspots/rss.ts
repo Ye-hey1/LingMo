@@ -119,7 +119,7 @@ export function parseRssItems(xml: string, source: RssItemSource): AiHotspotRawI
 export function parseOpmlFeeds(opmlContent: string) {
   const feeds: ParsedOpmlFeed[] = []
   const seen = new Set<string>()
-  const outlines = opmlContent.match(/<outline\b[^>]*(?:\/>|>[\s\S]*?<\/outline>)/gi) || []
+  const outlines = opmlContent.match(/<outline\b[^>]*\/?>/gi) || []
 
   for (const outline of outlines) {
     const xmlUrl = readXmlAttribute(outline, 'outline', 'xmlUrl')?.trim()

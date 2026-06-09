@@ -34,7 +34,7 @@ async function mapWithConcurrency<T, R>(
 export class UserRssFetcher extends BaseAiHotspotFetcher {
   sourceId = 'user-rss'
   sourceName = 'User RSS'
-  kind: 'rss' = 'rss'
+  kind = 'rss' as const
 
   constructor(private readonly feeds: AiHotspotUserFeed[]) {
     super()
@@ -71,6 +71,10 @@ export class UserRssFetcher extends BaseAiHotspotFetcher {
     )
 
     const failedFeeds = results.filter((result) => result.error)
+    if (failedFeeds.length === results.length) {
+      throw new Error(`All user RSS feeds failed: ${failedFeeds.map((failed) => failed.feed.title).join(', ')}`)
+    }
+
     return results.flatMap((result) => result.items.map((item) => ({
       ...item,
       meta: {

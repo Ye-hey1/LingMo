@@ -2,7 +2,7 @@ import { fetchHotspotJson, fetchHotspotText } from '../http'
 import { BaseAiHotspotFetcher } from './base'
 
 const FALLBACK_SOURCE_IDS = ['hackernews', 'producthunt', 'github', 'sspai', 'juejin', '36kr']
-const JUEJIN_SNOWFLAKE_EPOCH = -42416499549
+const JUEJIN_SNOWFLAKE_EPOCH = BigInt(-42416499549)
 
 interface NewsNowItem {
   id?: string
@@ -102,8 +102,8 @@ function parseJuejinId(id: string | undefined, now: Date) {
   if (!id || !/^\d{18,20}$/.test(id)) return null
 
   try {
-    const timestamp = Math.floor(Number(id) / (2 ** 22)) + JUEJIN_SNOWFLAKE_EPOCH
-    const date = new Date(timestamp)
+    const timestamp = (BigInt(id) >> BigInt(22)) + JUEJIN_SNOWFLAKE_EPOCH
+    const date = new Date(Number(timestamp))
     if (date.getTime() > now.getTime() + 24 * 60 * 60 * 1000) return null
     if (date.getTime() < now.getTime() - 30 * 24 * 60 * 60 * 1000) return null
     return date
