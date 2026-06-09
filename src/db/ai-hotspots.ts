@@ -258,15 +258,9 @@ export async function upsertAiHotspotItems(items: AiHotspotItem[]) {
            summary = excluded.summary,
            tags_json = excluded.tags_json,
            score = excluded.score,
-           is_favorite = case
-             when excluded.is_favorite = 0 and ai_hotspot_items.is_favorite = 1 then ai_hotspot_items.is_favorite
-             else excluded.is_favorite
-           end,
-           is_read = case
-             when excluded.is_read = 0 and ai_hotspot_items.is_read = 1 then ai_hotspot_items.is_read
-             else excluded.is_read
-           end,
-           saved_note_path = coalesce(excluded.saved_note_path, ai_hotspot_items.saved_note_path)`,
+           is_favorite = ai_hotspot_items.is_favorite,
+           is_read = ai_hotspot_items.is_read,
+           saved_note_path = ai_hotspot_items.saved_note_path`,
         [
           item.id,
           item.sourceId,
