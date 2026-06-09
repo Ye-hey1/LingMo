@@ -17,6 +17,7 @@ import {
   AI_HOTSPOT_CONFIG,
   buildHotspotDigestMarkdown,
   filterHotspotsByWindow,
+  parseOpmlFeeds,
   refreshAiHotspots,
   shouldAutoRefreshAiHotspots,
 } from '@/lib/ai-hotspots'
@@ -70,6 +71,7 @@ interface AiHotspotsState {
   addUserFeed: (input: AddAiHotspotUserFeedInput) => Promise<void>
   updateUserFeed: (id: string, patch: UpdateAiHotspotUserFeedPatch) => Promise<void>
   deleteUserFeed: (id: string) => Promise<void>
+  importOpml: (content: string) => Promise<number>
 }
 
 const STORE_KEYS = {
@@ -384,6 +386,34 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
   deleteUserFeed: async (id) => {
     await deleteAiHotspotUserFeed(id)
     set({ userFeeds: await getAiHotspotUserFeeds() })
+  },
+
+  importOpml: async (content) => {
+    const feeds = parseOpmlFeeds(content)
+    if (feeds.length === 0) return 0
+
+    const existingUrls = new Set(
+      get().userFeeds.map(feed => feed.feedUrl.trim().toLowerCase()),
+    )
+    let importedCount = 0
+
+    for (const feed of feeds) {
+      const feedUrl = feed.xmlUrl.trim()
+      const key = feedUrl.toLowerCase()
+      if (!feedUrl || existingUrls.has(key)) continue
+
+      await addAiHotspotUserFeed({
+        title: feed.title.trim() || feedUrl,
+        feedUrl,
+        groupName: 'OPML',
+        enabled: true,
+      })
+      existingUrls.add(key)
+      importedCount += 1
+    }
+
+    set({ userFeeds: await getAiHotspotUserFeeds() })
+    return importedCount
   },
 }))
 

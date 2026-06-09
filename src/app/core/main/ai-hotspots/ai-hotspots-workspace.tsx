@@ -18,11 +18,13 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/hooks/use-toast'
-import type { AiHotspotSourceStatus, AiHotspotView } from '@/lib/ai-hotspots'
+import type { AiHotspotView } from '@/lib/ai-hotspots'
 import { cn } from '@/lib/utils'
 import { useAiHotspotsStore } from '@/stores/ai-hotspots'
 import { HotspotFilterBar } from './hotspot-filter-bar'
 import { HotspotList } from './hotspot-list'
+import { HotspotSettingsDialog } from './hotspot-settings-dialog'
+import { HotspotSourceView } from './hotspot-source-view'
 import { getSourceHealthText } from './hotspot-utils'
 
 type DigestScope = 'current' | '24h' | '7d' | 'favorites' | 'unread'
@@ -32,13 +34,6 @@ function formatRefreshTime(value: string | null) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '刷新时间未知'
   return `上次刷新 ${date.toLocaleString()}`
-}
-
-function formatStatusTime(value: string | null) {
-  if (!value) return '暂无'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '未知'
-  return date.toLocaleString()
 }
 
 function ViewPill({
@@ -67,92 +62,6 @@ function ViewPill({
       {icon}
       {label}
     </button>
-  )
-}
-
-function Metric({
-  label,
-  value,
-}: {
-  label: string
-  value: number | string
-}) {
-  return (
-    <div className="rounded-md border bg-background px-3 py-2">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
-    </div>
-  )
-}
-
-function SourceStatusView({
-  sources,
-  userFeedCount,
-  onRefresh,
-}: {
-  sources: AiHotspotSourceStatus[]
-  userFeedCount: number
-  onRefresh: () => void
-}) {
-  const okCount = sources.filter(source => source.ok).length
-  const failedCount = sources.length - okCount
-
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-        <Metric label="来源" value={sources.length} />
-        <Metric label="可用" value={okCount} />
-        <Metric label="失败" value={failedCount} />
-        <Metric label="用户 RSS" value={userFeedCount} />
-      </div>
-
-      {sources.length === 0 ? (
-        <div className="flex h-[320px] flex-col items-center justify-center rounded-md border bg-background text-center">
-          <Rss className="mb-3 size-10 text-muted-foreground" />
-          <div className="text-sm font-medium">暂无来源状态</div>
-          <Button variant="outline" size="sm" className="mt-3" onClick={onRefresh}>
-            立即刷新
-          </Button>
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-md border bg-background">
-          {sources.map(source => (
-            <div key={source.sourceId} className="border-b px-3 py-2 last:border-b-0">
-              <div className="flex min-w-0 items-start gap-2">
-                <span
-                  className={cn(
-                    'mt-1 size-2 shrink-0 rounded-full',
-                    source.ok ? 'bg-emerald-500' : 'bg-destructive',
-                  )}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-sm font-medium">{source.sourceName}</span>
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                      {source.kind}
-                    </span>
-                    <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
-                      {source.itemCount} 条
-                    </span>
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                    <span>{source.ok ? '正常' : '失败'}</span>
-                    <span>{Math.round(source.durationMs)}ms</span>
-                    <span>最近成功 {formatStatusTime(source.lastOkAt)}</span>
-                    <span>更新 {formatStatusTime(source.updatedAt)}</span>
-                  </div>
-                  {!source.ok && source.lastError ? (
-                    <div className="mt-1 line-clamp-2 text-xs text-destructive">
-                      {source.lastError}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -232,6 +141,7 @@ export function AiHotspotsWorkspace() {
     sources,
     userFeeds,
     filters,
+    settings,
     isLoading,
     isRefreshing,
     lastRefreshAt,
@@ -245,9 +155,15 @@ export function AiHotspotsWorkspace() {
     markRead,
     saveItemAsNote,
     generateDigest,
+    saveSettings,
+    addUserFeed,
+    updateUserFeed,
+    deleteUserFeed,
+    importOpml,
   } = useAiHotspotsStore()
   const [digestMarkdown, setDigestMarkdown] = useState('')
   const [isGeneratingDigest, setIsGeneratingDigest] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     void load()
@@ -370,7 +286,7 @@ export function AiHotspotsWorkspace() {
           size="icon"
           className="size-7"
           title="AI 热点设置"
-          onClick={() => toast({ title: '设置面板将在来源配置步骤启用' })}
+          onClick={() => setSettingsOpen(true)}
         >
           <Settings className="size-4" />
         </Button>
@@ -436,10 +352,13 @@ export function AiHotspotsWorkspace() {
               onCopy={() => void handleCopyDigest()}
             />
           ) : (
-            <SourceStatusView
+            <HotspotSourceView
               sources={sources}
-              userFeedCount={userFeeds.length}
+              userFeeds={userFeeds}
+              isRefreshing={isRefreshing}
               onRefresh={handleRefresh}
+              onToggleUserFeed={async (id, enabled) => updateUserFeed(id, { enabled })}
+              onDeleteUserFeed={deleteUserFeed}
             />
           )}
         </main>
@@ -457,6 +376,15 @@ export function AiHotspotsWorkspace() {
           <span className="whitespace-nowrap text-destructive/80">{failedSourceCount} 来源失败</span>
         ) : null}
       </div>
+
+      <HotspotSettingsDialog
+        open={settingsOpen}
+        settings={settings}
+        onOpenChange={setSettingsOpen}
+        onSaveSettings={saveSettings}
+        onAddUserFeed={addUserFeed}
+        onImportOpml={importOpml}
+      />
     </div>
   )
 }
