@@ -552,6 +552,14 @@ contextPolicy:
   assert.match(writerExecutorSource, /export async function runWriterSkill/)
   assert.match(writerExecutorSource, /Do not use ReAct JSON/)
 
+  const harnessTypesSource = await readFile(join(repoRoot, 'src/lib/agent-harness/types.ts'), 'utf8')
+  assert.match(harnessTypesSource, /export interface AgentRunSnapshot/)
+  assert.match(harnessTypesSource, /export interface ContextPack/)
+  assert.match(harnessTypesSource, /export interface ToolObservation/)
+  assert.match(harnessTypesSource, /export interface ApprovalRequest/)
+  const runIdSource = await readFile(join(repoRoot, 'src/lib/agent-harness/run-id.ts'), 'utf8')
+  assert.match(runIdSource, /export function createAgentRunId/)
+
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
   assert.match(chatInputSource, /buildWriterSkillInstruction/)
   assert.match(chatInputSource, /routeOverride:\s*slashCommand\.runtimeProfile/)
