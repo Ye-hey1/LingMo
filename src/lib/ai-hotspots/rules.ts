@@ -47,18 +47,47 @@ export function isAiHotspotRelated(record: AiHotspotRelatedRecord): boolean {
 }
 
 export function dedupeHotspotItems(items: AiHotspotItem[]): AiHotspotItem[] {
-  const byKey = new Map<string, AiHotspotItem>()
+  const groups: Array<{
+    urls: Set<string>
+    titles: Set<string>
+    items: AiHotspotItem[]
+  }> = []
 
   for (const item of items) {
-    const key = createDedupeKey(item)
-    const existing = byKey.get(key)
+    const keys = createDedupeKeys(item)
+    const matchingGroups = groups.filter(group => {
+      return keys.urls.some(url => group.urls.has(url)) || keys.titles.some(title => group.titles.has(title))
+    })
 
-    if (!existing || getItemTime(item) >= getItemTime(existing)) {
-      byKey.set(key, item)
+    if (!keys.urls.length && !keys.titles.length) {
+      groups.push({ urls: new Set(), titles: new Set(), items: [item] })
+      continue
+    }
+
+    const group = matchingGroups[0] ?? { urls: new Set<string>(), titles: new Set<string>(), items: [] }
+
+    for (const url of keys.urls) group.urls.add(url)
+    for (const title of keys.titles) group.titles.add(title)
+    group.items.push(item)
+
+    if (!matchingGroups.length) {
+      groups.push(group)
+      continue
+    }
+
+    for (const duplicateGroup of matchingGroups.slice(1)) {
+      for (const url of duplicateGroup.urls) group.urls.add(url)
+      for (const title of duplicateGroup.titles) group.titles.add(title)
+      group.items.push(...duplicateGroup.items)
+      groups.splice(groups.indexOf(duplicateGroup), 1)
     }
   }
 
-  return Array.from(byKey.values()).sort((left, right) => getItemTime(right) - getItemTime(left))
+  return groups
+    .map(group => group.items.reduce((newest, item) => {
+      return getItemTime(item) >= getItemTime(newest) ? item : newest
+    }))
+    .sort((left, right) => getItemTime(right) - getItemTime(left))
 }
 
 export function classifyHotspotTags(text: string): string[] {
@@ -116,10 +145,14 @@ export function filterHotspotsByWindow(
   })
 }
 
-function createDedupeKey(item: AiHotspotItem): string {
+function createDedupeKeys(item: AiHotspotItem): { urls: string[], titles: string[] } {
   const normalizedUrl = normalizeHotspotUrl(item.url)
-  if (normalizedUrl) return `url:${normalizedUrl}`
-  return `title:${normalizeHotspotTitle(item.title)}`
+  const normalizedTitle = normalizeHotspotTitle(item.title)
+
+  return {
+    urls: normalizedUrl ? [normalizedUrl] : [],
+    titles: normalizedTitle ? [normalizedTitle] : [],
+  }
 }
 
 function getItemTime(item: AiHotspotItem): number {

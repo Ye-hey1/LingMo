@@ -151,6 +151,14 @@ try {
     item({ id: 'old', title: 'OpenAI update', url: 'https://x.com/a', publishedAt: '2026-06-08T00:00:00.000Z' }),
     item({ id: 'new', title: 'OpenAI update', url: 'https://x.com/a?utm_source=rss', publishedAt: '2026-06-09T00:00:00.000Z' }),
   ]).map(item => item.id), ['new'])
+  assert.deepEqual(dedupeHotspotItems([
+    item({ id: 'old-title', title: '  GPT-5  发布！ ', url: 'https://source-a.example/news', publishedAt: '2026-06-08T00:00:00.000Z' }),
+    item({ id: 'new-title', title: 'GPT5发布', url: 'https://source-b.example/item', publishedAt: '2026-06-09T00:00:00.000Z' }),
+  ]).map(item => item.id), ['new-title'])
+  assert.deepEqual(dedupeHotspotItems([
+    item({ id: 'empty-a', title: '', url: '', publishedAt: '2026-06-08T00:00:00.000Z' }),
+    item({ id: 'empty-b', title: '   ', url: '   ', publishedAt: '2026-06-09T00:00:00.000Z' }),
+  ]).map(item => item.id), ['empty-b', 'empty-a'])
   assert.deepEqual(classifyHotspotTags('OpenAI 发布新模型和 Agent SDK'), ['模型发布', '开发工具'])
   const digestMarkdown = buildHotspotDigestMarkdown({
     date: '2026-06-09',
