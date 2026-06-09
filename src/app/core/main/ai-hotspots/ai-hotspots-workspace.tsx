@@ -4,8 +4,6 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AlertCircle,
   Clipboard,
-  Copy,
-  FileText,
   Heart,
   Loader2,
   Newspaper,
@@ -16,18 +14,20 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/hooks/use-toast'
+import emitter from '@/lib/emitter'
 import type { AiHotspotView } from '@/lib/ai-hotspots'
+import { createAiHotspotChatContext } from '@/lib/ai-hotspots/chat-context'
 import { cn } from '@/lib/utils'
+import useArticleStore from '@/stores/article'
 import { useAiHotspotsStore } from '@/stores/ai-hotspots'
+import { useSidebarStore } from '@/stores/sidebar'
+import { HotspotDigestView, type HotspotDigestScope } from './hotspot-digest-view'
 import { HotspotFilterBar } from './hotspot-filter-bar'
 import { HotspotList } from './hotspot-list'
 import { HotspotSettingsDialog } from './hotspot-settings-dialog'
 import { HotspotSourceView } from './hotspot-source-view'
 import { getSourceHealthText } from './hotspot-utils'
-
-type DigestScope = 'current' | '24h' | '7d' | 'favorites' | 'unread'
 
 function formatRefreshTime(value: string | null) {
   if (!value) return '尚未刷新'
@@ -65,74 +65,6 @@ function ViewPill({
   )
 }
 
-function DigestView({
-  currentCount,
-  favoriteCount,
-  unreadCount,
-  markdown,
-  isGenerating,
-  onGenerate,
-  onCopy,
-}: {
-  currentCount: number
-  favoriteCount: number
-  unreadCount: number
-  markdown: string
-  isGenerating: boolean
-  onGenerate: (scope: DigestScope) => void
-  onCopy: () => void
-}) {
-  const scopes: Array<{ value: DigestScope; label: string; count: number | string }> = [
-    { value: 'current', label: '当前列表', count: currentCount },
-    { value: '24h', label: '24 小时', count: '日报' },
-    { value: '7d', label: '7 天', count: '周报' },
-    { value: 'favorites', label: '收藏', count: favoriteCount },
-    { value: 'unread', label: '未读', count: unreadCount },
-  ]
-
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-        {scopes.map(scope => (
-          <button
-            key={scope.value}
-            type="button"
-            className="rounded-md border bg-background px-3 py-2 text-left transition-colors hover:border-foreground/20 hover:bg-muted/30"
-            disabled={isGenerating}
-            onClick={() => onGenerate(scope.value)}
-          >
-            <div className="text-[11px] text-muted-foreground">{scope.label}</div>
-            <div className="mt-1 text-base font-semibold tabular-nums">{scope.count}</div>
-          </button>
-        ))}
-      </div>
-
-      <div className="rounded-md border bg-background">
-        <div className="flex h-10 items-center gap-2 border-b px-3">
-          <FileText className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Markdown 预览</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto h-7 px-2 text-xs"
-            disabled={!markdown}
-            onClick={onCopy}
-          >
-            <Copy className="size-3.5" />
-            复制
-          </Button>
-        </div>
-        <Textarea
-          readOnly
-          value={markdown}
-          placeholder="点击上方范围生成摘要预览"
-          className="min-h-[360px] resize-none rounded-none border-0 bg-muted/20 font-mono text-xs leading-5 shadow-none focus-visible:ring-0"
-        />
-      </div>
-    </div>
-  )
-}
-
 export function AiHotspotsWorkspace() {
   const {
     view,
@@ -155,14 +87,18 @@ export function AiHotspotsWorkspace() {
     markRead,
     saveItemAsNote,
     generateDigest,
+    saveDigestAsNote,
     saveSettings,
     addUserFeed,
     updateUserFeed,
     deleteUserFeed,
     importOpml,
   } = useAiHotspotsStore()
+  const { loadFileTree, setActiveFilePath } = useArticleStore()
+  const { setLeftSidebarTab } = useSidebarStore()
   const [digestMarkdown, setDigestMarkdown] = useState('')
   const [isGeneratingDigest, setIsGeneratingDigest] = useState(false)
+  const [isSavingDigest, setIsSavingDigest] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
@@ -211,20 +147,44 @@ export function AiHotspotsWorkspace() {
     void markRead(id, read)
   }
 
-  const handleSaveAsNote = (id: string) => {
-    void saveItemAsNote(id)
-    toast({ title: '保存为笔记将在知识沉淀步骤启用' })
+  const openSavedNote = async (path: string) => {
+    await loadFileTree({ skipRemoteSync: true })
+    await setLeftSidebarTab('files')
+    setActiveFilePath(path)
   }
 
-  const handleSendToChat = () => {
-    toast({ title: '发送到聊天将在知识沉淀步骤启用' })
+  const handleSaveAsNote = async (id: string) => {
+    try {
+      const existing = items.find(candidate => candidate.id === id)
+      if (existing?.savedNotePath) {
+        await openSavedNote(existing.savedNotePath)
+        return
+      }
+
+      const path = await saveItemAsNote(id)
+      if (!path) return
+      await openSavedNote(path)
+      toast({ title: '已保存为笔记', description: path })
+    } catch (err) {
+      toast({
+        title: '保存为笔记失败',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      })
+    }
   }
 
-  const handleDeepDive = () => {
-    toast({ title: '深挖将在聊天接入步骤启用' })
+  const sendItemToChat = (id: string, mode: 'discuss' | 'deep-dive') => {
+    const item = items.find(candidate => candidate.id === id)
+    if (!item) return
+
+    const context = createAiHotspotChatContext(item, mode)
+    emitter.emit('ai-hotspot-send-to-chat', context)
+    void markRead(id, true)
+    toast({ title: mode === 'deep-dive' ? '已发送深挖提示到聊天' : '已发送到聊天' })
   }
 
-  const handleGenerateDigest = async (scope: DigestScope) => {
+  const handleGenerateDigest = async (scope: HotspotDigestScope) => {
     setIsGeneratingDigest(true)
     try {
       const markdown = await generateDigest(scope)
@@ -238,6 +198,24 @@ export function AiHotspotsWorkspace() {
       })
     } finally {
       setIsGeneratingDigest(false)
+    }
+  }
+
+  const handleSaveDigest = async (scope: HotspotDigestScope) => {
+    setIsSavingDigest(true)
+    try {
+      const result = await saveDigestAsNote(scope)
+      setDigestMarkdown(result.markdown)
+      await openSavedNote(result.path)
+      toast({ title: '热点摘要已保存', description: result.path })
+    } catch (err) {
+      toast({
+        title: '保存摘要失败',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSavingDigest(false)
     }
   }
 
@@ -337,18 +315,20 @@ export function AiHotspotsWorkspace() {
               onRefresh={handleRefresh}
               onToggleFavorite={handleToggleFavorite}
               onMarkRead={handleMarkRead}
-              onSaveAsNote={handleSaveAsNote}
-              onSendToChat={handleSendToChat}
-              onDeepDive={handleDeepDive}
+              onSaveAsNote={(id) => void handleSaveAsNote(id)}
+              onSendToChat={(id) => sendItemToChat(id, 'discuss')}
+              onDeepDive={(id) => sendItemToChat(id, 'deep-dive')}
             />
           ) : view === 'digest' ? (
-            <DigestView
+            <HotspotDigestView
               currentCount={filteredItems.length}
               favoriteCount={favoriteCount}
               unreadCount={unreadCount}
               markdown={digestMarkdown}
               isGenerating={isGeneratingDigest}
+              isSaving={isSavingDigest}
               onGenerate={(scope) => void handleGenerateDigest(scope)}
+              onSave={(scope) => void handleSaveDigest(scope)}
               onCopy={() => void handleCopyDigest()}
             />
           ) : (

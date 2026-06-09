@@ -3,6 +3,17 @@ import type { QuickPrompt } from '@/lib/ai/placeholder'
 import type { OnboardingStepId } from '@/app/core/main/editor/onboarding-state'
 import type { MemorySessionTarget } from '@/app/core/main/memory/memory-navigation'
 
+export type TodoDraftPayload = {
+  title?: string
+  description?: string
+  priority?: 'low' | 'medium' | 'high'
+  dueDate?: string
+  reminderAt?: string
+  reminderEnabled?: boolean
+  subtasks?: Array<{ title: string; completed?: boolean }>
+  tagId?: number
+}
+
 // 定义事件类型
 interface Events {
   'searchAndScroll': string;
@@ -45,7 +56,7 @@ interface Events {
   };
   'toolbar-shortcut-image': unknown;
   'toolbar-shortcut-file': unknown;
-  'toolbar-shortcut-todo': unknown;
+  'toolbar-shortcut-todo': TodoDraftPayload | undefined;
   'editor-ai-streaming': { isStreaming: boolean; targetFilePath?: string; terminate?: () => void };
   'toolbar-shortcut-recording': unknown;
   'toolbar-shortcut-scan': unknown;
@@ -131,6 +142,19 @@ interface Events {
       articlePath: string;
     };
   };
+  'ai-hotspot-send-to-chat': {
+    prompt: string;
+    quoteData: {
+      quote: string;
+      fullContent: string;
+      fileName: string;
+      startLine: number;
+      endLine: number;
+      from: number;
+      to: number;
+      articlePath: string;
+    };
+  };
   'chat-attach-image': {
     id?: string;
     url: string;
@@ -149,6 +173,7 @@ interface Events {
     type: string;
     position: { top: number; left: number; right: number; bottom: number };
     controller?: AbortController;
+    targetRange?: { from: number; to: number };
   };
   'update-ai-streaming-content': {
     suggestedText: string;
@@ -164,6 +189,7 @@ interface Events {
     type: string;
     position: { top: number; left: number; right: number; bottom: number };
     generatedRange?: { from: number; to: number };
+    targetRange?: { from: number; to: number };
   } | undefined;
   'show-ai-suggestion': {
     originalText: string;
@@ -171,6 +197,7 @@ interface Events {
     type: string;
     position: { top: number; left: number; right: number; bottom: number };
     generatedRange?: { from: number; to: number };
+    targetRange?: { from: number; to: number };
   };
   'abort-ai-streaming': void;
   // Agent 编辑器工具事件 - 内联定义避免重复

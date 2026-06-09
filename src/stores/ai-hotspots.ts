@@ -7,6 +7,7 @@ import {
   getAiHotspotSourceStatuses,
   getAiHotspotUserFeeds,
   initAiHotspotsDb,
+  setAiHotspotSavedNotePath,
   setAiHotspotFavorite,
   setAiHotspotRead,
   updateAiHotspotUserFeed,
@@ -21,6 +22,7 @@ import {
   refreshAiHotspots,
   shouldAutoRefreshAiHotspots,
 } from '@/lib/ai-hotspots'
+import { writeHotspotDigestNote, writeHotspotItemNote } from '@/lib/ai-hotspots/notes'
 import type {
   AiHotspotFilters,
   AiHotspotItem,
@@ -66,8 +68,9 @@ interface AiHotspotsState {
   setFilters: (partial: Partial<AiHotspotFilters>) => void
   toggleFavorite: (id: string) => Promise<void>
   markRead: (id: string, read: boolean) => Promise<void>
-  saveItemAsNote: (id: string) => Promise<void>
+  saveItemAsNote: (id: string) => Promise<string | null>
   generateDigest: (scope?: AiHotspotDigestScope) => Promise<string>
+  saveDigestAsNote: (scope?: AiHotspotDigestScope) => Promise<{ markdown: string; path: string }>
   addUserFeed: (input: AddAiHotspotUserFeedInput) => Promise<void>
   updateUserFeed: (id: string, patch: UpdateAiHotspotUserFeedPatch) => Promise<void>
   deleteUserFeed: (id: string) => Promise<void>
@@ -349,8 +352,17 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
 
   saveItemAsNote: async (id) => {
     const item = get().items.find(candidate => candidate.id === id)
-    if (!item) return
-    set({ error: '保存为笔记将在 AI 热点知识沉淀任务中启用' })
+    if (!item) return null
+
+    const path = await writeHotspotItemNote(item)
+    await setAiHotspotSavedNotePath(id, path)
+    const items = patchItem(get().items, id, { savedNotePath: path })
+    set({
+      items,
+      filteredItems: deriveFilteredItems(items, get().filters),
+      error: null,
+    })
+    return path
   },
 
   generateDigest: async (scope = 'current') => {
@@ -371,6 +383,16 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
       title: scope === '7d' ? 'AI 热点周报' : 'AI 热点日报',
       items: sortHotspotItems(items).slice(0, 30),
     })
+  },
+
+  saveDigestAsNote: async (scope = 'current') => {
+    const markdown = await get().generateDigest(scope)
+    const title = scope === '7d' ? 'AI 热点周报' : 'AI 热点日报'
+    const path = await writeHotspotDigestNote(markdown, {
+      title,
+      date: new Date().toISOString().slice(0, 10),
+    })
+    return { markdown, path }
   },
 
   addUserFeed: async (input) => {

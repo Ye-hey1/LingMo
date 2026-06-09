@@ -35,6 +35,12 @@ import { ChatInputContext } from "./chat-input-context"
 import { ChatContextRing } from "./chat-token-display"
 import { ChatInputAddMenu } from "./chat-input-add-menu"
 import {
+  getResearchDepthConfig,
+  normalizeResearchDepthPreset,
+  ResearchDepthControl,
+  type ResearchDepthPreset,
+} from "./research-depth-control"
+import {
   getLingMoFilePointerDragDetail,
   isPointInsideElement,
   LINGMO_FILE_POINTER_DRAG_EVENT,
@@ -152,6 +158,7 @@ const RESEARCH_KEYWORDS = [
 ]
 
 const CHAT_DICTATION_POLISH_MODE_STORAGE_KEY = 'chat-dictation-polish-mode'
+const CHAT_RESEARCH_DEPTH_PRESET_STORAGE_KEY = 'chat-research-depth-preset'
 
 function isSensitiveInstruction(val: string): boolean {
   const normalized = val.toLowerCase()
@@ -524,9 +531,17 @@ ${exec.prompt}`
     CHAT_DICTATION_POLISH_MODE_STORAGE_KEY,
     'raw'
   )
+  const [researchDepthPresetValue, setResearchDepthPresetValue] = useLocalStorage<string>(
+    CHAT_RESEARCH_DEPTH_PRESET_STORAGE_KEY,
+    'auto'
+  )
   const dictationPolishMode: DictationPolishMode = isDictationPolishMode(dictationPolishModeValue)
     ? dictationPolishModeValue
     : 'raw'
+  const researchDepthPreset = normalizeResearchDepthPreset(researchDepthPresetValue)
+  const setResearchDepthPreset = useCallback((preset: ResearchDepthPreset) => {
+    setResearchDepthPresetValue(preset)
+  }, [setResearchDepthPresetValue])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [tempInput, setTempInput] = useState('')
   const [linkedResources, setLinkedResources] = useState<LinkedResource[]>([])
@@ -556,6 +571,16 @@ ${exec.prompt}`
     : ''
   const hasContext = !!pendingQuote || linkedResources.length > 0 || attachedImages.length > 0
   const chatSendRef = useRef<ChatSendHandle>(null)
+  const sendCurrentChat = useCallback(() => {
+    const depthConfig = getResearchDepthConfig(researchDepthPreset)
+    chatSendRef.current?.sendChat(undefined, chatMode === 'research'
+      ? {
+          researchDepthPreset: depthConfig.preset,
+          researchBreadth: depthConfig.breadth,
+          researchDepth: depthConfig.depth,
+        }
+      : undefined)
+  }, [chatMode, researchDepthPreset])
   const isMobile = useIsMobile()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const inputDropZoneRef = useRef<HTMLDivElement>(null)
@@ -801,9 +826,9 @@ ${exec.prompt}`
     clearPendingAutoSend()
     pendingAutoSendTimerRef.current = window.setTimeout(() => {
       pendingAutoSendTimerRef.current = null
-      chatSendRef.current?.sendChat()
+      sendCurrentChat()
     }, 30)
-  }, [applyTypedText, clearLinkedFiles, clearPendingAutoSend, loading, setPendingQuote, startNewConversation])
+  }, [applyTypedText, clearLinkedFiles, clearPendingAutoSend, loading, sendCurrentChat, setPendingQuote, startNewConversation])
 
   const restoreMessageDraft = useCallback((detail: {
     content: string
@@ -849,9 +874,9 @@ ${exec.prompt}`
     clearPendingAutoSend()
     pendingAutoSendTimerRef.current = window.setTimeout(() => {
       pendingAutoSendTimerRef.current = null
-      chatSendRef.current?.sendChat()
+      sendCurrentChat()
     }, 30)
-  }, [applyTypedText, chatMode, clearAllContexts, clearPendingAutoSend, setChatMode, setPendingQuote])
+  }, [applyTypedText, chatMode, clearAllContexts, clearPendingAutoSend, sendCurrentChat, setChatMode, setPendingQuote])
 
   useEffect(() => {
     return () => {
@@ -1012,6 +1037,15 @@ ${exec.prompt}`
         ? skills.filter(skill => skill.enabled).map(skill => skill.name)
         : []
 
+      // 从当前对话中提取最近的消息，用于解析"继续"、"上面"等上下文引用
+      const recentMessages = chats
+        .filter(chat => chat.type === 'chat' && chat.content?.trim())
+        .slice(-6)
+        .map(chat => ({
+          role: (chat.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+          content: chat.content || '',
+        }))
+
       const enhanced = await enhanceChatPrompt({
         userInput: input,
         chatMode,
@@ -1030,6 +1064,7 @@ ${exec.prompt}`
         isRagEnabled,
         webSearchEnabled,
         enabledSkillNames,
+        recentMessages,
       })
 
       if (enhanced) {
@@ -1251,7 +1286,7 @@ ${exec.prompt}`
   }, [primaryModel, marks, chats, trashState, t])
 
   useEffect(() => {
-    const handleGithubStarSendToChat = (event: unknown) => {
+    const handleQuotedPromptSendToChat = (event: unknown) => {
       const data = event as { prompt?: string; quoteData?: PendingQuote }
       if (!data?.quoteData) return
 
@@ -1304,7 +1339,8 @@ ${exec.prompt}`
     emitter.on('quick-prompt-send', handleQuickPromptSend)
     emitter.on('ai-placeholder-generated', handleAiPlaceholderGenerated)
     emitter.on('ai-prompts-generated', handleAiPromptsGenerated)
-    emitter.on('github-stars-send-to-chat', handleGithubStarSendToChat)
+    emitter.on('github-stars-send-to-chat', handleQuotedPromptSendToChat)
+    emitter.on('ai-hotspot-send-to-chat', handleQuotedPromptSendToChat)
     return () => {
       onboardingTypingTimerRefs.current.forEach((timerId) => window.clearTimeout(timerId))
       onboardingTypingTimerRefs.current = []
@@ -1317,7 +1353,8 @@ ${exec.prompt}`
       emitter.off('quick-prompt-send')
       emitter.off('ai-placeholder-generated', handleAiPlaceholderGenerated)
       emitter.off('ai-prompts-generated', handleAiPromptsGenerated)
-      emitter.off('github-stars-send-to-chat', handleGithubStarSendToChat)
+      emitter.off('github-stars-send-to-chat', handleQuotedPromptSendToChat)
+      emitter.off('ai-hotspot-send-to-chat', handleQuotedPromptSendToChat)
     }
   }, [applyQuickPrompt, applyTypedText, debouncedGenPlaceholder, handleQuickPromptSend, setContextPanelExpandedPref, setPendingQuote])
 
@@ -1943,7 +1980,7 @@ ${exec.prompt}`
                     }
 
                     pendingCommandRef.current = null
-                    chatSendRef.current?.sendChat()
+                    sendCurrentChat()
                   })()
                   return
                 }
@@ -1960,7 +1997,7 @@ ${exec.prompt}`
                   return
                 }
                 pendingCommandRef.current = null
-                chatSendRef.current?.sendChat()
+                sendCurrentChat()
               }
               if (e.key === "Escape" && dictation.isActive) {
                 e.preventDefault()
@@ -2026,6 +2063,13 @@ ${exec.prompt}`
           </div>
 
           <div className="ml-auto flex min-w-fit shrink-0 items-center justify-end gap-1 rounded-lg bg-muted/20 p-0.5">
+            {chatMode === 'research' && (
+              <ResearchDepthControl
+                value={researchDepthPreset}
+                onChange={setResearchDepthPreset}
+                disabled={isModelRunning}
+              />
+            )}
             <ChatContextRing
               inputText={text}
               model={currentModelContextKey}
