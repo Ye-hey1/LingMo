@@ -416,6 +416,13 @@ export const ChatInput = React.memo(function ChatInput() {
 
       try {
         const isAgentSkill = slashCommand.executionMode === 'agent'
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[SlashSkill] route', {
+            id: slashCommand.id,
+            runtimeProfile: slashCommand.runtimeProfile,
+            reason: slashCommand.runtimeProfileReason,
+          })
+        }
         chatSendRef.current?.sendChat(skillInstruction, {
           forcedSkillIds: isAgentSkill ? [slashCommand.skillContent.metadata.id] : undefined,
           displayText,

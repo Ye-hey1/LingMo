@@ -590,6 +590,12 @@ contextPolicy:
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
   assert.match(chatInputSource, /buildWriterSkillInstruction/)
   assert.match(chatInputSource, /routeOverride:\s*slashCommand\.runtimeProfile/)
+  assert.match(chatInputSource, /\[SlashSkill\] route/)
+  assert.match(chatInputSource, /runtimeProfile:\s*slashCommand\.runtimeProfile/)
+
+  const popoverSource = await readFile(join(repoRoot, 'src/app/core/main/chat/ai-doc-command-popover.tsx'), 'utf8')
+  assert.match(popoverSource, /runtimeProfile/)
+  assert.doesNotMatch(popoverSource, /agent\s*之类|Agent badge placeholder/)
   assert.match(chatInputSource, /const isAgentSkill = slashCommand\.executionMode === 'agent'/)
 
   const chatSendSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-send.tsx'), 'utf8')
