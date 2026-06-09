@@ -571,6 +571,10 @@ contextPolicy:
   assert.match(approvalSource, /export function shouldInterruptForTool/)
   assert.match(approvalSource, /approvalScope/)
   assert.match(approvalSource, /diffPreview/)
+  const contextEngineSource = await readFile(join(repoRoot, 'src/lib/agent-harness/context-engine.ts'), 'utf8')
+  assert.match(contextEngineSource, /export function buildContextPack/)
+  assert.match(contextEngineSource, /priority/)
+  assert.match(contextEngineSource, /deferred/)
 
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
   assert.match(chatInputSource, /buildWriterSkillInstruction/)
