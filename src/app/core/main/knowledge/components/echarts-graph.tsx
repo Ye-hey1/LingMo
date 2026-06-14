@@ -604,21 +604,28 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
         itemStyle: {
           color: {
             type: 'radial',
-            x: 0.4,
-            y: 0.35,
-            r: 0.65,
+            x: 0.35,
+            y: 0.3,
+            r: 0.7,
             colorStops: [
-              { offset: 0, color: withAlpha(color, 1) },
-              { offset: 0.4, color: withAlpha(color, 0.95) },
-              { offset: 0.7, color: withAlpha(color, 0.82) },
-              { offset: 1, color: withAlpha(mixColors(color, '#000000', 0.15), 0.68) },
+              { offset: 0, color: withAlpha(mixColors(color, '#ffffff', 0.2), 1) },
+              { offset: 0.3, color: withAlpha(color, 1) },
+              { offset: 0.6, color: withAlpha(color, 0.92) },
+              { offset: 0.85, color: withAlpha(mixColors(color, '#000000', 0.1), 0.78) },
+              { offset: 1, color: withAlpha(mixColors(color, '#000000', 0.25), 0.55) },
             ],
           },
-          borderColor: isSelected ? theme.foreground : isHovered ? withAlpha(theme.foreground, 0.8) : withAlpha(color, 0.4),
-          borderWidth: isSelected ? 3 : isHovered ? 2.5 : 0.8,
-          shadowBlur: isSelected ? 42 : isHovered ? 32 : 6 + importance * 16,
-          shadowColor: withAlpha(color, isSelected ? 0.55 : isHovered ? 0.42 : 0.12 + importance * 0.1),
-          opacity: isDimmed ? 0.25 : 1,
+          borderColor: isSelected 
+            ? theme.foreground 
+            : isHovered 
+              ? withAlpha(theme.foreground, 0.9) 
+              : withAlpha(mixColors(color, '#ffffff', 0.3), 0.6),
+          borderWidth: isSelected ? 3.5 : isHovered ? 2.8 : 1.2,
+          shadowBlur: isSelected ? 48 : isHovered ? 36 : 8 + importance * 20,
+          shadowOffsetX: 2 + importance * 3,
+          shadowOffsetY: 3 + importance * 4,
+          shadowColor: withAlpha('#000000', isSelected ? 0.45 : isHovered ? 0.38 : 0.18 + importance * 0.12),
+          opacity: isDimmed ? 0.2 : 1,
         },
         label: {
           show: labelVisible,
@@ -995,18 +1002,21 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
   return (
     <div
       className="relative h-full w-full touch-none bg-background"
+      style={{ perspective: '1200px', perspectiveOrigin: '50% 50%' }}
       onWheel={handleWheel}
     >
-      <ReactECharts
-        ref={chartRef}
-        key={chartLayoutKey}
-        option={getOption()}
-        style={{ width, height }}
-        onEvents={onEvents}
-        opts={{ renderer: 'canvas' }}
-        notMerge={false}
-        lazyUpdate
-      />
+      <div style={{ transformStyle: 'preserve-3d', transform: 'rotateX(2deg)' }}>
+        <ReactECharts
+          ref={chartRef}
+          key={chartLayoutKey}
+          option={getOption()}
+          style={{ width, height }}
+          onEvents={onEvents}
+          opts={{ renderer: 'canvas' }}
+          notMerge={false}
+          lazyUpdate
+        />
+      </div>
     </div>
   );
 }
