@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGraphStore, type GraphNode, type GraphEdge } from '../store/graph-store';
+import { useInertialDrag } from '../hooks/use-inertial-drag';
 
 interface EChartsGraphProps {
   width: number;
@@ -445,6 +446,9 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
   const [reducedMotion, setReducedMotion] = useState(false);
   const chartRef = useRef<any>(null);
 
+  const [isDragging, setIsDragging] = useState(false);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+
   const {
     filteredNodes,
     filteredEdges,
@@ -537,6 +541,27 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
     const factor = event.deltaY < 0 ? 1.1 : 0.9;
     setZoom(Number((useGraphStore.getState().zoom * factor).toFixed(2)));
   }, [setZoom]);
+
+  const handleDrag = useCallback((deltaX: number, deltaY: number) => {
+    setPanOffset(prev => ({
+      x: prev.x + deltaX,
+      y: prev.y + deltaY,
+    }));
+  }, []);
+
+  const dragHandlers = useInertialDrag({
+    onDrag: handleDrag,
+    onDragStart: () => setIsDragging(true),
+    onDragEnd: () => setIsDragging(false),
+    friction: 0.94,
+    maxVelocity: 30,
+  });
+
+  useEffect(() => {
+    if (zoom === 0.86) {
+      setPanOffset({ x: 0, y: 0 });
+    }
+  }, [zoom]);
 
   const getOption = useCallback(() => {
     const visibleLabels = filteredNodes.length <= 140;
@@ -1004,8 +1029,13 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
       className="relative h-full w-full touch-none bg-background"
       style={{ perspective: '1200px', perspectiveOrigin: '50% 50%' }}
       onWheel={handleWheel}
+      {...dragHandlers}
     >
-      <div style={{ transformStyle: 'preserve-3d', transform: 'rotateX(2deg)' }}>
+      <div style={{
+        transformStyle: 'preserve-3d',
+        transform: `rotateX(2deg) translate(${panOffset.x}px, ${panOffset.y}px)`,
+        transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+      }}>
         <ReactECharts
           ref={chartRef}
           key={chartLayoutKey}
