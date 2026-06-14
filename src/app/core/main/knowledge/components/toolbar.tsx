@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import {
+  Box,
   Download,
   Filter,
   GitBranch,
@@ -77,6 +78,7 @@ export function GraphToolbar({ layoutMode = 'force', onLayoutChange, onPathFinde
     selectedNode,
     showFilterPanel,
     showDetailPanel,
+    enable3D,
     setZoom,
     fitView,
     deleteNode,
@@ -84,6 +86,7 @@ export function GraphToolbar({ layoutMode = 'force', onLayoutChange, onPathFinde
     toggleFilterPanel,
     toggleDetailPanel,
     toggleExportDialog,
+    toggle3D,
     loadGraph,
     isLoading,
   } = useGraphStore();
@@ -139,6 +142,14 @@ export function GraphToolbar({ layoutMode = 'force', onLayoutChange, onPathFinde
             </div>
           )}
         </div>
+
+        <ToolbarButton
+          label="3D效果"
+          active={enable3D}
+          onClick={toggle3D}
+        >
+          <Box className="h-4 w-4" />
+        </ToolbarButton>
 
         <Separator orientation="vertical" className="mx-0.5 h-5 bg-border/80 dark:bg-white/10" />
 

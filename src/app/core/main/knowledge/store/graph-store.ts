@@ -64,6 +64,8 @@ interface GraphState {
   showExportDialog: boolean;
   isLoading: boolean;
   error: string | null;
+  enable3D: boolean;
+  enableInertialDrag: boolean;
   
   loadGraph: () => Promise<void>;
   loadNeighbors: (nodeId: string, depth?: number) => Promise<void>;
@@ -83,6 +85,8 @@ interface GraphState {
   toggleSearchDialog: () => void;
   toggleFilterPanel: () => void;
   toggleExportDialog: () => void;
+  toggle3D: () => void;
+  toggleInertialDrag: () => void;
   clearError: () => void;
 }
 
@@ -678,6 +682,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   showExportDialog: false,
   isLoading: false,
   error: null,
+  enable3D: true,
+  enableInertialDrag: true,
 
   // ==================== 数据加载 ====================
   
@@ -949,6 +955,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   toggleSearchDialog: () => set(state => ({ showSearchDialog: !state.showSearchDialog })),
   toggleFilterPanel: () => set(state => ({ showFilterPanel: !state.showFilterPanel })),
   toggleExportDialog: () => set(state => ({ showExportDialog: !state.showExportDialog })),
+  toggle3D: () => set(state => ({ enable3D: !state.enable3D })),
+  toggleInertialDrag: () => set(state => ({ enableInertialDrag: !state.enableInertialDrag })),
   clearError: () => set({ error: null }),
 }));
 

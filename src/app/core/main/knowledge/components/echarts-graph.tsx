@@ -459,6 +459,8 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
     selectedEdge,
     hoveredNode,
     zoom,
+    enable3D,
+    enableInertialDrag,
     selectNode,
     selectEdge,
     setHoveredNode,
@@ -556,8 +558,8 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
     onDrag: handleDrag,
     onDragStart: () => setIsDragging(true),
     onDragEnd: () => setIsDragging(false),
-    friction: 0.94,
-    maxVelocity: 30,
+    friction: enableInertialDrag ? 0.94 : 0,
+    maxVelocity: enableInertialDrag ? 30 : 0,
   });
 
   useEffect(() => {
@@ -1094,13 +1096,15 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
   return (
     <div
       className="relative h-full w-full touch-none bg-background"
-      style={{ perspective: '1200px', perspectiveOrigin: '50% 50%' }}
+      style={{ perspective: enable3D ? '1200px' : 'none', perspectiveOrigin: '50% 50%' }}
       onWheel={handleWheel}
       {...dragHandlers}
     >
       <div style={{
-        transformStyle: 'preserve-3d',
-        transform: `rotateX(2deg) translate(${panOffset.x}px, ${panOffset.y}px)`,
+        transformStyle: enable3D ? 'preserve-3d' : 'flat',
+        transform: enable3D
+          ? `rotateX(2deg) translate(${panOffset.x}px, ${panOffset.y}px)`
+          : `translate(${panOffset.x}px, ${panOffset.y}px)`,
         transition: isDragging ? 'none' : 'transform 0.1s ease-out',
       }}>
         <ReactECharts
