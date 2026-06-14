@@ -56,6 +56,7 @@ export { DetailPanel } from './components/detail-panel';
 export { SearchDialog } from './components/search-dialog';
 export { FilterPanel } from './components/filter-panel';
 export { ExportDialog } from './components/export-dialog';
+export { NodeDetailPopup } from './components/node-detail-popup';
 
 // ==================== 主页面导出 ====================
 export { KnowledgeGraphECharts, default } from './knowledge-graph-echarts';
