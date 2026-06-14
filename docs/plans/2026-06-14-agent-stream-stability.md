@@ -1,408 +1,167 @@
-# Agent Stream Stability Implementation Plan
+# Agent Runtime Stability and Manual Dream/Distill Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build a stable event-to-part pipeline for LingMo agent runs so tool calls, skill scripts, and long-form answer streaming no longer visually flicker or fail prematurely.
+**Goal:** Build a stable runtime snapshot, tool lifecycle, and stream reducer for LingMo agent runs, then add manual Dream and Distill entry points that turn run history into reviewable memory and workflow suggestions.
 
-**Architecture:** Add a canonical agent part reducer beside the existing `AgentEventBus`, then migrate UI status rendering to consume reducer snapshots. Keep the current runner and callbacks during migration, but make reducer output the single stable display source for live status, tool lifecycle, recoverable errors, and final answer rendering.
+**Architecture:** Add a canonical runtime snapshot that combines skill exposure, MCP exposure, and permission state before each run. Feed that snapshot into a single agent-part reducer so the UI renders stable lifecycle parts instead of guessing from transient fields. After the runtime and stream foundation is in place, add manual Dream and Distill actions that read run summaries, working memory, and memory store data, then write only after explicit user approval.
 
-**Tech Stack:** TypeScript, React 19, Zustand, Next.js, Tauri shell plugin, Node-based test scripts.
+**Tech Stack:** TypeScript, React 19, Zustand, Next.js, Tauri shell/plugin APIs, Node-based test scripts.
 
 ---
 
-### Task 1: Add Canonical Agent Part Types
+### Task 1: Add Runtime Snapshot Types
 
 **Files:**
-- Modify: `src/lib/agent/types.ts`
+- Create: `src/lib/agent/runtime-snapshot.ts`
 - Modify: `src/lib/agent/index.ts`
+- Modify: `src/lib/agent-harness/types.ts`
+- Modify: `src/lib/agent/types.ts`
 - Test: `scripts/agent-core-tests.mjs`
 
-**Step 1: Write the failing type/runtime shape test**
+**Step 1: Write the failing snapshot-shape test**
 
-Add this assertion block near the existing event bus tests in `scripts/agent-core-tests.mjs`:
+Add a pure test to `scripts/agent-core-tests.mjs` that imports the new snapshot helpers and asserts the initial runtime snapshot exposes:
+
+- `runId`
+- skill summary
+- MCP summary
+- visible tool names
+- warnings
+
+Example expectation:
 
 ```js
-{
-  const {
-    createInitialAgentPartSnapshot,
-  } = await importTsModule('src/lib/agent/part-reducer.ts')
-
-  const snapshot = createInitialAgentPartSnapshot('run-1')
-  assert.equal(snapshot.runId, 'run-1')
-  assert.equal(snapshot.status, 'idle')
-  assert.deepEqual(snapshot.parts, [])
-  assert.equal(snapshot.visibleStatus.label, '准备中')
-}
+const snapshot = createInitialAgentRuntimeSnapshot('run-1')
+assert.equal(snapshot.runId, 'run-1')
+assert.deepEqual(snapshot.visibleToolNames, [])
+assert.deepEqual(snapshot.warnings, [])
 ```
 
-**Step 2: Run test to verify it fails**
+**Step 2: Run the test to confirm it fails**
 
 Run: `pnpm test:agent`
 
-Expected: FAIL because `src/lib/agent/part-reducer.ts` does not exist.
+Expected: FAIL because the new snapshot module and types do not exist yet.
 
-**Step 3: Create minimal part types**
+**Step 3: Add the minimal snapshot types**
 
-Create `src/lib/agent/part-reducer.ts` with:
+Create `src/lib/agent/runtime-snapshot.ts` with pure types and an initializer for:
 
-```ts
-import type { AgentActivityPhase, AgentEvent, AgentTurnTelemetry, ToolCall } from './types'
-
-export type AgentPartStatus =
-  | 'pending'
-  | 'running'
-  | 'success'
-  | 'error'
-  | 'skipped'
-  | 'cancelled'
-  | 'completed'
-
-export type AgentPartVisibility = 'visible' | 'hidden'
-
-export interface AgentBasePart {
-  id: string
-  runId?: string
-  type: 'reasoning' | 'text' | 'tool' | 'status' | 'error' | 'checkpoint'
-  status: AgentPartStatus
-  createdAt: number
-  updatedAt: number
-  visibility: AgentPartVisibility
-}
-
-export interface AgentReasoningPart extends AgentBasePart {
-  type: 'reasoning'
-  text: string
-}
-
-export interface AgentTextPart extends AgentBasePart {
-  type: 'text'
-  text: string
-}
-
-export interface AgentToolPart extends AgentBasePart {
-  type: 'tool'
-  toolCallId: string
-  toolName: string
-  params: Record<string, any>
-  result?: ToolCall['result']
-  recoverable?: boolean
-}
-
-export interface AgentStatusPart extends AgentBasePart {
-  type: 'status'
-  label: string
-  detail?: string
-  phase?: AgentActivityPhase
-}
-
-export interface AgentErrorPart extends AgentBasePart {
-  type: 'error'
-  message: string
-  recoverable: boolean
-}
-
-export interface AgentCheckpointPart extends AgentBasePart {
-  type: 'checkpoint'
-  label: string
-}
-
-export type AgentPart =
-  | AgentReasoningPart
-  | AgentTextPart
-  | AgentToolPart
-  | AgentStatusPart
-  | AgentErrorPart
-  | AgentCheckpointPart
-
-export interface AgentVisibleStatus {
-  tone: 'running' | 'done' | 'error'
-  label: string
-  detail?: string
-}
-
-export interface AgentPartSnapshot {
-  runId?: string
-  status: 'idle' | 'running' | 'waiting_approval' | 'completed' | 'stopped' | 'error'
-  parts: AgentPart[]
-  visibleStatus: AgentVisibleStatus
-  finalAnswerContent?: string
-  activity?: {
-    phase: AgentActivityPhase
-    label: string
-    detail?: string
-    startedAt: number
-    iteration?: number
-    toolName?: string
-  }
-  telemetry?: AgentTurnTelemetry
-  recoverableErrors: string[]
-  fatalErrors: string[]
-}
-
-export function createInitialAgentPartSnapshot(runId?: string): AgentPartSnapshot {
-  return {
-    runId,
-    status: 'idle',
-    parts: [],
-    visibleStatus: {
-      tone: 'running',
-      label: '准备中',
-    },
-    recoverableErrors: [],
-    fatalErrors: [],
-  }
-}
-
-export function reduceAgentPartSnapshot(
-  snapshot: AgentPartSnapshot,
-  event: AgentEvent,
-): AgentPartSnapshot {
-  return snapshot
-}
-```
+- runtime snapshot
+- skill snapshot
+- MCP snapshot
+- tool exposure snapshot
+- permission snapshot
+- warning entries
 
 **Step 4: Export the new API**
 
-Modify `src/lib/agent/index.ts`:
+Modify `src/lib/agent/index.ts` to export the new runtime snapshot helpers and types.
 
-```ts
-export {
-  createInitialAgentPartSnapshot,
-  reduceAgentPartSnapshot,
-} from './part-reducer'
-
-export type {
-  AgentPart,
-  AgentPartSnapshot,
-  AgentVisibleStatus,
-  AgentToolPart,
-} from './part-reducer'
-```
-
-**Step 5: Run test to verify it passes**
+**Step 5: Run the test to confirm it passes**
 
 Run: `pnpm test:agent`
 
-Expected: PASS for the new snapshot shape test.
+Expected: PASS.
 
 **Step 6: Commit**
 
 ```bash
-git add src/lib/agent/types.ts src/lib/agent/index.ts src/lib/agent/part-reducer.ts scripts/agent-core-tests.mjs
-git commit -m "Introduce a stable agent part snapshot"
+git add src/lib/agent/runtime-snapshot.ts src/lib/agent/index.ts src/lib/agent-harness/types.ts src/lib/agent/types.ts scripts/agent-core-tests.mjs
+git commit -m "Add canonical agent runtime snapshot types"
 ```
 
 ---
 
-### Task 2: Reduce Tool Lifecycle Events Into Stable Tool Parts
+### Task 2: Build Skill Runtime Snapshot Data
 
 **Files:**
-- Modify: `src/lib/agent/part-reducer.ts`
+- Modify: `src/lib/agent-harness/middleware.ts`
+- Modify: `src/lib/skills/manager.ts`
+- Modify: `src/stores/skills.ts`
 - Test: `scripts/agent-core-tests.mjs`
 
-**Step 1: Write failing lifecycle tests**
+**Step 1: Write a failing snapshot-assembly test**
 
-Add this block to `scripts/agent-core-tests.mjs`:
+Add a pure test that constructs a runtime snapshot from mocked skill metadata and asserts it includes:
 
-```js
-{
-  const {
-    createInitialAgentPartSnapshot,
-    reduceAgentPartSnapshot,
-  } = await importTsModule('src/lib/agent/part-reducer.ts')
+- skill id and name
+- source scope
+- base directory or file info
+- allowed tools
+- user-invocable flag
+- validation warnings
 
-  let snapshot = createInitialAgentPartSnapshot('tool-run')
-  snapshot = reduceAgentPartSnapshot(snapshot, {
-    type: 'action.parsed',
-    runId: 'tool-run',
-    sequence: 1,
-    timestamp: 100,
-    payload: { tool: 'execute_skill_script', params: { skill_id: 'aihot' } },
-  })
-
-  assert.equal(snapshot.parts.length, 1)
-  assert.equal(snapshot.parts[0].type, 'tool')
-  assert.equal(snapshot.parts[0].status, 'pending')
-  assert.equal(snapshot.visibleStatus.label, '准备调用工具')
-
-  snapshot = reduceAgentPartSnapshot(snapshot, {
-    type: 'tool.updated',
-    runId: 'tool-run',
-    sequence: 2,
-    timestamp: 120,
-    payload: {
-      toolCall: {
-        id: 'tool-1',
-        toolName: 'execute_skill_script',
-        params: { skill_id: 'aihot' },
-        status: 'running',
-        timestamp: 120,
-      },
-    },
-  })
-
-  assert.equal(snapshot.parts[0].status, 'running')
-  assert.equal(snapshot.visibleStatus.label, '正在调用工具')
-
-  snapshot = reduceAgentPartSnapshot(snapshot, {
-    type: 'tool.updated',
-    runId: 'tool-run',
-    sequence: 3,
-    timestamp: 140,
-    payload: {
-      toolCall: {
-        id: 'tool-1',
-        toolName: 'execute_skill_script',
-        params: { skill_id: 'aihot' },
-        status: 'success',
-        timestamp: 120,
-        result: { success: true, message: 'created report.md' },
-      },
-    },
-  })
-
-  assert.equal(snapshot.parts[0].status, 'success')
-  assert.equal(snapshot.visibleStatus.label, '工具调用完成')
-}
-```
-
-**Step 2: Run test to verify it fails**
+**Step 2: Run the test to confirm it fails**
 
 Run: `pnpm test:agent`
 
-Expected: FAIL because `reduceAgentPartSnapshot` is still a no-op.
+Expected: FAIL.
 
-**Step 3: Implement tool part upsert helpers**
+**Step 3: Add skill snapshot helpers**
 
-In `src/lib/agent/part-reducer.ts`, add:
+Implement a helper that reads from `skillManager` and the skills store to produce a stable runtime view for the current run.
 
-```ts
-function getPayloadToolName(payload: Record<string, any>) {
-  return typeof payload.toolName === 'string'
-    ? payload.toolName
-    : typeof payload.tool === 'string'
-      ? payload.tool
-      : typeof payload.toolCall?.toolName === 'string'
-        ? payload.toolCall.toolName
-        : undefined
-}
+**Step 4: Thread skill snapshot into middleware state**
 
-function createPartId(event: AgentEvent, suffix: string) {
-  return `${event.runId || 'agent'}:${event.sequence || event.timestamp}:${suffix}`
-}
+Extend the middleware state in `src/lib/agent-harness/types.ts` and `src/lib/agent-harness/middleware.ts` so `beforeRun` stores the skill snapshot alongside the existing skill match state.
 
-function upsertPart(parts: AgentPart[], nextPart: AgentPart): AgentPart[] {
-  const index = parts.findIndex(part => part.id === nextPart.id)
-  if (index < 0) return [...parts, nextPart]
-  return parts.map((part, partIndex) => partIndex === index ? { ...part, ...nextPart } : part)
-}
+**Step 5: Run the test to confirm it passes**
 
-function getToolPartId(event: AgentEvent, toolCallId?: string) {
-  return toolCallId
-    ? `${event.runId || 'agent'}:tool:${toolCallId}`
-    : createPartId(event, 'tool')
-}
+Run: `pnpm test:agent`
+
+Expected: PASS.
+
+**Step 6: Commit**
+
+```bash
+git add src/lib/agent-harness/middleware.ts src/lib/agent-harness/types.ts src/lib/skills/manager.ts src/stores/skills.ts scripts/agent-core-tests.mjs
+git commit -m "Capture stable skill runtime state for agent runs"
 ```
 
-**Step 4: Implement `action.parsed` handling**
+---
 
-Inside `reduceAgentPartSnapshot`, handle `action.parsed` and `action`:
+### Task 3: Build MCP Runtime Snapshot Data
 
-```ts
-case 'action':
-case 'action.parsed': {
-  const toolName = getPayloadToolName(payload)
-  if (!toolName) return snapshot
+**Files:**
+- Modify: `src/lib/agent-harness/middleware.ts`
+- Modify: `src/lib/mcp/types.ts`
+- Modify: `src/stores/mcp.ts`
+- Modify: `src/lib/mcp/client.ts`
+- Modify: `src/lib/mcp/server-manager.ts`
+- Test: `scripts/agent-core-tests.mjs`
 
-  const now = event.timestamp
-  const part: AgentToolPart = {
-    id: getToolPartId(event),
-    runId: event.runId,
-    type: 'tool',
-    status: 'pending',
-    visibility: 'visible',
-    createdAt: now,
-    updatedAt: now,
-    toolCallId: getToolPartId(event),
-    toolName,
-    params: typeof payload.params === 'object' && payload.params ? payload.params : {},
-  }
+**Step 1: Write a failing MCP snapshot test**
 
-  return {
-    ...snapshot,
-    runId: event.runId || snapshot.runId,
-    status: 'running',
-    parts: upsertPart(snapshot.parts, part),
-    visibleStatus: { tone: 'running', label: '准备调用工具' },
-  }
-}
-```
+Add a test that checks the runtime snapshot can represent:
 
-**Step 5: Implement `tool.updated` handling**
+- selected servers
+- connected servers
+- failed servers
+- auth-needed servers
+- cached tool names
+- warnings
 
-Map `ToolCall.status` into `AgentPartStatus` and update the visible status:
+**Step 2: Run the test to confirm it fails**
 
-```ts
-case 'tool':
-case 'tool.updated': {
-  const toolCall = payload.toolCall as ToolCall | undefined
-  if (!toolCall?.toolName) return snapshot
+Run: `pnpm test:agent`
 
-  const status = toolCall.status === 'success'
-    ? 'success'
-    : toolCall.status === 'error'
-      ? 'error'
-      : toolCall.status
+Expected: FAIL.
 
-  const part: AgentToolPart = {
-    id: getToolPartId(event, toolCall.id),
-    runId: event.runId,
-    type: 'tool',
-    status,
-    visibility: 'visible',
-    createdAt: toolCall.timestamp || event.timestamp,
-    updatedAt: event.timestamp,
-    toolCallId: toolCall.id,
-    toolName: toolCall.toolName,
-    params: toolCall.params || {},
-    result: toolCall.result,
-    recoverable: status === 'error' ? isRecoverableToolError(toolCall.result) : undefined,
-  }
+**Step 3: Add richer MCP state**
 
-  const visibleStatus = status === 'error'
-    ? part.recoverable
-      ? { tone: 'running' as const, label: '工具步骤失败，正在恢复', detail: toolCall.result?.error || toolCall.result?.message }
-      : { tone: 'error' as const, label: '工具调用失败', detail: toolCall.result?.error || toolCall.result?.message }
-    : status === 'success'
-      ? { tone: 'running' as const, label: '工具调用完成', detail: toolCall.result?.message }
-      : { tone: 'running' as const, label: '正在调用工具' }
+Extend `MCPServerState` and related types with explicit lifecycle states and cache metadata.
 
-  return {
-    ...snapshot,
-    runId: event.runId || snapshot.runId,
-    status: status === 'error' && !part.recoverable ? 'error' : 'running',
-    parts: upsertPart(snapshot.parts, part),
-    visibleStatus,
-    recoverableErrors: part.recoverable && toolCall.result?.error
-      ? [...snapshot.recoverableErrors, toolCall.result.error]
-      : snapshot.recoverableErrors,
-  }
-}
-```
+**Step 4: Normalize tool results**
 
-Add a conservative helper:
+Harden `normalizeCallToolResult` and tool-call paths so missing or malformed results never throw when `isError` is read.
 
-```ts
-function isRecoverableToolError(result?: ToolCall['result']) {
-  const message = `${result?.error || ''}\n${result?.message || ''}`
-  return Boolean(
-    result?.data?.retryable ||
-    /invalid utf-8|utf-8|decode|skipped_tool_call|too large|truncated|firecrawl|web_fetch/i.test(message)
-  )
-}
-```
+**Step 5: Thread MCP snapshot into middleware**
 
-**Step 6: Run tests**
+Update `createSkillMcpMiddleware` so `beforeRun` records MCP snapshot data from `useMcpStore` and `mcpServerManager`.
+
+**Step 6: Run the test to confirm it passes**
 
 Run: `pnpm test:agent`
 
@@ -411,131 +170,95 @@ Expected: PASS.
 **Step 7: Commit**
 
 ```bash
-git add src/lib/agent/part-reducer.ts scripts/agent-core-tests.mjs
-git commit -m "Reduce tool events into stable agent parts"
+git add src/lib/agent-harness/middleware.ts src/lib/mcp/types.ts src/lib/mcp/client.ts src/lib/mcp/server-manager.ts src/stores/mcp.ts scripts/agent-core-tests.mjs
+git commit -m "Stabilize MCP runtime state and tool normalization"
 ```
 
 ---
 
-### Task 3: Add Final Answer and Status Reduction
+### Task 4: Expose Runtime Snapshot to the Agent Runner
 
 **Files:**
-- Modify: `src/lib/agent/part-reducer.ts`
+- Modify: `src/lib/agent-harness/types.ts`
+- Modify: `src/lib/agent-harness/harness-agent-runner.ts`
+- Modify: `src/lib/agent-harness/middleware.ts`
+- Modify: `src/lib/agent/agent-handler.ts`
 - Test: `scripts/agent-core-tests.mjs`
 
-**Step 1: Write failing tests**
+**Step 1: Write a failing integration test**
 
-Add:
+Add a test that confirms the agent run control stores a runtime snapshot and that tool exposure reads from it.
 
-```js
-{
-  const {
-    createInitialAgentPartSnapshot,
-    reduceAgentPartSnapshot,
-  } = await importTsModule('src/lib/agent/part-reducer.ts')
-
-  let snapshot = createInitialAgentPartSnapshot('answer-run')
-  snapshot = reduceAgentPartSnapshot(snapshot, {
-    type: 'final.answer.rendered',
-    runId: 'answer-run',
-    sequence: 1,
-    timestamp: 100,
-    payload: { content: '日报正文', streaming: true },
-  })
-
-  assert.equal(snapshot.finalAnswerContent, '日报正文')
-  assert.equal(snapshot.visibleStatus.label, '正在写答案')
-  assert.equal(snapshot.status, 'running')
-
-  snapshot = reduceAgentPartSnapshot(snapshot, {
-    type: 'agent.completed',
-    runId: 'answer-run',
-    sequence: 2,
-    timestamp: 200,
-    payload: { result: '日报正文' },
-  })
-
-  assert.equal(snapshot.status, 'completed')
-  assert.equal(snapshot.visibleStatus.label, '完成')
-}
-```
-
-**Step 2: Run test to verify it fails**
+**Step 2: Run the test to confirm it fails**
 
 Run: `pnpm test:agent`
 
 Expected: FAIL.
 
-**Step 3: Implement answer/status events**
+**Step 3: Add runtime snapshot plumbing**
 
-Handle these event types:
+Wire the runtime snapshot through the run control and middleware state so each model step can use one stable source of truth for visible tools and permissions.
 
-```ts
-case 'agent.started':
-  return {
-    ...snapshot,
-    runId: event.runId || snapshot.runId,
-    status: 'running',
-    visibleStatus: { tone: 'running', label: '准备中' },
-  }
+**Step 4: Keep fallback behavior**
 
-case 'iteration.started':
-case 'model.request.started':
-  return {
-    ...snapshot,
-    status: 'running',
-    visibleStatus: { tone: 'running', label: '思考中' },
-  }
+Do not remove existing tool selection heuristics yet; keep them as fallback while the new snapshot path is being verified.
 
-case 'final':
-case 'final.answer.rendered':
-  return {
-    ...snapshot,
-    status: snapshot.status === 'completed' ? 'completed' : 'running',
-    finalAnswerContent: typeof payload.content === 'string' ? payload.content : snapshot.finalAnswerContent,
-    visibleStatus: { tone: 'running', label: '正在写答案' },
-  }
-
-case 'agent.completed':
-  return {
-    ...snapshot,
-    status: 'completed',
-    finalAnswerContent: typeof payload.result === 'string' ? payload.result : snapshot.finalAnswerContent,
-    visibleStatus: { tone: 'done', label: '完成' },
-  }
-
-case 'agent.stopped':
-  return {
-    ...snapshot,
-    status: 'stopped',
-    visibleStatus: { tone: 'done', label: '已停止' },
-  }
-
-case 'error':
-  return {
-    ...snapshot,
-    status: 'error',
-    visibleStatus: { tone: 'error', label: '执行失败', detail: String(payload.friendlyMessage || payload.error || '') },
-    fatalErrors: [...snapshot.fatalErrors, String(payload.error || payload.friendlyMessage || 'Unknown error')],
-  }
-```
-
-**Step 4: Run tests**
+**Step 5: Run the test to confirm it passes**
 
 Run: `pnpm test:agent`
 
 Expected: PASS.
 
-**Step 5: Commit**
+**Step 6: Commit**
 
 ```bash
-git add src/lib/agent/part-reducer.ts scripts/agent-core-tests.mjs
-git commit -m "Stabilize final answer status reduction"
+git add src/lib/agent-harness/types.ts src/lib/agent-harness/harness-agent-runner.ts src/lib/agent-harness/middleware.ts src/lib/agent/agent-handler.ts scripts/agent-core-tests.mjs
+git commit -m "Plumb runtime snapshots through agent execution"
 ```
 
 ---
 
-### Task 4: Store Part Snapshots in Agent State
+### Task 5: Add Canonical Agent Part Types and Reducer
+
+**Files:**
+- Create: `src/lib/agent/part-reducer.ts`
+- Modify: `src/lib/agent/index.ts`
+- Test: `scripts/agent-core-tests.mjs`
+
+**Step 1: Write the failing reducer test**
+
+Add a test that constructs a snapshot, feeds it `agent.started`, `action.parsed`, `tool.updated`, and `agent.completed`, then asserts the visible status and part statuses move predictably.
+
+**Step 2: Run the test to confirm it fails**
+
+Run: `pnpm test:agent`
+
+Expected: FAIL.
+
+**Step 3: Implement the minimal reducer**
+
+Create the part types, snapshot shape, and pure reducer.
+
+**Step 4: Export the reducer API**
+
+Expose the new reducer from `src/lib/agent/index.ts`.
+
+**Step 5: Run the test to confirm it passes**
+
+Run: `pnpm test:agent`
+
+Expected: PASS.
+
+**Step 6: Commit**
+
+```bash
+git add src/lib/agent/part-reducer.ts src/lib/agent/index.ts scripts/agent-core-tests.mjs
+git commit -m "Introduce stable agent part reduction"
+```
+
+---
+
+### Task 6: Store Part Snapshots in Agent State
 
 **Files:**
 - Modify: `src/lib/agent/types.ts`
@@ -543,71 +266,23 @@ git commit -m "Stabilize final answer status reduction"
 - Modify: `src/lib/agent/agent-handler.ts`
 - Test: `scripts/agent-core-tests.mjs`
 
-**Step 1: Extend `AgentState`**
+**Step 1: Write the failing store integration test**
 
-In `src/lib/agent/types.ts`, add fields:
+Add a pure test that verifies agent state can hold the new part snapshot and part list.
 
-```ts
-agentPartSnapshot?: import('./part-reducer').AgentPartSnapshot
-agentParts?: import('./part-reducer').AgentPart[]
-```
+**Step 2: Run the test to confirm it fails**
 
-If circular type imports are awkward, define the fields after importing types normally:
+Run: `pnpm test:agent`
 
-```ts
-import type { AgentPart, AgentPartSnapshot } from './part-reducer'
-```
+Expected: FAIL.
 
-Then use:
+**Step 3: Extend agent state**
 
-```ts
-agentPartSnapshot?: AgentPartSnapshot
-agentParts?: AgentPart[]
-```
+Add `agentPartSnapshot` and `agentParts` to agent state and initialize/reset them.
 
-**Step 2: Initialize and reset state**
+**Step 4: Update the agent handler**
 
-In `src/stores/chat.ts`, set:
-
-```ts
-agentPartSnapshot: undefined,
-agentParts: [],
-```
-
-in both initial `agentState` and `resetAgentState`.
-
-**Step 3: Write reducer integration test**
-
-Add a pure test in `scripts/agent-core-tests.mjs` that imports `reduceAgentPartSnapshot` and proves multiple events accumulate parts. This guards the store integration without needing React.
-
-**Step 4: Wire reducer in `AgentHandler.handleAgentEvent`**
-
-In `src/lib/agent/agent-handler.ts`, import:
-
-```ts
-import {
-  createInitialAgentPartSnapshot,
-  reduceAgentPartSnapshot,
-} from './part-reducer'
-```
-
-Inside `handleAgentEvent`, after `nextAgentEvents` is computed:
-
-```ts
-const previousPartSnapshot = store.agentState.agentPartSnapshot
-  || createInitialAgentPartSnapshot(event.runId || store.agentState.agentRunId)
-const partSnapshot = reduceAgentPartSnapshot(previousPartSnapshot, event)
-```
-
-Add to `store.setAgentState`:
-
-```ts
-agentPartSnapshot: partSnapshot,
-agentParts: partSnapshot.parts,
-finalAnswerContent: partSnapshot.finalAnswerContent || store.agentState.finalAnswerContent,
-```
-
-Do not remove old fields yet.
+Reduce each incoming agent event into the part snapshot and persist it to chat state alongside the legacy fields.
 
 **Step 5: Run tests and typecheck**
 
@@ -618,99 +293,55 @@ pnpm test:agent
 pnpm typecheck
 ```
 
-Expected: both PASS.
+Expected: PASS.
 
 **Step 6: Commit**
 
 ```bash
 git add src/lib/agent/types.ts src/stores/chat.ts src/lib/agent/agent-handler.ts scripts/agent-core-tests.mjs
-git commit -m "Store agent part snapshots during live runs"
+git commit -m "Persist agent parts in live chat state"
 ```
 
 ---
 
-### Task 5: Render Status From Part Snapshot
+### Task 7: Render Live Status From the Snapshot
 
 **Files:**
-- Modify: `src/app/core/main/chat/agent-execution-status.tsx`
+- Create: `src/app/core/main/chat/agent-live-status.ts`
 - Modify: `src/app/core/main/chat/agent-live-stream.tsx`
+- Modify: `src/app/core/main/chat/agent-execution-status.tsx`
 - Test: `scripts/agent-core-tests.mjs`
 
-**Step 1: Add a pure status selector**
+**Step 1: Write a failing selector test**
 
-Create `src/app/core/main/chat/agent-live-status.ts`:
+Add a test for the live status selector against empty and populated part snapshots.
 
-```ts
-import type { AgentPartSnapshot } from '@/lib/agent'
-
-export function getAgentLiveDisplayStatus(snapshot?: AgentPartSnapshot) {
-  if (!snapshot) {
-    return undefined
-  }
-  return snapshot.visibleStatus
-}
-```
-
-**Step 2: Test selector fallback**
-
-Add to `scripts/agent-core-tests.mjs`:
-
-```js
-{
-  const { getAgentLiveDisplayStatus } = await importTsModule('src/app/core/main/chat/agent-live-status.ts')
-  assert.equal(getAgentLiveDisplayStatus(undefined), undefined)
-  assert.deepEqual(
-    getAgentLiveDisplayStatus({
-      runId: 'r',
-      status: 'running',
-      parts: [],
-      visibleStatus: { tone: 'running', label: '正在调用工具' },
-      recoverableErrors: [],
-      fatalErrors: [],
-    }),
-    { tone: 'running', label: '正在调用工具' },
-  )
-}
-```
-
-**Step 3: Run test to verify selector works**
+**Step 2: Run the test to confirm it fails**
 
 Run: `pnpm test:agent`
 
-Expected: PASS.
+Expected: FAIL.
 
-**Step 4: Add prop to `AgentLiveStream`**
+**Step 3: Implement the selector**
 
-In `src/app/core/main/chat/agent-live-stream.tsx`, add:
+Return the reducer’s visible status when available.
 
-```ts
-partSnapshot?: AgentPartSnapshot
+**Step 4: Pass the snapshot through the UI**
+
+Use the snapshot as the primary source for live status, with the old heuristic path as fallback.
+
+**Step 5: Run tests and typecheck**
+
+Run:
+
+```bash
+pnpm test:agent
+pnpm typecheck
 ```
-
-Use `getAgentLiveDisplayStatus(partSnapshot)` before current heuristic `getStatus`. If it exists, prefer it:
-
-```ts
-const reducedStatus = getAgentLiveDisplayStatus(partSnapshot)
-const status = reducedStatus || getStatus(...)
-```
-
-Keep the old heuristic as fallback.
-
-**Step 5: Pass snapshot from `AgentExecutionStatus`**
-
-In `src/app/core/main/chat/agent-execution-status.tsx`, pass:
-
-```tsx
-partSnapshot={agentState.agentPartSnapshot}
-```
-
-**Step 6: Typecheck**
-
-Run: `pnpm typecheck`
 
 Expected: PASS.
 
-**Step 7: Commit**
+**Step 6: Commit**
 
 ```bash
 git add src/app/core/main/chat/agent-live-status.ts src/app/core/main/chat/agent-live-stream.tsx src/app/core/main/chat/agent-execution-status.tsx scripts/agent-core-tests.mjs
@@ -719,97 +350,30 @@ git commit -m "Render live agent status from part snapshots"
 
 ---
 
-### Task 6: Add Stream-Safe Markdown Blocks
+### Task 8: Add Stream-Safe Markdown Rendering
 
 **Files:**
 - Create: `src/app/core/main/chat/markdown-live-stream.ts`
 - Modify: `src/app/core/main/chat/chat-preview.tsx`
 - Test: `scripts/agent-core-tests.mjs`
 
-**Step 1: Write failing markdown stream tests**
+**Step 1: Write the failing markdown-stream test**
 
-Add:
+Add a test that checks unfinished code fences stay in live-safe mode.
 
-```js
-{
-  const { splitLiveMarkdownBlocks } = await importTsModule('src/app/core/main/chat/markdown-live-stream.ts')
-
-  assert.deepEqual(splitLiveMarkdownBlocks('hello', false), [
-    { raw: 'hello', src: 'hello', mode: 'full' },
-  ])
-
-  const blocks = splitLiveMarkdownBlocks('intro\n\n```ts\nconst a = 1', true)
-  assert.equal(blocks.length, 2)
-  assert.equal(blocks[0].mode, 'live')
-  assert.equal(blocks[1].raw.startsWith('```ts'), true)
-}
-```
-
-**Step 2: Run test to verify it fails**
+**Step 2: Run the test to confirm it fails**
 
 Run: `pnpm test:agent`
 
-Expected: FAIL because module does not exist.
+Expected: FAIL.
 
-**Step 3: Implement minimal block splitter**
+**Step 3: Implement the block splitter**
 
-Create:
+Create a minimal live markdown splitter that preserves unfinished blocks.
 
-```ts
-export type LiveMarkdownBlock = {
-  raw: string
-  src: string
-  mode: 'full' | 'live'
-}
+**Step 4: Wire it into preview rendering**
 
-function hasOpenFence(raw: string) {
-  const lines = raw.split('\n')
-  let fence: { char: string; size: number } | null = null
-  for (const line of lines) {
-    const match = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/)
-    if (!match) continue
-    const mark = match[1]
-    const char = mark[0]
-    const size = mark.length
-    if (!fence) {
-      fence = { char, size }
-    } else if (fence.char === char && new RegExp(`^[\\t ]{0,3}${char}{${size},}[\\t ]*$`).test(line.trim())) {
-      fence = null
-    }
-  }
-  return Boolean(fence)
-}
-
-export function splitLiveMarkdownBlocks(text: string, live: boolean): LiveMarkdownBlock[] {
-  if (!live) return [{ raw: text, src: text, mode: 'full' }]
-  if (!hasOpenFence(text)) return [{ raw: text, src: text, mode: 'live' }]
-
-  const fenceStart = Math.max(text.lastIndexOf('\n```'), text.lastIndexOf('\n~~~'))
-  if (fenceStart <= 0) return [{ raw: text, src: text, mode: 'live' }]
-
-  const head = text.slice(0, fenceStart)
-  const tail = text.slice(fenceStart + 1)
-  return [
-    { raw: head, src: head, mode: 'live' },
-    { raw: tail, src: tail, mode: 'live' },
-  ].filter(block => block.raw.length > 0)
-}
-```
-
-**Step 4: Integrate carefully in `ChatPreview`**
-
-In `src/app/core/main/chat/chat-preview.tsx`, inspect how markdown is currently rendered. Add the splitter only for `streaming === true`; render each block with the same existing renderer path. Do not rewrite the markdown renderer.
-
-Pseudo-shape:
-
-```tsx
-const blocks = React.useMemo(
-  () => splitLiveMarkdownBlocks(text || '', Boolean(streaming)),
-  [text, streaming],
-)
-```
-
-Then map blocks where current code rendered one markdown body. Use `block.src` as rendered text.
+Use the live splitter only when streaming is active.
 
 **Step 5: Run tests and typecheck**
 
@@ -826,155 +390,37 @@ Expected: PASS.
 
 ```bash
 git add src/app/core/main/chat/markdown-live-stream.ts src/app/core/main/chat/chat-preview.tsx scripts/agent-core-tests.mjs
-git commit -m "Render live markdown through stable blocks"
+git commit -m "Render streaming markdown through safe blocks"
 ```
 
 ---
 
-### Task 7: Harden Skill Script UTF-8 Output
+### Task 9: Harden Skill Script UTF-8 Output
 
 **Files:**
 - Modify: `src/lib/skills/executor.ts`
 - Modify: `src/lib/skills/types.ts`
 - Test: `scripts/agent-core-tests.mjs`
 
-**Step 1: Find current script result type**
+**Step 1: Write the failing decoder test**
 
-Open `src/lib/skills/types.ts` and locate `ScriptExecutionResult`.
+Add a test that feeds invalid bytes into the output decoder and asserts the result contains replacement decoding and warnings.
 
-**Step 2: Add warning-capable result fields**
-
-Add optional fields:
-
-```ts
-warnings?: string[]
-outputEncoding?: 'utf8' | 'utf8-replacement'
-```
-
-**Step 3: Add pure decoder helper**
-
-In `src/lib/skills/executor.ts`, export:
-
-```ts
-export function decodeSkillScriptOutput(value: string | Uint8Array): {
-  output: string
-  warnings: string[]
-  outputEncoding: 'utf8' | 'utf8-replacement'
-} {
-  if (typeof value === 'string') {
-    return { output: value, warnings: [], outputEncoding: 'utf8' }
-  }
-
-  const strict = new TextDecoder('utf-8', { fatal: true })
-  try {
-    return { output: strict.decode(value), warnings: [], outputEncoding: 'utf8' }
-  } catch {
-    const output = new TextDecoder('utf-8', { fatal: false }).decode(value)
-    return {
-      output,
-      warnings: ['Script output contained invalid UTF-8 bytes and was decoded with replacement characters.'],
-      outputEncoding: 'utf8-replacement',
-    }
-  }
-}
-```
-
-**Step 4: Write decoder test**
-
-Add:
-
-```js
-{
-  const { decodeSkillScriptOutput } = await importTsModule('src/lib/skills/executor.ts')
-  const decoded = decodeSkillScriptOutput(new Uint8Array([0xff, 0x61]))
-  assert.equal(decoded.output.includes('a'), true)
-  assert.equal(decoded.outputEncoding, 'utf8-replacement')
-  assert.equal(decoded.warnings.length, 1)
-}
-```
-
-**Step 5: Run test**
+**Step 2: Run the test to confirm it fails**
 
 Run: `pnpm test:agent`
 
-Expected: PASS.
+Expected: FAIL.
 
-**Step 6: Thread warnings through `executeScript`**
+**Step 3: Implement output decoding with warnings**
 
-When `executeScriptByType` returns output, include warnings and output encoding if present. If Tauri currently gives strings only, still use the helper on `result.stdout + result.stderr`; this keeps future byte-based shell adapters safe.
+Decode script output as UTF-8 with replacement fallback and preserve the warning state.
 
-Shape:
+**Step 4: Thread warnings through script execution**
 
-```ts
-const decoded = decodeSkillScriptOutput(output)
-return {
-  output: decoded.output,
-  exitCode: result.code ?? 0,
-  warnings: decoded.warnings,
-  outputEncoding: decoded.outputEncoding,
-}
-```
+Return encoding warnings and preserve successful artifact handling even when output is malformed.
 
-Adjust private return type and `executeScript` result mapping.
-
-**Step 7: Run tests and typecheck**
-
-Run:
-
-```bash
-pnpm test:agent
-pnpm typecheck
-```
-
-Expected: PASS.
-
-**Step 8: Commit**
-
-```bash
-git add src/lib/skills/executor.ts src/lib/skills/types.ts scripts/agent-core-tests.mjs
-git commit -m "Decode skill script output without fatal UI failures"
-```
-
----
-
-### Task 8: Persist Stable Agent Parts in Run Summaries
-
-**Files:**
-- Modify: `src/lib/agent/resume.ts`
-- Modify: `src/lib/agent/agent-handler.ts`
-- Modify: `src/lib/ai/citations.ts` if stored history parsing needs a tolerant field
-- Test: `scripts/agent-core-tests.mjs`
-
-**Step 1: Inspect summary schema**
-
-Open `src/lib/agent/resume.ts` and find `buildAgentRunSummary`.
-
-**Step 2: Add optional `parts` field**
-
-Extend the summary type with:
-
-```ts
-parts?: AgentPart[]
-partSnapshot?: AgentPartSnapshot
-```
-
-Keep parsing tolerant: old histories without parts must still parse.
-
-**Step 3: Add test**
-
-Write a test that builds a summary with an `agentPartSnapshot`, serializes it, parses it via existing history parsing, and asserts old fields still work.
-
-**Step 4: Pass snapshot from `AgentHandler.persistRunSummary`**
-
-Read from store:
-
-```ts
-const partSnapshot = store.agentState.agentPartSnapshot
-```
-
-Pass into `buildAgentRunSummary`.
-
-**Step 5: Run tests**
+**Step 5: Run tests and typecheck**
 
 Run:
 
@@ -988,73 +434,81 @@ Expected: PASS.
 **Step 6: Commit**
 
 ```bash
-git add src/lib/agent/resume.ts src/lib/agent/agent-handler.ts src/lib/ai/citations.ts scripts/agent-core-tests.mjs
-git commit -m "Persist stable agent part history"
+git add src/lib/skills/executor.ts src/lib/skills/types.ts scripts/agent-core-tests.mjs
+git commit -m "Decode skill script output without fatal UTF-8 failures"
 ```
 
 ---
 
-### Task 9: Reduce Scroll Jitter From Thought Chunks
+### Task 10: Persist Stable Run Summaries and Memory Evidence
 
 **Files:**
-- Modify: `src/app/core/main/chat/chat-content.tsx`
-- Test: manual smoke, `pnpm typecheck`
+- Modify: `src/lib/agent/resume.ts`
+- Modify: `src/lib/agent/working-memory.ts`
+- Modify: `src/lib/agent/agent-handler.ts`
+- Test: `scripts/agent-core-tests.mjs`
 
-**Step 1: Change scroll dependency**
+**Step 1: Write the failing summary test**
 
-Replace the agent scroll effect dependency from raw thought fields:
+Add a test that verifies `AgentRunSummary` can carry part history or snapshot metadata without breaking old summary parsing.
 
-```ts
-agentState.currentThought,
-agentState.thoughtHistory,
-agentState.pendingConfirmation,
-agentState.isRunning,
-```
+**Step 2: Run the test to confirm it fails**
 
-to stable part/status fields:
+Run: `pnpm test:agent`
 
-```ts
-agentState.agentPartSnapshot?.parts.length,
-agentState.agentPartSnapshot?.visibleStatus.label,
-agentState.pendingConfirmation,
-agentState.isRunning,
-```
+Expected: FAIL.
 
-**Step 2: Keep RAF batching**
+**Step 3: Extend run summaries**
 
-Do not remove the existing `requestAnimationFrame` batching. It is already useful.
+Add optional snapshot/history fields and keep parsing tolerant of older records.
 
-**Step 3: Run typecheck**
+**Step 4: Record stable evidence**
 
-Run: `pnpm typecheck`
+Persist the new snapshot or part summary after a run completes so Dream and Distill can use it later.
+
+**Step 5: Run tests**
+
+Run: `pnpm test:agent`
 
 Expected: PASS.
 
-**Step 4: Manual smoke**
-
-Run dev app:
+**Step 6: Commit**
 
 ```bash
-pnpm dev
-```
-
-Open the app, start a long agent response, scroll slightly upward, and verify auto-scroll does not fight the user.
-
-**Step 5: Commit**
-
-```bash
-git add src/app/core/main/chat/chat-content.tsx
-git commit -m "Scroll live agent output from stable part changes"
+git add src/lib/agent/resume.ts src/lib/agent/working-memory.ts src/lib/agent/agent-handler.ts scripts/agent-core-tests.mjs
+git commit -m "Persist stable agent run evidence"
 ```
 
 ---
 
-### Task 10: End-to-End Verification
+### Task 11: Add Manual Dream Entry Points
 
 **Files:**
-- No code changes unless verification reveals a bug.
+- Create: `src/lib/agent/dream.ts`
+- Modify: `src/lib/agent/index.ts`
+- Modify: `src/lib/agent/tools/agent-memory-tools.ts`
+- Modify: `src/app/core/main/memory/memory-workspace.tsx`
+- Test: `scripts/agent-core-tests.mjs`
 
-**Step 1: Run targeted automated checks**
+**Step 1: Write the failing dream-candidate test**
+
+Add a test that creates a memory candidate list from run summaries and working-memory evidence.
+
+**Step 2: Run the test to confirm it fails**
+
+Run: `pnpm test:agent`
+
+Expected: FAIL.
+
+**Step 3: Implement Dream candidate extraction**
+
+Use run summaries, working memory, and memory store data to produce reviewable candidates with evidence and confidence.
+
+**Step 4: Add a manual trigger path**
+
+Expose Dream through a tool or workspace action that opens the candidate list for review.
+
+**Step 5: Run tests and typecheck**
 
 Run:
 
@@ -1065,7 +519,79 @@ pnpm typecheck
 
 Expected: PASS.
 
-**Step 2: Run broader checks if time allows**
+**Step 6: Commit**
+
+```bash
+git add src/lib/agent/dream.ts src/lib/agent/index.ts src/lib/agent/tools/agent-memory-tools.ts src/app/core/main/memory/memory-workspace.tsx scripts/agent-core-tests.mjs
+git commit -m "Add manual Dream review flow"
+```
+
+---
+
+### Task 12: Add Manual Distill Entry Points
+
+**Files:**
+- Create: `src/lib/agent/distill.ts`
+- Modify: `src/lib/agent/index.ts`
+- Modify: `src/app/core/main/memory/memory-workspace.tsx`
+- Modify: `src/lib/agent/tools/agent-memory-tools.ts`
+- Test: `scripts/agent-core-tests.mjs`
+
+**Step 1: Write the failing distill-recommendation test**
+
+Add a test that identifies repeated workflows from summaries and tool usage.
+
+**Step 2: Run the test to confirm it fails**
+
+Run: `pnpm test:agent`
+
+Expected: FAIL.
+
+**Step 3: Implement Distill recommendation generation**
+
+Produce workflow suggestions, trigger examples, reusable steps, and risk notes.
+
+**Step 4: Keep Distill manual-first**
+
+Do not auto-create or auto-enable skills. Only emit suggestions and optional drafts after user action.
+
+**Step 5: Run tests and typecheck**
+
+Run:
+
+```bash
+pnpm test:agent
+pnpm typecheck
+```
+
+Expected: PASS.
+
+**Step 6: Commit**
+
+```bash
+git add src/lib/agent/distill.ts src/lib/agent/index.ts src/app/core/main/memory/memory-workspace.tsx src/lib/agent/tools/agent-memory-tools.ts scripts/agent-core-tests.mjs
+git commit -m "Add manual Distill workflow recommendations"
+```
+
+---
+
+### Task 13: End-to-End Verification
+
+**Files:**
+- No code changes unless verification reveals a bug.
+
+**Step 1: Run the targeted agent tests**
+
+Run:
+
+```bash
+pnpm test:agent
+pnpm typecheck
+```
+
+Expected: PASS.
+
+**Step 2: Run the broader checks**
 
 Run:
 
@@ -1073,44 +599,28 @@ Run:
 pnpm check
 ```
 
-Expected: PASS or known lint baseline documented.
+Expected: PASS or a known baseline issue documented separately.
 
-**Step 3: Manual skill-script smoke**
+**Step 3: Smoke test runtime stability**
 
-Use the UI to run a skill script that writes a file. Confirm:
+Verify manually that:
 
-- pending tool appears before execution
-- running tool state does not flicker
-- invalid output encoding shows as a warning, not a full run crash
-- final artifact appears in the editor
-- final answer does not claim success before a tool succeeds
+- skill scripts do not trigger false fatal failures when output is recoverable
+- MCP unavailable/auth/permission states are visible before tool execution
+- tool calls keep one stable lifecycle in the UI
+- long-form writing streams without flicker or broken markdown
 
-**Step 4: Manual long-form writing smoke**
+**Step 4: Smoke test manual Dream and Distill**
 
-Ask the agent to generate a daily report or article. Confirm:
+Verify manually that:
 
-- first visible answer appears promptly
-- markdown code fences or lists do not visually break while streaming
-- status does not alternate rapidly between thinking/tool/answering
-- final rendered markdown is clean
+- Dream shows reviewable memory candidates with evidence
+- accepted memory candidates are written only after confirmation
+- Distill shows workflow recommendations without auto-writing files
 
-**Step 5: Final commit if fixes were needed**
+**Step 5: Final commit if any fixes were needed**
 
 ```bash
 git add <fixed-files>
-git commit -m "Verify stable agent streaming flow"
+git commit -m "Verify stable agent runtime and manual memory flows"
 ```
-
----
-
-## Rollback Strategy
-
-The migration keeps old `currentThought`, `currentAction`, `currentObservation`, and `toolCalls` fields during rollout. If the new reducer causes display issues, disable the snapshot preference in `AgentLiveStream` and the UI will fall back to the existing heuristic path.
-
-## Implementation Notes
-
-- Avoid adding new dependencies.
-- Keep all reducer logic pure and testable.
-- Do not remove old state fields until several manual agent runs are stable.
-- Treat recoverable tool errors as tool-level warnings, not run-level failures.
-- Keep script output decoding separate from script process exit-code handling.
