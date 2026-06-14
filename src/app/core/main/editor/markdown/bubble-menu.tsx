@@ -17,6 +17,7 @@ import {
   List,
   ListOrdered,
   CheckSquare,
+  CircleHelp,
   Sparkles,
   MessageCircle,
   Minimize2,
@@ -104,6 +105,7 @@ interface BubbleMenuProps {
   onAIPolish?: () => void
   onAIConcise?: () => void
   onAIExpand?: () => void
+  onAIExplain?: () => void
   onAITranslate?: (targetLanguage: string) => void
   onQuoteToChat?: () => void
   onCreateFlashcard?: () => void
@@ -177,6 +179,7 @@ export function BubbleMenu({
   onAIPolish,
   onAIConcise,
   onAIExpand,
+  onAIExplain,
   onAITranslate,
   onQuoteToChat,
   onCreateFlashcard,
@@ -710,6 +713,82 @@ export function BubbleMenu({
       ? '删除当前列'
       : '删除行/列'
   const canDeleteSelection = tableSelectionType === 'row' || tableSelectionType === 'column'
+  const aiControls = (
+    <div className="relative">
+      <button
+        className={cn('p-1.5 rounded hover:bg-muted transition-colors text-primary', showAISubmenu && 'bg-muted')}
+        onClick={() => {
+          setShowBlockMenu(false)
+          setShowAlignMenu(false)
+          setShowColorMenu(false)
+          setShowAISubmenu(!showAISubmenu)
+        }}
+        title={t('bubbleMenu.ai')}
+      >
+        <Sparkles className="w-4 h-4" />
+      </button>
+
+      {showAISubmenu && (
+        <div
+          ref={aiSubmenuRef}
+          className="absolute top-full left-0 mt-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-32 z-50 data-right-edge:left-auto data-right-edge:right-0 data-right-edge:translate-x-0 data-bottom-edge:top-full data-bottom-edge:mt-1 data-bottom-edge:translate-y-0"
+        >
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIPolish?.() }}>
+            <Sparkles className="w-3.5 h-3.5" /><span>{t('bubbleMenu.polish')}</span>
+          </button>
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIConcise?.() }}>
+            <Minimize2 className="w-3.5 h-3.5" /><span>{t('bubbleMenu.concise')}</span>
+          </button>
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIExpand?.() }}>
+            <Maximize2 className="w-3.5 h-3.5" /><span>{t('bubbleMenu.expand')}</span>
+          </button>
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIExplain?.() }}>
+            <CircleHelp className="w-3.5 h-3.5" /><span>{t('bubbleMenu.explain')}</span>
+          </button>
+
+          <div className="border-t border-border my-1" />
+
+          <div
+            className="relative"
+            onMouseEnter={() => setShowTranslateSubmenu(true)}
+            onMouseLeave={() => setShowTranslateSubmenu(false)}
+          >
+            <button
+              className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2"
+              onClick={() => setShowTranslateSubmenu(!showTranslateSubmenu)}
+            >
+              <Languages className="w-3.5 h-3.5" /><span>{t('bubbleMenu.translate')}</span><ChevronRight className={cn('w-3.5 h-3.5 ml-auto transition-transform', showTranslateSubmenu && 'rotate-90')} />
+            </button>
+
+            {showTranslateSubmenu && (
+              <div
+                ref={translateSubmenuRef}
+                className="absolute top-0 left-full ml-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-40 z-50 max-h-60 overflow-y-auto data-translate-submenu-right:left-auto data-translate-submenu-right:right-full data-translate-submenu-right:ml-0 data-translate-submenu-right:mr-1"
+                data-submenu="translate"
+              >
+                {POPULAR_LANGUAGES.map((lang) => (
+                  <button key={lang.code} className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); setShowTranslateSubmenu(false); handleTranslate(lang.code) }}>
+                    <span>{t(`bubbleMenu.${lang.i18nKey}`)}</span>
+                  </button>
+                ))}
+                <div className="border-t border-border my-1" />
+                <div className="px-3 py-1 flex items-center gap-1">
+                  <input type="text" placeholder={t('bubbleMenu.customLanguagePlaceholder')} value={customTranslateLang} onChange={(e) => setCustomTranslateLang(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { handleCustomTranslate() } else if (e.key === 'Escape') { setShowTranslateSubmenu(false); setCustomTranslateLang('') } }} className="w-full px-2 py-1 text-sm bg-muted rounded border border-border focus:outline-none focus:ring-1 focus:ring-primary" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); handleQuoteToChat() }}>
+            <MessageCircle className="w-3.5 h-3.5" /><span>{t('bubbleMenu.quoteToChat')}</span>
+          </button>
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onCreateFlashcard?.() }}>
+            <WalletCards className="w-3.5 h-3.5" /><span>生成闪卡</span>
+          </button>
+        </div>
+      )}
+    </div>
+  )
 
   const menuContent = (
     <>
@@ -730,6 +809,10 @@ export function BubbleMenu({
       <div
         className="flex w-max max-w-[calc(100vw-24px)] flex-nowrap items-center gap-0.5 whitespace-nowrap px-1 py-1 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 border border-border rounded-lg shadow-lg"
       >
+        {aiControls}
+
+        <div className="w-px h-5 bg-border mx-1" />
+
         {/* 块类型 */}
         <div className="relative">
           <button
@@ -972,80 +1055,6 @@ export function BubbleMenu({
 
         <button className="p-1.5 rounded hover:bg-muted transition-colors" onClick={clearFormatting} title={t('bubbleMenu.clearFormatting')}><Eraser className="w-4 h-4" /></button>
 
-        <div className="w-px h-5 bg-border mx-1" />
-
-        {/* AI 操作 */}
-        <div className="relative">
-          <button
-            className={cn('p-1.5 rounded hover:bg-muted transition-colors text-primary', showAISubmenu && 'bg-muted')}
-            onClick={() => {
-              setShowBlockMenu(false)
-              setShowAlignMenu(false)
-              setShowColorMenu(false)
-              setShowAISubmenu(!showAISubmenu)
-            }}
-            title={t('bubbleMenu.ai')}
-          >
-            <Sparkles className="w-4 h-4" />
-          </button>
-
-          {showAISubmenu && (
-            <div
-              ref={aiSubmenuRef}
-              className="absolute top-full right-0 mt-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-32 z-50 data-right-edge:left-auto data-right-edge:right-0 data-right-edge:translate-x-0 data-bottom-edge:top-full data-bottom-edge:mt-1 data-bottom-edge:translate-y-0"
-            >
-              <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIPolish?.() }}>
-                <Sparkles className="w-3.5 h-3.5" /><span>{t('bubbleMenu.polish')}</span>
-              </button>
-              <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIConcise?.() }}>
-                <Minimize2 className="w-3.5 h-3.5" /><span>{t('bubbleMenu.concise')}</span>
-              </button>
-              <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIExpand?.() }}>
-                <Maximize2 className="w-3.5 h-3.5" /><span>{t('bubbleMenu.expand')}</span>
-              </button>
-
-              <div className="border-t border-border my-1" />
-
-              <div
-                className="relative"
-                onMouseEnter={() => setShowTranslateSubmenu(true)}
-                onMouseLeave={() => setShowTranslateSubmenu(false)}
-              >
-                <button
-                  className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2"
-                  onClick={() => setShowTranslateSubmenu(!showTranslateSubmenu)}
-                >
-                  <Languages className="w-3.5 h-3.5" /><span>{t('bubbleMenu.translate')}</span><ChevronRight className={cn('w-3.5 h-3.5 ml-auto transition-transform', showTranslateSubmenu && 'rotate-90')} />
-                </button>
-
-                {showTranslateSubmenu && (
-                  <div
-                    ref={translateSubmenuRef}
-                    className="absolute top-0 left-full ml-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-40 z-50 max-h-60 overflow-y-auto data-translate-submenu-right:left-auto data-translate-submenu-right:right-full data-translate-submenu-right:ml-0 data-translate-submenu-right:mr-1"
-                    data-submenu="translate"
-                  >
-                    {POPULAR_LANGUAGES.map((lang) => (
-                      <button key={lang.code} className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); setShowTranslateSubmenu(false); handleTranslate(lang.code) }}>
-                        <span>{t(`bubbleMenu.${lang.i18nKey}`)}</span>
-                      </button>
-                    ))}
-                    <div className="border-t border-border my-1" />
-                    <div className="px-3 py-1 flex items-center gap-1">
-                      <input type="text" placeholder={t('bubbleMenu.customLanguagePlaceholder')} value={customTranslateLang} onChange={(e) => setCustomTranslateLang(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { handleCustomTranslate() } else if (e.key === 'Escape') { setShowTranslateSubmenu(false); setCustomTranslateLang('') } }} className="w-full px-2 py-1 text-sm bg-muted rounded border border-border focus:outline-none focus:ring-1 focus:ring-primary" />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); handleQuoteToChat() }}>
-                <MessageCircle className="w-3.5 h-3.5" /><span>{t('bubbleMenu.quoteToChat')}</span>
-              </button>
-              <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onCreateFlashcard?.() }}>
-                <WalletCards className="w-3.5 h-3.5" /><span>生成闪卡</span>
-              </button>
-            </div>
-          )}
-        </div>
       </div>
       </div>
       {colorMenu}

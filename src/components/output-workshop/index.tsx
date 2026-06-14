@@ -21,6 +21,7 @@ import {
   ImageIcon,
   Layers,
   FileImage,
+  PanelLeftOpen,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -56,6 +57,11 @@ import { PreviewPanel } from "./preview-panel"
 import { DeployPanel } from "./deploy-panel"
 import { MarketModal } from "./market-modal"
 import { SmartCardDialog } from "./smart-card-dialog"
+import type { MokaPanelMode, MokaPanelPlatform } from "./moka-design-panel"
+import {
+  getMokaStyleId,
+  getMokaTemplateKind,
+} from "@/lib/output-workshop/moka"
 
 // Types & utils
 import type {
@@ -95,6 +101,12 @@ export function OutputWorkshopModal({
   const [activeOutlineIndex, setActiveOutlineIndex] = React.useState<number | null>(null)
   const [templateOverrides, setTemplateOverrides] = React.useState(DEFAULT_TEMPLATE_OVERRIDES)
   const [showSmartCardDialog, setShowSmartCardDialog] = React.useState(false)
+  const [mokaMode, setMokaMode] = React.useState<MokaPanelMode>("split")
+  const [mokaPlatform, setMokaPlatform] = React.useState<MokaPanelPlatform>("xhs")
+  const [mokaStyleId, setMokaStyleId] = React.useState("ai")
+  const [mokaPaletteId, setMokaPaletteId] = React.useState("coral")
+  const [mokaReferenceImageDataUrl, setMokaReferenceImageDataUrl] = React.useState("")
+  const [mokaReferenceImageName, setMokaReferenceImageName] = React.useState("")
 
   // Market state (kept here because it involves install/create logic)
   const [showMarketModal, setShowMarketModal] = React.useState(false)
@@ -115,6 +127,18 @@ export function OutputWorkshopModal({
       ...current,
       sizePresetId: getTemplateDefaultSizePreset(selectedTemplateId),
     }))
+  }, [selectedTemplateId])
+
+  React.useEffect(() => {
+    const mokaKind = getMokaTemplateKind(selectedTemplateId)
+    if (!mokaKind) return
+
+    setMokaMode(mokaKind === "single" || mokaKind === "ai-single" ? "single" : "split")
+    if (mokaKind === "single" || mokaKind === "split") {
+      setMokaStyleId(getMokaStyleId(selectedTemplateId))
+    }
+    setShowAdvanced(true)
+    setSourceWorkspaceTab("edit")
   }, [selectedTemplateId])
 
   // Computed: parsed deck data
@@ -180,6 +204,12 @@ export function OutputWorkshopModal({
     parsedDeckData,
     iframeRef,
     templateOverrides,
+    mokaMode,
+    mokaPlatform,
+    mokaStyleId,
+    mokaPaletteId,
+    mokaReferenceImageDataUrl,
+    mokaReferenceImageName,
     setGeneratedHtml,
     saveSnapshot: history.saveSnapshot,
   })
@@ -350,7 +380,6 @@ export function OutputWorkshopModal({
 
   const handleSelectOutlineSection = (section: ExtractedSection, index: number) => {
     setActiveOutlineIndex(index)
-    setSourceWorkspaceTab("edit")
     window.setTimeout(() => {
       scrollToPreviewSection(index)
     }, 80)
@@ -363,16 +392,16 @@ export function OutputWorkshopModal({
   const hasGeneratedOutput = generatedHtml.trim().length > 0
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-14 px-2 pb-2 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="relative flex h-[calc(100vh-4rem)] w-[99vw] max-w-none flex-col overflow-hidden rounded-2xl border bg-background shadow-3xl select-none">
-        <header className="relative z-40 flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background/95 px-5 py-2.5 backdrop-blur">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 px-2 pb-2 pt-12 animate-in fade-in duration-200">
+      <div className="relative flex h-[calc(100vh-3.5rem)] w-[99vw] max-w-none flex-col overflow-hidden rounded-lg border bg-background shadow-none select-none">
+        <header className="relative z-40 flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-background px-3 py-2">
           <div className="flex min-w-0 flex-1 items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <Sparkles className="size-4.5" />
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-foreground">
+              <Sparkles className="size-4" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="truncate text-sm font-semibold text-foreground">输出工坊</h2>
+                <h2 className="truncate text-sm font-semibold text-foreground">智能排版</h2>
               </div>
             </div>
 
@@ -401,7 +430,7 @@ export function OutputWorkshopModal({
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -415,7 +444,7 @@ export function OutputWorkshopModal({
                   <ChevronDown className="size-3" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44 p-1.5">
+              <DropdownMenuContent align="end" className="w-44 p-2">
                 <DropdownMenuLabel className="px-2 py-1 text-[10px] font-semibold text-muted-foreground">复制</DropdownMenuLabel>
                 <DropdownMenuItem className="h-8 cursor-pointer text-xs" onClick={generation.handleCopyWechatHtml}>
                   <Share2 className="size-3.5" /> 图文
@@ -491,6 +520,7 @@ export function OutputWorkshopModal({
                 onClose()
               }}
               className="size-9 rounded-lg p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="关闭智能排版"
             >
               <X className="size-4" />
             </Button>
@@ -501,11 +531,10 @@ export function OutputWorkshopModal({
           <button
             type="button"
             onClick={toggleSourcePanel}
-            className="absolute left-0 top-1/2 z-50 flex h-16 w-7 -translate-y-1/2 items-center justify-center rounded-r-xl border border-l-0 bg-background/95 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:w-8 hover:bg-muted hover:text-foreground"
+            className="absolute left-0 top-1/2 z-50 flex h-12 w-7 -translate-y-1/2 items-center justify-center rounded-r-md border border-l-0 bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title="展开输入区"
           >
-            {/* PanelLeftOpen icon */}
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/><path d="M12 20v-8"/><path d="M12 12V4"/></svg>
+            <PanelLeftOpen className="size-3.5" />
           </button>
         )}
 
@@ -514,9 +543,9 @@ export function OutputWorkshopModal({
             ref={sourcePanelRef}
             id="output-workshop-source"
             order={1}
-            defaultSize={isMobile ? 46 : 20}
-            minSize={isMobile ? 32 : 15}
-            maxSize={isMobile ? 68 : 35}
+            defaultSize={isMobile ? 46 : 28}
+            minSize={isMobile ? 32 : 22}
+            maxSize={isMobile ? 68 : 42}
             collapsible
             collapsedSize={0}
             onCollapse={() => setSourcePanelCollapsed(true)}
@@ -545,6 +574,24 @@ export function OutputWorkshopModal({
               templateOverrides={templateOverrides}
               setTemplateOverrides={setTemplateOverrides}
               onSelectTemplate={templates.handleSelectTemplate}
+              mokaMode={mokaMode}
+              setMokaMode={setMokaMode}
+              mokaPlatform={mokaPlatform}
+              setMokaPlatform={setMokaPlatform}
+              mokaStyleId={mokaStyleId}
+              setMokaStyleId={setMokaStyleId}
+              mokaPaletteId={mokaPaletteId}
+              setMokaPaletteId={setMokaPaletteId}
+              mokaReferenceImageDataUrl={mokaReferenceImageDataUrl}
+              mokaReferenceImageName={mokaReferenceImageName}
+              onMokaReferenceImageChange={(dataUrl, name) => {
+                setMokaReferenceImageDataUrl(dataUrl)
+                setMokaReferenceImageName(name)
+              }}
+              onClearMokaReferenceImage={() => {
+                setMokaReferenceImageDataUrl("")
+                setMokaReferenceImageName("")
+              }}
               onGenerate={generation.handleGenerate}
               onStop={generation.handleStop}
               showFilePicker={files.showFilePicker}
@@ -588,7 +635,7 @@ export function OutputWorkshopModal({
 
           <ResizableHandle withHandle />
 
-          <ResizablePanel id="output-workshop-preview" order={2} defaultSize={isMobile ? 54 : 80} minSize={isMobile ? 32 : 65} className="min-w-0">
+          <ResizablePanel id="output-workshop-preview" order={2} defaultSize={isMobile ? 54 : 72} minSize={isMobile ? 32 : 58} className="min-w-0">
             <PreviewPanel
               previewTab={previewTab}
               setPreviewTab={setPreviewTab}
@@ -626,6 +673,10 @@ export function OutputWorkshopModal({
               refining={generation.refining}
               handleStop={generation.handleStop}
               handleGenerate={generation.handleGenerate}
+              mokaEditingEnabled={Boolean(generation.mokaRenderMemory) && !generation.refining && generation.status === "done"}
+              onMokaTextEdit={generation.handleMokaTextEdit}
+              onMokaStyleEdit={generation.handleMokaStyleEdit}
+              onMokaReorder={generation.handleMokaReorder}
             />
           </ResizablePanel>
         </ResizablePanelGroup>
@@ -664,6 +715,7 @@ export function OutputWorkshopModal({
         generatedHtml={generatedHtml}
         selectedTemplate={selectedTemplate}
         sizePresetId={templateOverrides.sizePresetId}
+        activeCardIndex={activeSlideIdx}
         exportBusy={generation.exportBusy}
         onExport={generation.handleExportSmartCards}
       />

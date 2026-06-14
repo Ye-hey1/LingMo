@@ -56,6 +56,15 @@ export interface ExportResult {
   fileName: string
   filePath?: string
   canceled?: boolean
+  exportedCount?: number
+  totalCount?: number
+  skipped?: SmartCardExportSkip[]
+}
+
+export interface SmartCardExportSkip {
+  index: number
+  title: string
+  reason: string
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +79,29 @@ function pick(re: RegExp, src: string): string {
 function extractAttr(tag: string, name: string): string {
   const re = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i")
   return pick(re, tag)
+}
+
+function getNormalizedText(el: Element): string {
+  return (el.textContent || "").replace(/\s+/g, " ").trim()
+}
+
+function isSemanticCardCandidate(el: HTMLElement): boolean {
+  const tagName = el.tagName.toLowerCase()
+  if (["html", "head", "body", "script", "style", "template", "link", "meta"].includes(tagName)) {
+    return false
+  }
+
+  const text = getNormalizedText(el)
+  if (text.length >= 8) return true
+  if (el.querySelector("img, svg, canvas, video, table")) return true
+  return el.outerHTML.length > 240
+}
+
+function dropNestedDuplicateMatches(elements: HTMLElement[]): HTMLElement[] {
+  const unique = Array.from(new Set(elements))
+  return unique.filter((el) => {
+    return !unique.some((other) => other !== el && other.contains(el))
+  })
 }
 
 /** 默认的卡片选择器级联（与原 getCardSliceLines 保持一致） */
@@ -145,15 +177,12 @@ function trySelectors(
   bodyClass: string,
   bodyStyle: string
 ): SmartCard[] {
-  const docHeight = doc.documentElement.scrollHeight || doc.body?.scrollHeight || 1
-
   for (const selector of selectors) {
     try {
-      const found = Array.from(doc.querySelectorAll(selector)) as HTMLElement[]
-      const valid = found.filter((el) => {
-        const h = el.offsetHeight || el.getBoundingClientRect?.().height || 0
-        return h > 120 && h < docHeight * 0.95
-      })
+      const found = Array.from(doc.querySelectorAll(selector)).filter(
+        (el): el is HTMLElement => el instanceof HTMLElement
+      )
+      const valid = dropNestedDuplicateMatches(found).filter(isSemanticCardCandidate)
       if (valid.length > 1) {
         return valid.map((el, i) => buildStandaloneCardHtml(el, head, bodyClass, bodyStyle, i, selector))
       }
@@ -193,11 +222,54 @@ function buildStandaloneCardHtml(
   const standalone =
     `<!DOCTYPE html><html><head>${head}\n` +
     `<style>
-      html, body { margin:0; padding:0; height:auto; min-height:100vh; }
-      body { display:flex; align-items:center; justify-content:center; ${bodyStyle} }
-      ${bodyClass ? `body { @apply ${bodyClass}; }` : ""}
+      html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; }
+      body { display:grid; place-items:center; ${bodyStyle} }
+      .lingmo-smart-card-export-root {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+      }
+      .lingmo-smart-card-export-root *,
+      .lingmo-smart-card-export-root *::before,
+      .lingmo-smart-card-export-root *::after {
+        animation: none !important;
+        transition: none !important;
+        caret-color: transparent !important;
+      }
+      .lingmo-smart-card-export-root > * {
+        max-width: 100%;
+        max-height: 100%;
+      }
+      .lingmo-smart-card-export-root > .moka-card {
+        width: 100% !important;
+        height: 100% !important;
+        aspect-ratio: 3 / 4 !important;
+        max-width: none !important;
+        max-height: none !important;
+      }
+      .lingmo-smart-card-export-root .lingmo-moka-editor,
+      .lingmo-smart-card-export-root .moka-reorder-handle,
+      .lingmo-smart-card-export-root [data-moka-editor-ui] {
+        display: none !important;
+      }
+      .lingmo-smart-card-export-root .slide,
+      .lingmo-smart-card-export-root .deck-slide,
+      .lingmo-smart-card-export-root .gz-deck-slide {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        position: relative !important;
+        inset: auto !important;
+        transform: none !important;
+        margin: 0 !important;
+      }
+      .lingmo-smart-card-export-root .gz-deck-slide {
+        width: 100% !important;
+        height: 100% !important;
+      }
     </style></head>` +
-    `<body class="${bodyClass}">${cardHtml}</body></html>`
+    `<body class="${bodyClass}"><div class="lingmo-smart-card-export-root">${cardHtml}</div></body></html>`
 
   return { html: standalone, title, index, bg, matchedBy }
 }
@@ -284,9 +356,154 @@ function wrapAsSingleCard(fullHtml: string): SmartCard {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+const CARD_LOAD_TIMEOUT_MS = 3500
+const CARD_RESOURCE_TIMEOUT_MS = 6500
+const CARD_SCREENSHOT_TIMEOUT_MS = 9000
+const CARD_THUMBNAIL_SCREENSHOT_TIMEOUT_MS = 6000
+const CARD_FILE_READER_TIMEOUT_MS = 3000
+const CARD_BASE_WIDTH = 420
+const CARD_BASE_HEIGHT = 560
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${label}超时，请检查卡片中的远程图片、字体或复杂样式`))
+    }, timeoutMs)
+  })
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId)
+  })
+}
+
+function isMokaCard(card: SmartCard): boolean {
+  return /\b(?:moka-card|moka-slide)\b|data-moka-card|data-moka-ai-design/.test(card.html)
+}
+
+function getRenderViewport(card: SmartCard, targetWidth: number, targetHeight: number): { width: number; height: number } {
+  if (isMokaCard(card)) {
+    return {
+      width: CARD_BASE_WIDTH,
+      height: CARD_BASE_HEIGHT,
+    }
+  }
+
+  return {
+    width: Math.max(targetWidth, CARD_BASE_WIDTH),
+    height: Math.max(targetHeight, CARD_BASE_HEIGHT),
+  }
+}
+
+function findScreenshotTarget(doc: Document): HTMLElement {
+  const selectors = [
+    ".lingmo-smart-card-export-root > [data-moka-card]",
+    ".lingmo-smart-card-export-root > .moka-card",
+    ".lingmo-smart-card-export-root > .gz-social-card",
+    ".lingmo-smart-card-export-root > .xhs-card",
+    ".lingmo-smart-card-export-root > .learning-card",
+    ".lingmo-smart-card-export-root > .slide",
+    ".lingmo-smart-card-export-root > .deck-slide",
+    ".lingmo-smart-card-export-root > .gz-deck-slide",
+    ".lingmo-smart-card-export-root > section",
+    ".lingmo-smart-card-export-root > article",
+    ".lingmo-smart-card-export-root > div",
+  ]
+
+  for (const selector of selectors) {
+    const target = doc.querySelector(selector)
+    if (target instanceof HTMLElement) return target
+  }
+
+  return doc.body
+}
+
+async function loadBlobImage(blob: Blob): Promise<ImageBitmap | HTMLImageElement> {
+  if ("createImageBitmap" in window) {
+    return window.createImageBitmap(blob)
+  }
+
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(img)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error("导出图片解码失败"))
+    }
+    img.src = url
+  })
+}
+
+async function fitBlobToTargetSize(
+  blob: Blob,
+  targetWidth: number,
+  targetHeight: number,
+  backgroundColor: string
+): Promise<Blob> {
+  const image = await loadBlobImage(blob)
+  const imageWidth = image.width
+  const imageHeight = image.height
+
+  if (imageWidth === targetWidth && imageHeight === targetHeight) {
+    if ("close" in image) image.close()
+    return blob
+  }
+
+  const canvas = document.createElement("canvas")
+  canvas.width = targetWidth
+  canvas.height = targetHeight
+  const ctx = canvas.getContext("2d")
+  if (!ctx) throw new Error("无法创建导出画布")
+
+  ctx.fillStyle = backgroundColor
+  ctx.fillRect(0, 0, targetWidth, targetHeight)
+
+  const sourceRatio = imageWidth / imageHeight
+  const targetRatio = targetWidth / targetHeight
+  const ratioMatches = Math.abs(sourceRatio - targetRatio) < 0.02
+  const scale = ratioMatches
+    ? Math.max(targetWidth / imageWidth, targetHeight / imageHeight)
+    : Math.min(targetWidth / imageWidth, targetHeight / imageHeight)
+  const drawWidth = imageWidth * scale
+  const drawHeight = imageHeight * scale
+  const x = (targetWidth - drawWidth) / 2
+  const y = (targetHeight - drawHeight) / 2
+  ctx.drawImage(image, x, y, drawWidth, drawHeight)
+  if ("close" in image) image.close()
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((nextBlob) => {
+      if (nextBlob) resolve(nextBlob)
+      else reject(new Error("导出图片尺寸转换失败"))
+    }, "image/png")
+  })
+}
+
+function resolveTargetBackground(target: HTMLElement, fallback: string): string {
+  const win = target.ownerDocument.defaultView
+  let current: HTMLElement | null = target
+  while (current) {
+    const bg = win?.getComputedStyle(current).backgroundColor
+    if (bg && bg !== "transparent" && bg !== "rgba(0, 0, 0, 0)") return bg
+    current = current.parentElement
+  }
+  return fallback
+}
 
 /** 等待 iframe 文档就绪 */
 async function waitForIframeReady(iframe: HTMLIFrameElement): Promise<void> {
+  await withTimeout(waitForIframeReadyInner(iframe), CARD_RESOURCE_TIMEOUT_MS, "卡片资源加载")
+}
+
+async function waitForIframeReadyInner(iframe: HTMLIFrameElement): Promise<void> {
   const doc = iframe.contentDocument
   if (!doc) return
 
@@ -298,7 +515,7 @@ async function waitForIframeReady(iframe: HTMLIFrameElement): Promise<void> {
         new Promise<void>((res) => {
           if ((l as HTMLLinkElement).sheet) return res()
           l.addEventListener("load", () => res(), { once: true })
-          setTimeout(res, 4000)
+          setTimeout(res, CARD_LOAD_TIMEOUT_MS)
         })
     )
   )
@@ -306,7 +523,9 @@ async function waitForIframeReady(iframe: HTMLIFrameElement): Promise<void> {
   // 字体
   try {
     const fonts = (doc as Document & { fonts?: FontFaceSet }).fonts
-    if (fonts?.ready) await fonts.ready
+    if (fonts?.ready) {
+      await withTimeout(fonts.ready, 2500, "卡片字体加载").catch(() => undefined)
+    }
   } catch { /* noop */ }
 
   // 图片
@@ -320,7 +539,7 @@ async function waitForIframeReady(iframe: HTMLIFrameElement): Promise<void> {
           img.addEventListener("load", done, { once: true })
           img.addEventListener("error", done, { once: true })
           if ("decode" in img) img.decode().then(done, done)
-          setTimeout(done, 5000)
+          setTimeout(done, 4000)
         })
     )
   )
@@ -344,11 +563,12 @@ export async function renderCardToBlob(
   targetHeight: number,
   scale = 2
 ): Promise<Blob> {
+  const viewport = getRenderViewport(card, targetWidth, targetHeight)
   const wrap = document.createElement("div")
   wrap.style.cssText = `
     position: fixed;
     top: 0; left: -100000px;
-    width: ${targetWidth}px; height: ${targetHeight}px;
+    width: ${viewport.width}px; height: ${viewport.height}px;
     overflow: hidden;
     pointer-events: none;
     z-index: -1;
@@ -356,7 +576,7 @@ export async function renderCardToBlob(
 
   const iframe = document.createElement("iframe")
   iframe.style.cssText = `
-    width: ${targetWidth}px; height: ${targetHeight}px;
+    width: ${viewport.width}px; height: ${viewport.height}px;
     border: 0; background: ${card.bg ?? "#fff"};
   `
   iframe.srcdoc = card.html
@@ -370,38 +590,54 @@ export async function renderCardToBlob(
       const done = () => res()
       if (iframe.contentDocument?.readyState === "complete") return done()
       iframe.addEventListener("load", done, { once: true })
-      setTimeout(done, 4000)
+      setTimeout(done, CARD_LOAD_TIMEOUT_MS)
     })
 
     await waitForIframeReady(iframe)
 
     // 截图
     const doc = iframe.contentDocument!
-    // 临时展开以截取全部内容
-    const prevH = iframe.style.height
-    const prevDocOverflow = doc.documentElement.style.overflow
-    const prevBodyOverflow = doc.body.style.overflow
+    const prevHtmlStyle = doc.documentElement.getAttribute("style")
+    const prevBodyStyle = doc.body.getAttribute("style")
 
-    const fullHeight = Math.max(
-      doc.documentElement.scrollHeight,
-      doc.body.scrollHeight,
-      targetHeight
-    )
-    iframe.style.height = fullHeight + "px"
-    doc.documentElement.style.overflow = "visible"
-    doc.body.style.overflow = "visible"
+    doc.documentElement.style.width = `${viewport.width}px`
+    doc.documentElement.style.height = `${viewport.height}px`
+    doc.documentElement.style.overflow = "hidden"
+    doc.body.style.width = `${viewport.width}px`
+    doc.body.style.height = `${viewport.height}px`
+    doc.body.style.overflow = "hidden"
+
+    await nextFrame()
+    await sleep(50)
+    await nextFrame()
 
     try {
-      const blob = await domToBlob(doc.documentElement, {
-        scale,
-        backgroundColor: card.bg ?? "#ffffff",
-      })
+      const timeoutMs = scale <= 1 ? CARD_THUMBNAIL_SCREENSHOT_TIMEOUT_MS : CARD_SCREENSHOT_TIMEOUT_MS
+      const target = findScreenshotTarget(doc)
+      const rect = target.getBoundingClientRect()
+      if (!rect.width || !rect.height) {
+        throw new Error("卡片内容尚未渲染，无法截图")
+      }
+      const backgroundColor = resolveTargetBackground(target, card.bg ?? "#ffffff")
+      const presetScale = Math.min(targetWidth / rect.width, targetHeight / rect.height)
+      const captureScale = Math.max(0.25, Math.min(5, presetScale * Math.max(scale, 1)))
+      const blob = await withTimeout(
+        domToBlob(target, {
+          scale: captureScale,
+          width: Math.ceil(rect.width),
+          height: Math.ceil(rect.height),
+          backgroundColor,
+        }),
+        timeoutMs,
+        `卡片 #${card.index + 1} 截图`
+      )
       if (!blob) throw new Error("卡片截图转换失败")
-      return blob
+      return fitBlobToTargetSize(blob, targetWidth, targetHeight, backgroundColor)
     } finally {
-      iframe.style.height = prevH
-      doc.documentElement.style.overflow = prevDocOverflow
-      doc.body.style.overflow = prevBodyOverflow
+      if (prevHtmlStyle === null) doc.documentElement.removeAttribute("style")
+      else doc.documentElement.setAttribute("style", prevHtmlStyle)
+      if (prevBodyStyle === null) doc.body.removeAttribute("style")
+      else doc.body.setAttribute("style", prevBodyStyle)
     }
   } finally {
     wrap.remove()
@@ -434,15 +670,39 @@ export async function exportSmartCardsZip(
   const zip = new JSZip()
   const pad = (n: number) => String(n).padStart(2, "0")
 
+  const skipped: SmartCardExportSkip[] = []
+  let exportedCount = 0
+
   for (let i = 0; i < total; i++) {
     onProgress?.(i + 1, total)
     const card = filtered[i]
-    const blob = await renderCardToBlob(card, targetWidth, targetHeight)
-    zip.file(`${basename}-${pad(i + 1)}.png`, blob)
+    try {
+      const blob = await renderCardToBlob(card, targetWidth, targetHeight)
+      zip.file(`${basename}-${pad(card.index + 1)}.png`, blob)
+      exportedCount += 1
+    } catch (error) {
+      skipped.push({
+        index: card.index,
+        title: card.title,
+        reason: errorMessage(error),
+      })
+      console.warn(`【智能卡片导出】卡片 #${card.index + 1} 渲染失败，已跳过:`, error)
+    }
+  }
+
+  if (exportedCount === 0) {
+    const firstReason = skipped[0]?.reason ? `：${skipped[0].reason}` : ""
+    throw new Error(`全部 ${total} 张卡片都未能渲染${firstReason}`)
   }
 
   const out = await zip.generateAsync({ type: "blob" })
-  return saveBlobAs(out, `${basename}.zip`)
+  const result = await saveBlobAs(out, `${basename}.zip`)
+  return {
+    ...result,
+    exportedCount,
+    totalCount: total,
+    skipped,
+  }
 }
 
 /**
@@ -502,10 +762,10 @@ export async function renderCardThumbnail(
   thumbHeight = 360
 ): Promise<string> {
   const blob = await renderCardToBlob(card, thumbWidth, thumbHeight, 1)
-  return new Promise((resolve, reject) => {
+  return withTimeout(new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(reader.result as string)
     reader.onerror = () => reject(reader.error ?? new Error("生成卡片缩略图失败"))
     reader.readAsDataURL(blob)
-  })
+  }), CARD_FILE_READER_TIMEOUT_MS, `卡片 #${card.index + 1} 缩略图读取`)
 }

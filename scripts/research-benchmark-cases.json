@@ -1,0 +1,33 @@
+[
+  {
+    "id": "ai-agent-memory-tooling-2026",
+    "question": "2026 年 AI Agent 记忆、工具调用和工作流编排有哪些可靠实践？",
+    "expectedKeywords": ["agent", "memory", "tool", "workflow", "cache", "evaluation"],
+    "requiredDomains": ["langchain-ai.github.io", "platform.openai.com"],
+    "freshnessDays": 180,
+    "minSources": 3,
+    "minEvidence": 4,
+    "minKeywordCoverage": 0.45,
+    "minSourceQuality": 50
+  },
+  {
+    "id": "ai-model-release-recentness",
+    "question": "最近 AI 模型发布和能力变化有哪些需要关注的事实？",
+    "expectedKeywords": ["model", "release", "benchmark", "reasoning", "multimodal"],
+    "freshnessDays": 90,
+    "minSources": 3,
+    "minEvidence": 4,
+    "minKeywordCoverage": 0.35,
+    "minSourceQuality": 50
+  },
+  {
+    "id": "rag-research-cache-quality",
+    "question": "RAG 和深度研究系统如何评估来源质量、缓存命中率和事实准确性？",
+    "expectedKeywords": ["rag", "research", "source", "quality", "cache", "accuracy"],
+    "freshnessDays": 365,
+    "minSources": 3,
+    "minEvidence": 4,
+    "minKeywordCoverage": 0.4,
+    "minSourceQuality": 50
+  }
+]

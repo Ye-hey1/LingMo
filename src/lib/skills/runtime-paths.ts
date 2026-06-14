@@ -10,7 +10,7 @@ function hasScriptExtension(filePath: string): boolean {
 export function classifySkillScriptPath(arg: string): ClassifiedSkillScriptPath {
   const normalized = arg.replace(/\\/g, '/')
 
-  const runtimeMatch = normalized.match(/^skills\/[^/]+\/scripts\/[^/]+\/([^/]+)$/)
+  const runtimeMatch = normalized.match(/^skills\/[^/]+\/(?:runtime|scripts\/[^/]+)\/([^/]+)$/)
   if (runtimeMatch) {
     return {
       kind: 'generated-runtime-script',

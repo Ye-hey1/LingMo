@@ -170,15 +170,15 @@ export function TodoEditDialog({ mark, open, onOpenChange }: TodoEditDialogProps
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] max-w-[860px] gap-0 p-0">
-        <DialogHeader className="border-b border-border/70 px-5 py-4">
-          <DialogTitle>{t('record.mark.todo.edit')}</DialogTitle>
-          <DialogDescription>
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-[560px] gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-border/70 px-3.5 py-2.5">
+          <DialogTitle className="text-sm">{t('record.mark.todo.edit')}</DialogTitle>
+          <DialogDescription className="text-xs">
             {t('record.mark.todo.editDescription')}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="max-h-[calc(100vh-13rem)] overflow-y-auto px-5 py-4">
+        <div className="max-h-[calc(100vh-9.5rem)] overflow-y-auto px-3.5 py-3">
           <TodoForm
             mode="edit"
             data={formData}
@@ -186,11 +186,11 @@ export function TodoEditDialog({ mark, open, onOpenChange }: TodoEditDialogProps
             showReminderOption={true}
           />
         </div>
-        <DialogFooter className="border-t border-border/70 px-5 py-3">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+        <DialogFooter className="border-t border-border/70 bg-muted/10 px-3.5 py-2">
+          <Button variant="outline" className="h-8 px-3 text-xs shadow-none" onClick={() => onOpenChange(false)}>
             {t('common.cancel')}
           </Button>
-          <Button onClick={handleSave} disabled={!canSubmit}>
+          <Button className="h-8 px-3 text-xs shadow-none" onClick={handleSave} disabled={!canSubmit}>
             {t('common.save')}
           </Button>
         </DialogFooter>

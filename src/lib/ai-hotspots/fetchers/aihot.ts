@@ -1,5 +1,5 @@
 import { fetchHotspotText } from '../http'
-import { BaseAiHotspotFetcher } from './base'
+import { AiHotspotFetcherOptions, BaseAiHotspotFetcher } from './base'
 
 interface AiHotItem {
   title?: string
@@ -127,7 +127,7 @@ export class AiHotFetcher extends BaseAiHotspotFetcher {
   sourceId = 'aihot'
   sourceName = 'AI今日热榜'
 
-  async fetch(now: Date) {
+  async fetch(now: Date, _options?: AiHotspotFetcherOptions) {
     const html = await fetchHotspotText('https://aihot.today/')
     let initialData: Record<string, AiHotItem[]> | null = null
     let sourceList: AiHotSource[] | null = null

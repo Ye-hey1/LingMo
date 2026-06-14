@@ -1,12 +1,12 @@
 import { Store } from '@tauri-apps/plugin-store'
 import { getPromptContent } from '@/lib/ai/utils'
+import { buildXiaoMoIdentityPrompt } from '@/lib/ai/xiaomo-prompt'
 import { skillManager } from '@/lib/skills'
 import type { SkillMatchSummary } from '@/lib/skills/types'
 import { formatIntentPolicyForPrompt, type IntentPolicy } from './tool-policy'
 import { buildToolExecutionPrompt } from './tool-intent'
 
 export interface AgentPromptOptions {
-  mode: 'react'
   userInput: string
   webSearchEnabled?: boolean
   memoryPrompt?: string
@@ -132,7 +132,7 @@ function buildForcedSkillSection(forcedSkillIds?: string[]) {
   if (skillIds.length === 0) return ''
 
   const skillBlocks = skillIds
-    .map(id => skillManager.getSkill(id))
+    .map(id => skillManager.findSkill(id))
     .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill))
     .map(buildFullSkillBlock)
 
@@ -163,7 +163,7 @@ function buildSkillSummary(activeSkills?: string[], activeSkillMatches?: SkillMa
 
   const skillLines = skillIds
     .filter(id => !excluded.has(id))
-    .map(id => skillManager.getSkill(id))
+    .map(id => skillManager.findSkill(id))
     .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill))
     .slice(0, 5)
     .map(skill => {
@@ -216,24 +216,13 @@ function buildCoreRules(language: string) {
       'If a required parameter is missing, ask only for that parameter.',
       'After successful completion, stop and give a concise final answer.',
       'When asked about "latest", "recent", "current", "trending" topics that require up-to-date information, ALWAYS use web_search first. Do NOT rely on training data alone for time-sensitive questions.',
+      'For latest/recent/current answers, verify source publication dates against the current date. If web_search returns only older or undated results, say the search did not find enough recent dated evidence instead of presenting old data as latest.',
     ].join('\n')
   )
 }
 
 function buildStaticIdentity(language: string) {
-  return [
-    'You are LingMo Agent, a local-first knowledge workspace assistant that can answer, analyze, and use tools to help users work with notes, records, diagrams, memories, and connected services.',
-    '',
-    section(
-      'Identity & Tone',
-      [
-        `Respond in ${language} unless the user explicitly asks for another language.`,
-        'Be direct, accurate, and concise.',
-        'Do not fabricate tool calls, file paths, search results, command results, or content you have not verified.',
-        'If the available evidence is insufficient, say what is missing or use the smallest necessary tool to get it.',
-      ].join('\n')
-    ),
-  ].join('\n')
+  return buildXiaoMoIdentityPrompt(language)
 }
 
 function buildStaticRuntimeDiscipline() {
@@ -245,7 +234,7 @@ function buildStaticRuntimeDiscipline() {
       'After a successful tool result, either take a distinct next action that uses that result, or produce the final answer.',
       'Do not repeat the same action with the same arguments. If retrying is necessary, change the arguments based on the error.',
       'Keep tool arguments minimal and exact. Prefer reading targeted files or narrowed searches over broad repeated scans.',
-      'When the task is done, stop with final_answer. Do not add another tool call just to look busy.',
+      'When the task is done, stop and answer normally in user-visible Markdown. Do not call another tool just to look busy.',
     ].join('\n')
   )
 }
@@ -257,6 +246,9 @@ function buildWebControl(enabled?: boolean) {
       ? [
           'Web access is enabled for this request.',
           'Use web_search for current external facts, web_extract for readable page content, and web_fetch only when raw content from a known URL is needed.',
+          'When the request is latest/recent/current/news/trending, call web_search with a days/startDate/endDate window and prefer topic=news. Treat results marked outside-window or date-unverified as insufficient for strict latest claims unless corroborated by another dated source.',
+          'For hot/latest information summaries, every source mention must be a clickable Markdown link like [Source Title](https://example.com). Do not output plain source names without links when a URL is available.',
+          'Summaries should read like a sharp human briefing: what happened, why it matters, what to watch next. Avoid academic section titles unless the user asks for a formal report.',
         ].join('\n')
       : [
           'Web access is disabled for this request.',
@@ -273,14 +265,15 @@ function buildToolExecutionMode(userInput: string) {
   return buildToolExecutionPrompt(userInput)
 }
 
-function buildOutputRules(_mode: AgentPromptOptions['mode']) {
+function buildOutputRules() {
   return section(
-    'ReAct Output Format',
+    'Harness Output Format',
     [
-      'Return JSON only.',
-      'Tool call: {"thought":"reason","action":"tool_name","action_input":{"param":"value"}}',
-      'Batch reads, max 3 read-only tools: {"thought":"reason","actions":[{"action":"tool_name","action_input":{}}]}',
-      'Final answer: {"thought":"reason","final_answer":"answer"}',
+      'Use the model tool-calling protocol whenever a tool is needed.',
+      'Do not emit ReAct JSON, Action/Observation text, or final_answer wrappers.',
+      'For independent read-only lookups, you may request up to 3 tool calls in one model step.',
+      'For writes, deletes, execution, or any uncertain operation, request exactly one tool call and wait for the observation.',
+      'When complete, answer directly in Markdown with only user-visible results and any important verification caveats.',
     ].join('\n')
   )
 }
@@ -321,6 +314,6 @@ export async function buildAgentSystemPrompt(options: AgentPromptOptions) {
     '- If you have enough information to answer, give the Final Answer immediately. Do NOT call unnecessary tools.',
     '- When safe_grep returns truncated results, read the specific files instead of broadening the search.',
     '',
-    buildOutputRules(options.mode),
+    buildOutputRules(),
   ].filter(Boolean).join('\n\n')
 }

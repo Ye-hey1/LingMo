@@ -311,32 +311,29 @@ async fn send_json_with_retry(
 }
 
 struct SseDecoder {
-    buffer: String,
+    buffer: Vec<u8>,
 }
 
 impl SseDecoder {
     fn new() -> Self {
         Self {
-            buffer: String::new(),
+            buffer: Vec::new(),
         }
     }
 
     fn push(&mut self, chunk: &[u8]) -> Vec<String> {
-        self.buffer.push_str(&String::from_utf8_lossy(chunk));
+        self.buffer.extend_from_slice(chunk);
         let mut messages = Vec::new();
 
         loop {
-            let separator = self
-                .buffer
-                .find("\n\n")
-                .or_else(|| self.buffer.find("\r\n\r\n"));
+            let separator = find_sse_separator(&self.buffer);
 
             let Some(separator) = separator else {
                 break;
             };
 
-            let raw = self.buffer[..separator].to_string();
-            let drain_len = if self.buffer[separator..].starts_with("\r\n\r\n") {
+            let raw = String::from_utf8_lossy(&self.buffer[..separator]).to_string();
+            let drain_len = if self.buffer[separator..].starts_with(b"\r\n\r\n") {
                 separator + 4
             } else {
                 separator + 2
@@ -358,6 +355,24 @@ impl SseDecoder {
 
         messages
     }
+}
+
+fn find_sse_separator(buffer: &[u8]) -> Option<usize> {
+    for index in 0..buffer.len().saturating_sub(1) {
+        if buffer[index] == b'\n' && buffer[index + 1] == b'\n' {
+            return Some(index);
+        }
+        if index + 3 < buffer.len()
+            && buffer[index] == b'\r'
+            && buffer[index + 1] == b'\n'
+            && buffer[index + 2] == b'\r'
+            && buffer[index + 3] == b'\n'
+        {
+            return Some(index);
+        }
+    }
+
+    None
 }
 
 #[tauri::command]
@@ -582,5 +597,16 @@ mod tests {
         let mut decoder = SseDecoder::new();
         let messages = decoder.push(b"data: hello\r\ndata: world\r\n\r\n");
         assert_eq!(messages, vec!["hello\nworld".to_string()]);
+    }
+
+    #[test]
+    fn preserves_utf8_split_across_chunks() {
+        let mut decoder = SseDecoder::new();
+        let payload = "data: {\"content\":\"中文日报\"}\n\n".as_bytes();
+        let first = decoder.push(&payload[..20]);
+        assert!(first.is_empty());
+
+        let second = decoder.push(&payload[20..]);
+        assert_eq!(second, vec!["{\"content\":\"中文日报\"}".to_string()]);
     }
 }

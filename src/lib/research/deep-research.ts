@@ -5,9 +5,11 @@ import type { MCPServerConfig, MCPTool } from '@/lib/mcp/types'
 import { useMcpStore } from '@/stores/mcp'
 import useSettingStore from '@/stores/setting'
 import { createOpenAIClient, getAISettings, validateAIService } from '@/lib/ai/utils'
+import { buildXiaoMoDeepResearchSystemPrompt } from '@/lib/ai/xiaomo-prompt'
 import { tavilyExtract, requestDuckDuckGoFallback, searchWeb, type TavilySearchDepth } from '@/lib/tavily'
 import type { AgentEventBus } from '@/lib/agent'
 import { saveSessionState, loadSessionState } from './session-store'
+import { assessResearchQuality, type ResearchQualityScore } from './research-enhancements'
 
 interface ProviderState {
   name: string
@@ -16,6 +18,8 @@ interface ProviderState {
   isBroken: boolean
   responseTime: number
 }
+
+export type ResearchProviderHealth = ProviderState
 
 class SearchProviderRegistry {
   private states = new Map<string, ProviderState>()
@@ -59,6 +63,14 @@ class SearchProviderRegistry {
       this.states.set(name, state)
     }
     return state
+  }
+
+  snapshot(names?: string[]): ResearchProviderHealth[] {
+    const targets = names?.length
+      ? names.map(name => this.getOrCreateState(name))
+      : Array.from(this.states.values())
+
+    return targets.map(state => ({ ...state }))
   }
 }
 
@@ -137,9 +149,13 @@ export type DeepResearchProgress = {
   providerStatus?: string
   strategy?: ResearchStrategyId
   estimatedMinutes?: string
+  cacheHits?: number
+  cacheMisses?: number
+  providerHealth?: ResearchProviderHealth[]
 }
 
-export type ResearchStrategyId = 'quick' | 'comprehensive' | 'academic' | 'technical' | 'news'
+export type BuiltInResearchStrategyId = 'quick' | 'comprehensive' | 'academic' | 'technical' | 'news'
+export type ResearchStrategyId = BuiltInResearchStrategyId | (string & {})
 
 export type ResearchSource = {
   id: string
@@ -173,6 +189,11 @@ export type ResearchSession = {
   evidences: ResearchEvidence[]
   learnings: string[]
   visitedUrls: string[]
+  quality?: ResearchQualityScore
+  breadth?: number
+  depth?: number
+  cacheStats?: ResearchSearchCacheStats
+  providerHealth?: ResearchProviderHealth[]
 }
 
 export type DeepResearchResult = {
@@ -182,6 +203,7 @@ export type DeepResearchResult = {
   sources: ResearchSource[]
   evidences: ResearchEvidence[]
   session: ResearchSession
+  quality?: ResearchQualityScore
 }
 
 export type ResearchClarification = {
@@ -197,8 +219,17 @@ const MAX_LEARNINGS_FOR_REPORT = 60
 const MAX_EVIDENCES_FOR_REPORT = 80
 const MAX_PARALLEL_SEARCHES = 3
 const ASK_JSON_MAX_RETRIES = 2
+const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000
+const SEARCH_CACHE_MAX_ENTRIES = 250
 
-type ResearchStrategyConfig = {
+export type ResearchSearchCacheStats = {
+  hits: number
+  misses: number
+  writes: number
+  bypasses: number
+}
+
+export type ResearchStrategyConfig = {
   id: ResearchStrategyId
   label: string
   breadth: number
@@ -224,7 +255,7 @@ type SearchHit = FirecrawlSearchItem & {
   sourceId: string
 }
 
-const STRATEGY_CONFIGS: Record<ResearchStrategyId, ResearchStrategyConfig> = {
+const STRATEGY_CONFIGS: Record<BuiltInResearchStrategyId, ResearchStrategyConfig> = {
   quick: {
     id: 'quick',
     label: '快速概览',
@@ -276,6 +307,63 @@ const STRATEGY_CONFIGS: Record<ResearchStrategyId, ResearchStrategyConfig> = {
     queryHint: 'Prioritize recent sources, dates, primary announcements, and independent confirmation.',
     reportFocus: '强调时间线、最新状态、来源发布时间和未确认信息。',
   },
+}
+
+function cloneResearchStrategyConfig(config: ResearchStrategyConfig): ResearchStrategyConfig {
+  return {
+    ...config,
+    includeDomains: config.includeDomains ? [...config.includeDomains] : undefined,
+  }
+}
+
+class ResearchStrategyRegistry {
+  private configs = new Map<ResearchStrategyId, ResearchStrategyConfig>()
+
+  constructor(defaults: Record<BuiltInResearchStrategyId, ResearchStrategyConfig>) {
+    Object.values(defaults).forEach(config => {
+      this.configs.set(config.id, cloneResearchStrategyConfig(config))
+    })
+  }
+
+  has(id: string): id is ResearchStrategyId {
+    return this.configs.has(id as ResearchStrategyId)
+  }
+
+  get(id: ResearchStrategyId | string, fallback: ResearchStrategyId = 'comprehensive'): ResearchStrategyConfig {
+    const config = this.configs.get(id as ResearchStrategyId)
+      || this.configs.get(fallback)
+      || STRATEGY_CONFIGS.comprehensive
+    return cloneResearchStrategyConfig(config)
+  }
+
+  list(): ResearchStrategyConfig[] {
+    return Array.from(this.configs.values()).map(cloneResearchStrategyConfig)
+  }
+
+  register(config: ResearchStrategyConfig): ResearchStrategyConfig {
+    const normalized: ResearchStrategyConfig = {
+      ...cloneResearchStrategyConfig(config),
+      breadth: clampInteger(config.breadth, DEFAULT_BREADTH, 1, 6),
+      depth: clampInteger(config.depth, DEFAULT_DEPTH, 1, 4),
+      maxResults: clampInteger(config.maxResults, 6, 1, 10),
+    }
+    this.configs.set(normalized.id, normalized)
+    return cloneResearchStrategyConfig(normalized)
+  }
+}
+
+export const researchStrategyRegistry = new ResearchStrategyRegistry(STRATEGY_CONFIGS)
+
+export function registerResearchStrategy(config: ResearchStrategyConfig): ResearchStrategyConfig {
+  return researchStrategyRegistry.register(config)
+}
+
+export function getResearchStrategyConfig(id: ResearchStrategyId | string): ResearchStrategyConfig {
+  return researchStrategyRegistry.get(id)
+}
+
+export function listResearchStrategies(): ResearchStrategyConfig[] {
+  return researchStrategyRegistry.list()
 }
 
 function clampInteger(value: number | undefined, fallback: number, min: number, max: number) {
@@ -339,6 +427,111 @@ function normalizeUrl(url: string) {
   } catch {
     return url.trim()
   }
+}
+
+function createResearchSearchCacheStats(): ResearchSearchCacheStats {
+  return {
+    hits: 0,
+    misses: 0,
+    writes: 0,
+    bypasses: 0,
+  }
+}
+
+function snapshotSearchCacheStats(stats: ResearchSearchCacheStats): ResearchSearchCacheStats {
+  return { ...stats }
+}
+
+type ResearchSearchCacheEntry = {
+  expiresAt: number
+  results: FirecrawlSearchItem[]
+}
+
+const researchSearchCache = new Map<string, ResearchSearchCacheEntry>()
+const researchSearchInflight = new Map<string, Promise<FirecrawlSearchItem[]>>()
+
+function cloneSearchItems(items: FirecrawlSearchItem[]): FirecrawlSearchItem[] {
+  return items.map(item => ({ ...item }))
+}
+
+function buildResearchSearchCacheKey(input: {
+  providerName: string
+  query: string
+  maxResults: number
+  searchDepth: TavilySearchDepth
+  includeDomains?: string[]
+}) {
+  return JSON.stringify({
+    provider: input.providerName,
+    query: input.query.replace(/\s+/g, ' ').trim().toLowerCase(),
+    maxResults: input.maxResults,
+    searchDepth: input.searchDepth,
+    includeDomains: [...(input.includeDomains || [])].map(domain => domain.toLowerCase()).sort(),
+  })
+}
+
+function trimResearchSearchCache(now = Date.now()) {
+  for (const [key, entry] of researchSearchCache) {
+    if (entry.expiresAt <= now) {
+      researchSearchCache.delete(key)
+    }
+  }
+
+  while (researchSearchCache.size > SEARCH_CACHE_MAX_ENTRIES) {
+    const oldestKey = researchSearchCache.keys().next().value
+    if (!oldestKey) break
+    researchSearchCache.delete(oldestKey)
+  }
+}
+
+async function searchProviderWithCache(input: {
+  provider: ResearchSearchProvider
+  query: string
+  options: Parameters<ResearchSearchProvider['search']>[1]
+  stats: ResearchSearchCacheStats
+}): Promise<FirecrawlSearchItem[]> {
+  input.options.abortSignal?.throwIfAborted()
+
+  const cacheKey = buildResearchSearchCacheKey({
+    providerName: input.provider.name,
+    query: input.query,
+    maxResults: input.options.maxResults,
+    searchDepth: input.options.searchDepth,
+    includeDomains: input.options.includeDomains,
+  })
+  const now = Date.now()
+  trimResearchSearchCache(now)
+
+  const cached = researchSearchCache.get(cacheKey)
+  if (cached && cached.expiresAt > now) {
+    input.stats.hits += 1
+    return cloneSearchItems(cached.results)
+  }
+
+  const inflight = researchSearchInflight.get(cacheKey)
+  if (inflight) {
+    input.stats.hits += 1
+    return cloneSearchItems(await inflight)
+  }
+
+  input.stats.misses += 1
+  const request = input.provider.search(input.query, input.options)
+    .then(results => {
+      const normalized = cloneSearchItems(results)
+      researchSearchCache.set(cacheKey, {
+        expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
+        results: normalized,
+      })
+      input.stats.writes += 1
+      trimResearchSearchCache()
+      return cloneSearchItems(normalized)
+    })
+    .finally(() => {
+      researchSearchInflight.delete(cacheKey)
+    })
+
+  researchSearchInflight.set(cacheKey, request)
+  return request
 }
 
 function hostFromUrl(url: string) {
@@ -1123,7 +1316,7 @@ async function askText(
         messages: [
           {
             role: 'system',
-            content: 'You are a careful deep research assistant. Write in Simplified Chinese. Cite sources by URL when available.',
+            content: buildXiaoMoDeepResearchSystemPrompt(),
           },
           { role: 'user', content: prompt },
         ],
@@ -1241,7 +1434,7 @@ async function classifyResearchIntent(params: {
   ].join('\n'), params.abortSignal)
 
   const strategy = typeof parsed?.strategy === 'string' ? parsed.strategy : ''
-  return strategy in STRATEGY_CONFIGS ? strategy as ResearchStrategyId : 'comprehensive'
+  return researchStrategyRegistry.has(strategy) ? strategy : 'comprehensive'
 }
 
 async function generateSerpQueries(params: {
@@ -1357,15 +1550,21 @@ async function runSearch(params: {
   providers: ResearchSearchProvider[]
   query: string
   strategy: ResearchStrategyConfig
+  cacheStats: ResearchSearchCacheStats
   abortSignal?: AbortSignal
 }): Promise<FirecrawlSearchItem[]> {
   const execute = (includeDomains?: string[]) => Promise.allSettled(
     params.providers.map(provider =>
-      provider.search(params.query, {
-        maxResults: params.strategy.maxResults,
-        searchDepth: params.strategy.searchDepth,
-        includeDomains,
-        abortSignal: params.abortSignal,
+      searchProviderWithCache({
+        provider,
+        query: params.query,
+        stats: params.cacheStats,
+        options: {
+          maxResults: params.strategy.maxResults,
+          searchDepth: params.strategy.searchDepth,
+          includeDomains,
+          abortSignal: params.abortSignal,
+        },
       })
     )
   )
@@ -1672,23 +1871,36 @@ function formatEvidenceForReport(sources: ResearchSource[], evidences: ResearchE
 }
 
 function formatCompactReferenceSection(sources: ResearchSource[]) {
-  const rows = sources.map((source, index) => {
+  // Only keep top sources sorted by credibility, max 15
+  const topSources = sources
+    .slice()
+    .sort((a, b) => b.credibilityScore - a.credibilityScore)
+    .slice(0, 15)
+
+  const rows = topSources.map((source, index) => {
     const published = source.publishedAt ? `，${source.publishedAt}` : ''
     const host = hostFromUrl(source.url)
     const label = source.title || host || source.url
+    const score = `（置信度 ${(source.credibilityScore * 100).toFixed(0)}%）`
     if (source.url.startsWith('local:')) {
-      return `${index + 1}. ${label}，本地来源${published}`
+      return `${index + 1}. ${label}，本地来源${published} ${score}`
     }
-    return `${index + 1}. [${label}](${source.url})${host ? `，${host}` : ''}${published}`
+    return `${index + 1}. [${label}](${source.url})${host ? `，${host}` : ''}${published} ${score}`
   })
+
+  const omittedCount = sources.length - topSources.length
+  const omittedNote = omittedCount > 0
+    ? [``, `> 共 ${sources.length} 个来源，已按置信度排序，展示前 ${topSources.length} 个。`]
+    : []
 
   return [
     '## 参考来源',
     '',
     '<details>',
-    '<summary>查看本次研究使用的来源</summary>',
+    `<summary>📊 点击展开 ${topSources.length} 个核心来源${omittedCount > 0 ? `（共 ${sources.length} 个）` : ''}</summary>`,
     '',
     ...rows,
+    ...omittedNote,
     '',
     '</details>',
   ].join('\n')
@@ -1707,26 +1919,43 @@ function formatEvidenceAppendix(sources: ResearchSource[], evidences: ResearchEv
     return ''
   }
 
-  const rows = evidences.map(ev => {
+  // Only keep high/medium confidence evidences, sorted by relevance, max 20
+  const filteredEvidences = evidences
+    .filter(ev => ev.confidence !== 'low')
+    .sort((a, b) => b.relevanceScore - a.relevanceScore)
+    .slice(0, 20)
+
+  if (filteredEvidences.length === 0) {
+    return ''
+  }
+
+  const rows = filteredEvidences.map(ev => {
     const source = sources.find(s => s.id === ev.sourceId)
     const sourceTitle = source ? source.title : '未知来源'
     const sourceRef = ev.sourceUrl.startsWith('local:')
       ? `${sourceTitle}（本地来源）`
       : `[${sourceTitle}](${ev.sourceUrl})`
-    return `| ${ev.id} | ${ev.confidence.toUpperCase()} | ${ev.claim} | ${sourceRef} |`
+    const confidenceEmoji = ev.confidence === 'high' ? '🟢' : '🟡'
+    return `| ${confidenceEmoji} ${ev.confidence.toUpperCase()} | ${ev.claim.slice(0, 80)}${ev.claim.length > 80 ? '…' : ''} | ${sourceRef} |`
   })
 
+  const omittedCount = evidences.length - filteredEvidences.length
+  const omittedNote = omittedCount > 0
+    ? [``, `> 共 ${evidences.length} 条证据，展示置信度中/高的前 ${filteredEvidences.length} 条。`]
+    : []
+
   return [
-    '## 附录：证据索引与交叉验证',
+    '## 附录：证据索引',
     '',
-    '以下内容用于追溯事实依据和置信度，默认折叠，避免干扰正文阅读。',
+    '以下内容用于追溯事实依据，默认折叠。',
     '',
     '<details>',
-    '<summary>查看证据索引</summary>',
+    `<summary>📋 点击展开 ${filteredEvidences.length} 条核心证据</summary>`,
     '',
-    '| 证据 ID | 来源置信度 | 事实主张 | 引用来源 |',
-    '|---|---|---|---|',
+    '| 置信度 | 事实主张 | 引用来源 |',
+    '|---|---|---|',
     ...rows,
+    ...omittedNote,
     '',
     '</details>',
   ].join('\n')
@@ -1750,10 +1979,12 @@ export async function runDeepResearch(params: {
     localContextBrief: localContextPrompt,
     abortSignal: params.abortSignal,
   })
-  const strategy = STRATEGY_CONFIGS[strategyId]
+  const strategy = researchStrategyRegistry.get(strategyId)
   const defaultBreadth = clampInteger(params.breadth, strategy.breadth || DEFAULT_BREADTH, 1, 6)
   const defaultDepth = clampInteger(params.depth, strategy.depth || DEFAULT_DEPTH, 1, 4)
   const providers = await buildSearchProviders()
+  const cacheStats = createResearchSearchCacheStats()
+  const getProviderHealth = () => searchProviderRegistry.snapshot(providers.map(provider => provider.name))
 
   let sessionId = params.sessionId || createResearchId()
   let allLearnings: string[] = []
@@ -1774,6 +2005,12 @@ export async function runDeepResearch(params: {
       allEvidences = savedState.evidences || []
       pendingQueries = savedState.pendingQueries || []
       localSourcesCount = allSources.filter(source => source.engine.startsWith('local:')).length
+      if (savedState.cacheStats) {
+        cacheStats.hits = savedState.cacheStats.hits || 0
+        cacheStats.misses = savedState.cacheStats.misses || 0
+        cacheStats.writes = savedState.cacheStats.writes || 0
+        cacheStats.bypasses = savedState.cacheStats.bypasses || 0
+      }
       console.log(`[DeepResearch] Resumed from session ${sessionId}. Pending queries count: ${pendingQueries.length}`)
     }
   }
@@ -1797,6 +2034,9 @@ export async function runDeepResearch(params: {
       providerStatus: providers.map(provider => provider.name).join(', '),
       strategy: strategy.id,
       estimatedMinutes: `${Math.max(3, defaultDepth * defaultBreadth)}-${Math.max(5, defaultDepth * defaultBreadth * 2)} 分钟`,
+      cacheHits: cacheStats.hits,
+      cacheMisses: cacheStats.misses,
+      providerHealth: getProviderHealth(),
       ...buildProgressStats(allSources, allEvidences, localSourcesCount),
     })
 
@@ -1806,6 +2046,8 @@ export async function runDeepResearch(params: {
       strategy: strategy.id,
       breadth: defaultBreadth,
       depth: defaultDepth,
+      cacheStats: snapshotSearchCacheStats(cacheStats),
+      providerHealth: getProviderHealth(),
     })
 
     const serpQueries = await generateSerpQueries({
@@ -1838,6 +2080,8 @@ export async function runDeepResearch(params: {
       totalDepth: defaultDepth,
       currentBreadth: defaultBreadth,
       totalBreadth: defaultBreadth,
+      cacheStats: snapshotSearchCacheStats(cacheStats),
+      providerHealth: getProviderHealth(),
     })
   } else {
     params.eventBus?.emit('research.started', {
@@ -1845,6 +2089,10 @@ export async function runDeepResearch(params: {
       sessionId,
       strategy: strategy.id,
       isResumed: true,
+      breadth: defaultBreadth,
+      depth: defaultDepth,
+      cacheStats: snapshotSearchCacheStats(cacheStats),
+      providerHealth: getProviderHealth(),
     })
   }
 
@@ -1877,6 +2125,9 @@ export async function runDeepResearch(params: {
       visitedUrlsCount: allUrls.length,
       providerStatus: providerNames,
       strategy: strategy.id,
+      cacheHits: cacheStats.hits,
+      cacheMisses: cacheStats.misses,
+      providerHealth: getProviderHealth(),
       ...buildProgressStats(allSources, allEvidences, localSourcesCount),
     })
 
@@ -1886,6 +2137,8 @@ export async function runDeepResearch(params: {
       completedQueries: completedQueriesCount,
       totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
       learningsCount: allLearnings.length,
+      cacheStats: snapshotSearchCacheStats(cacheStats),
+      providerHealth: getProviderHealth(),
       ...buildProgressStats(allSources, allEvidences, localSourcesCount),
       sessionId,
     })
@@ -1895,6 +2148,7 @@ export async function runDeepResearch(params: {
         providers,
         query: task.query,
         strategy,
+        cacheStats,
         abortSignal: params.abortSignal,
       }))
     )
@@ -1936,6 +2190,9 @@ export async function runDeepResearch(params: {
           visitedUrlsCount: allUrls.length,
           providerStatus: `${providerNames} | crawler`,
           strategy: strategy.id,
+          cacheHits: cacheStats.hits,
+          cacheMisses: cacheStats.misses,
+          providerHealth: getProviderHealth(),
           ...buildProgressStats(allSources, allEvidences, localSourcesCount),
         })
 
@@ -1987,6 +2244,9 @@ export async function runDeepResearch(params: {
         learningsCount: allLearnings.length,
         visitedUrlsCount: allUrls.length,
         strategy: strategy.id,
+        cacheHits: cacheStats.hits,
+        cacheMisses: cacheStats.misses,
+        providerHealth: getProviderHealth(),
         ...buildProgressStats(allSources, allEvidences, localSourcesCount),
       })
 
@@ -1996,6 +2256,8 @@ export async function runDeepResearch(params: {
         completedQueries: completedQueriesCount + currentBatch.length,
         totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
         learningsCount: allLearnings.length,
+        cacheStats: snapshotSearchCacheStats(cacheStats),
+        providerHealth: getProviderHealth(),
         ...buildProgressStats(allSources, allEvidences, localSourcesCount),
         sessionId,
       })
@@ -2071,6 +2333,8 @@ export async function runDeepResearch(params: {
       totalDepth: defaultDepth,
       currentBreadth: currentBatch[0]?.breadth || 1,
       totalBreadth: defaultBreadth,
+      cacheStats: snapshotSearchCacheStats(cacheStats),
+      providerHealth: getProviderHealth(),
     })
   }
 
@@ -2087,6 +2351,9 @@ export async function runDeepResearch(params: {
     visitedUrlsCount: allUrls.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
     strategy: strategy.id,
+    cacheHits: cacheStats.hits,
+    cacheMisses: cacheStats.misses,
+    providerHealth: getProviderHealth(),
     ...buildProgressStats(allSources, allEvidences, localSourcesCount),
   })
 
@@ -2094,6 +2361,8 @@ export async function runDeepResearch(params: {
     stage: 'verifying',
     detail: '正在进行多源交叉验证与冲突检测中...',
     sessionId,
+    cacheStats: snapshotSearchCacheStats(cacheStats),
+    providerHealth: getProviderHealth(),
   })
 
   const verificationResult = await performCrossVerification(allSources, allEvidences, params.abortSignal)
@@ -2113,34 +2382,80 @@ export async function runDeepResearch(params: {
     visitedUrlsCount: allUrls.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
     strategy: strategy.id,
+    cacheHits: cacheStats.hits,
+    cacheMisses: cacheStats.misses,
+    providerHealth: getProviderHealth(),
     ...verifiedProgressStats,
   })
 
   params.eventBus?.emit('research.progress', {
     stage: 'writing',
     sessionId,
+    cacheStats: snapshotSearchCacheStats(cacheStats),
+    providerHealth: getProviderHealth(),
   })
 
   const learnings = allLearnings.slice(0, MAX_LEARNINGS_FOR_REPORT)
   const report = await askText([
-    'Write a substantial deep-research article in Markdown for the user query.',
-    'The article must feel like a carefully reasoned research deliverable, not a fixed-template summary.',
-    'Writing requirements:',
-    '- Use Simplified Chinese.',
+    'Write a substantial deep-research article in Markdown. It must read like a knowledgeable human analyst wrote it, not like AI-generated content.',
+    'Your visible role is 小墨: wise, considerate, root-cause oriented, and clear enough that a non-expert can follow.',
+    '',
+    '## Language & Strategy',
+    '- Write in Simplified Chinese. Section headings use sentence case (e.g. "背景与发展" not "背景与发展概述").',
     `- Research strategy: ${strategy.label}. ${strategy.reportFocus}`,
-    '- Build a topic-specific structure with meaningful section titles. Do not force the report into a generic template such as executive summary / key findings / detailed analysis / limitations.',
-    '- Cover the subject in depth: background and context, core mechanisms or concepts, current state, important actors or cases, evidence comparisons, disagreements, risks, trade-offs, and practical implications when relevant.',
-    '- Prefer coherent article flow over bullet-only output. Use paragraphs for reasoning, tables for comparisons, and lists only where they improve scanability.',
-    '- Start with a concise orientation that tells the reader what question is being answered and why it matters, then develop the argument layer by layer.',
-    '- Make the final structure proportional to the available evidence. If evidence is rich, write a more detailed long-form report with multiple sections and subsections; do not over-compress.',
-    '- Ground every major claim in the provided evidences, but do NOT show inline citation markers, bracketed source labels, or source IDs in the body text.',
-    '- Write the body as a clean article. Source tracing is handled in the compact reference section at the end.',
-    '- Make evidence quality visible in prose: clearly call out key conclusions that are single-source, low-confidence, or contradicted by other sources. Do this naturally in the article body or in a short evidence-quality section; do not use [S1] style markers.',
-    '- If local materials are provided, treat them as local sources: use them to frame the brief, verify them against web evidence, and distinguish local-context conclusions from externally verified conclusions.',
+    '',
+    '## Structure — Self-directed, NOT a fixed template',
+    '- Design the report structure yourself based on the topic and the evidence. Do NOT use a preset skeleton.',
+    '- The ONLY structural requirements:',
+    '  1. Open with a short orientation (1–2 paragraphs) on the question and why it matters.',
+    '  2. Core body MUST be ≥70% of total output. Develop arguments in depth with multiple sections and subsections.',
+    '  3. End with a compact reference section.',
+    '- Let the topic guide structure: chronological narrative, thematic decomposition, problem→solution arc, comparative review — choose what fits.',
+    '',
+    '## Visual Richness',
+    '- Include Mermaid diagrams (flowchart, sequence, timeline, mindmap) wherever they genuinely clarify a process, relationship, or timeline.',
+    '- Use Markdown tables for comparisons instead of prose.',
+    '- Use blockquote callouts (> **💡** / > **⚠️**) sparingly to highlight key points.',
+    '- Use **bold** only for genuine key terms on first mention. Do not bold entire phrases mechanically.',
+    '',
+    '## Human Writing Style (CRITICAL — anti-AI patterns)',
+    'This is the most important section. The report MUST NOT read like typical AI output. Follow ALL of these rules:',
+    '',
+    '### Ban these AI tell-tale patterns:',
+    '- NO significance inflation: "标志着…的重要时刻", "具有深远意义", "起到了关键作用", "展现了…的魅力", "为…奠定了基础", "体现了…的精神".',
+    '- NO promotional language: "蓬勃发展", "丰富多彩", "令人瞩目", "令人印象深刻", "备受关注", "层出不穷", "异彩纷呈".',
+    '- NO -ing analysis tacking: "…，展现了…"，"…，体现了…"，"…，推动了…的发展". End the sentence at the fact; don\'t attach a significance clause.',
+    '- NO vague attribution: "业内人士认为", "专家指出", "有分析称". Either name a specific source or drop the attribution.',
+    '- NO AI vocabulary: "值得注意的是", "不可或缺", "至关重要", "毋庸置疑", "纵观全局", "深入探讨", "全方位", "多维度", "赋能", "助力".',
+    '- NO filler hedging: "在一定程度上", "可以说", "不难发现", "显而易见", "总而言之". Cut them.',
+    '- NO formulaic "challenges and prospects" endings: "尽管面临挑战，但未来依然光明" style wrap-ups. End with specifics or don\'t write a conclusion section at all.',
+    '- NO em dashes (—). Use commas, periods, colons, or parentheses instead.',
+    '- NO rule-of-three lists where items are parallel adjectives padded for rhythm.',
+    '- NO signposting: "让我们来看看…", "接下来将探讨…", "下面将从几个方面进行分析…". Just say the thing.',
+    '- NO bullet-point paragraphs. Write prose paragraphs with at least 2–3 sentences each. Bullets are only for genuine lists.',
+    '- NO inline-header lists ("- **标题：** 内容" format). Write real paragraphs.',
+    '',
+    '### Write like a human analyst:',
+    '- Use simple, direct constructions: "是", "有", "能" instead of "被视为", "拥有", "具备…的能力".',
+    '- Vary sentence length. Mix short, punchy sentences with longer ones. Even rhythm is the biggest AI tell.',
+    '- Prefer specific details (names, numbers, dates, URLs) over vague summaries.',
+    '- When evidence is thin, say so plainly: "公开资料中未找到…" is fine; padding with speculation is not.',
+    '- When opinions differ, present the disagreement concretely, not as "一方面…另一方面…".',
+    '- State conclusions directly instead of building up with ceremony.',
+    '',
+    '## Writing Quality',
+    '- Build arguments layer by layer: orient, present evidence, then conclude.',
+    '- Structure proportional to evidence: rich evidence → detailed report; thin evidence → honest, concise coverage.',
+    '- Ground claims in evidences, but do NOT show inline citation markers [S1] or source IDs in body text.',
+    '- Clearly call out single-source, low-confidence, or contradicted conclusions in prose.',
+    '- If local materials are provided, distinguish local-context conclusions from externally verified ones.',
     '- Preserve concrete names, numbers, dates, and URLs.',
-    '- Include a compact "参考来源" section near the end. Keep it visually lightweight: use a folded details block or a concise numbered list, not a large flat wall of links.',
-    '- When the report contains a process, architecture, relationship map, decision tree, timeline, or comparison that would benefit from visual structure, include a valid Mermaid fenced code block. Keep labels concise and syntax renderable.',
-    '- Avoid shallow filler, generic advice, and unsupported claims. If the evidence is insufficient for a requested angle, say so clearly and explain what is missing.',
+    '- Every source mention with an available URL must be a clickable Markdown link, both in the body and in the references.',
+    '- If evidence is insufficient for a requested angle, say so and explain what is missing.',
+    '',
+    '## Reference Section',
+    '- End with a compact "参考来源" section in a folded <details> block, max 15 sources by credibility.',
+    '- Keep references lightweight — they must not dominate the report.',
     '',
     `<user_query>${params.query}</user_query>`,
     localContextPrompt,
@@ -2189,6 +2504,10 @@ export async function runDeepResearch(params: {
     evidences: allEvidences,
     learnings: allLearnings,
     visitedUrls,
+    breadth: defaultBreadth,
+    depth: defaultDepth,
+    cacheStats: snapshotSearchCacheStats(cacheStats),
+    providerHealth: getProviderHealth(),
   }
 
   const finalResult: DeepResearchResult = {
@@ -2199,6 +2518,9 @@ export async function runDeepResearch(params: {
     evidences: allEvidences,
     session,
   }
+  const quality = assessResearchQuality(finalResult)
+  finalResult.quality = quality
+  finalResult.session.quality = quality
 
   params.onProgress?.({
     stage: 'done',
@@ -2213,12 +2535,24 @@ export async function runDeepResearch(params: {
     providerStatus: providers.map(provider => provider.name).join(', '),
     strategy: strategy.id,
     estimatedMinutes: `0 分钟`,
+    cacheHits: cacheStats.hits,
+    cacheMisses: cacheStats.misses,
+    providerHealth: getProviderHealth(),
     ...buildProgressStats(allSources, allEvidences, localSourcesCount, verificationResult.stats),
   })
 
   params.eventBus?.emit('research.completed', {
     report: appendedReport,
     sessionId,
+    sourceCount: allSources.length,
+    evidenceCount: allEvidences.length,
+    visitedUrlsCount: visitedUrls.length,
+    quality,
+    strategy: strategy.id,
+    breadth: defaultBreadth,
+    depth: defaultDepth,
+    cacheStats: snapshotSearchCacheStats(cacheStats),
+    providerHealth: getProviderHealth(),
   })
 
   return finalResult

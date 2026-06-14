@@ -8,6 +8,7 @@ import { searchWeb, tavilyExtract } from '@/lib/tavily'
 import { processMarkdownFile } from '@/lib/rag'
 import { getVectorDocumentKey } from '@/lib/vector-document-key'
 import { collapseWhitespace, htmlToMarkdown, looksLikeHtml, normalizeWebContent } from '@/lib/web/content-extractor'
+import { isTimeSensitiveRequest } from '../tool-intent'
 
 interface WorkspaceEntry {
   name: string
@@ -56,6 +57,164 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
 
 function assertNotAborted(signal?: AbortSignal) {
   signal?.throwIfAborted()
+}
+
+type SearchTimeRange = 'day' | 'week' | 'month' | 'year' | 'd' | 'w' | 'm' | 'y'
+
+function getLocalDateString(date = new Date()): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addLocalDays(date: Date, days: number): Date {
+  const next = new Date(date)
+  next.setHours(0, 0, 0, 0)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function parseDateParam(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed
+  const timestamp = Date.parse(trimmed)
+  if (!Number.isFinite(timestamp)) return undefined
+  return getLocalDateString(new Date(timestamp))
+}
+
+function parseTimeRangeParam(value: unknown): SearchTimeRange | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim().toLowerCase()
+  if (trimmed === 'day' || trimmed === 'd') return trimmed
+  if (trimmed === 'week' || trimmed === 'w') return trimmed
+  if (trimmed === 'month' || trimmed === 'm') return trimmed
+  if (trimmed === 'year' || trimmed === 'y') return trimmed
+  return undefined
+}
+
+function daysFromTimeRange(timeRange?: SearchTimeRange): number | undefined {
+  switch (timeRange) {
+    case 'day':
+    case 'd':
+      return 1
+    case 'week':
+    case 'w':
+      return 7
+    case 'month':
+    case 'm':
+      return 31
+    case 'year':
+    case 'y':
+      return 366
+    default:
+      return undefined
+  }
+}
+
+function inferRecentDays(input: string): number | undefined {
+  const text = input.trim()
+  if (!text) return undefined
+
+  if (/今日|今天|today/i.test(text)) return 2
+  if (/昨日|昨天|yesterday/i.test(text)) return 3
+  if (/本周|这周|this week|过去一周|最近一周/i.test(text)) return 7
+  if (/本月|这个月|this month|过去一个月|最近一个月/i.test(text)) return 31
+  if (/本季度|这个季度|quarter/i.test(text)) return 120
+  if (/今年|this year|2026/.test(text)) return 366
+  if (/新闻|资讯|快讯|动态|公告|发布|更新|latest|recent|current|trending|news/i.test(text)) return 30
+
+  return undefined
+}
+
+function inferSearchTopic(input: string, explicit: unknown): 'general' | 'news' | undefined {
+  if (explicit === 'general' || explicit === 'news') return explicit
+  return /新闻|资讯|快讯|动态|公告|发布|更新|latest|recent|current|trending|news/i.test(input)
+    ? 'news'
+    : undefined
+}
+
+function formatSearchDateWindow(days?: number, startDate?: string, endDate?: string, timeRange?: SearchTimeRange) {
+  const today = getLocalDateString()
+  if (startDate || endDate) {
+    return `${startDate || 'unbounded'} to ${endDate || today}`
+  }
+  if (timeRange) {
+    return `Tavily time_range=${timeRange}; current date is ${today}`
+  }
+  if (days) {
+    return `last ${days} days ending ${today}`
+  }
+  return `no explicit date filter; current date is ${today}`
+}
+
+function parsePublishedDate(value?: string) {
+  if (!value?.trim()) return null
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function isResultInsideWindow(publishedDate: string | undefined, days?: number, startDate?: string, endDate?: string) {
+  const publishedAt = parsePublishedDate(publishedDate)
+  if (publishedAt === null) return null
+
+  if (startDate) {
+    const startAt = Date.parse(`${startDate}T00:00:00Z`)
+    if (Number.isFinite(startAt) && publishedAt < startAt) return false
+  }
+
+  if (endDate) {
+    const endAt = Date.parse(`${endDate}T23:59:59Z`)
+    if (Number.isFinite(endAt) && publishedAt > endAt) return false
+  }
+
+  if (days) {
+    const cutoff = addLocalDays(new Date(), -days).getTime()
+    return publishedAt >= cutoff
+  }
+
+  return true
+}
+
+function buildWebSearchSummary(input: {
+  query: string
+  provider: string
+  degraded: boolean
+  dateWindow: string
+  inWindowCount: number
+  outsideWindowCount: number
+  unverifiableCount: number
+  results: Array<{ title: string; url: string; snippet: string; publishedDate?: string; withinDateWindow: boolean | null }>
+}) {
+  const lines = [
+    `Web search completed for "${input.query}" via ${input.provider}${input.degraded ? ' (fallback)' : ''}.`,
+    `Date window: ${input.dateWindow}.`,
+    `Freshness: ${input.inWindowCount} in-window, ${input.outsideWindowCount} outside-window, ${input.unverifiableCount} date-unverified.`,
+    'Use only sources with a verified Published date inside the requested date window for claims about "latest/recent/current".',
+    'If no result has a verified in-window Published date, state that the search did not find enough recent dated sources instead of presenting older results as latest.',
+    '',
+    'Results:',
+  ]
+
+  input.results.forEach((result, index) => {
+    const freshness = result.withinDateWindow === true
+      ? 'in-window'
+      : result.withinDateWindow === false
+        ? 'outside-window'
+        : 'date-unverified'
+    const title = result.title || result.url || 'Untitled'
+    const sourceLink = result.url ? `[${title}](${result.url})` : title
+    lines.push(
+      `${index + 1}. ${sourceLink}`,
+      `   Published: ${result.publishedDate || 'unknown'} (${freshness})`,
+      `   Source: ${sourceLink}`,
+      `   Snippet: ${result.snippet || 'N/A'}`,
+    )
+  })
+
+  return lines.join('\n')
 }
 
 function getExtension(path: string): string {
@@ -717,7 +876,7 @@ export const webFetchTool: Tool = {
 
 export const webSearchTool: Tool = {
   name: 'web_search',
-  description: 'Search the public web through Tavily Search API. Use for current external information when web access is enabled or needed.',
+  description: 'Search the public web through Tavily Search API. Use for current external information when web access is enabled or needed. For latest/recent/current/news queries, provide days or a date range and only treat dated in-window results as current evidence.',
   category: 'web',
   requiresConfirmation: false,
   risk: 'low',
@@ -742,6 +901,37 @@ export const webSearchTool: Tool = {
       description: 'Tavily search depth: basic or advanced. Default follows app settings.',
       required: false,
       default: 'basic',
+    },
+    {
+      name: 'topic',
+      type: 'string',
+      description: 'Search topic: general or news. Use news for latest/recent/current/news/trending queries.',
+      required: false,
+      default: 'general',
+    },
+    {
+      name: 'timeRange',
+      type: 'string',
+      description: 'Optional Tavily time_range: day/week/month/year (or d/w/m/y). Prefer startDate/endDate when exact freshness is required.',
+      required: false,
+    },
+    {
+      name: 'days',
+      type: 'number',
+      description: 'Optional recent lookback window in days. The tool converts this to startDate/endDate so old results are filtered out.',
+      required: false,
+    },
+    {
+      name: 'startDate',
+      type: 'string',
+      description: 'Optional ISO date (YYYY-MM-DD) lower bound for published date.',
+      required: false,
+    },
+    {
+      name: 'endDate',
+      type: 'string',
+      description: 'Optional ISO date (YYYY-MM-DD) upper bound for published date. Defaults to today when startDate is used.',
+      required: false,
     },
     {
       name: 'includeAnswer',
@@ -775,16 +965,60 @@ export const webSearchTool: Tool = {
       }
 
       const maxResults = clampNumber(params.maxResults, 5, 1, 10)
+      const userInput = typeof context?.userInput === 'string' ? context.userInput : query
+      const timeSensitive = isTimeSensitiveRequest(`${userInput}\n${query}`)
+      const explicitDays = typeof params.days === 'number' || typeof params.days === 'string'
+        ? clampNumber(params.days, 0, 0, 3650)
+        : 0
+      const explicitTimeRange = parseTimeRangeParam(params.timeRange)
+      const inferredDays = timeSensitive ? inferRecentDays(`${userInput}\n${query}`) : undefined
+      const days = explicitDays > 0 ? explicitDays : (daysFromTimeRange(explicitTimeRange) || inferredDays)
+      const today = getLocalDateString()
+      const explicitStartDate = parseDateParam(params.startDate)
+      const explicitEndDate = parseDateParam(params.endDate)
+      const startDate = explicitStartDate || (days ? getLocalDateString(addLocalDays(new Date(), -days)) : undefined)
+      const endDate = explicitEndDate || (startDate ? today : undefined)
+      const timeRange = startDate || endDate ? undefined : explicitTimeRange
+      const topic = inferSearchTopic(`${userInput}\n${query}`, params.topic)
       const response = await searchWeb({
         query,
         maxResults,
         searchDepth: params.searchDepth === 'advanced' ? 'advanced' : 'basic',
+        topic,
+        days,
+        timeRange,
+        startDate,
+        endDate,
         includeAnswer: params.includeAnswer !== false,
         includeDomains: params.includeDomains,
         excludeDomains: params.excludeDomains,
         signal: context?.abortSignal,
       })
       assertNotAborted(context?.abortSignal)
+
+      const results = response.results.map(result => ({
+        title: result.title,
+        url: result.url,
+        sourceLink: result.url ? `[${result.title || result.url}](${result.url})` : result.title,
+        snippet: result.content,
+        score: result.score,
+        publishedDate: result.publishedDate,
+        withinDateWindow: isResultInsideWindow(result.publishedDate, days, startDate, endDate),
+      }))
+      const dateWindow = formatSearchDateWindow(days, startDate, endDate, timeRange)
+      const inWindowCount = results.filter(result => result.withinDateWindow === true).length
+      const outsideWindowCount = results.filter(result => result.withinDateWindow === false).length
+      const unverifiableCount = results.filter(result => result.withinDateWindow === null).length
+      const summary = buildWebSearchSummary({
+        query: response.query,
+        provider: response.provider,
+        degraded: response.degraded === true,
+        dateWindow,
+        inWindowCount,
+        outsideWindowCount,
+        unverifiableCount,
+        results,
+      })
 
       return {
         success: true,
@@ -794,16 +1028,20 @@ export const webSearchTool: Tool = {
           provider: response.provider,
           degraded: response.degraded === true,
           fallbackReason: response.fallbackReason,
-          results: response.results.map(result => ({
-            title: result.title,
-            url: result.url,
-            snippet: result.content,
-            score: result.score,
-            publishedDate: result.publishedDate,
-          })),
+          topic: topic || 'general',
+          dateWindow,
+          days,
+          timeRange,
+          startDate,
+          endDate,
+          timeSensitive,
+          inWindowCount,
+          outsideWindowCount,
+          unverifiableCount,
+          results,
           responseTime: response.responseTime,
         },
-        message: `Found ${response.results.length} web results for "${query}" via ${response.provider}${response.degraded ? ' (fallback)' : ''}.`,
+        message: summary,
       }
     } catch (error) {
       return {

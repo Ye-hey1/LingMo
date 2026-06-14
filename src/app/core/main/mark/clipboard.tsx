@@ -209,11 +209,11 @@ export function Clipboard() {
     return (
       <AnimatePresence>
         <motion.div
-          initial={{ opacity: 0, y: 20, scale: 0.95 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -20, scale: 0.95 }}
-          transition={{ duration: 0.3, ease: "easeOut" }}
-          className="relative group overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg transition-all duration-300 hover:shadow-xl"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
+          className="relative group overflow-hidden rounded-lg border border-border/50 bg-card"
         >
           {/* 图片预览 */}
           <div className="relative aspect-video max-h-[220px] overflow-hidden">
@@ -222,20 +222,20 @@ export function Clipboard() {
               width={0} 
               height={0} 
               alt="clipboard image" 
-              className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" 
+              className="w-full h-full object-cover"
             />
             
-            {/* 渐变遮罩 */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent opacity-80 group-hover:opacity-100 transition-opacity duration-300" />
+            {/* 图片操作层 */}
+            <div className="absolute inset-0 bg-black/35 transition-colors duration-200 group-hover:bg-black/45" />
             
             {/* 顶部信息栏 */}
-            <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between transform transition-transform duration-300 group-hover:-translate-y-1">
+            <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <motion.div 
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
                   transition={{ delay: 0.2 }}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/15 backdrop-blur-md border border-white/25 shadow-lg"
+                  className="flex items-center gap-1.5 rounded-md border border-white/25 bg-white/15 px-2.5 py-1 backdrop-blur-sm"
                 >
                   <ImageIcon className="size-3.5 text-white" />
                   <span className="text-xs font-medium text-white">
@@ -247,10 +247,10 @@ export function Clipboard() {
                     initial={{ scale: 0 }}
                     animate={{ scale: 1 }}
                     transition={{ delay: 0.3 }}
-                    className="flex items-center gap-1 px-2 py-1 rounded-full bg-purple-500/25 backdrop-blur-md border border-purple-400/40 shadow-lg"
+                    className="flex items-center gap-1 rounded-md border border-white/25 bg-white/15 px-2 py-1 backdrop-blur-sm"
                   >
-                    <Sparkles className="size-3 text-purple-200" />
-                    <span className="text-xs text-purple-100 font-medium">
+                    <Sparkles className="size-3 text-white/85" />
+                    <span className="text-xs text-white/85 font-medium">
                       {primaryImageMethod === 'vlm' ? 'AI Vision' : 'OCR'}
                     </span>
                   </motion.div>
@@ -266,14 +266,14 @@ export function Clipboard() {
               >
                 <button
                   onClick={handleCopyImage}
-                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white transition-all duration-200"
+                  className="rounded-md border border-white/20 bg-white/10 p-1.5 text-white backdrop-blur-sm transition-colors duration-200 hover:bg-white/20"
                   title={t('record.mark.clipboard.copy')}
                 >
                   <Copy className="size-3.5" />
                 </button>
                 <button
                   onClick={handleDownloadImage}
-                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white transition-all duration-200"
+                  className="rounded-md border border-white/20 bg-white/10 p-1.5 text-white backdrop-blur-sm transition-colors duration-200 hover:bg-white/20"
                   title={t('record.mark.clipboard.download')}
                 >
                   <Download className="size-3.5" />
@@ -282,7 +282,7 @@ export function Clipboard() {
             </div>
             
             {/* 底部信息栏 */}
-            <div className="absolute bottom-0 left-0 right-0 p-3 transform transition-transform duration-300 group-hover:translate-y-1">
+            <div className="absolute bottom-0 left-0 right-0 p-3">
               <div className="flex items-end justify-between">
                 <div className="flex items-center gap-2">
                   <p className="text-xs text-white/80 font-mono bg-black/30 px-2 py-0.5 rounded backdrop-blur-sm">
@@ -300,7 +300,7 @@ export function Clipboard() {
                     whileTap={{ scale: 0.95 }}
                     onClick={handleCancle}
                     disabled={isProcessing}
-                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/25 text-white text-xs font-medium transition-all duration-200 disabled:opacity-50 shadow-lg"
+                    className="flex items-center gap-1.5 rounded-md border border-white/25 bg-white/10 px-3.5 py-2 text-xs font-medium text-white backdrop-blur-sm transition-colors duration-200 hover:bg-white/20 disabled:opacity-50"
                   >
                     <CircleX className="size-3.5" />
                     {t('common.cancel')}
@@ -310,7 +310,7 @@ export function Clipboard() {
                     whileTap={{ scale: 0.95 }}
                     onClick={handleInset}
                     disabled={isProcessing}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white hover:bg-white/95 text-black text-xs font-bold transition-all duration-200 disabled:opacity-50 shadow-xl"
+                    className="flex items-center gap-1.5 rounded-md bg-white px-4 py-2 text-xs font-medium text-black transition-colors duration-200 hover:bg-white/95 disabled:opacity-50"
                   >
                     {isProcessing ? (
                       <Loader2 className="size-3.5 animate-spin" />
@@ -330,7 +330,7 @@ export function Clipboard() {
               initial={{ scaleX: 0 }}
               animate={{ scaleX: 1 }}
               transition={{ duration: 2, ease: "linear" }}
-              className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-500 via-blue-500 to-purple-500 origin-left"
+              className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary origin-left"
             />
           )}
         </motion.div>
@@ -352,27 +352,27 @@ export function Clipboard() {
     return (
       <AnimatePresence>
         <motion.div
-          initial={{ opacity: 0, y: 20, scale: 0.95 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -20, scale: 0.95 }}
-          transition={{ duration: 0.3, ease: "easeOut" }}
-          className="overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg transition-all duration-300 hover:shadow-xl"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
+          className="overflow-hidden rounded-lg border border-border/50 bg-card"
         >
           {/* 文本头部 */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 bg-gradient-to-r from-muted/50 to-muted/30">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 bg-muted/30">
             <div className="flex items-center gap-2">
               <motion.div 
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ delay: 0.2 }}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/20"
+                className="flex items-center gap-1.5 rounded-md border border-blue-500/20 bg-blue-500/10 px-2.5 py-1 text-blue-600 dark:text-blue-400"
               >
                 <FileText className="size-3.5" />
                 <span className="text-xs font-medium">
                   {t('record.mark.clipboard.detectedText')}
                 </span>
               </motion.div>
-              <span className="text-xs text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">
+              <span className="rounded-md bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
                 {t('record.mark.text.characterCount', { count: text.length })}
               </span>
             </div>
@@ -383,7 +383,7 @@ export function Clipboard() {
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={handleCopyText}
-                className="p-1.5 rounded-lg bg-muted hover:bg-muted/80 text-muted-foreground transition-all duration-200"
+                className="rounded-md bg-muted p-1.5 text-muted-foreground transition-colors duration-200 hover:bg-muted/80"
                 title={t('record.mark.clipboard.copy')}
               >
                 <Copy className="size-3.5" />
@@ -396,7 +396,7 @@ export function Clipboard() {
                 whileTap={{ scale: 0.95 }}
                 onClick={handleCancle}
                 disabled={isProcessing}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-muted hover:bg-muted/80 text-muted-foreground text-xs font-medium transition-all duration-200 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors duration-200 hover:bg-muted/80 disabled:opacity-50"
               >
                 <CircleX className="size-3.5" />
                 {t('common.cancel')}
@@ -406,7 +406,7 @@ export function Clipboard() {
                 whileTap={{ scale: 0.95 }}
                 onClick={handleTextInset}
                 disabled={isProcessing}
-                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-bold transition-all duration-200 disabled:opacity-50 shadow-md"
+                className="flex items-center gap-1.5 rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground transition-colors duration-200 hover:bg-primary/90 disabled:opacity-50"
               >
                 {isProcessing ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -438,7 +438,7 @@ export function Clipboard() {
               initial={{ scaleX: 0 }}
               animate={{ scaleX: 1 }}
               transition={{ duration: 2, ease: "linear" }}
-              className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-500 via-purple-500 to-blue-500 origin-left"
+              className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary origin-left"
             />
           )}
         </motion.div>

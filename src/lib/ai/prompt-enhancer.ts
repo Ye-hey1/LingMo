@@ -26,6 +26,7 @@ interface EnhanceChatPromptOptions {
   isRagEnabled?: boolean
   webSearchEnabled?: boolean
   enabledSkillNames?: string[]
+  recentMessages?: Array<{ role: 'user' | 'assistant'; content: string }>
 }
 
 const CURRENT_NOTE_CHAR_LIMIT = 5000
@@ -34,36 +35,40 @@ const QUOTE_CHAR_LIMIT = 3000
 const RAG_CONTEXT_CHAR_LIMIT = 4200
 const MAX_LINKED_FILES = 5
 const MAX_KEYWORDS = 8
+const RECENT_MESSAGES_LIMIT = 6
+const RECENT_MESSAGE_CHAR_LIMIT = 500
 
 const MODE_REWRITE_GUIDES: Record<EnhancePromptMode, string> = {
   chat: [
     'Target mode: Chat.',
-    'Goal: make the question clearer while keeping a light, conversational feel.',
-    'Format: use a compact prompt with these sections only when useful:',
-    '问题：the clarified question or request.',
-    '可参考：current note, quote, linked resources, or knowledge base context that should guide the answer.',
-    '回答偏好：tone, depth, examples, comparison, or step-by-step needs inferred from the request.',
-    'Avoid heavy execution language such as plans, verification commands, or tool workflows unless the user explicitly asks.',
+    'Goal: clarify the question while keeping a light, conversational feel.',
+    'Guidelines:',
+    '- Determine the user intent first: is it a question, a request for explanation, a comparison, a creative task, or casual conversation?',
+    '- For questions: restate clearly, add relevant context from notes/quotes/links, specify preferred answer depth.',
+    '- For comparisons or analysis: list the items to compare and the dimensions that matter.',
+    '- For casual conversation: keep it short and natural, don\'t add unnecessary structure.',
+    '- Do NOT add execution plans, tool commands, or step-by-step workflows unless the user explicitly asks for them.',
   ].join('\n'),
   agent: [
     'Target mode: Agent.',
-    'Goal: turn the request into an executable task prompt for an Agent that may inspect context and use tools.',
-    'Format the enhanced prompt with these sections:',
-    '目标：state the concrete outcome.',
-    '上下文：list relevant current note, selected quote, linked files, knowledge base snippets, skills, and enabled tools.',
-    '执行步骤：give concise steps the Agent should follow, including inspection before action when needed.',
-    '验收标准：state how the user can tell the task is complete.',
-    '约束：preserve user intent, avoid unrelated changes, mention unavailable capabilities only as constraints.',
+    'Goal: turn the request into a clear, actionable task prompt for an Agent with tools.',
+    'Guidelines:',
+    '- Determine the task type: file editing, information retrieval, code generation, analysis, multi-step workflow, or exploration.',
+    '- For simple tasks (quick edit, lookup, single action): keep the prompt short and direct. Don\'t pad with formal sections.',
+    '- For complex multi-step tasks: organize with clear structure — what to do, what to check, what constraints to respect.',
+    '- Include relevant context (current note, linked files, quotes, knowledge base) only when it directly helps the task.',
+    '- Preserve the user intent exactly. Do not add steps the user didn\'t ask for.',
+    '- If the request is vague, add a short "如需补充" note instead of guessing.',
   ].join('\n'),
   research: [
     'Target mode: Research.',
-    'Goal: turn the request into a research-ready prompt with clear scope and evidence requirements.',
-    'Format the enhanced prompt with these sections:',
-    '研究范围：define the question boundaries and what to compare or investigate.',
-    '时间要求：state freshness requirements when implied; if not specified, ask for current information only when web search is enabled or necessary.',
-    '来源要求：describe source quality, citation, and cross-check expectations.',
-    '输出格式：state the expected report structure, tables, bullets, citations, or conclusion format.',
-    '注意事项：include assumptions, missing context, and what should not be overclaimed.',
+    'Goal: turn the request into a research-ready prompt with clear scope.',
+    'Guidelines:',
+    '- Define what to investigate and where the boundaries are.',
+    '- When the request implies time sensitivity (trends, recent developments), resolve relative time to concrete dates using the current date.',
+    '- Specify source quality expectations only when the user cares about rigor (academic, technical, etc.).',
+    '- State output format preferences (report, comparison table, bullet summary) only when implied by the request.',
+    '- Keep the prompt proportional to the request. Don\'t add a full methodology section for a quick lookup.',
   ].join('\n'),
 }
 
@@ -212,6 +217,30 @@ function buildQuoteContext(quoteData?: PromptQuoteContext | null): string {
   ].join('\n')
 }
 
+function buildRecentMessagesContext(messages?: Array<{ role: 'user' | 'assistant'; content: string }>): string {
+  if (!messages || messages.length === 0) {
+    return ''
+  }
+
+  const recent = messages.slice(-RECENT_MESSAGES_LIMIT)
+  const lines = recent.map(msg => {
+    const label = msg.role === 'user' ? '👤' : '🤖'
+    const content = msg.content.replace(/\n{2,}/g, '\n').trim()
+    const truncated = content.length > RECENT_MESSAGE_CHAR_LIMIT
+      ? `${content.slice(0, RECENT_MESSAGE_CHAR_LIMIT)}…`
+      : content
+    return `${label} ${truncated}`
+  })
+
+  return [
+    '<recent_conversation>',
+    `Last ${recent.length} messages in this conversation (oldest → newest):`,
+    '',
+    ...lines,
+    '</recent_conversation>',
+  ].join('\n')
+}
+
 function buildCapabilityContext(options: EnhanceChatPromptOptions): string {
   const capabilities = [
     'Current app is a note-first AI workspace with Markdown notes, editor actions, note search, RAG, MCP, Skills, and Agent tools.',
@@ -268,6 +297,11 @@ async function buildEnhancerContext(options: EnhanceChatPromptOptions): Promise<
     sections.push(ragContext)
   }
 
+  const messagesContext = buildRecentMessagesContext(options.recentMessages)
+  if (messagesContext) {
+    sections.push(messagesContext)
+  }
+
   return sections.join('\n\n')
 }
 
@@ -286,21 +320,32 @@ export async function enhanceChatPrompt(options: EnhanceChatPromptOptions): Prom
     const context = await buildEnhancerContext(options)
     const openai = await createOpenAIClient(aiConfig)
 
+    const now = new Date()
+    const currentDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const currentWeekday = ['日', '一', '二', '三', '四', '五', '六'][now.getDay()]
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+
     const completion = await openai.chat.completions.create({
       model: aiConfig.model || '',
-      temperature: 0.25,
+      temperature: 0.3,
       top_p: 0.9,
       messages: [
         {
           role: 'system',
           content: [
             'You are LingMo prompt enhancement engine for a note-first AI workspace.',
+            `Current date: ${currentDate} (星期${currentWeekday}) ${currentTime}. Use this as “now” when resolving relative time expressions.`,
+            'When the user says “最近”, “今年”, “目前”, “当前”, “latest”, “this year”, “recently” etc., resolve them to concrete time ranges based on the current date above.',
+            '',
             'Rewrite the user request into a clearer prompt that can be sent directly in the current mode.',
-            'Infer useful structure from the request semantics and provided context, but never change the user intent.',
-            'Do not solve the task. Do not invent facts, files, requirements, or available capabilities.',
-            'Use the target mode format exactly enough to make the next AI response orderly.',
-            'Use the same language as the user request unless the user clearly asks otherwise.',
-            'Output only the enhanced prompt text. No title, no markdown fence, no explanation.',
+            'Core principles:',
+            '- First, classify the user intent: question, task/command, analysis, comparison, creative, follow-up (referring to previous conversation), or casual chat.',
+            '- Adapt the prompt structure to the intent. Do NOT force every request into the same template.',
+            '- If <recent_conversation> is provided and the user refers to earlier content (“继续”, “上面”, “之前”, “刚才”, “接着说”, “this”, “that”, “it”), resolve the reference to concrete context from the conversation.',
+            '- Infer useful structure from the request semantics and provided context, but never change the user intent.',
+            '- Do not solve the task. Do not invent facts, files, requirements, or available capabilities.',
+            '- Use the same language as the user request unless the user clearly asks otherwise.',
+            '- Output only the enhanced prompt text. No title, no markdown fence, no explanation.',
           ].join('\n'),
         },
         {
@@ -315,11 +360,12 @@ export async function enhanceChatPrompt(options: EnhanceChatPromptOptions): Prom
             '</original_user_request>',
             '',
             '<rewrite_rules>',
-            '- Preserve the user intent exactly.',
-            '- Add concrete context from current note, selected quote, linked files, knowledge base snippets, enabled web search, and Skills only when relevant.',
-            '- Follow the target mode guide: Chat stays light, Agent becomes executable, Research becomes evidence-oriented.',
-            '- Make the prompt concise enough to edit in the input box.',
-            '- Prefer note-app terminology: current note, linked notes, selected quote, knowledge base, Agent tools.',
+            '- Preserve the user intent exactly. Do not add requirements the user did not express.',
+            '- Resolve relative time expressions (最近, 今年, 目前, 当前, 最新 etc.) to concrete time ranges based on the current date.',
+            '- Resolve conversation references (继续, 上面, 之前, 刚才, 接着说, 这个, 那个) using <recent_conversation> when available.',
+            '- Add concrete context from current note, selected quote, linked files, knowledge base snippets, and Skills only when directly relevant to the request.',
+            '- Adapt structure to intent: short for casual questions, structured for complex tasks, evidence-oriented for research.',
+            '- Make the prompt concise enough to edit in the input box. Avoid bloated sections.',
             '- If critical information is missing, include a short “需要补充：” or equivalent line instead of inventing the answer.',
             '</rewrite_rules>',
           ].join('\n'),

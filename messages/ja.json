@@ -3091,6 +3091,7 @@
       "polish": "添削",
       "concise": "簡潔に",
       "expand": "拡張",
+      "explain": "説明",
       "translate": "翻訳",
       "translateSubtitle": "翻訳先",
       "quoteToChat": "チャットに引用",
@@ -3132,6 +3133,26 @@
       },
       "customLanguagePlaceholder": "カスタム言語..."
     },
+    "inlineAI": {
+      "generateTitle": "AI インスピレーション",
+      "rewriteTitle": "AI 選択範囲を書き換え",
+      "generatingTitle": "AI が生成中",
+      "generateDescription": "カーソル位置から続けて書くか、指示から文章を生成します",
+      "rewriteDescription": "選択したテキストを指示に従って処理します",
+      "generatePlaceholder": "例：次の段落を追加、3つの論点を挙げる...",
+      "rewritePlaceholder": "例：英語に翻訳、より説得力を持たせる...",
+      "generate": "生成",
+      "generating": "生成中",
+      "close": "AI パネルを閉じる",
+      "continue": "続きを書く",
+      "continueDesc": "前後の文脈を読み取り、続きを書きます",
+      "polish": "文章を磨く",
+      "polishDesc": "意味を保ちながら表現を自然にします",
+      "concise": "簡潔にする",
+      "conciseDesc": "冗長さを削り、要点を残します",
+      "expand": "詳しくする",
+      "expandDesc": "詳細を補い、内容を充実させます"
+    },
     "emptyLineMenu": {
       "open": "ブロックを挿入または変換",
       "basic": "基本",
@@ -3159,7 +3180,14 @@
       "accept": "受け入れ",
       "reject": "拒否",
       "generating": "生成中...",
-      "abort": "中止"
+      "abort": "中止",
+      "explainTitle": "AI 説明",
+      "explaining": "説明中...",
+      "selectedText": "選択したテキスト",
+      "explainHint": "理解のための表示のみで、本文には挿入されません",
+      "copy": "コピー",
+      "copied": "コピー済み",
+      "close": "閉じる"
     },
     "image": {
       "insert": "画像を挿入",
@@ -3220,8 +3248,8 @@
         "chart": "図"
       },
       "items": {
-        "continue": "続ける",
-        "continueDesc": "AIが内容を続きます",
+        "continue": "AI で続きを書く",
+        "continueDesc": "現在のカーソル位置から生成",
         "heading1": "見出し1",
         "heading1Desc": "大見出し",
         "heading2": "見出し2",
@@ -3240,6 +3268,8 @@
         "tableDesc": "表を挿入",
         "blockquote": "引用",
         "blockquoteDesc": "引用内容をキャプチャ",
+        "callout": "コールアウト",
+        "calloutDesc": "色付きのメモブロックを挿入",
         "codeBlock": "コードブロック",
         "codeBlockDesc": "コードスニペットをキャプチャ",
         "divider": "区切り線",

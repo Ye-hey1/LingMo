@@ -1,7 +1,7 @@
 'use client'
 
 import { Editor } from '@tiptap/react'
-import { Brain, Check, ChevronRight, CircleX, Loader2, Sparkles, X } from 'lucide-react'
+import { BookOpenText, Brain, Check, ChevronRight, CircleX, Clipboard, Loader2, Sparkles, X } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import emitter from '@/lib/emitter'
@@ -15,6 +15,7 @@ interface SuggestionData {
   suggestedText: string
   type: string
   generatedRange?: { from: number; to: number }
+  targetRange?: { from: number; to: number }
 }
 
 interface PositionData {
@@ -54,6 +55,12 @@ function calculateFloatingPosition(
   }
 }
 
+function clampRange(range: { from: number; to: number }, docSize: number) {
+  const from = Math.max(0, Math.min(range.from, docSize))
+  const to = Math.max(from, Math.min(range.to, docSize))
+  return { from, to }
+}
+
 export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
   const t = useTranslations('editor')
   const tCommon = useTranslations()
@@ -64,10 +71,12 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
   const [thinkingText, setThinkingText] = useState('')
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(false)
   const [abortController, setAbortController] = useState<AbortController | null>(null)
+  const [hasCopied, setHasCopied] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
   const thinkingContentRef = useRef<HTMLDivElement>(null)
   const latestSuggestionRef = useRef<SuggestionData | null>(null)
   const anchorPositionRef = useRef<{ top: number; left: number; right: number; bottom: number } | null>(null)
+  const copyResetTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     latestSuggestionRef.current = suggestion
@@ -78,6 +87,9 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
       if (abortController) {
         abortController.abort()
       }
+      if (copyResetTimerRef.current) {
+        window.clearTimeout(copyResetTimerRef.current)
+      }
     }
   }, [abortController])
 
@@ -86,10 +98,18 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
       return
     }
 
-    const panelWidth = panelRef.current?.offsetWidth || 320
+    const panelWidth = panelRef.current?.offsetWidth || (latestSuggestionRef.current?.type === 'explain' ? 360 : 320)
     const panelHeight = panelRef.current?.offsetHeight || (thinkingText ? 132 : 52)
     setPosition(calculateFloatingPosition(editor, anchorPositionRef.current, panelWidth, panelHeight))
   }, [editor, thinkingText])
+
+  const closeSuggestion = useCallback(() => {
+    anchorPositionRef.current = null
+    setThinkingText('')
+    setIsVisible(false)
+    setSuggestion(null)
+    setHasCopied(false)
+  }, [])
 
   useEffect(() => {
     if (!isVisible) {
@@ -138,15 +158,18 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
       type: string
       position: { top: number; left: number; right: number; bottom: number }
       controller?: AbortController
+      targetRange?: { from: number; to: number }
     }) => {
       anchorPositionRef.current = data.position
       setSuggestion({
         originalText: data.originalText,
         suggestedText: '',
         type: data.type,
+        targetRange: data.targetRange,
       })
       setThinkingText('')
       setIsThinkingExpanded(false)
+      setHasCopied(false)
       setIsVisible(true)
       setIsStreaming(true)
       if (data.controller) {
@@ -183,7 +206,7 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
       } : null)
     }
 
-    const handleStreamingComplete = (data?: SuggestionData & PositionData & { generatedRange?: { from: number; to: number } }) => {
+    const handleStreamingComplete = (data?: SuggestionData & PositionData) => {
       if (data) {
         anchorPositionRef.current = data.position
         setSuggestion({
@@ -191,8 +214,16 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
           suggestedText: data.suggestedText,
           type: data.type,
           generatedRange: data.generatedRange,
+          targetRange: data.targetRange,
         })
         setIsVisible(true)
+      }
+
+      if (!data && !latestSuggestionRef.current?.suggestedText) {
+        anchorPositionRef.current = null
+        setThinkingText('')
+        setIsVisible(false)
+        setSuggestion(null)
       }
 
       setIsStreaming(false)
@@ -206,20 +237,17 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
 
       setIsStreaming(false)
       setAbortController(null)
-
-      anchorPositionRef.current = null
-      setThinkingText('')
-      setIsVisible(false)
-      setSuggestion(null)
+      closeSuggestion()
     }
 
-    const handleShowSuggestion = (data: SuggestionData & PositionData & { generatedRange?: { from: number; to: number } }) => {
+    const handleShowSuggestion = (data: SuggestionData & PositionData) => {
       anchorPositionRef.current = data.position
       setSuggestion({
         originalText: data.originalText,
         suggestedText: data.suggestedText,
         type: data.type,
         generatedRange: data.generatedRange,
+        targetRange: data.targetRange,
       })
       setIsVisible(true)
       setIsStreaming(false)
@@ -240,26 +268,37 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
       emitter.off('show-ai-suggestion', handleShowSuggestion)
       emitter.off('abort-ai-streaming', handleAbortStreaming)
     }
-  }, [editor, abortController])
+  }, [editor, abortController, closeSuggestion])
 
   const handleAccept = useCallback(() => {
-    anchorPositionRef.current = null
-    setThinkingText('')
-    setIsVisible(false)
-    setSuggestion(null)
-  }, [])
+    const current = latestSuggestionRef.current
+    if (!current) return
+
+    if (current.targetRange && current.suggestedText.trim()) {
+      const targetRange = clampRange(current.targetRange, editor.state.doc.content.size)
+      editor
+        .chain()
+        .focus()
+        .setTextSelection(targetRange)
+        .deleteSelection()
+        .insertContent(current.suggestedText, { contentType: 'markdown' })
+        .run()
+    }
+
+    closeSuggestion()
+  }, [editor, closeSuggestion])
 
   const handleReject = useCallback(() => {
     const current = latestSuggestionRef.current
     if (!current) return
 
-    if (current.generatedRange) {
+    if (!current.targetRange && current.generatedRange) {
       editor.chain()
         .focus()
         .deleteRange(current.generatedRange)
         .insertContent(current.originalText)
         .run()
-    } else {
+    } else if (!current.targetRange) {
       editor.chain()
         .focus()
         .deleteSelection()
@@ -267,27 +306,145 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
         .run()
     }
 
-    anchorPositionRef.current = null
-    setThinkingText('')
-    setIsVisible(false)
-    setSuggestion(null)
-  }, [editor])
+    closeSuggestion()
+  }, [editor, closeSuggestion])
 
   const handleAbort = useCallback(() => {
     emitter.emit('abort-ai-streaming')
   }, [])
 
-  if (!isVisible) return null
-
   const typeLabels: Record<string, string> = {
     polish: t('bubbleMenu.polish'),
     concise: t('bubbleMenu.concise'),
     expand: t('bubbleMenu.expand'),
+    explain: t('bubbleMenu.explain'),
     translate: t('bubbleMenu.translate'),
   }
 
   const showThinkingPanel = Boolean(thinkingText)
   const currentLabel = suggestion && typeLabels[suggestion.type] ? typeLabels[suggestion.type] : t('bubbleMenu.ai')
+  const isExplain = suggestion?.type === 'explain'
+  const previewText = suggestion?.suggestedText.trimStart() || ''
+  const selectedText = suggestion?.originalText.trim().replace(/\s+/g, ' ') || ''
+  const selectedPreview = selectedText.length > 88 ? `${selectedText.slice(0, 88)}...` : selectedText
+
+  const handleClose = useCallback(() => {
+    if (isStreaming) {
+      handleAbort()
+      return
+    }
+
+    closeSuggestion()
+  }, [closeSuggestion, handleAbort, isStreaming])
+
+  const handleCopy = useCallback(async () => {
+    const text = previewText.trim()
+    if (!text || !navigator.clipboard?.writeText) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(text)
+      setHasCopied(true)
+      if (copyResetTimerRef.current) {
+        window.clearTimeout(copyResetTimerRef.current)
+      }
+      copyResetTimerRef.current = window.setTimeout(() => {
+        setHasCopied(false)
+        copyResetTimerRef.current = null
+      }, 1600)
+    } catch {
+      setHasCopied(false)
+    }
+  }, [previewText])
+
+  if (!isVisible) return null
+
+  if (isExplain) {
+    return (
+      <div
+        ref={panelRef}
+        className="absolute z-50 w-[360px] max-w-[calc(100%-24px)] overflow-hidden rounded-xl border border-border/70 bg-background text-foreground shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-150"
+        style={{
+          top: position.top,
+          left: position.left,
+        }}
+      >
+        <div className="flex items-start gap-3 border-b border-border/60 px-3 py-3">
+          <div className="mt-0.5 rounded-md bg-primary/10 p-1.5 text-primary">
+            <BookOpenText className="size-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold">
+              {isStreaming ? t('aiSuggestion.explaining') : t('aiSuggestion.explainTitle')}
+            </div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {t('aiSuggestion.selectedText')}
+            </div>
+          </div>
+          <button
+            onClick={handleClose}
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={isStreaming ? t('aiSuggestion.abort') : t('aiSuggestion.close')}
+            type="button"
+          >
+            {isStreaming ? <CircleX className="size-4" /> : <X className="size-4" />}
+          </button>
+        </div>
+
+        {selectedPreview && (
+          <div className="px-3 pt-3">
+            <div className="border-l-2 border-primary/40 bg-muted/35 px-3 py-2 text-xs leading-5 text-muted-foreground break-words">
+              {selectedPreview}
+            </div>
+          </div>
+        )}
+
+        <div className="px-3 py-3">
+          <div className="min-h-[92px] max-h-64 overflow-y-auto text-sm leading-7 text-foreground whitespace-pre-wrap break-words">
+            {previewText || (
+              <span className="text-muted-foreground">
+                {t('aiSuggestion.explaining')}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 border-t border-border/60 px-3 py-2.5">
+          {isStreaming ? (
+            <Loader2 className="size-4 animate-spin text-primary" />
+          ) : (
+            <Sparkles className="size-4 text-primary" />
+          )}
+          <span className="flex-1 text-xs text-muted-foreground">
+            {isStreaming ? t('aiSuggestion.generating') : t('aiSuggestion.explainHint')}
+          </span>
+          {!isStreaming && previewText && (
+            <button
+              onClick={() => void handleCopy()}
+              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted"
+              title={t('aiSuggestion.copy')}
+              type="button"
+            >
+              {hasCopied ? <Check className="size-3.5" /> : <Clipboard className="size-3.5" />}
+              <span>{hasCopied ? t('aiSuggestion.copied') : t('aiSuggestion.copy')}</span>
+            </button>
+          )}
+          {!isStreaming && (
+            <button
+              onClick={closeSuggestion}
+              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted"
+              title={t('aiSuggestion.close')}
+              type="button"
+            >
+              <X className="size-3.5" />
+              <span>{t('aiSuggestion.close')}</span>
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -326,6 +483,16 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
           )}
         </div>
       )}
+
+      <div className="border-b border-border/60 px-3 py-2.5">
+        <div className="max-h-56 overflow-y-auto rounded-md bg-muted/35 px-3 py-2 text-sm leading-6 text-foreground whitespace-pre-wrap break-words">
+          {previewText || (
+            <span className="text-muted-foreground">
+              {isStreaming ? t('aiSuggestion.generating') : currentLabel}
+            </span>
+          )}
+        </div>
+      </div>
 
       <div className="flex items-center gap-2 px-3 py-2.5">
         {isStreaming ? (

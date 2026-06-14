@@ -88,6 +88,7 @@ export interface ContextBuildResult {
 // ============================================================
 
 const CITATION_CONTENT_LIMIT = 1600
+const RECENT_WEB_QUERY_PATTERN = /最新|最近|近况|当前|今天|今日|本周|本月|今年|新闻|资讯|快讯|动态|热门|热榜|趋势|发布|更新|latest|recent|current|today|this week|this month|news|trending/i
 
 // RAG 关键词停用词
 const RAG_STOP_WORDS = new Set([
@@ -144,6 +145,19 @@ function normalizeCitationContent(content: unknown): string {
   const normalized = content.replace(/\r\n/g, '\n').trim()
   if (normalized.length <= CITATION_CONTENT_LIMIT) return normalized
   return `${normalized.slice(0, CITATION_CONTENT_LIMIT).trim()}\n...`
+}
+
+function getLocalDateString(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function getDateDaysAgo(days: number, date = new Date()) {
+  const next = new Date(date)
+  next.setDate(next.getDate() - Math.max(0, days - 1))
+  return getLocalDateString(next)
 }
 
 export function addCitationSource(
@@ -299,10 +313,14 @@ export async function buildWebSearchContext(
   query: string,
   signal?: AbortSignal
 ): Promise<{ context: string; sources: ChatCitationSource[] }> {
+  const needsRecentWindow = RECENT_WEB_QUERY_PATTERN.test(query)
   const response = await searchWeb({
     query,
     maxResults: 5,
     includeAnswer: true,
+    topic: needsRecentWindow ? 'news' : undefined,
+    startDate: needsRecentWindow ? getDateDaysAgo(30) : undefined,
+    endDate: needsRecentWindow ? getLocalDateString() : undefined,
     signal,
   })
 
@@ -310,7 +328,9 @@ export async function buildWebSearchContext(
     '## Web search results',
     '',
     `Provider: ${response.provider}${response.degraded ? ' (fallback)' : ''}`,
-  ]
+    needsRecentWindow ? `Date window: ${getDateDaysAgo(30)} to ${getLocalDateString()}` : '',
+    needsRecentWindow ? 'Use only dated, in-window sources for strict latest/recent/current claims.' : '',
+  ].filter(Boolean)
 
   if (response.answer?.trim()) {
     lines.push('', `Answer: ${response.answer.trim()}`)

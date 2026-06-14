@@ -265,8 +265,8 @@ export function getToolsByCategory(category: Tool['category']): Tool[] {
   return allTools.filter(tool => tool.category === category)
 }
 
-export function getToolDescriptions(): string {
-  return getAllToolsSync().map(tool => {
+export function getToolDescriptions(tools: Tool[] = getAllToolsSync()): string {
+  return tools.map(tool => {
     const params = tool.parameters.map(p =>
       `  - ${p.name} (${p.type}${p.required ? ', required' : ', optional'}): ${p.description}`
     ).join('\n')

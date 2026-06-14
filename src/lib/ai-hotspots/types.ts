@@ -1,6 +1,9 @@
 export type AiHotspotTimeRange = '24h' | '7d'
-export type AiHotspotView = 'latest' | 'favorites' | 'digest' | 'sources'
-export type AiHotspotSourceKind = 'default' | 'rss' | 'opml'
+export type AiHotspotView = 'featured' | 'all' | 'clusters' | 'digest' | 'sources' | 'favorites' | 'saved' | 'trash'
+export type AiHotspotSourceKind = 'default' | 'rss' | 'opml' | 'scraper'
+export type AiHotspotStatusFilter = 'all' | 'unread' | 'favorite' | 'saved' | 'ignored' | 'deleted'
+export type AiHotspotDigestStatus = 'none' | 'added' | 'saved'
+export type AiHotspotSuggestedAction = 'ignore' | 'favorite' | 'deep-dive' | 'digest' | 'save'
 
 export interface AiHotspotRawItem {
   sourceId: string
@@ -31,6 +34,16 @@ export interface AiHotspotItem {
   isFavorite: boolean
   isRead: boolean
   savedNotePath: string | null
+  signalSummary: string | null
+  signalEssence: string | null
+  impactAudience: string[]
+  suggestedAction: AiHotspotSuggestedAction | null
+  relatedSignalIds: string[]
+  isIgnored: boolean
+  deletedAt: string | null
+  digestStatus: AiHotspotDigestStatus
+  snapshotId: string | null
+  meta?: Record<string, unknown>
 }
 
 export interface AiHotspotSourceStatus {
@@ -60,5 +73,6 @@ export interface AiHotspotFilters {
   query: string
   timeRange: AiHotspotTimeRange
   sourceId: string
-  status: 'all' | 'unread' | 'favorite' | 'saved'
+  feedName: string
+  status: AiHotspotStatusFilter
 }

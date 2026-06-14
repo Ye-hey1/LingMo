@@ -8,7 +8,7 @@
   padding: 0 2px;
   cursor: pointer;
   text-decoration: none;
-  transition: background 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 .tiptap-editor .ProseMirror .wikilink:hover {
   background: hsl(var(--primary) / 0.18);
@@ -206,7 +206,7 @@
 .tiptap-editor .ProseMirror p.is-empty::before {
   content: attr(data-placeholder);
   float: left;
-  color: hsl(var(--muted-foreground) / 0.5);
+  color: hsl(var(--muted-foreground) / 0.6);
   pointer-events: none;
   height: 0;
 }
@@ -223,15 +223,17 @@
 .tiptap-editor .ProseMirror h1 {
   font-size: 2em;
   font-weight: 700;
-  margin-top: 1em;
-  margin-bottom: 0.5em;
+  margin-top: 1.5em;
+  margin-bottom: 0.6em;
+  line-height: 1.25;
 }
 
 .tiptap-editor .ProseMirror h2 {
   font-size: 1.5em;
-  font-weight: 600;
-  margin-top: 1em;
-  margin-bottom: 0.5em;
+  font-weight: 650;
+  margin-top: 1.25em;
+  margin-bottom: 0.55em;
+  line-height: 1.3;
 }
 
 .tiptap-editor .ProseMirror h3 {
@@ -239,13 +241,15 @@
   font-weight: 600;
   margin-top: 1em;
   margin-bottom: 0.5em;
+  line-height: 1.35;
 }
 
 .tiptap-editor .ProseMirror h4 {
   font-size: 1em;
   font-weight: 600;
-  margin-top: 1em;
-  margin-bottom: 0.5em;
+  margin-top: 0.85em;
+  margin-bottom: 0.4em;
+  line-height: 1.4;
 }
 
 /* 粗体和斜体 */
@@ -343,7 +347,7 @@
   border-radius: 8px;
   padding: 16px;
   overflow-x: auto;
-  margin: 1em 0;
+  margin: 16px 0;
 }
 
 .tiptap-editor .ProseMirror pre code {
@@ -1258,6 +1262,37 @@
 /* ========================
    AI 建议样式
    ======================== */
+
+.tiptap-editor .ProseMirror .ghost-text-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.6;
+  font-size: 0.92em;
+  font-style: italic;
+}
+
+.tiptap-editor .ProseMirror .ghost-text-loading::after {
+  content: "";
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: ghost-text-pulse 1s ease-in-out infinite;
+}
+
+@keyframes ghost-text-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
 
 /* AI 建议标记 - 选中时显示 */
 .tiptap-editor .ProseMirror .ai-suggestion {

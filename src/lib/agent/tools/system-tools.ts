@@ -73,9 +73,9 @@ export const selectSkillTool: Tool = {
       const invalidSkills: string[] = []
 
       for (const skillId of skill_ids) {
-        const skill = skillManager.getSkill(skillId)
+        const skill = skillManager.findSkill(skillId)
         if (skill) {
-          validSkills.push(skillId)
+          validSkills.push(skill.metadata.id)
         } else {
           invalidSkills.push(skillId)
         }
@@ -144,7 +144,7 @@ export const loadSkillContentTool: Tool = {
     try {
       const { skill_id, file_type } = params
 
-      const skill = skillManager.getSkill(skill_id)
+      const skill = skillManager.findSkill(skill_id)
       if (!skill) {
         return {
           success: false,
@@ -153,7 +153,7 @@ export const loadSkillContentTool: Tool = {
       }
 
       // 获取 Skill 的文件信息
-      const fileInfo = skillManager.getSkillFileInfo(skill_id)
+      const fileInfo = skillManager.getSkillFileInfo(skill.metadata.id)
       if (!fileInfo) {
         return {
           success: false,

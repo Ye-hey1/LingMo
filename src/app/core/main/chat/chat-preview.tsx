@@ -2,6 +2,7 @@
 import useSettingStore from "@/stores/setting";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useTheme } from 'next-themes'
+import { cn } from "@/lib/utils"
 import MarkdownIt from 'markdown-it';
 import katex from '@traptitech/markdown-it-katex';
 import 'katex/dist/katex.min.css';
@@ -1076,11 +1077,14 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     return null
   }
 
+  // 流式输出时，给最后一个可见内容块加上光标闪烁效果
+  const streamCursorClass = streaming && text.trim() ? 'streaming-cursor' : ''
+
   return (
     <div className={className || "flex-1 max-w-[calc(100vw-30px)] md:max-w-[calc(100vw-440px)]"}>
-      <div 
+      <div
         ref={previewRef}
-        className={getThemeClass()}
+        className={cn(getThemeClass(), streamCursorClass)}
         style={previewStyle}
         dangerouslySetInnerHTML={{ __html: htmlContent }}
         data-highlight-style={getHighlightStyle()}

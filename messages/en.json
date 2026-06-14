@@ -1751,9 +1751,12 @@
           "process": "Process",
           "recognize": "Recognize",
           "organize": "Organize",
+          "summarize": "Summarize",
+          "extract": "Key Points",
           "tag": "Tags",
           "title": "Title",
           "translate": "Translate",
+          "translateTo": "Translate to",
           "import": "Import Record",
           "copyText": "Copy Text",
           "copyImage": "Copy Image",
@@ -3210,7 +3213,7 @@
     "description": "Click to select a recording tool and quickly create records"
   },
   "editor": {
-    "placeholder": "Type / to open menu, or start writing...",
+    "placeholder": "Type / for commands, or press Ctrl/Cmd + J for AI writing...",
     "outline": {
       "title": "Outline",
       "open": "Open Outline",
@@ -3244,6 +3247,7 @@
       "polish": "Polish",
       "concise": "Concise",
       "expand": "Expand",
+      "explain": "Explain",
       "translate": "Translate",
       "translateSubtitle": "Translate to",
       "quoteToChat": "Quote to Chat",
@@ -3285,6 +3289,26 @@
       },
       "customLanguagePlaceholder": "Custom language..."
     },
+    "inlineAI": {
+      "generateTitle": "AI inspiration",
+      "rewriteTitle": "AI rewrite selection",
+      "generatingTitle": "AI is generating",
+      "generateDescription": "Continue from the cursor or generate from an instruction",
+      "rewriteDescription": "Process the selected text with your instruction",
+      "generatePlaceholder": "e.g. add the next paragraph, list three points...",
+      "rewritePlaceholder": "e.g. translate to English, make it more persuasive...",
+      "generate": "Generate",
+      "generating": "Generating",
+      "close": "Close AI panel",
+      "continue": "Continue writing",
+      "continueDesc": "Read the context and write the next part",
+      "polish": "Polish",
+      "polishDesc": "Keep the meaning and improve the wording",
+      "concise": "Make concise",
+      "conciseDesc": "Remove redundancy and keep the point",
+      "expand": "Expand",
+      "expandDesc": "Add detail and make the content fuller"
+    },
     "emptyLineMenu": {
       "open": "Insert or convert block",
       "basic": "Basic",
@@ -3312,7 +3336,14 @@
       "accept": "Accept",
       "reject": "Reject",
       "generating": "Generating...",
-      "abort": "Abort"
+      "abort": "Abort",
+      "explainTitle": "AI Explanation",
+      "explaining": "Explaining...",
+      "selectedText": "Selected text",
+      "explainHint": "For reading only, not inserted into the note",
+      "copy": "Copy",
+      "copied": "Copied",
+      "close": "Close"
     },
     "image": {
       "insert": "Insert Image",
@@ -3377,8 +3408,8 @@
         "chart": "Chart"
       },
       "items": {
-        "continue": "Continue",
-        "continueDesc": "AI continue writing content",
+        "continue": "AI continue",
+        "continueDesc": "Generate from the current cursor",
         "heading1": "Heading 1",
         "heading1Desc": "Large heading",
         "heading2": "Heading 2",
@@ -3397,6 +3428,8 @@
         "tableDesc": "Insert a table",
         "blockquote": "Quote",
         "blockquoteDesc": "Capture quoted content",
+        "callout": "Callout",
+        "calloutDesc": "Insert a colored note block",
         "codeBlock": "Code Block",
         "codeBlockDesc": "Capture code snippets",
         "divider": "Divider",

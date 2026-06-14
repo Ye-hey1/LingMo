@@ -76,25 +76,25 @@ export function RecognitionPreview({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
+      exit={{ opacity: 0, y: -8 }}
       className={cn(
-        "overflow-hidden rounded-xl border border-border/50 bg-card shadow-lg",
+        "overflow-hidden rounded-lg border border-border/50 bg-card",
         className
       )}
     >
       {/* 头部 */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 bg-gradient-to-r from-muted/50 to-muted/30">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 bg-muted/30">
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-500/15 text-green-600 dark:text-green-400 border border-green-500/20">
+          <div className="flex items-center gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1 text-emerald-600 dark:text-emerald-400">
             <Sparkles className="size-3.5" />
             <span className="text-xs font-medium">
               {t('record.mark.clipboard.recognitionComplete')}
             </span>
           </div>
           {desc && (
-            <span className="text-xs text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full max-w-[200px] truncate">
+            <span className="max-w-[200px] truncate rounded-md bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
               {desc}
             </span>
           )}
@@ -149,11 +149,11 @@ export function RecognitionPreview({
                     type="text"
                     value={editedDesc}
                     onChange={(e) => setEditedDesc(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
                     placeholder={t('record.mark.clipboard.enterDescription')}
                   />
                 ) : (
-                  <p className="text-sm text-foreground/80 px-3 py-2 bg-muted/30 rounded-lg">
+                  <p className="rounded-md bg-muted/30 px-3 py-2 text-sm text-foreground/80">
                     {desc || t('record.mark.clipboard.noDescription')}
                   </p>
                 )}
@@ -196,7 +196,7 @@ export function RecognitionPreview({
                     placeholder={t('record.mark.clipboard.enterContent')}
                   />
                 ) : (
-                  <div className="max-h-[200px] overflow-y-auto px-3 py-2 bg-muted/30 rounded-lg scrollbar-thin">
+                  <div className="max-h-[200px] overflow-y-auto rounded-md bg-muted/30 px-3 py-2 scrollbar-thin">
                     <pre className="text-sm text-foreground/80 whitespace-pre-wrap break-words font-mono">
                       {content || t('record.mark.clipboard.noContent')}
                     </pre>

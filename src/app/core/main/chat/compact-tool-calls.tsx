@@ -24,6 +24,7 @@
 import * as React from "react"
 import {
   ChevronDown,
+  Database,
   Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -146,6 +147,36 @@ function getToolDisplayName(toolName: string) {
     .trim()
 }
 
+function getHarnessResultMeta(result: ToolCall["result"]) {
+  const data = result?.data
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return null
+  }
+
+  const record = data as {
+    compressed?: boolean
+    originalType?: string
+    itemCount?: number
+    preview?: string
+    dataRef?: string
+    artifacts?: string[]
+    retryable?: boolean
+    errorKind?: string
+  }
+
+  if (
+    !record.compressed &&
+    !record.dataRef &&
+    !record.artifacts?.length &&
+    !record.retryable &&
+    !record.errorKind
+  ) {
+    return null
+  }
+
+  return record
+}
+
 // ---------------------------------------------------------------------------
 // 工具调用行组件
 // ---------------------------------------------------------------------------
@@ -161,6 +192,7 @@ function ToolCallRow({ toolCall, isStreaming: _isStreaming = false, defaultExpan
   const paramSummary = extractParamSummary(toolCall.toolName, toolCall.params)
   const isRunning = toolCall.status === "running" || toolCall.status === "pending"
   const hasError = toolCall.status === "error"
+  const harnessMeta = getHarnessResultMeta(toolCall.result)
 
   // 结果摘要
   const resultSummary = React.useMemo(() => {
@@ -201,6 +233,32 @@ function ToolCallRow({ toolCall, isStreaming: _isStreaming = false, defaultExpan
           </div>
         )}
 
+        {harnessMeta && (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {harnessMeta.compressed && (
+              <span className="inline-flex items-center gap-1 rounded bg-muted/20 px-1 py-0.5 text-[9px] text-muted-foreground/45">
+                <Database className="size-2.5" />
+                compressed
+              </span>
+            )}
+            {harnessMeta.dataRef && (
+              <span className="max-w-full truncate rounded bg-muted/20 px-1 py-0.5 font-mono text-[9px] text-muted-foreground/45" title={harnessMeta.dataRef}>
+                {harnessMeta.dataRef}
+              </span>
+            )}
+            {harnessMeta.errorKind && (
+              <span className="rounded bg-destructive/10 px-1 py-0.5 text-[9px] text-destructive/70">
+                {harnessMeta.errorKind}
+              </span>
+            )}
+            {harnessMeta.retryable && (
+              <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[9px] text-amber-600">
+                retryable
+              </span>
+            )}
+          </div>
+        )}
+
         {/* 展开的详细内容 */}
         <AnimatePresence initial={false}>
           {expanded && (
@@ -225,7 +283,9 @@ function ToolCallRow({ toolCall, isStreaming: _isStreaming = false, defaultExpan
                     toolCall.result.success ? "text-muted-foreground/45" : "text-destructive/65",
                   )}>
                     {toolCall.result.success
-                      ? (typeof toolCall.result.data === "string" ? toolCall.result.data : JSON.stringify(toolCall.result.data || toolCall.result.message, null, 2))
+                      ? (typeof toolCall.result.data === "string"
+                          ? toolCall.result.data
+                          : JSON.stringify(harnessMeta?.preview || toolCall.result.data || toolCall.result.message, null, 2))
                       : toolCall.result.error || "Unknown error"}
                   </pre>
                 )}

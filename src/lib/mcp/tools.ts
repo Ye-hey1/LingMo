@@ -1,5 +1,6 @@
 import { mcpServerManager } from './server-manager'
 import { useMcpStore } from '@/stores/mcp'
+import { normalizeCallToolResult } from './result'
 import type { MCPTool, CallToolResult } from './types'
 
 /**
@@ -126,11 +127,14 @@ export function validateToolArgs(tool: MCPTool, args: any): {
  * 格式化工具调用结果
  */
 export function formatToolResult(result: CallToolResult): string {
-  if (result.isError) {
-    return `❌ Error: ${result.content[0]?.text || 'Unknown error'}`
+  const normalized = normalizeCallToolResult(result)
+  const content = normalized.content
+
+  if (normalized.isError) {
+    return `Error: ${content[0]?.text || 'Unknown error'}`
   }
   
-  const textContent = result.content
+  const textContent = content
     .filter(c => c.type === 'text')
     .map(c => c.text)
     .join('\n')
@@ -151,4 +155,3 @@ export function toolToOpenAIFunction(tool: MCPTool) {
     },
   }
 }
-

@@ -326,7 +326,7 @@ export function ArtifactStudio({ sourcePath }: ArtifactStudioProps) {
             <LayoutTemplate className="size-4" />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-foreground">输出工坊</div>
+            <div className="truncate text-sm font-semibold text-foreground">智能排版</div>
             <div className="truncate text-[11px] text-muted-foreground">{activeTemplate.name} · {summary.format}</div>
           </div>
         </div>

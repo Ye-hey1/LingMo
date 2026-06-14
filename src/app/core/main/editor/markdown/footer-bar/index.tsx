@@ -26,6 +26,8 @@ import { extractWikiLinks } from '@/lib/wikilink-extension'
 import { findBacklinkSuggestions, applyBacklinks, type BacklinkSuggestion } from '@/lib/auto-backlink'
 import { getCrossValidatedRelations } from '@/lib/relation-engine'
 import { readWorkspaceTextFile } from '@/lib/file-binary'
+import { toast } from '@/hooks/use-toast'
+import { requestGhostTextCompletion } from '../ghost-text-extension'
 
 interface FooterBarProps {
   editor: Editor
@@ -50,6 +52,24 @@ export function FooterBar({ editor }: FooterBarProps) {
     emitter.emit('graph-locate-node' as any, { path: activeFilePath })
     useArticleStore.getState().setActiveFilePath(KNOWLEDGE_GRAPH_TAB_PATH)
   }, [activeFilePath])
+
+  const handleToggleAICompletion = useCallback(async (enabled: boolean) => {
+    await setAiCompletionEnabled(enabled)
+
+    if (!enabled) {
+      return
+    }
+
+    window.setTimeout(() => {
+      const requested = requestGhostTextCompletion(editor)
+      if (!requested) {
+        toast({
+          title: 'AI 补全已开启',
+          description: '当前光标上下文太短，继续输入后会自动触发灰字补全。',
+        })
+      }
+    }, 0)
+  }, [editor, setAiCompletionEnabled])
 
   if (isMobile) {
     return (
@@ -83,7 +103,7 @@ export function FooterBar({ editor }: FooterBarProps) {
           >
             <Keyboard className="size-3" />
           </button>
-          <VectorCalc aiCompletionEnabled={aiCompletionEnabled} onToggleAICompletion={setAiCompletionEnabled} />
+          <VectorCalc aiCompletionEnabled={aiCompletionEnabled} onToggleAICompletion={handleToggleAICompletion} />
           <SyncTools editor={editor} />
         </div>
       </div>
@@ -167,7 +187,7 @@ export function FooterBar({ editor }: FooterBarProps) {
 
         <Separator />
 
-        <VectorCalc aiCompletionEnabled={aiCompletionEnabled} onToggleAICompletion={setAiCompletionEnabled} />
+        <VectorCalc aiCompletionEnabled={aiCompletionEnabled} onToggleAICompletion={handleToggleAICompletion} />
         <SyncTools editor={editor} />
       </div>
     </div>

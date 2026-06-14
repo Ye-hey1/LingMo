@@ -1,8 +1,11 @@
-import type { Tool } from '@/lib/agent/types'
-import type { ToolObservation } from './types'
+import type { Tool, ToolExecutionContext, ToolResult } from '@/lib/agent/types'
+import type { HarnessToolExecutionResult, ToolObservation } from './types'
 import { writeAgentVfsText } from './vfs'
+import { compressToolResult, executeWithTimeout } from '@/lib/agent/tool-utils'
 
 const MAX_INLINE_OBSERVATION_CHARS = 4000
+const MAX_RETRIES = 2
+const TRANSIENT_ERROR_RE = /timeout|network|fetch|connect|econnrefused|econnreset|enotfound|rate.?limit|429|503|502|500|internal.?server|temporar/i
 
 function classifyError(error: string): ToolObservation['errorKind'] {
   if (/timeout|timed out/i.test(error)) return 'timeout'
@@ -18,6 +21,59 @@ function isRetryableError(error: string) {
 
 function formatResultText(result: Awaited<ReturnType<Tool['execute']>>) {
   return result.message || result.error || JSON.stringify(result.data || '')
+}
+
+function isTransientError(error?: string) {
+  return Boolean(error && TRANSIENT_ERROR_RE.test(error))
+}
+
+function abortErrorMessage() {
+  return 'Tool execution cancelled.'
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+function assertNotAborted(signal?: AbortSignal) {
+  signal?.throwIfAborted()
+}
+
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return new Promise(resolve => setTimeout(resolve, ms))
+  }
+  assertNotAborted(signal)
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timeout)
+      signal.removeEventListener('abort', onAbort)
+      reject(new DOMException(abortErrorMessage(), 'AbortError'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+async function cancelledToolResult(tool: Tool, context: ToolExecutionContext): Promise<HarnessToolExecutionResult> {
+  const message = abortErrorMessage()
+  const result: ToolResult = {
+    success: false,
+    error: message,
+    message,
+  }
+  const observation = await maybeOffloadObservation({
+    toolName: tool.name,
+    success: false,
+    summary: message,
+    errorKind: 'tool',
+    retryable: false,
+  }, message, tool, context)
+  return { result, observation }
 }
 
 async function maybeOffloadObservation(
@@ -58,37 +114,65 @@ async function maybeOffloadObservation(
 export async function executeHarnessTool(
   tool: Tool,
   params: Record<string, any>,
-  context: Parameters<Tool['execute']>[1],
-): Promise<ToolObservation> {
+  context: ToolExecutionContext = {},
+): Promise<HarnessToolExecutionResult> {
   try {
-    const result = await tool.execute(params, context)
+    let result!: ToolResult
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+      assertNotAborted(context.abortSignal)
+      if (attempt > 0) {
+        const delayMs = Math.min(500 * Math.pow(2, attempt - 1), 2000)
+        await sleepWithAbort(delayMs, context.abortSignal)
+        assertNotAborted(context.abortSignal)
+      }
+
+      result = await executeWithTimeout(tool, params, context)
+      if (result.success || attempt === MAX_RETRIES || !isTransientError(result.error || result.message)) {
+        break
+      }
+    }
+
+    result = compressToolResult(tool, result)
+
     if (!result.success) {
       const error = result.error || result.message || 'Tool failed'
-      return maybeOffloadObservation({
+      const observation = await maybeOffloadObservation({
         toolName: tool.name,
         success: false,
         summary: error,
         errorKind: classifyError(error),
         retryable: isRetryableError(error),
       }, error, tool, context)
+      return { result, observation }
     }
 
     const fullText = formatResultText(result)
-    return maybeOffloadObservation({
+    const observation = await maybeOffloadObservation({
       toolName: tool.name,
       success: true,
       summary: fullText,
       artifacts: Array.isArray(result.data?.output_files) ? result.data.output_files : undefined,
       retryable: false,
     }, fullText, tool, context)
+    return { result, observation }
   } catch (error) {
+    if (isAbortError(error)) {
+      return cancelledToolResult(tool, context)
+    }
+
     const message = error instanceof Error ? error.message : String(error)
-    return maybeOffloadObservation({
+    const result: ToolResult = {
+      success: false,
+      error: message,
+    }
+    const observation = await maybeOffloadObservation({
       toolName: tool.name,
       success: false,
       summary: message,
       errorKind: classifyError(message),
       retryable: isRetryableError(message),
     }, message, tool, context)
+    return { result, observation }
   }
 }

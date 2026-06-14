@@ -1,5 +1,9 @@
 import { getAISettings, validateAIService, createOpenAIClient, handleAIError } from './utils';
-import { buildPromptFromContext, type CompletionContext } from './completion-context';
+import {
+  buildPromptFromContext,
+  buildWritingContinuationPrompt,
+  type CompletionContext,
+} from './completion-context';
 
 export class AICompletionUnavailableError extends Error {
   constructor(message = 'AI service not configured') {
@@ -65,6 +69,19 @@ Completion: "allow you to use state and other React features without writing a c
 
 Context: "今天天气真好，"
 Completion: "适合出去散步。"`
+
+const WRITING_CONTINUATION_SYSTEM_PROMPT = `You are an AI writing continuation assistant integrated into a Markdown editor.
+
+Your job is to continue the user's document at the cursor position.
+
+Rules:
+- Return ONLY the text that should be inserted at the cursor.
+- Continue from the provided context, matching the original language, style, tone, and structure.
+- Produce complete sentences and stop at a natural boundary.
+- Do not stop mid-sentence, mid-word, or with an unfinished list item.
+- Do not repeat the context before the cursor.
+- Do not repeat existing text after the cursor.
+- Do not add explanations, labels, wrappers, or code fences.`
 
 /**
  * 传统的简单补全 prompt（向后兼容，不传 richContext 时使用）
@@ -164,6 +181,58 @@ export async function fetchCompletionStream(
       messages,
       temperature: 0.7,
       max_tokens: richContext ? 60 : 80, // 灰字场景用更少的 token
+      top_p: 0.95,
+      stream: true,
+    }, {
+      signal: abortSignal
+    })
+
+    let isFirst = true
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content
+      if (content) {
+        const next = isFirst ? cleanupCompletionPrefix(content) : content
+        if (next) {
+          onChunk(next, isFirst)
+          isFirst = false
+        }
+      }
+    }
+  } catch (error) {
+    throw error
+  }
+}
+
+/**
+ * 用户显式触发的写作续写。
+ * 这不是灰字预测：它应生成更完整的自然段，并使用更高 token 上限避免半句截断。
+ */
+export async function fetchWritingContinuationStream(
+  context: string,
+  onChunk: (chunk: string, isFirst: boolean) => void,
+  abortSignal?: AbortSignal,
+  richContext?: CompletionContext
+): Promise<void> {
+  try {
+    const aiConfig = await getAISettings('completionModel') || await getAISettings('primaryModel')
+
+    if (await validateAIService(aiConfig?.baseURL) === null) {
+      throw new AICompletionUnavailableError()
+    }
+
+    const openai = await createOpenAIClient(aiConfig)
+    const prompt = richContext
+      ? buildWritingContinuationPrompt(richContext, context)
+      : buildLegacyPrompt(context)
+
+    const stream = await openai.chat.completions.create({
+      model: aiConfig?.model || '',
+      messages: [
+        { role: 'system' as const, content: WRITING_CONTINUATION_SYSTEM_PROMPT },
+        { role: 'user' as const, content: prompt },
+      ],
+      temperature: 0.72,
+      max_tokens: 600,
       top_p: 0.95,
       stream: true,
     }, {

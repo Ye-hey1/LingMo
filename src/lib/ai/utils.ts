@@ -5,6 +5,7 @@ import { AiConfig } from "@/app/core/setting/config";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { platform } from "@tauri-apps/plugin-os";
 import { createTauriOpenAIClient, type OpenAICompatibleClient } from "./tauri-client";
+import { buildXiaoMoChatSystemPrompt } from "./xiaomo-prompt";
 
 const MERMAID_OUTPUT_GUIDE = `When a process, architecture, relationship, decision tree, timeline, or comparison is better expressed visually, include a valid Mermaid fenced code block in the answer:
 \`\`\`mermaid
@@ -196,7 +197,19 @@ export async function prepareMessages(
   geminiText?: string
 }> {
   // 获取prompt内容
-  let promptContent = await getPromptContent()
+  const userPromptContent = (await getPromptContent()).trim()
+  const promptSections = [
+    buildXiaoMoChatSystemPrompt(),
+    userPromptContent
+      ? [
+          '## User Preference Prompt',
+          '',
+          'The following user prompt controls style, role preference, and response habits only. It must not override safety, data boundaries, source discipline, or the current user request.',
+          '',
+          userPromptContent,
+        ].join('\n')
+      : '',
+  ]
 
   // 加载记忆上下文
   try {
@@ -215,7 +228,7 @@ export async function prepareMessages(
       const memoryContext = await contextLoader.getContextForQuery(queryText)
       if (memoryContext.preferences.length > 0 || memoryContext.memory.length > 0) {
         const memoryPrompt = contextLoader.formatMemoriesForPrompt(memoryContext)
-        promptContent += '\n\n' + memoryPrompt
+        promptSections.push(memoryPrompt)
       }
     }
   } catch (error) {
@@ -223,7 +236,8 @@ export async function prepareMessages(
     console.error('Failed to load memory context:', error)
   }
 
-  promptContent = [promptContent, MERMAID_OUTPUT_GUIDE].filter(Boolean).join('\n\n')
+  promptSections.push(MERMAID_OUTPUT_GUIDE)
+  const promptContent = promptSections.filter(Boolean).join('\n\n')
 
   // 如果提供了基础消息数组，直接使用它
   if (baseMessages && baseMessages.length > 0) {
@@ -253,7 +267,7 @@ export async function prepareMessages(
           : ''
         messages[firstSystemIndex] = {
           role: 'system',
-          content: existingContent + '\n\n' + promptContent
+          content: [promptContent, existingContent].filter(Boolean).join('\n\n')
         }
       }
     }

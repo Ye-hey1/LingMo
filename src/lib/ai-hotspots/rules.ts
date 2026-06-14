@@ -11,17 +11,48 @@ type AiHotspotRelatedRecord = {
 }
 
 const TAG_RULES: Array<{ tag: string, keywords: string[] }> = [
-  { tag: '模型发布', keywords: ['model', 'gpt', 'llm', 'claude', 'gemini', 'deepseek', '模型', '大模型', '发布'] },
-  { tag: '开发工具', keywords: ['sdk', 'api', 'agent', 'developer', 'tool', 'github', '开源', '开发', '工具', '智能体'] },
-  { tag: '多模态', keywords: ['multimodal', 'vision', 'video', 'image', 'audio', '多模态', '视觉', '视频', '图像', '语音'] },
-  { tag: '算力芯片', keywords: ['gpu', 'chip', 'cuda', 'nvidia', '算力', '芯片'] },
-  { tag: '行业应用', keywords: ['enterprise', 'startup', 'industry', '应用', '企业', '商业化'] },
-  { tag: '研究进展', keywords: ['paper', 'research', 'benchmark', 'eval', '论文', '研究', '评测'] },
+  { tag: 'AI模型', keywords: [
+    'model', 'gpt', 'llm', 'claude', 'gemini', 'deepseek', 'mistral', 'llama', 'qwen',
+    '模型', '大模型', '发布', '开源模型', '训练', '推理', '微调', 'fine-tune', 'rlhf',
+    'transformer', 'attention', '多模态', 'multimodal', 'vision', '语言模型', 'foundation model',
+    'diffusion', 'stable diffusion', 'midjourney', 'dall-e', 'sora',
+  ] },
+  { tag: '产品应用', keywords: [
+    'product', 'app', 'platform', 'tool', 'agent', 'chatbot', 'copilot',
+    '产品', '应用', '平台', '工具', '智能体', '助手', '插件', 'plugin',
+    'sdk', 'api', 'developer', '开发', '开源', 'github', 'release', 'launch',
+    'chatgpt', 'claude code', 'cursor', 'windsurf', 'v0', 'bolt',
+  ] },
+  { tag: '行业动态', keywords: [
+    'industry', 'startup', 'company', 'enterprise', 'business', 'funding', 'acquisition',
+    '行业', '企业', '公司', '融资', '收购', '商业化', 'market', '市场',
+    'nvidia', 'amd', 'intel', 'google', 'microsoft', 'openai', 'anthropic', 'meta', 'apple',
+    '算力', 'gpu', 'chip', '芯片', '数据中心', 'cloud', 'aws', 'azure',
+    '政策', 'regulation', '监管', '安全', 'safety',
+  ] },
+  { tag: '论文研究', keywords: [
+    'paper', 'research', 'arxiv', 'benchmark', 'eval', 'study', 'academic',
+    '论文', '研究', '评测', '基准', '实验', '突破', '创新', '算法',
+    'neurips', 'icml', 'iclr', 'cvpr', 'acl', 'emnlp', 'aaai',
+    'technique', 'method', 'approach', 'framework', 'architecture',
+  ] },
+  { tag: '技巧经验', keywords: [
+    'tutorial', 'guide', 'tip', 'trick', 'howto', 'how-to', 'best practice', 'workflow',
+    '教程', '技巧', '经验', '实践', '指南', '入门', '进阶', '实战',
+    'prompt', '提示词', '工程', 'engineering', '效率', 'productivity',
+    'case study', '案例', '分享', '总结', '复盘',
+  ] },
 ]
 
 export function isAiHotspotRelated(record: AiHotspotRelatedRecord): boolean {
   const siteId = (record.siteId ?? '').trim().toLowerCase()
+  const url = (record.url ?? '').toLowerCase()
   const filter = AI_HOTSPOT_CONFIG.filter
+
+  // 直接过滤掉 GitHub 相关内容（专注于 AI 热点新闻）
+  if (url.includes('github.com') || url.includes('github.io') || url.includes('githubusercontent.com')) {
+    return false
+  }
 
   if (filter.trustedAiSourceIds.includes(siteId)) return true
 
@@ -148,15 +179,27 @@ export function filterHotspotsByWindow(
 function createDedupeKeys(item: AiHotspotItem): { urls: string[], titles: string[] } {
   const normalizedUrl = normalizeHotspotUrl(item.url)
   const normalizedTitle = normalizeHotspotTitle(item.title)
+  const scope = getDedupeScope(item)
 
   return {
-    urls: normalizedUrl ? [normalizedUrl] : [],
-    titles: normalizedTitle ? [normalizedTitle] : [],
+    urls: normalizedUrl ? [`${scope}${normalizedUrl}`] : [],
+    titles: normalizedTitle ? [`${scope}${normalizedTitle}`] : [],
   }
 }
 
+function getDedupeScope(item: AiHotspotItem) {
+  if (item.meta?.feedRole !== 'daily-article') return ''
+
+  const issueDate = typeof item.meta.dailyIssueDate === 'string' ? item.meta.dailyIssueDate : ''
+  const articleKey = typeof item.meta.dailyArticleKey === 'string' ? item.meta.dailyArticleKey : ''
+  const articleIndex = typeof item.meta.dailyArticleIndex === 'number' ? String(item.meta.dailyArticleIndex) : ''
+  const dailyScope = [issueDate, articleKey || articleIndex].filter(Boolean).join(':')
+
+  return `daily-article:${dailyScope}:`
+}
+
 function getItemTime(item: AiHotspotItem): number {
-  const value = item.publishedAt ?? item.lastSeenAt ?? item.firstSeenAt
+  const value = item.lastSeenAt ?? item.publishedAt ?? item.firstSeenAt
   const time = value ? Date.parse(value) : 0
   return Number.isFinite(time) ? time : 0
 }

@@ -1,24 +1,19 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { 
-  Settings, 
-  Sparkles, 
-  Save,
+import {
+  CheckCircle2,
+  Eye,
+  Sparkles,
+  History,
   RotateCcw,
-  Info
+  Save,
 } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger
-} from '@/components/ui/tooltip'
 import { ModelSelect } from '@/app/core/setting/components/model-select'
 
 const SETTINGS_KEY = 'recognition-settings'
@@ -38,10 +33,11 @@ interface RecognitionSettingsProps {
 
 export function RecognitionSettings({ className }: RecognitionSettingsProps) {
   const t = useTranslations()
-  
+  const [savedSettings, setSavedSettings] = useState({ ...DEFAULT_LOCAL_SETTINGS })
   const [localSettings, setLocalSettings] = useState({
     ...DEFAULT_LOCAL_SETTINGS,
   })
+  const [saveState, setSaveState] = useState<'idle' | 'saved'>('idle')
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -49,7 +45,7 @@ export function RecognitionSettings({ className }: RecognitionSettingsProps) {
     try {
       const raw = window.localStorage.getItem(SETTINGS_KEY)
       const saved = raw ? JSON.parse(raw) : {}
-      setLocalSettings({
+      const nextSettings = {
         autoRecognize: saved.autoRecognize !== false,
         autoOrganizeAfterRecognize: saved.autoOrganizeAfterRecognize === true,
         autoTagAfterOrganize: saved.autoTagAfterOrganize === true,
@@ -58,11 +54,16 @@ export function RecognitionSettings({ className }: RecognitionSettingsProps) {
         maxHistoryItems: Number(saved.maxHistoryItems) > 0
           ? Number(saved.maxHistoryItems)
           : DEFAULT_LOCAL_SETTINGS.maxHistoryItems,
-      })
+      }
+      setLocalSettings(nextSettings)
+      setSavedSettings(nextSettings)
     } catch {
       setLocalSettings({ ...DEFAULT_LOCAL_SETTINGS })
+      setSavedSettings({ ...DEFAULT_LOCAL_SETTINGS })
     }
   }, [])
+
+  const hasUnsavedChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings)
 
   const handleSave = useCallback(() => {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
@@ -73,202 +74,137 @@ export function RecognitionSettings({ className }: RecognitionSettingsProps) {
       saveHistory: localSettings.saveHistory,
       maxHistoryItems: localSettings.maxHistoryItems
     }))
+    setSavedSettings(localSettings)
+    setSaveState('saved')
+    window.setTimeout(() => setSaveState('idle'), 1800)
   }, [localSettings])
 
   const handleReset = useCallback(() => {
-    setLocalSettings({
-      autoRecognize: true,
-      autoOrganizeAfterRecognize: false,
-      autoTagAfterOrganize: false,
-      autoTitleBeforeImport: false,
-      saveHistory: true,
-      maxHistoryItems: 50
-    })
+    setLocalSettings({ ...DEFAULT_LOCAL_SETTINGS })
+    setSaveState('idle')
   }, [])
 
   return (
-    <div className={cn("overflow-hidden rounded-xl border border-border/50 bg-card", className)}>
-      {/* 头部 */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 bg-muted/30">
-        <div className="flex items-center gap-2">
-          <Settings className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium">
-            {t('record.mark.recognitionSettings.title')}
-          </span>
-        </div>
-      </div>
-
-      {/* 内容 */}
-      <div className="p-4 space-y-5">
-        {/* VLM 视觉模型 */}
-        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-          <div className="flex items-start justify-between gap-3 max-md:flex-col">
-            <div className="min-w-0 space-y-0.5">
-              <div className="flex items-center gap-2">
-                <label className="text-sm font-medium">
-                  {t('record.mark.recognitionSettings.visionModel')}
-                </label>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger>
-                      <Info className="size-3.5 text-muted-foreground" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p className="text-xs">{t('record.mark.recognitionSettings.visionModelHint')}</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {t('record.mark.recognitionSettings.visionModelDesc')}
-              </p>
-            </div>
-            <div className="shrink-0 max-md:w-full">
-              <ModelSelect modelKey="knowledgeRelayVision" />
-            </div>
+    <div className={cn("flex h-full flex-col", className)}>
+      <div className="flex-1 space-y-4 p-1">
+        {/* 视觉模型 */}
+        <section className="rounded-md border border-border/50 bg-background p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <Eye className="size-3.5 text-muted-foreground" />
+            <span className="text-xs font-medium text-muted-foreground">
+              {t('record.mark.recognitionSettings.visionModel')}
+            </span>
           </div>
-        </div>
+          <ModelSelect modelKey="knowledgeRelayVision" hideClear />
+        </section>
 
-        {/* 自动识别 */}
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <label className="text-sm font-medium">
-              {t('record.mark.recognitionSettings.autoRecognize')}
-            </label>
-            <p className="text-xs text-muted-foreground">
-              {t('record.mark.recognitionSettings.autoRecognizeDesc')}
-            </p>
-          </div>
-          <Switch
-            checked={localSettings.autoRecognize}
-            onCheckedChange={(checked) => 
-              setLocalSettings(prev => ({ ...prev, autoRecognize: checked }))
-            }
-          />
-        </div>
-
-        <div className="space-y-3 rounded-lg border border-border/60 bg-muted/15 p-3">
-          <div className="flex items-center gap-2">
+        {/* AI 工作流 */}
+        <section className="rounded-md border border-border/50 bg-background p-3">
+          <div className="mb-3 flex items-center gap-2">
             <Sparkles className="size-3.5 text-primary" />
-            <label className="text-sm font-medium">
+            <span className="text-xs font-medium text-muted-foreground">
               {t('record.mark.recognitionSettings.aiWorkflow')}
-            </label>
+            </span>
           </div>
           <div className="space-y-3">
-            <div className="flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <p className="text-xs font-medium">
-                  {t('record.mark.recognitionSettings.autoOrganizeAfterRecognize')}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {t('record.mark.recognitionSettings.autoOrganizeAfterRecognizeDesc')}
-                </p>
-              </div>
-              <Switch
-                checked={localSettings.autoOrganizeAfterRecognize}
-                onCheckedChange={(checked) =>
-                  setLocalSettings(prev => ({ ...prev, autoOrganizeAfterRecognize: checked }))
-                }
-              />
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <p className="text-xs font-medium">
-                  {t('record.mark.recognitionSettings.autoTagAfterOrganize')}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {t('record.mark.recognitionSettings.autoTagAfterOrganizeDesc')}
-                </p>
-              </div>
-              <Switch
-                checked={localSettings.autoTagAfterOrganize}
-                onCheckedChange={(checked) =>
-                  setLocalSettings(prev => ({ ...prev, autoTagAfterOrganize: checked }))
-                }
-              />
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <p className="text-xs font-medium">
-                  {t('record.mark.recognitionSettings.autoTitleBeforeImport')}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {t('record.mark.recognitionSettings.autoTitleBeforeImportDesc')}
-                </p>
-              </div>
-              <Switch
-                checked={localSettings.autoTitleBeforeImport}
-                onCheckedChange={(checked) =>
-                  setLocalSettings(prev => ({ ...prev, autoTitleBeforeImport: checked }))
-                }
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* 保存历史 */}
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <label className="text-sm font-medium">
-              {t('record.mark.recognitionSettings.saveHistory')}
-            </label>
-            <p className="text-xs text-muted-foreground">
-              {t('record.mark.recognitionSettings.saveHistoryDesc')}
-            </p>
-          </div>
-          <Switch
-            checked={localSettings.saveHistory}
-            onCheckedChange={(checked) => 
-              setLocalSettings(prev => ({ ...prev, saveHistory: checked }))
-            }
-          />
-        </div>
-
-        {/* 历史记录数量 */}
-        {localSettings.saveHistory && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium">
-                {t('record.mark.recognitionSettings.maxHistoryItems')}
-              </label>
-              <span className="text-sm text-muted-foreground">
-                {localSettings.maxHistoryItems}
-              </span>
-            </div>
-            <Slider
-              value={[localSettings.maxHistoryItems]}
-              onValueChange={([value]) => 
-                setLocalSettings(prev => ({ ...prev, maxHistoryItems: value }))
-              }
-              min={10}
-              max={100}
-              step={10}
-              className="w-full"
+            <ToggleRow
+              label={t('record.mark.recognitionSettings.autoRecognize')}
+              checked={localSettings.autoRecognize}
+              onChange={(v) => setLocalSettings(p => ({ ...p, autoRecognize: v }))}
+            />
+            <ToggleRow
+              label={t('record.mark.recognitionSettings.autoOrganizeAfterRecognize')}
+              checked={localSettings.autoOrganizeAfterRecognize}
+              onChange={(v) => setLocalSettings(p => ({ ...p, autoOrganizeAfterRecognize: v }))}
+            />
+            <ToggleRow
+              label={t('record.mark.recognitionSettings.autoTagAfterOrganize')}
+              checked={localSettings.autoTagAfterOrganize}
+              onChange={(v) => setLocalSettings(p => ({ ...p, autoTagAfterOrganize: v }))}
+            />
+            <ToggleRow
+              label={t('record.mark.recognitionSettings.autoTitleBeforeImport')}
+              checked={localSettings.autoTitleBeforeImport}
+              onChange={(v) => setLocalSettings(p => ({ ...p, autoTitleBeforeImport: v }))}
             />
           </div>
-        )}
+        </section>
+
+        {/* 历史记录 */}
+        <section className="rounded-md border border-border/50 bg-background p-3">
+          <div className="mb-3 flex items-center gap-2">
+            <History className="size-3.5 text-muted-foreground" />
+            <span className="text-xs font-medium text-muted-foreground">
+              {t('record.mark.recognitionSettings.saveHistory')}
+            </span>
+            <div className="ml-auto">
+              <Switch
+                checked={localSettings.saveHistory}
+                onCheckedChange={(v) => setLocalSettings(p => ({ ...p, saveHistory: v }))}
+              />
+            </div>
+          </div>
+          {localSettings.saveHistory && (
+            <div className="space-y-2 pl-0.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">
+                  {t('record.mark.recognitionSettings.maxHistoryItems')}
+                </span>
+                <span className="text-xs font-medium tabular-nums">
+                  {localSettings.maxHistoryItems}
+                </span>
+              </div>
+              <Slider
+                value={[localSettings.maxHistoryItems]}
+                onValueChange={([v]) => setLocalSettings(p => ({ ...p, maxHistoryItems: v }))}
+                min={10}
+                max={100}
+                step={10}
+                className="w-full"
+              />
+            </div>
+          )}
+        </section>
       </div>
 
-      {/* 底部操作 */}
-      <div className="flex items-center justify-between px-4 py-3 border-t border-border/50 bg-muted/20">
+      {/* 底部操作栏 */}
+      <div className="flex items-center justify-end gap-2 border-t border-border/40 pt-3">
         <Button
-          variant="outline"
+          variant="ghost"
           size="sm"
           onClick={handleReset}
-          className="text-xs"
+          className="h-7 text-[11px]"
         >
-          <RotateCcw className="size-3.5 mr-1.5" />
+          <RotateCcw className="size-3 mr-1" />
           {t('record.mark.recognitionSettings.reset')}
         </Button>
         <Button
           size="sm"
           onClick={handleSave}
-          className="text-xs"
+          disabled={!hasUnsavedChanges && saveState !== 'saved'}
+          className="h-7 text-[11px]"
         >
-          <Save className="size-3.5 mr-1.5" />
+          {saveState === 'saved' ? (
+            <CheckCircle2 className="size-3 mr-1" />
+          ) : (
+            <Save className="size-3 mr-1" />
+          )}
           {t('common.save')}
         </Button>
       </div>
+    </div>
+  )
+}
+
+function ToggleRow({ label, checked, onChange }: {
+  label: string
+  checked: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-sm">{label}</span>
+      <Switch checked={checked} onCheckedChange={onChange} />
     </div>
   )
 }

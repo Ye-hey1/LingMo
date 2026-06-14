@@ -16,7 +16,8 @@ import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { McpToolCallCard } from './mcp-tool-call'
 import { AgentExecutionStatus } from './agent-execution-status'
-import { TaskPlanProgress } from './task-plan-progress'
+import { AgentThinkingSummary } from './agent-thinking-summary'
+import { TaskPlanProgress, ResearchResumeCard } from './task-plan-progress'
 import { ChatImages } from "./chat-images"
 import { cleanAssistantGeneratedContent } from '@/lib/ai/assistant-content'
 import {
@@ -28,6 +29,7 @@ import {
 } from '@/lib/ai/citations'
 import { highlightTextReact } from '@/lib/highlight'
 import { parseResearchProgressView } from '@/lib/research/progress-status'
+import { parseResearchResumeData } from '@/lib/research/session-store'
 import { motion } from 'framer-motion'
 
 const BOTTOM_THRESHOLD = 24
@@ -326,7 +328,7 @@ MessageWrapper.displayName = 'MessageWrapper'
 
 const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat; searchQuery?: string }) {
   const t = useTranslations()
-  const { chats, deleteChat, getMcpToolCallsByChatId, loading, agentState } = useChatStore()
+  const { chats, deleteChat, getMcpToolCallsByChatId, loading, agentState, researchRun } = useChatStore()
   const content = chat.content
   const displayContent = useMemo(
     () => chat.role === 'system' ? cleanAssistantGeneratedContent(content || '') : content,
@@ -358,6 +360,16 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     () => chat.role === 'system' ? parseResearchProgressView(content) : null,
     [chat.role, content],
   )
+  const liveResearchProgress = chat.role === 'system'
+    && researchRun.activeChatId === chat.id
+    && researchRun.progressView
+    ? researchRun.progressView
+    : null
+  const visibleResearchProgress = liveResearchProgress || researchProgress
+  const researchResume = useMemo(
+    () => chat.role === 'system' ? parseResearchResumeData(content) : null,
+    [chat.role, content],
+  )
 
   const handleRemoveClearContext = useCallback(() => {
     deleteChat(chat.id)
@@ -387,6 +399,23 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     () => parseStoredAgentHistory(chat.agentHistory),
     [chat.agentHistory]
   )
+  const storedThinkingSummary = useMemo(() => {
+    if (!storedAgentHistory) return null
+    const history = storedAgentHistory as typeof storedAgentHistory & {
+      steps?: Array<{ thought?: string; duration?: number }>
+    }
+    const steps = history.steps || []
+    const lastThought = [...steps].reverse().find(step => step.thought)?.thought
+    const elapsedMs = steps.reduce(
+      (sum: number, step: { duration?: number }) => sum + (typeof step.duration === 'number' ? step.duration : 0),
+      0,
+    )
+    return {
+      thought: lastThought,
+      elapsedMs,
+      toolCalls: storedAgentHistory.toolCalls || [],
+    }
+  }, [storedAgentHistory])
 
   const webCitationDetails = useMemo(() => {
     const storedToolCalls = storedAgentHistory?.toolCalls || []
@@ -471,6 +500,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
       // 检查 AI 消息是否有实际内容（没有内容时不渲染）
       const hasContent = chat.role === 'system' && (
         !!content ||
+        !!visibleResearchProgress ||
         !!visibleThinkingContent ||
         (chat.agentHistory && chat.agentHistory.length > 0) ||
         ragSources.length > 0 ||
@@ -518,18 +548,32 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
 
             {/* 4. 思考内容 - live Agent 的 thinking 由 AgentExecutionStatus 渲染 */}
             {!isLiveAgentVisible && (
-              <ChatThinking
-                chat={chat}
-                isStreaming={isResponseStreaming}
-                citationDetails={citationDetails}
-                ragSources={ragSources}
-              />
+              <>
+                {storedThinkingSummary ? (
+                  <AgentThinkingSummary
+                    thought={storedThinkingSummary.thought}
+                    elapsedMs={storedThinkingSummary.elapsedMs}
+                    toolCalls={storedThinkingSummary.toolCalls}
+                  />
+                ) : (
+                  <ChatThinking
+                    chat={chat}
+                    isStreaming={isResponseStreaming}
+                    citationDetails={citationDetails}
+                    ragSources={ragSources}
+                  />
+                )}
+              </>
             )}
 
-            {/* 5. 正式回复内容 */}
-            {researchProgress ? (
-              <TaskPlanProgress content={content || ''} compact={false} className="max-w-2xl" />
-            ) : (
+            {/* 5. 恢复研究卡片 + 研究进度 + 正式回复内容 */}
+            {researchResume && (
+              <ResearchResumeCard data={researchResume} />
+            )}
+            {visibleResearchProgress && (
+              <TaskPlanProgress view={visibleResearchProgress} content={content || ''} compact={false} className="max-w-2xl" />
+            )}
+            {(!visibleResearchProgress || (visibleResearchProgress && visibleResearchProgress.statusText === '研究完成，正在收尾' && displayContent?.trim())) && (
               <ChatPreview text={displayContent || ''} streaming={isResponseStreaming} highlightQuery={searchQuery} />
             )}
 

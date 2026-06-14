@@ -1,6 +1,6 @@
 import { fetchHotspotText } from '../http'
 import { decodeXmlEntities, extractXmlTag } from '../rss'
-import { BaseAiHotspotFetcher } from './base'
+import { AiHotspotFetcherOptions, BaseAiHotspotFetcher } from './base'
 
 interface YouTubeChannel {
   id: string
@@ -48,7 +48,7 @@ export class YouTubeFetcher extends BaseAiHotspotFetcher {
   sourceId = 'youtube'
   sourceName = 'YouTube'
 
-  async fetch() {
+  async fetch(_now: Date, _options?: AiHotspotFetcherOptions) {
     const results = await Promise.all(
       YOUTUBE_CHANNELS.map(async (channel) => {
         try {

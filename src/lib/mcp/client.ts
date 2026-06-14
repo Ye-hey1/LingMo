@@ -9,6 +9,7 @@ import type {
   MCPResource,
   CallToolResult,
 } from './types'
+import { normalizeCallToolResult } from './result'
 
 /**
  * MCP 客户端
@@ -116,7 +117,7 @@ export class MCPClient {
       arguments: args,
     })
     
-    return response as CallToolResult
+    return normalizeCallToolResult(response)
   }
   
   /**

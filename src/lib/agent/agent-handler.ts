@@ -1,12 +1,12 @@
-import { ReActAgent, ReActConfig } from './react'
 import { AgentActivity, AgentEvent, ToolCall, ReActStep } from './types'
 import { replayAgentEvents } from './event-bus'
 import useChatStore from '@/stores/chat'
 import { skillManager } from '@/lib/skills'
 import { useSkillsStore } from '@/stores/skills'
-import { reloadMcpTools } from './tools'
 import OpenAI from 'openai'
 import type { SkillMatchSummary } from '@/lib/skills/types'
+import type { AgentRunControl, AgentRunMiddlewareState } from '@/lib/agent-harness/types'
+import { HarnessAgentRunner } from '@/lib/agent-harness/harness-agent-runner'
 import {
   SnapshotManager,
   persistSnapshot,
@@ -25,6 +25,7 @@ import {
 import { isSupportOnlyObservationText, isSupportOnlyToolName } from './support-tools'
 
 export interface AgentHandlerConfig {
+  runControl?: AgentRunControl
   activeChatId?: number
   webSearchEnabled?: boolean
   onThought?: (thought: string) => void
@@ -33,8 +34,8 @@ export interface AgentHandlerConfig {
   onEvent?: (event: AgentEvent) => void
   onComplete?: (result: string, steps?: any[], stopped?: boolean) => void
   onError?: (error: string) => void
+  onAnswerDelta?: (markdownContent: string) => void
   onFinalAnswerRender?: (markdownContent: string) => void  // 当检测到 Final Answer 时立即渲染 Markdown
-  formatAutoFinalAnswer?: (key: string, values?: Record<string, string>) => string
   requestConfirmation?: (toolName: string, params: Record<string, any>) => Promise<boolean>
   forcedSkillIds?: string[]
   currentQuote?: {
@@ -89,7 +90,7 @@ function summarizeText(value?: string, maxLength = 120) {
 }
 
 export class AgentHandler {
-  private agent: ReActAgent | null = null
+  private agent: HarnessAgentRunner | null = null
   private config: AgentHandlerConfig
   private executing = false
 
@@ -306,6 +307,15 @@ export class AgentHandler {
       })
     }
 
+    if (event.type === 'skills.selected') {
+      const skillIds = Array.isArray(event.payload?.skillIds)
+        ? event.payload.skillIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        : []
+      if (skillIds.length > 0) {
+        store.setAgentState({ selectedSkills: skillIds })
+      }
+    }
+
     store.setAgentState({
       agentEvents: nextAgentEvents,
       agentRunId: event.runId || store.agentState.agentRunId,
@@ -332,10 +342,12 @@ export class AgentHandler {
     this.executing = true
 
     const store = useChatStore.getState()
+    const runControl = this.config.runControl
 
     store.resetAgentState()
     store.setAgentState({
       activeChatId: this.config.activeChatId,
+      agentRunId: runControl?.runId,
       isRunning: true,
       activity: this.createActivity('Preparing agent', 'preparing'),
     })
@@ -360,41 +372,24 @@ export class AgentHandler {
       return directReply
     }
 
-    // 确保 MCP Store 已初始化
-    try {
-      store.setAgentState({
-        activity: this.createActivity('Loading tools', 'preparing'),
-      })
-      const { useMcpStore } = await import('@/stores/mcp')
-      const mcpStore = useMcpStore.getState()
-      if (!mcpStore.initialized) {
-        await mcpStore.initMcpData()
-      }
-    } catch (error) {
-      console.error('[Agent Handler] Failed to initialize MCP Store:', error)
+    store.setAgentState({
+      activity: this.createActivity('Loading runtime', 'preparing'),
+    })
+    const middlewareState = runControl?.getMiddlewareState()
+    if (!middlewareState?.mcp && !middlewareState?.skills) {
+      await this.loadLegacyRuntimeState()
     }
 
-    // 预加载 MCP 工具（仅在未加载时加载，避免重复）
-    try {
-      store.setAgentState({
-        activity: this.createActivity('Loading tools', 'preparing'),
-      })
-      const { getAllToolsSync } = await import('./tools')
-      const currentTools = getAllToolsSync()
-      // 只有当没有 MCP 工具时才重新加载
-      if (!currentTools.some(t => t.category === 'mcp')) {
-        await reloadMcpTools()
-      }
-    } catch (error) {
-      console.error('[Agent Handler] Failed to reload MCP tools:', error)
-    }
-
-    // 获取与当前请求相关的 Skills 候选。显式 /skill 调用优先于自动匹配。
-    const forcedSkillMatches = await this.getForcedSkillMatches(forcedSkillIds)
+    // 获取与当前请求相关的 Skills 候选。Harness middleware 优先；无 Harness 时保留兼容路径。
+    const forcedSkillMatches = middlewareState?.skills
+      ? this.getForcedSkillMatchesFromState(middlewareState)
+      : await this.getForcedSkillMatches(forcedSkillIds)
     store.setAgentState({
       activity: this.createActivity('Selecting skills', 'loading-skills'),
     })
-    const autoSkillMatches = await this.getAvailableSkills(userInput)
+    const autoSkillMatches = middlewareState?.skills
+      ? middlewareState.skills.activeSkillMatches.filter(match => !forcedSkillMatches.some(forced => forced.id === match.id))
+      : await this.getAvailableSkills(userInput)
     const skillMatches = this.mergeSkillMatches([...forcedSkillMatches, ...autoSkillMatches])
     const activeSkills = skillMatches.map(skill => skill.id)
     const forcedActiveSkillIds = forcedSkillMatches.map(skill => skill.id)
@@ -426,82 +421,12 @@ export class AgentHandler {
       } catch { /* non-critical */ }
     }
 
-    const reactConfig: ReActConfig = {
+    const runnerConfig = {
       maxIterations: 15,
       webSearchEnabled: effectiveWebSearchEnabled,
       activeSkills,
       activeSkillMatches: skillMatches,
       forcedSkillIds: forcedActiveSkillIds,
-      onIterationStart: () => {
-        // 在新迭代开始时，将完整的 ReAct 循环保存到历史，然后清空当前状态
-        const currentState = useChatStore.getState()
-        if (currentState.agentState.currentThought ||
-            currentState.agentState.currentAction ||
-            currentState.agentState.currentObservation) {
-          // 检查是否是 Final Answer - 如果是，不添加到 completedSteps，直接清空
-          const isFinalAnswer = currentState.agentState.currentThought.includes('Final Answer:') ||
-                               currentState.agentState.currentThought.includes('Final Answer：') ||
-                               currentState.agentState.currentThought.includes('最终答案')
-
-          if (isFinalAnswer) {
-            // Final Answer 不添加到步骤历史，直接清空状态（它会作为 result 在正文中显示）
-            store.setAgentState({
-              currentThought: '',
-              currentAction: undefined,
-              currentObservation: undefined,
-              currentStepStartTime: undefined,
-            })
-            return
-          }
-
-          // 解析当前动作
-          let action = undefined
-          if (currentState.agentState.currentAction) {
-            const match = currentState.agentState.currentAction.match(/^(\w+)\((.*)\)$/)
-            if (match) {
-              try {
-                action = {
-                  tool: match[1],
-                  params: match[2] ? JSON.parse(match[2]) : {}
-                }
-              } catch {
-                // 解析失败，忽略
-              }
-            }
-          }
-
-          // 计算步骤耗时
-          const duration = currentState.agentState.currentStepStartTime
-            ? Date.now() - currentState.agentState.currentStepStartTime
-            : undefined
-
-          // 创建完整的步骤
-          const completedStep: ReActStep = {
-            thought: currentState.agentState.currentThought,
-            action: action,
-            observation: currentState.agentState.currentObservation,
-            duration
-          }
-
-          const newHistory = [...currentState.agentState.thoughtHistory, currentState.agentState.currentThought]
-          const newCompletedSteps = [...currentState.agentState.completedSteps, completedStep]
-          store.setAgentState({
-            thoughtHistory: newHistory,
-            completedSteps: newCompletedSteps,
-            currentThought: '',
-            currentAction: undefined,
-            currentObservation: undefined,
-            currentStepStartTime: Date.now(),  // 记录新步骤的开始时间
-            isThinking: true,  // 标记正在等待 AI 生成新的思考
-            activity: this.createActivity('Thinking', 'thinking', undefined, {
-              iteration: currentState.agentState.currentIteration + 1,
-            }),
-            // Reset Final Answer mode for new iteration
-            isFinalAnswerMode: false,
-            finalAnswerContent: undefined
-          })
-        }
-      },
       onThought: (thought: string) => {
         const finalAnswerContent = extractVisibleFinalAnswer(thought)
         const visibleThought = sanitizeVisibleAssistantContent(thought)
@@ -509,6 +434,8 @@ export class AgentHandler {
         if (finalAnswerContent) {
           store.setAgentState({
             currentThought: '',
+            currentAction: undefined,
+            currentObservation: undefined,
             isThinking: false,
             isFinalAnswerMode: true,
             finalAnswerContent,
@@ -525,12 +452,10 @@ export class AgentHandler {
               iteration: useChatStore.getState().agentState.currentIteration,
             }),
           })
-        }
-        if (visibleThought || finalAnswerContent) {
-          this.config.onThought?.(finalAnswerContent || visibleThought)
+          this.config.onThought?.(visibleThought)
         }
       },
-      onAction: (action, params) => {
+      onAction: (action: string, params: Record<string, any>) => {
         store.setAgentState({
           currentAction: `${action}(${JSON.stringify(params)})`,
           activity: this.createActivity(`Preparing ${formatToolLabel(action)}`, 'tool', summarizeParams(params), {
@@ -540,7 +465,7 @@ export class AgentHandler {
         })
         this.config.onAction?.(action, params)
       },
-      onObservation: (observation) => {
+      onObservation: (observation: string) => {
         const currentAction = useChatStore.getState().agentState.currentAction
         const currentToolName = currentAction?.match(/^(\w+)\(/)?.[1]
         if (
@@ -559,7 +484,7 @@ export class AgentHandler {
         })
         this.config.onObservation?.(observation)
       },
-      onEvent: (event) => {
+      onEvent: (event: AgentEvent) => {
         this.handleAgentEvent(event)
       },
       onToolCall: (toolCall: ToolCall) => {
@@ -572,17 +497,30 @@ export class AgentHandler {
           currentState.addAgentToolCall(toolCall)
         }
       },
-      onSkillsSelected: (skillIds: string[]) => {
-        // 当 AI 选择 Skills 后，更新状态
-        store.setAgentState({ selectedSkills: skillIds })
+      onAnswerDelta: (markdownContent: string) => {
+        if (!markdownContent.trim()) {
+          return
+        }
+        store.setAgentState({
+          currentThought: '',
+          currentAction: undefined,
+          currentObservation: undefined,
+          isThinking: false,
+          isFinalAnswerMode: true,
+          finalAnswerContent: markdownContent,
+          activity: this.createActivity('Writing answer', 'answering', undefined, {
+            iteration: useChatStore.getState().agentState.currentIteration,
+          }),
+        })
+        this.config.onAnswerDelta?.(markdownContent)
       },
       onFinalAnswerRender: (markdownContent: string) => {
         // 检测到 Final Answer 时，触发外部渲染
         this.config.onFinalAnswerRender?.(markdownContent)
       },
-      formatAutoFinalAnswer: this.config.formatAutoFinalAnswer,
       requestConfirmation: this.config.requestConfirmation,
       currentQuote: this.config.currentQuote,
+      runControl,
     }
 
     // 在开始执行前设置当前步骤的开始时间（确保第一次思考也有耗时）
@@ -592,12 +530,11 @@ export class AgentHandler {
       activity: this.createActivity('Thinking', 'thinking'),
     })
 
-    this.agent = new ReActAgent(reactConfig)
+    this.agent = new HarnessAgentRunner(runnerConfig)
 
     try {
       const result = await this.agent.run(userInput, contextOrMessages, imageUrls)
 
-      // 获取完整的 ReAct 步骤
       const steps = this.agent.getSteps()
       store.setAgentState({
         isRunning: false,
@@ -612,7 +549,6 @@ export class AgentHandler {
     } catch (error) {
       // 检查是否是用户终止
       if (error instanceof Error && error.message === 'USER_STOPPED') {
-        // 获取已产生的步骤
         const steps = this.agent.getSteps()
         const toolCalls = store.agentState.toolCalls || []
         const events = store.agentState.agentEvents || []
@@ -789,6 +725,28 @@ export class AgentHandler {
     ))
   }
 
+  private async loadLegacyRuntimeState() {
+    try {
+      const { useMcpStore } = await import('@/stores/mcp')
+      const { reloadMcpTools, getAllToolsSync } = await import('./tools')
+      const mcpStore = useMcpStore.getState()
+      if (!mcpStore.initialized) {
+        await mcpStore.initMcpData()
+      }
+      const currentTools = getAllToolsSync()
+      if (!currentTools.some(t => t.category === 'mcp')) {
+        await reloadMcpTools()
+      }
+    } catch (error) {
+      console.error('[Agent Handler] Failed to initialize legacy runtime state:', error)
+    }
+  }
+
+  private getForcedSkillMatchesFromState(state: AgentRunMiddlewareState): SkillMatchSummary[] {
+    const forcedSkillIds = new Set(state.skills?.forcedSkillIds || [])
+    return (state.skills?.activeSkillMatches || []).filter(match => forcedSkillIds.has(match.id))
+  }
+
   private mergeSkillMatches(skillMatches: SkillMatchSummary[]): SkillMatchSummary[] {
     const matchesById = new Map<string, SkillMatchSummary>()
     for (const match of skillMatches) {
@@ -809,7 +767,7 @@ export class AgentHandler {
       await skillsStore.initSkills()
 
       return skillIds
-        .map(skillId => skillManager.getSkill(skillId))
+        .map(skillId => skillManager.findSkill(skillId))
         .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill))
         .map(skill => ({
           id: skill.metadata.id,
@@ -877,7 +835,7 @@ export class AgentHandler {
       // 确保 Skill 管理器已初始化
       await skillsStore.initSkills()
       return (skillMatches || [])
-        .filter(match => Boolean(skillManager.getSkill(match.id)))
+        .filter(match => Boolean(skillManager.findSkill(match.id)))
         .map(match => ({
           id: match.id,
           name: match.name,

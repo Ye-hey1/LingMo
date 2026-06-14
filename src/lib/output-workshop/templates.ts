@@ -5,6 +5,8 @@
 
 import { listInstalledTemplates } from './market'
 import type { ExportBlueprint } from './smart-card-export'
+import { WECHAT_STYLES } from './wechat-styles'
+import { MOKA_OUTPUT_TEMPLATES } from './moka/templates'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -12,10 +14,12 @@ import type { ExportBlueprint } from './smart-card-export'
 
 export type OutputMode =
   | 'social'       // 社交传播
+  | 'moka'         // Moka 卡片模式
+  | 'wechat'       // 公众号排版
   | 'infographic'  // 可视化展示
   | 'deck'         // 演示汇报
   | 'article'      // 专业阅读
-  | 'creative'     // AI 自由设计
+  | 'creative'     // AI 自由创意
 
 export type OutputScenario =
   | 'note'         // 笔记整理
@@ -61,20 +65,326 @@ export interface OutputTemplate {
 const SHARED_DESIGN_CONSTRAINTS = `
 ## 设计约束（必须遵守）
 
-1. **CJK 优先字体栈** — 中文使用 Noto Sans/Serif SC 或思源黑体/宋体，拉丁文使用 Inter/Manrope
-2. **8px 基线网格** — 所有间距、行高、字体大小必须是 8 的倍数
-3. **圆角柔和阴影** — 使用圆角（8px/12px/16px）和柔和阴影，避免纯黑纯白
-4. **颜色对比度 ≥ 4.5** — 确保文字可读性
-5. **使用用户真实数据** — 不得使用 Lorem ipsum 或占位文本
-6. **自包含单文件** — 所有 CSS 内联，无外部依赖
-7. **移动端适配** — 使用响应式设计，确保在手机上可读
+1. **CJK 优先字体栈** — 中文使用 Noto Sans/Serif SC、思源黑体/宋体或系统中文字体，拉丁文使用系统 sans 或少量高质量字体
+2. **清晰排版层级** — 标题、正文、说明、标签使用固定 rem 阶梯；正文不低于 1rem，长段落行高 1.55-1.75，标题使用 text-wrap: balance
+3. **有节奏的布局** — 使用 4px/8px 基线间距，相关元素收紧，区块之间留出更大间距；Grid 负责二维结构，Flex 负责行内排列
+4. **克制容器与安全区** — 卡片圆角优先 8/12/16px，避免 24px 以上的大圆角；移动端、长词、表格和代码块不得横向溢出
+5. **状态型动效** — 动画只用于悬停、展开、切换、加载和内容关系提示；150-250ms 为主，使用 ease-out quart/quint/expo，必须提供 prefers-reduced-motion 降级
+6. **颜色对比度 ≥ 4.5** — 正文、说明、占位文本都必须清晰可读；不要使用渐变文字或低对比灰字
+7. **使用用户真实数据** — 不得使用 Lorem ipsum 或占位文本
+8. **自包含单文件** — 所有 CSS 内联，无外部依赖；除必要字体 CDN 外不加载外部资源
 `
+
+const WECHAT_DESIGN_CONSTRAINTS = `
+## 公众号排版约束
+
+1. **保持 Markdown 结构** — 不重新编造内容，不强行拆卡片，优先保留用户原有标题、段落、表格、列表、引用和代码块
+2. **微信编辑器友好** — 输出以内联样式为主，避免依赖外部脚本、复杂动画或平台不稳定 CSS
+3. **正文阅读优先** — 字号、行高、段落间距以手机阅读为准，避免网页化装饰遮蔽正文
+4. **图文复制优先** — 生成后推荐使用“导出 / 图文”复制到公众号后台
+`
+
+const WECHAT_OUTPUT_TEMPLATES: OutputTemplate[] = WECHAT_STYLES.map((style) => ({
+  id: style.id,
+  name: style.name,
+  nameEn: style.nameEn,
+  mode: 'wechat',
+  scenario: 'sharing',
+  description: style.description,
+  icon: '🟩',
+  designConstraints: WECHAT_DESIGN_CONSTRAINTS,
+  outputHint: '生成可直接复制到微信公众号编辑器的内联样式图文 HTML',
+  bestFor: style.bestFor,
+  recommended: style.recommended,
+  features: ['公众号', 'Markdown', '图文复制'],
+  outputTargets: ['图文'],
+  previewTone: 'wechat-article',
+  sizePresets: ['auto'],
+}))
+
+const CREATIVE_SERIES_BASE_PROMPT = `
+## 创意设计集成规范
+
+能力来源：本模板提炼自本地创意设计工作流与 workflow、design-context、design-styles、content-guidelines、slide-decks、tweaks-system、animations、video-export、verification、critique-guide 等规范。输出工坊直接生成浏览器可预览的 HTML 源产物；PPTX、MP4、GIF、BGM 等脚本链路属于本地创意导出能力，必须在 HTML 注释中写清可执行导出配方，不能在页面可见区域假装已经导出。
+
+### 核心理念
+- HTML 是工具，不是媒介。根据输入材料选择专家身份：视觉编辑、幻灯片设计师、信息图设计师、交互原型师或 motion designer。
+- 不要像普通网页模板。做幻灯片时像 PPT，做信息图时像出版物，做原型时像可点击产品界面，做动画时像一段有时间轴的叙事 demo。
+- 从已有上下文出发。输入材料里如果出现品牌、产品、界面、色值、设计系统、截图描述或参考风格，优先提取这些上下文作为视觉系统；如果没有上下文，明确在 HTML 注释中写出 assumptions 与选择的 aesthetic direction。
+- 先建立设计系统，再写页面：颜色、字体、间距、圆角、组件词汇、动效节奏都必须自洽。
+
+### 工作流
+1. 内部先做 Junior Designer brief，不在可见页面显示：目标受众、内容类型、关键信息、假设、风险、选用的视觉方向。
+2. 依据内容选择一种交付形态：
+   - 演示/汇报/课程：生成单文件 HTML deck，16:9 舞台，支持键盘翻页，正文最小 24px，每页一个记忆点。
+   - 信息图/数据/流程：生成印刷级信息图，使用精确网格、注释、图例、时间轴或流程图，不伪造数据。
+   - 产品/功能/体验描述：生成高保真交互原型，包含真实状态切换、可点击路径和 44px 以上触控目标。
+   - 观点/故事/复盘：生成编辑部专题或叙事页面，避免 hero + 三卡片套路。
+   - 动画/演示机制：生成轻量 stage + scene 结构，用 CSS/少量 JS 时间轴表达信息关系，不做装饰性乱动。
+3. 如果内容适合变体探索，加入一个轻量 Tweaks 面板，用 localStorage 保存 2-3 个参数：主题、密度、字号、布局或动效强度。Tweaks 必须小而可用，不遮挡主要内容。
+
+### 设计哲学选择
+从内容中选择一种主导哲学，不要混搭成噪音：
+- Pentagram / Müller-Brockmann：网格、字体、黑白加单一强调色，适合品牌、汇报、结构化观点。
+- Information Architects：内容优先、阅读效率、少装饰，适合长文、文档、知识库。
+- Fathom / Stamen：科学叙事、数据地图、注释系统，适合研究、数据、时间线。
+- Takram：技术与人文的精密平衡，适合 AI、产品、系统设计。
+- Kenya Hara：东方极简、留白、材料感，适合哲学、文化、沉思型内容。
+- Field.io / Active Theory：生成艺术、运动诗学，只在内容本身与算法、流动、系统、未来感有关时使用。
+- Experimental Jetset：概念极简、字体即图形，适合宣言、封面、强观点。
+
+### 反 AI slop 规则
+- 禁止默认紫蓝粉大渐变、hero + 3-column features、重复同款 card grid、emoji 装饰、假数据 metric cards、编造 quote。
+- 禁止普通圆角卡片加左侧粗色条作为主要设计语言。
+- 禁止用廉价 SVG 手画人物、设备或场景。需要素材但没有素材时，用诚实的 placeholder 或纯排版解决。
+- 卡片只在信息确实需要分组时使用；信息结构能用网格、索引、时间轴、目录、标注系统表达时优先不用卡片。
+- 每个视觉元素必须服务内容。删掉不会损失信息的装饰就不要生成。
+
+### 输出约束
+- 输出完整自包含 HTML，只返回代码。
+- 在 HTML 顶部加入注释：assumptions、chosen philosophy、artifact type、content structure、known limitations。
+- 必须包含 prefers-reduced-motion 降级。
+- 移动端与桌面端都不能横向溢出，长标题、表格、代码块必须有安全处理。
+- 生成的内容必须来自用户材料，允许压缩、分组、重排，不允许编造不存在的数据、客户、引用或事实。
+`
+
+const CREATIVE_SERIES_TEMPLATES: OutputTemplate[] = [
+  {
+    id: 'creative-huashu-design',
+    name: '智能创意路由',
+    nameEn: 'Creative Output Router',
+    mode: 'creative',
+    scenario: 'presentation',
+    description: '根据材料自动判断要做原型、Deck、动画、变体、信息图、方向顾问或专家评审',
+    icon: '✦',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + CREATIVE_SERIES_BASE_PROMPT + `
+### 综合路由任务
+- 先判断输入材料最适合哪一种创意交付形态，并在 HTML 顶部注释写出 routing decision。
+- 如果用户没有明确要求形态，优先输出 3 个方向的轻量预览面板，让用户选择后再深入。
+- 可见页面不能只是模板菜单，必须给出可用的第一版视觉产物。
+`,
+    outputHint: '自动路由到最合适的创意交付形态，生成第一版可预览 HTML',
+    bestFor: '需求还不完全确定、需要 AI 判断设计产物类型、想先看方向',
+    recommended: true,
+    features: ['智能路由', 'Brief', '方向预览'],
+    outputTargets: ['HTML', 'PNG/PDF', '下游脚本'],
+    previewTone: 'creative-router',
+    skillPrompt: CREATIVE_SERIES_BASE_PROMPT + `
+### 综合路由任务
+- 先判断输入材料最适合哪一种创意交付形态，并在 HTML 顶部注释写出 routing decision。
+- 如果用户没有明确要求形态，优先输出 3 个方向的轻量预览面板，让用户选择后再深入。
+- 可见页面不能只是模板菜单，必须给出可用的第一版视觉产物。
+`,
+  },
+  {
+    id: 'huashu-prototype',
+    name: '真机交互原型',
+    nameEn: 'Device Prototype',
+    mode: 'creative',
+    scenario: 'presentation',
+    description: 'App/Web 高保真交互原型：单文件 HTML、真 iPhone bezel、可点击状态流、Playwright 检查清单',
+    icon: '▣',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + CREATIVE_SERIES_BASE_PROMPT + `
+### 交互原型任务
+- 输出单文件 HTML 高保真 App/Web 原型。App 场景默认使用 iPhone 15 Pro bezel：Dynamic Island、状态栏、Home Indicator、内容安全区都要准确，不要随手画一个手机框。
+- 页面必须有真实可点击状态：至少 3 个 screen/state、一个主流程、tab 或关键按钮切换，触控目标不小于 44px。
+- 为关键元素添加 data-testid，并在 HTML 注释中列出 Playwright 最小验证：进入详情、关键按钮、tab/状态切换、pageerror=0。
+- 使用用户材料中的真实功能和内容；没有真实图片时用诚实 placeholder，不用廉价手绘 SVG 充当产品图。
+`,
+    outputHint: '生成可点击 App/Web 原型 HTML，并附 Playwright 验证清单',
+    bestFor: '移动应用 mockup、Web 产品流程、功能演示、设计 review',
+    recommended: true,
+    features: ['Prototype', 'iPhone bezel', 'Clickable'],
+    outputTargets: ['HTML', 'PNG', 'Playwright清单'],
+    sizePresets: ['mobile', '16:9'],
+    skillPrompt: CREATIVE_SERIES_BASE_PROMPT + `
+### 交互原型任务
+- 输出单文件 HTML 高保真 App/Web 原型。App 场景默认使用 iPhone 15 Pro bezel：Dynamic Island、状态栏、Home Indicator、内容安全区都要准确，不要随手画一个手机框。
+- 页面必须有真实可点击状态：至少 3 个 screen/state、一个主流程、tab 或关键按钮切换，触控目标不小于 44px。
+- 为关键元素添加 data-testid，并在 HTML 注释中列出 Playwright 最小验证：进入详情、关键按钮、tab/状态切换、pageerror=0。
+- 使用用户材料中的真实功能和内容；没有真实图片时用诚实 placeholder，不用廉价手绘 SVG 充当产品图。
+`,
+  },
+  {
+    id: 'huashu-deck',
+    name: '浏览器演讲 Deck',
+    nameEn: 'Centered HTML Deck',
+    mode: 'creative',
+    scenario: 'presentation',
+    description: 'HTML deck 浏览器演讲源文件，16:9 居中逐页播放；可按 editable PPTX 约束组织 DOM',
+    icon: '▤',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + CREATIVE_SERIES_BASE_PROMPT + `
+### 演讲幻灯片任务
+- 输出单文件 HTML deck，16:9 舞台居中显示，键盘左右键翻页，页码、speaker notes、print/PDF 友好。
+- 每页一个记忆点，正文最小 24px，演讲者 10 米外可读；deck 不要像网页长滚动。
+- 如果输入或用户指令提到 PPTX/可编辑，HTML 必须从第一行按 html2pptx 友好约束写：body 固定 16:9，文字放 h/p，文字元素自身不加 background/border/shadow，不使用 web component、复杂 SVG、CSS gradient。
+- 在 HTML 顶部注释写清：当前输出工坊可直接预览 HTML，并可走现有 PPTX/PDF 导出；真文本框可编辑 PPTX 需本地 scripts/export_deck_pptx.mjs 链路。
+`,
+    outputHint: '生成浏览器可演讲 HTML deck，并保留 PPTX/PDF 下游导出提示',
+    bestFor: '演讲、课程、项目汇报、发布会 deck、可导 PPTX/PDF 的源文件',
+    recommended: true,
+    features: ['Deck', 'Speaker notes', 'PPTX-ready'],
+    outputTargets: ['HTML deck', 'PDF', 'PPTX'],
+    sizePresets: ['16:9'],
+    exportBlueprint: { cardSelectors: ['.creative-slide', '.slide', '[data-slide]'], defaultRatio: '16:9', cardGap: 0 },
+    skillPrompt: CREATIVE_SERIES_BASE_PROMPT + `
+### 演讲幻灯片任务
+- 输出单文件 HTML deck，16:9 舞台居中显示，键盘左右键翻页，页码、speaker notes、print/PDF 友好。
+- 每页一个记忆点，正文最小 24px，演讲者 10 米外可读；deck 不要像网页长滚动。
+- 如果输入或用户指令提到 PPTX/可编辑，HTML 必须从第一行按 html2pptx 友好约束写：body 固定 16:9，文字放 h/p，文字元素自身不加 background/border/shadow，不使用 web component、复杂 SVG、CSS gradient。
+- 在 HTML 顶部注释写清：当前输出工坊可直接预览 HTML，并可走现有 PPTX/PDF 导出；真文本框可编辑 PPTX 需本地 scripts/export_deck_pptx.mjs 链路。
+`,
+  },
+  {
+    id: 'huashu-timeline-animation',
+    name: '时间轴动画直绘',
+    nameEn: 'Timeline Animation',
+    mode: 'creative',
+    scenario: 'sharing',
+    description: 'Stage + Sprite 时间片段模型，生成可播放/暂停/拖动的时间轴动画 HTML，并附 MP4/GIF/BGM 导出配方',
+    icon: '▶',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + CREATIVE_SERIES_BASE_PROMPT + `
+### 时间轴动画任务
+- 输出单文件 HTML animation stage，包含 play/pause、scrubber、当前时间、总时长，并用 JS timeline 数据驱动场景。
+- 用 Stage/Sprite 思维组织：scene、sprite、start/end、interpolate、easing。不要做成几张 PPT 淡入淡出。
+- 默认画布 1920x1080，可自适应 letterbox。运动必须有节奏，重点信息逐步揭示，支持 prefers-reduced-motion。
+- 在 HTML 注释中附导出配方：25fps MP4、60fps 插帧、palette 优化 GIF、BGM/SFX cue list。当前输出工坊生成 HTML 源，视频/BGM 需本地 video-export 脚本链路。
+`,
+    outputHint: '生成时间轴动画 HTML 源，并附 MP4/GIF/BGM 下游导出说明',
+    bestFor: '概念解释、发布动画、机制演示、社媒视频素材前置设计',
+    features: ['Timeline', 'MP4/GIF recipe', 'BGM cues'],
+    outputTargets: ['HTML动画', 'MP4脚本', 'GIF脚本', 'BGM配方'],
+    sizePresets: ['16:9'],
+    skillPrompt: CREATIVE_SERIES_BASE_PROMPT + `
+### 时间轴动画任务
+- 输出单文件 HTML animation stage，包含 play/pause、scrubber、当前时间、总时长，并用 JS timeline 数据驱动场景。
+- 用 Stage/Sprite 思维组织：scene、sprite、start/end、interpolate、easing。不要做成几张 PPT 淡入淡出。
+- 默认画布 1920x1080，可自适应 letterbox。运动必须有节奏，重点信息逐步揭示，支持 prefers-reduced-motion。
+- 在 HTML 注释中附导出配方：25fps MP4、60fps 插帧、palette 优化 GIF、BGM/SFX cue list。当前输出工坊生成 HTML 源，视频/BGM 需本地 video-export 脚本链路。
+`,
+  },
+  {
+    id: 'huashu-variants',
+    name: '多方向设计变体',
+    nameEn: 'Variants + Tweaks',
+    mode: 'creative',
+    scenario: 'presentation',
+    description: '3+ 并排方案对比，内置 Tweaks 实时调参，用 localStorage 保存主题、密度、布局等变量',
+    icon: '◫',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + CREATIVE_SERIES_BASE_PROMPT + `
+### 设计变体任务
+- 输出至少 3 个并排 variation，必须跨维度探索：视觉方向、布局、密度、交互或色彩，不要只换配色。
+- 页面包含可折叠 Tweaks 面板，至少 3 个参数：theme、density、layout 或 motion intensity，并用 localStorage 持久化。
+- 每个 variation 都要有短 label 与 tradeoff，不给用户制造盲选。
+- 适合交互差异时，Tweaks 切换必须真的改变 DOM/状态，不只是文字说明。
+`,
+    outputHint: '生成 3+ 设计方向并排对比，并提供 Tweaks 实时调参',
+    bestFor: '视觉探索、方案比稿、布局/密度/交互方向选择',
+    recommended: true,
+    features: ['3+ variants', 'Tweaks', 'localStorage'],
+    outputTargets: ['HTML', 'PNG/PDF'],
+    skillPrompt: CREATIVE_SERIES_BASE_PROMPT + `
+### 设计变体任务
+- 输出至少 3 个并排 variation，必须跨维度探索：视觉方向、布局、密度、交互或色彩，不要只换配色。
+- 页面包含可折叠 Tweaks 面板，至少 3 个参数：theme、density、layout 或 motion intensity，并用 localStorage 持久化。
+- 每个 variation 都要有短 label 与 tradeoff，不给用户制造盲选。
+- 适合交互差异时，Tweaks 切换必须真的改变 DOM/状态，不只是文字说明。
+`,
+  },
+  {
+    id: 'huashu-infographic',
+    name: '印刷级信息图',
+    nameEn: 'Print-grade Infographic',
+    mode: 'creative',
+    scenario: 'research',
+    description: '印刷级信息图/可视化，精确网格、图例、注释、数据来源，可导 PDF/PNG/SVG 友好',
+    icon: '◈',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + CREATIVE_SERIES_BASE_PROMPT + `
+### 信息图/可视化任务
+- 输出印刷级信息图 HTML：明确画布、安全区、标题层级、图例、注释、来源、脚注。
+- 若材料包含数据，优先用真实数据做图；不能伪造数字。无数据时做结构图、流程图或概念地图。
+- SVG 只用于真实图表/连线/图例，不用于廉价装饰；可导 PDF/PNG/SVG 时要保持高对比、矢量友好。
+- 页面必须能整页导出，也要声明关键图表选择器，便于输出工坊智能卡片导出。
+`,
+    outputHint: '生成印刷级信息图 HTML，可走 PDF/PNG/智能卡片导出',
+    bestFor: '研究报告、数据故事、流程图、知识地图、品牌图解',
+    features: ['Infographic', 'Print grid', 'Data viz'],
+    outputTargets: ['HTML', 'PDF', 'PNG', 'SVG友好'],
+    exportBlueprint: { cardSelectors: ['.creative-infographic', '.infographic-panel', '[data-export-card]'], defaultRatio: 'auto', cardGap: 16 },
+    skillPrompt: CREATIVE_SERIES_BASE_PROMPT + `
+### 信息图/可视化任务
+- 输出印刷级信息图 HTML：明确画布、安全区、标题层级、图例、注释、来源、脚注。
+- 若材料包含数据，优先用真实数据做图；不能伪造数字。无数据时做结构图、流程图或概念地图。
+- SVG 只用于真实图表/连线/图例，不用于廉价装饰；可导 PDF/PNG/SVG 时要保持高对比、矢量友好。
+- 页面必须能整页导出，也要声明关键图表选择器，便于输出工坊智能卡片导出。
+`,
+  },
+  {
+    id: 'huashu-direction-advisor',
+    name: '设计方向顾问',
+    nameEn: 'Direction Advisor',
+    mode: 'creative',
+    scenario: 'presentation',
+    description: '5 流派 × 20 种设计哲学，推荐 3 个差异化方向，并行生成 Demo 供选择',
+    icon: '◇',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + CREATIVE_SERIES_BASE_PROMPT + `
+### 设计方向顾问任务
+- 当需求模糊、没有设计上下文或用户只说“做得好看”时，输出方向顾问页面，而不是直接押一个风格。
+- 必须覆盖 5 个设计流派与 20 种哲学的选择空间，并最终推荐 3 个差异化方向。
+- 每个推荐方向必须包含：哲学来源、适用理由、视觉语法、风险、适合/不适合场景，以及一个小型 HTML demo 面板。
+- 3 个方向要拉开距离：保守可信、表达性强、实验前沿，不要三份都长得像。
+`,
+    outputHint: '生成 3 个可比较的设计方向和 demo 面板，帮助先定风格',
+    bestFor: '需求模糊、风格未定、需要先选方向或说服团队',
+    recommended: true,
+    features: ['5x20 philosophy', '3 demos', 'Advisor'],
+    outputTargets: ['HTML顾问板', 'PNG/PDF'],
+    skillPrompt: CREATIVE_SERIES_BASE_PROMPT + `
+### 设计方向顾问任务
+- 当需求模糊、没有设计上下文或用户只说“做得好看”时，输出方向顾问页面，而不是直接押一个风格。
+- 必须覆盖 5 个设计流派与 20 种哲学的选择空间，并最终推荐 3 个差异化方向。
+- 每个推荐方向必须包含：哲学来源、适用理由、视觉语法、风险、适合/不适合场景，以及一个小型 HTML demo 面板。
+- 3 个方向要拉开距离：保守可信、表达性强、实验前沿，不要三份都长得像。
+`,
+  },
+  {
+    id: 'huashu-expert-review',
+    name: '5维专家评审',
+    nameEn: '5D Expert Review',
+    mode: 'creative',
+    scenario: 'research',
+    description: '按哲学一致性、视觉层级、细节执行、功能性、创新性打分，输出雷达图与 Keep/Fix/Quick Wins',
+    icon: '◎',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + CREATIVE_SERIES_BASE_PROMPT + `
+### 5 维度专家评审任务
+- 输出的是设计评审 artifact，不是重新设计页面。评审对象来自用户提供的 HTML、截图描述、设计稿说明或生成结果。
+- 5 个维度各 0-10 分：哲学一致性、视觉层级、细节执行、功能性、创新性。必须给出总分、雷达图、证据句。
+- 输出 Keep / Fix / Quick Wins 三栏。Fix 要按严重程度排序，Quick Wins 必须是 5-15 分钟内可执行的小修复。
+- 评审设计不评设计师，语气具体、可操作、不空泛夸奖。
+`,
+    outputHint: '生成专家评审页，包含雷达图、分数、Keep/Fix/Quick Wins 和修复清单',
+    bestFor: '审稿、视觉验收、改版前诊断、设计质量复盘',
+    features: ['5D review', 'Radar', 'Fix list'],
+    outputTargets: ['HTML评审', 'PDF'],
+    skillPrompt: CREATIVE_SERIES_BASE_PROMPT + `
+### 5 维度专家评审任务
+- 输出的是设计评审 artifact，不是重新设计页面。评审对象来自用户提供的 HTML、截图描述、设计稿说明或生成结果。
+- 5 个维度各 0-10 分：哲学一致性、视觉层级、细节执行、功能性、创新性。必须给出总分、雷达图、证据句。
+- 输出 Keep / Fix / Quick Wins 三栏。Fix 要按严重程度排序，Quick Wins 必须是 5-15 分钟内可执行的小修复。
+- 评审设计不评设计师，语气具体、可操作、不空泛夸奖。
+`,
+  },
+]
 
 // ---------------------------------------------------------------------------
 // 模板列表
 // ---------------------------------------------------------------------------
 
 export const OUTPUT_TEMPLATES: OutputTemplate[] = [
+  ...WECHAT_OUTPUT_TEMPLATES,
+  ...MOKA_OUTPUT_TEMPLATES,
+  ...CREATIVE_SERIES_TEMPLATES,
+
   // === 一、社交传播类 ===
   {
     id: 'social-xiaohongshu',
@@ -421,12 +731,16 @@ export const OUTPUT_TEMPLATES: OutputTemplate[] = [
   },
 ]
 
+export const INTERNAL_OUTPUT_TEMPLATES: OutputTemplate[] = [
+  ...OUTPUT_TEMPLATES,
+]
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
 
 export function getOutputTemplate(id: string): OutputTemplate {
-  return OUTPUT_TEMPLATES.find(t => t.id === id) || OUTPUT_TEMPLATES[0]
+  return INTERNAL_OUTPUT_TEMPLATES.find(t => t.id === id) || OUTPUT_TEMPLATES[0]
 }
 
 export function getTemplatesByMode(mode: OutputMode): OutputTemplate[] {
@@ -442,7 +756,7 @@ export function getRecommendedTemplates(): OutputTemplate[] {
 }
 
 export function isOutputTemplateId(value: unknown): value is string {
-  return typeof value === 'string' && OUTPUT_TEMPLATES.some(t => t.id === value)
+  return typeof value === 'string' && INTERNAL_OUTPUT_TEMPLATES.some(t => t.id === value)
 }
 
 // ---------------------------------------------------------------------------
@@ -450,7 +764,9 @@ export function isOutputTemplateId(value: unknown): value is string {
 // ---------------------------------------------------------------------------
 
 export const OUTPUT_MODES: Array<{ id: OutputMode; name: string; icon: string; description: string }> = [
-  { id: 'creative', name: 'AI 自由设计', icon: '🎨', description: '根据设计 Skill 或自由提示直绘网页' },
+  { id: 'creative', name: 'AI 自由创意', icon: '🎨', description: '根据创意模板或自由提示直绘网页' },
+  { id: 'moka', name: 'Moka 卡片', icon: '✨', description: 'AI 卡片设计、参考图、分页导出' },
+  { id: 'wechat', name: '公众号排版', icon: '🟩', description: '内联样式、图文复制、微信编辑器友好' },
   { id: 'social', name: '社交传播', icon: '📢', description: '轻量化、易分享、高颜值' },
   { id: 'infographic', name: '可视化展示', icon: '📈', description: '图文并茂、视觉冲击' },
   { id: 'deck', name: '演示汇报', icon: '🎬', description: '正式、结构化、替代 PPT' },

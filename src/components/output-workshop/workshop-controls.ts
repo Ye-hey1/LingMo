@@ -31,7 +31,7 @@ export const DEFAULT_TEMPLATE_OVERRIDES: TemplateOverrides = {
 }
 
 export const BUILD_STAGES: BuildStage[] = [
-  { id: "parse", label: "解析内容" },
+  { id: "parse", label: "提炼内容" },
   { id: "template", label: "套用模板" },
   { id: "mermaid", label: "渲染图表" },
   { id: "preview", label: "生成预览" },
@@ -51,6 +51,8 @@ export function getPresetById(id: PreviewSizePreset["id"]): PreviewSizePreset {
 }
 
 export function getTemplateDefaultSizePreset(templateId: string): PreviewSizePreset["id"] {
+  if (templateId.startsWith("moka-")) return "3:4"
+
   switch (templateId) {
     case "social-xiaohongshu":
       return "3:4"

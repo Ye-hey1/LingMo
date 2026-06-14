@@ -1,4 +1,5 @@
 import { MCPClient } from './client'
+import { normalizeCallToolResult } from './result'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { useMcpStore } from '@/stores/mcp'
 import type {
@@ -51,6 +52,7 @@ export class MCPServerManager {
       status: 'connecting',
       tools: [],
       resources: [],
+      lastAttemptedAt: Date.now(),
     })
     
     try {
@@ -78,6 +80,8 @@ export class MCPServerManager {
         tools,
         resources,
         connectedAt: Date.now(),
+        lastToolRefreshAt: Date.now(),
+        staleTools: false,
       })
       
       // 更新最后连接时间
@@ -86,10 +90,11 @@ export class MCPServerManager {
       // 静默处理错误，设置错误状态
       store.setServerState(config.id, {
         id: config.id,
-        status: 'error',
+        status: 'failed',
         tools: [],
         resources: [],
         error: error instanceof Error ? error.message : String(error),
+        lastAttemptedAt: Date.now(),
       })
       
       throw error
@@ -178,7 +183,7 @@ export class MCPServerManager {
       throw new Error(`Server ${serverId} is not connected`)
     }
     
-    return await client.callTool(toolName, args)
+    return normalizeCallToolResult(await client.callTool(toolName, args))
   }
   
   /**

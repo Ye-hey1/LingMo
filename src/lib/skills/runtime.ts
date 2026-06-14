@@ -63,6 +63,7 @@ const OUTPUT_FILE_EXTENSIONS = new Set([
 ])
 
 const SCRIPT_FILE_EXTENSIONS = new Set(['js', 'mjs', 'cjs', 'py', 'sh', 'bash'])
+const UTF8_DECODER = new TextDecoder('utf-8', { fatal: false })
 
 function getExtension(filePath: string): string {
   const fileName = filePath.split('/').pop() || filePath
@@ -92,6 +93,20 @@ function isSafeRelativePath(filePath: string): boolean {
 
 function toPosixPath(filePath: string): string {
   return filePath.replace(/\\/g, '/')
+}
+
+function decodeShellOutput(chunk?: string | Uint8Array | null): string {
+  if (!chunk) return ''
+  return typeof chunk === 'string' ? chunk : UTF8_DECODER.decode(chunk)
+}
+
+function sanitizeShellOutput(text: string): string {
+  const withoutNulls = text.replace(/\u0000/g, '')
+  return withoutNulls
+    .split(/\r?\n/)
+    .filter(line => !/^wsl:/i.test(line.trim()))
+    .join('\n')
+    .trimEnd()
 }
 
 async function pathExists(filePath: string, baseDir?: BaseDirectory): Promise<boolean> {
@@ -129,12 +144,13 @@ async function resolveWritableRuntimeDir(
 }
 
 async function resolveContext(skillId: string): Promise<SkillRuntimeContext> {
-  const skill = skillManager.getSkill(skillId)
+  const skill = skillManager.findSkill(skillId)
   if (!skill) {
     throw new Error(`Skill not found: ${skillId}`)
   }
+  const canonicalSkillId = skill.metadata.id
 
-  const fileInfo = skillManager.getSkillFileInfo(skillId)
+  const fileInfo = skillManager.getSkillFileInfo(skill.metadata.id)
   if (!fileInfo) {
     throw new Error(`Cannot determine Skill directory for: ${skillId}`)
   }
@@ -142,17 +158,17 @@ async function resolveContext(skillId: string): Promise<SkillRuntimeContext> {
   const skillDir = await resolveSkillDirectory(fileInfo.directory, skill.metadata.scope)
   const appDataPath = await appDataDir()
   const appArticleDir = `${appDataPath.replace(/\/$/, '')}/article`
-  const outputDir = `${appArticleDir}/outputs/${skillId}`
+  const outputDir = `${appArticleDir}/outputs/${canonicalSkillId}`
   const runtimeResolution = await resolveWritableRuntimeDir(fileInfo.directory)
   const runtimeDir = runtimeResolution.runtimeDirPath
-  const outputDirOptions = await getFilePathOptions(`outputs/${skillId}`)
+  const outputDirOptions = await getFilePathOptions(`outputs/${canonicalSkillId}`)
   const skillDirOptions = await getFilePathOptions(fileInfo.directory)
   const fsBaseDir = runtimeResolution.baseDir ?? outputDirOptions.baseDir ?? skillDirOptions.baseDir
 
   await ensureDir(outputDirOptions.path, outputDirOptions.baseDir)
 
   return {
-    skillId,
+    skillId: canonicalSkillId,
     skillDir,
     runtimeDir,
     outputDir,
@@ -223,6 +239,10 @@ async function normalizeArg(arg: string, context: SkillRuntimeContext): Promise<
   }
 
   return normalized
+}
+
+function isRuntimeScriptArg(arg: string): boolean {
+  return !arg.includes('/') && isScriptLikeFile(arg)
 }
 
 function parseCommand(command: string, args: string[]): { cmd: string; cmdArgs: string[] } {
@@ -421,11 +441,38 @@ export async function executeSkillRuntime(
     processedArgs.push(await normalizeArg(arg, context))
   }
 
+  const missingRuntimeScripts = processedArgs.filter(arg => (
+    isRuntimeScriptArg(arg) &&
+    !isSkillBuiltInPath(arg)
+  ))
+  for (const scriptName of missingRuntimeScripts) {
+    if (!(await pathExists(`${context.runtimeDirFsPath}/${scriptName}`, context.fsBaseDir))) {
+      return {
+        success: false,
+        error: `Runtime script not found: ${scriptName}. Create it first under ${context.runtimeDirFsPath}, or call an existing built-in script under scripts/.`,
+        message: `Runtime script not found: ${scriptName}.`,
+        data: {
+          exit_code: -1,
+          execution_time_ms: Date.now() - startTime,
+          working_directory: context.runtimeDir,
+          runtime_directory: context.runtimeDir,
+          output_directory: context.outputDir,
+          stdout: '',
+          stderr: '',
+          output_files: [],
+        },
+      }
+    }
+  }
+
   const envPrefix = [
+    'LANG=C.UTF-8',
+    'LC_ALL=C.UTF-8',
+    'PYTHONIOENCODING=utf-8',
     `SKILL_OUTPUT_DIR="${context.outputDir}"`,
     `SKILL_RUNTIME_DIR="${context.runtimeDir}"`,
     `SKILL_ROOT_DIR="${context.skillDir}"`,
-`LINGMO_OUTPUT_DIR="${context.outputDir}"`,
+    `LINGMO_OUTPUT_DIR="${context.outputDir}"`,
   ].join(' ')
   const workingDirectory = determineWorkingDirectory(context, normalizedCommand, processedArgs)
 
@@ -437,14 +484,21 @@ export async function executeSkillRuntime(
   const stderrChunks: string[] = []
 
   async function runShellCommand(): Promise<{ code: number; stdout: string; stderr: string }> {
-    const process = Command.create('bash', ['-c', shellCommand])
-
-    process.stdout.on('data', (line: string) => {
-      stdoutChunks.push(line)
+    const process = Command.create('bash', ['-c', shellCommand], {
+      encoding: 'raw',
+      env: {
+        LANG: 'C.UTF-8',
+        LC_ALL: 'C.UTF-8',
+        PYTHONIOENCODING: 'utf-8',
+      },
     })
 
-    process.stderr.on('data', (line: string) => {
-      stderrChunks.push(line)
+    process.stdout.on('data', (line: Uint8Array) => {
+      stdoutChunks.push(decodeShellOutput(line))
+    })
+
+    process.stderr.on('data', (line: Uint8Array) => {
+      stderrChunks.push(decodeShellOutput(line))
     })
 
     const execution = process.execute()
@@ -457,8 +511,8 @@ export async function executeSkillRuntime(
 
     return {
       code: result.code ?? -1,
-      stdout: stdoutChunks.join('') + (result.stdout || ''),
-      stderr: stderrChunks.join('') + (result.stderr || ''),
+      stdout: sanitizeShellOutput(stdoutChunks.join('') || decodeShellOutput(result.stdout)),
+      stderr: sanitizeShellOutput(stderrChunks.join('') || decodeShellOutput(result.stderr)),
     }
   }
 

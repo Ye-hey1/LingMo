@@ -1361,9 +1361,9 @@ export function FileItem({
         fileContent: content,
       })
     } catch (error) {
-      console.error('进入输出工坊失败:', error)
+      console.error('进入智能排版失败:', error)
       toast({
-        title: '进入输出工坊失败',
+        title: '进入智能排版失败',
         description: error instanceof Error ? error.message : String(error),
         variant: 'destructive',
       })

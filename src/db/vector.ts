@@ -12,6 +12,16 @@ export interface VectorDocument {
 interface CachedVector {
   id: number;
   filename: string;
+  chunk_id: number;
+  content: string;
+  embedding: number[];
+  updated_at: number;
+}
+
+export interface VectorEmbeddingDocument {
+  id: number;
+  filename: string;
+  chunk_id: number;
   content: string;
   embedding: number[];
   updated_at: number;
@@ -58,6 +68,7 @@ class VectorCache {
         const cached: CachedVector = {
           id: doc.id,
           filename: doc.filename,
+          chunk_id: doc.chunk_id,
           content: doc.content,
           embedding,
           updated_at: doc.updated_at,
@@ -83,6 +94,7 @@ class VectorCache {
       const cached: CachedVector = {
         id: doc.id,
         filename: doc.filename,
+        chunk_id: doc.chunk_id,
         content: doc.content,
         embedding,
         updated_at: doc.updated_at,
@@ -295,6 +307,21 @@ export async function getAllVectorDocumentFilenames() {
 
 export async function refreshVectorCache() {
   await vectorCache.update();
+}
+
+export async function getAllVectorEmbeddingDocuments(): Promise<VectorEmbeddingDocument[]> {
+  if (vectorCache.needsUpdate()) {
+    await vectorCache.update();
+  }
+
+  return vectorCache.getAll().map(doc => ({
+    id: doc.id,
+    filename: doc.filename,
+    chunk_id: doc.chunk_id,
+    content: doc.content,
+    embedding: [...doc.embedding],
+    updated_at: doc.updated_at,
+  }));
 }
 
 // Return file-level averaged embeddings for semantic graph computation

@@ -19,7 +19,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Button } from "@/components/ui/button"
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Menu, Trash2, XCircle } from 'lucide-react'
 import {
@@ -139,6 +138,7 @@ export function MarkHeader() {
             type="button"
             className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             onClick={() => setTrashState(false)}
+            title="退出回收站"
           >
             <XCircle className="size-4" />
           </button>
@@ -148,6 +148,7 @@ export function MarkHeader() {
               <button
                 type="button"
                 className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title="更多操作"
               >
                 <Menu className="size-4" />
               </button>

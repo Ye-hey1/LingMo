@@ -617,6 +617,21 @@ class SkillManager {
   }
 
   /**
+   * 根据 ID、目录派生 ID 或 metadata.name 获取 Skill。
+   * 兼容用户/模型使用 Skill 名称（如 aihot）而非目录 ID（如 ai-hots）的调用。
+   */
+  findSkill(idOrName: string): SkillContent | undefined {
+    const normalized = generateSkillId(idOrName)
+    const exact = this.getSkill(idOrName) || this.getSkill(normalized)
+    if (exact) return exact
+
+    return this.getAllSkills().find(skill => (
+      skill.metadata.name === idOrName ||
+      generateSkillId(skill.metadata.name) === normalized
+    ))
+  }
+
+  /**
    * 检查 Skill 是否存在
    */
   hasSkill(id: string): boolean {
@@ -818,7 +833,11 @@ class SkillManager {
    * 获取 Skill 文件信息
    */
   getSkillFileInfo(id: string): SkillFileInfo | undefined {
-    return this.skillFiles.get(id)
+    const direct = this.skillFiles.get(id)
+    if (direct) return direct
+
+    const skill = this.findSkill(id)
+    return skill ? this.skillFiles.get(skill.metadata.id) : undefined
   }
 
   /**

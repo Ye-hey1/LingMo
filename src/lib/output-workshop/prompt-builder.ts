@@ -38,7 +38,11 @@ export function buildOutputPrompt(options: BuildOutputPromptOptions): string {
 - 如果内容较长，宁可增加 section、card 或 slide，也不要压缩到几段
 - 最终输出必须是完整的、可直接在浏览器中打开的 HTML 文件
 - 所有 CSS 必须内联，不依赖外部资源（除了 Google Fonts CDN）
-- 使用现代 CSS（Grid、Flexbox、CSS Variables），不使用 JavaScript 框架`)
+- 使用现代 CSS（Grid、Flexbox、CSS Variables），不使用 JavaScript 框架
+- 先用布局和排版建立层级：正文 1rem 以上，长文 1.55-1.75 行高，标题 text-wrap: balance，段落 text-wrap: pretty
+- 避免横向溢出：长标题、表格、代码块、固定比例卡片和移动端视口都必须可读
+- 动效只表达状态或内容关系，150-250ms 为主，使用自然 ease-out 曲线，并写入 prefers-reduced-motion 降级
+- 不要使用渐变文字、装饰性玻璃拟态、24px 以上大圆角卡片、无意义的大阴影或每个区块都一样的入场动画`)
 
   // 2. 模板信息
   sections.push(`## 输出模板

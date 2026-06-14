@@ -1,8 +1,6 @@
-import { fetchHotspotJson, fetchHotspotText } from '../http'
-import { BaseAiHotspotFetcher } from './base'
-
-const FALLBACK_SOURCE_IDS = ['hackernews', 'producthunt', 'github', 'sspai', 'juejin', '36kr']
-const JUEJIN_SNOWFLAKE_EPOCH = BigInt(-42416499549)
+import { fetchHotspotJson } from '../http'
+import { BaseAiHotspotFetcher, type AiHotspotFetcherOptions } from './base'
+import type { AiHotspotRawItem } from '../types'
 
 interface NewsNowItem {
   id?: string
@@ -21,186 +19,115 @@ interface NewsNowBlock {
   items?: NewsNowItem[]
 }
 
-function extractBundleUrl(html: string) {
-  const scripts = html.match(/<script\b[^>]*\bsrc=["'][^"']+["'][^>]*>/gi) || []
-  const script = scripts.find((tag) => /\/assets\/index-[^"']+\.js/i.test(tag))
-  const src = script?.match(/\bsrc=["']([^"']+)["']/i)?.[1]
-  if (!src) return null
-
-  return new URL(src, 'https://newsnow.busiyi.world/').toString()
-}
-
-function extractSourceIds(js: string) {
-  const marker = '{v2ex:vL'
-  const start = js.indexOf(marker)
-  if (start === -1) return FALLBACK_SOURCE_IDS
-
-  let depth = 0
-  let end: number | null = null
-  let inStr = false
-  let esc = false
-
-  for (let i = start; i < js.length; i += 1) {
-    const ch = js[i]
-    if (inStr) {
-      if (esc) {
-        esc = false
-      } else if (ch === '\\') {
-        esc = true
-      } else if (ch === '"') {
-        inStr = false
-      }
-      continue
-    }
-
-    if (ch === '"') {
-      inStr = true
-    } else if (ch === '{') {
-      depth += 1
-    } else if (ch === '}') {
-      depth -= 1
-      if (depth === 0) {
-        end = i + 1
-        break
-      }
-    }
-  }
-
-  if (end === null) return FALLBACK_SOURCE_IDS
-
-  const ignore = new Set(['name', 'column', 'home', 'https', 'color', 'interval', 'title', 'type', 'redirect', 'desc'])
-  const keys = [...js.slice(start, end).matchAll(/(['"]?)([a-zA-Z0-9_-]+)\1\s*:/g)].map((match) => match[2])
-  const sourceIds: string[] = []
-
-  for (const key of keys) {
-    if (!ignore.has(key) && !sourceIds.includes(key)) {
-      sourceIds.push(key)
-    }
-  }
-
-  return sourceIds.length ? sourceIds : FALLBACK_SOURCE_IDS
-}
-
-function parseDate(value: unknown) {
+function parseUnixTimestamp(value: unknown): Date | null {
   if (value === null || value === undefined) return null
+  let num = typeof value === 'number' ? value : parseFloat(String(value))
+  if (isNaN(num)) return null
+  if (num > 10_000_000_000) num = num / 1000
+  const d = new Date(num * 1000)
+  return isNaN(d.getTime()) ? null : d
+}
+
+function parseDate(value: unknown, now: Date): Date | null {
+  if (!value) return null
+  if (value instanceof Date) return value
   if (typeof value === 'number') return parseUnixTimestamp(value)
-
-  const date = new Date(String(value))
-  return Number.isNaN(date.getTime()) ? null : date
+  const s = String(value).trim()
+  if (!s) return null
+  if (/^\d{12,}$/.test(s)) return parseUnixTimestamp(parseInt(s))
+  if (/^\d{9,11}$/.test(s)) return parseUnixTimestamp(parseInt(s))
+  // Chinese relative time
+  let m = s.match(/(\d+)\s*分钟前/)
+  if (m) return new Date(now.getTime() - parseInt(m[1]) * 60 * 1000)
+  m = s.match(/(\d+)\s*小时前/)
+  if (m) return new Date(now.getTime() - parseInt(m[1]) * 60 * 60 * 1000)
+  m = s.match(/(\d+)\s*天前/)
+  if (m) return new Date(now.getTime() - parseInt(m[1]) * 24 * 60 * 60 * 1000)
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? null : d
 }
 
-function parseUnixTimestamp(value: unknown) {
-  const numberValue = typeof value === 'number' ? value : Number.parseFloat(String(value))
-  if (Number.isNaN(numberValue)) return null
-
-  const seconds = numberValue > 10_000_000_000 ? numberValue / 1000 : numberValue
-  const date = new Date(seconds * 1000)
-  return Number.isNaN(date.getTime()) ? null : date
-}
-
-function parseJuejinId(id: string | undefined, now: Date) {
+function parseJuejinId(id: string | undefined, now: Date): Date | null {
   if (!id || !/^\d{18,20}$/.test(id)) return null
-
   try {
-    const timestamp = (BigInt(id) >> BigInt(22)) + JUEJIN_SNOWFLAKE_EPOCH
+    const epoch = BigInt(-42416499549)
+    const timestamp = (BigInt(id) >> BigInt(22)) + epoch
     const date = new Date(Number(timestamp))
-    if (date.getTime() > now.getTime() + 24 * 60 * 60 * 1000) return null
-    if (date.getTime() < now.getTime() - 30 * 24 * 60 * 60 * 1000) return null
+    if (date.getTime() > now.getTime() + 86400000) return null
+    if (date.getTime() < now.getTime() - 30 * 86400000) return null
     return date
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
-function firstNonEmpty(...values: unknown[]) {
-  for (const value of values) {
-    const text = String(value || '').trim()
-    if (text) return text
-  }
-
-  return ''
-}
+const NEWSNOW_SOURCE_IDS = [
+  'hackernews', 'producthunt', 'sspai', 'juejin', '36kr',
+  'v2ex', 'zhihu', 'weibo', 'bilibili', 'ithome', 'huxiu',
+  'solidot', 'guokr', 'oschina',
+]
 
 export class NewsNowFetcher extends BaseAiHotspotFetcher {
   sourceId = 'newsnow'
-  sourceName = 'NewsNow'
+  sourceName = 'NewsNow 聚合'
+  kind = 'scraper' as const
 
-  async fetch(now: Date) {
-    const homeHtml = await fetchHotspotText('https://newsnow.busiyi.world/')
-    const bundleUrl = extractBundleUrl(homeHtml)
-    let sourceIds = FALLBACK_SOURCE_IDS
-
-    if (bundleUrl) {
-      try {
-        sourceIds = extractSourceIds(await fetchHotspotText(bundleUrl))
-      } catch {
-        sourceIds = FALLBACK_SOURCE_IDS
-      }
-    }
-
+  async fetch(now: Date, _options?: AiHotspotFetcherOptions): Promise<AiHotspotRawItem[]> {
     const headers = {
-      Accept: 'application/json, text/plain, */*',
+      'Accept': 'application/json, text/plain, */*',
       'Content-Type': 'application/json',
-      Origin: 'https://newsnow.busiyi.world',
-      Referer: 'https://newsnow.busiyi.world/',
+      'Origin': 'https://newsnow.busiyi.world',
+      'Referer': 'https://newsnow.busiyi.world/',
     }
 
     let sourceBlocks: NewsNowBlock[] = []
+
+    // Try bulk API first
     try {
       const response = await fetchHotspotJson<{ data?: NewsNowBlock[] } | NewsNowBlock[]>(
         'https://newsnow.busiyi.world/api/s/entire',
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ sources: sourceIds }),
-        }
+        { method: 'POST', headers, body: JSON.stringify({ sources: NEWSNOW_SOURCE_IDS }), timeoutMs: 45000 }
       )
-      sourceBlocks = Array.isArray(response) ? response : response.data || []
+      sourceBlocks = Array.isArray(response) ? response : (response as any).data || []
     } catch {
-      const results = await Promise.all(
-        sourceIds.map(async (sourceId) => {
-          try {
-            return await fetchHotspotJson<NewsNowBlock>(
-              `https://newsnow.busiyi.world/api/s?id=${encodeURIComponent(sourceId)}`,
-              { headers, timeoutMs: 20000 }
-            )
-          } catch {
-            return null
-          }
-        })
-      )
-      sourceBlocks = results.filter((block): block is NewsNowBlock => block !== null)
+      // Fallback: fetch per-source
+      for (const sid of NEWSNOW_SOURCE_IDS) {
+        try {
+          const block = await fetchHotspotJson<NewsNowBlock>(
+            `https://newsnow.busiyi.world/api/s?id=${sid}`,
+            { headers, timeoutMs: 20000 }
+          )
+          sourceBlocks.push(block)
+        } catch { continue }
+      }
     }
 
-    return sourceBlocks.flatMap((block) => {
-      const feedId = String(block.id || 'unknown')
-      const feedTitle = firstNonEmpty(block.title, block.name, block.desc, feedId)
-      const feedName = feedTitle !== feedId ? `${feedTitle} (${feedId})` : feedId
+    const items: AiHotspotRawItem[] = []
+
+    for (const block of sourceBlocks) {
+      const sid = String(block.id || 'unknown')
+      const sourceTitle = block.title || block.name || block.desc || sid
+      const sourceLabel = sourceTitle !== sid ? sourceTitle : sid
       const updated = parseUnixTimestamp(block.updatedTime) || now
 
-      return (block.items || [])
-        .map((item) => {
-          const title = (item.title || '').trim()
-          const url = (item.url || '').trim()
-          if (!title || !url) return null
+      for (const it of block.items || []) {
+        const title = (it.title || '').trim()
+        const url = (it.url || '').trim()
+        if (!title || !url) continue
 
-          const publishedAt = parseDate(item.pubDate) ||
-            parseDate(item.extra?.date) ||
-            parseJuejinId(item.id, now) ||
-            updated
+        let publishedAt = parseDate(it.pubDate, now)
+        if (!publishedAt && it.extra?.date) publishedAt = parseDate(it.extra.date, now)
+        if (!publishedAt && sid === 'juejin' && it.id) publishedAt = parseJuejinId(it.id, now)
+        if (!publishedAt) publishedAt = updated
 
-          return this.createItem({
-            feedName,
-            title,
-            url,
-            publishedAt,
-            meta: {
-              rawSourceId: feedId,
-              rawItemId: item.id || '',
-            },
-          })
-        })
-        .filter((item) => item !== null)
-    })
+        items.push(this.createItem({
+          feedName: sourceLabel,
+          title,
+          url,
+          publishedAt,
+          meta: { newsnowSourceId: sid },
+        }))
+      }
+    }
+
+    return items
   }
 }

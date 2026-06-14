@@ -28,6 +28,8 @@ export type ResearchProgressView = {
   lowConfidenceCount: number
   singleSourceCount: number
   localSourcesCount: number
+  cacheHits?: number
+  cacheMisses?: number
   steps: ResearchProgressStep[]
 }
 
@@ -123,6 +125,8 @@ export function buildResearchProgressView(
     lowConfidenceCount: progress?.lowConfidenceCount ?? 0,
     singleSourceCount: progress?.singleSourceCount ?? 0,
     localSourcesCount: progress?.localSourcesCount ?? 0,
+    cacheHits: progress?.cacheHits,
+    cacheMisses: progress?.cacheMisses,
     steps,
   }
 }
@@ -143,6 +147,9 @@ export function encodeResearchProgressView(view: ResearchProgressView) {
     view.currentDetail || '',
     `来源：${view.sourceCount}，本地材料：${view.localSourcesCount}，证据：${view.evidenceCount}`,
     `已确认：${view.confirmedClaimsCount}，有争议：${view.disputedClaimsCount}，低置信：${view.lowConfidenceCount}，单源：${view.singleSourceCount}`,
+    typeof view.cacheHits === 'number' || typeof view.cacheMisses === 'number'
+      ? `搜索缓存：命中 ${view.cacheHits || 0}，未命中 ${view.cacheMisses || 0}`
+      : '',
     '',
     ...stepLines,
   ].filter(Boolean).join('\n')

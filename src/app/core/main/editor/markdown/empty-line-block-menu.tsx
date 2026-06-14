@@ -906,7 +906,7 @@ export function EmptyLineBlockMenu({ editor }: { editor: Editor }) {
   return (
     <>
       <div
-        className="pointer-events-none fixed z-40 rounded-md bg-sky-50/80 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.12),0_1px_8px_rgba(59,130,246,0.10)] dark:bg-sky-500/10 dark:shadow-[inset_0_0_0_1px_rgba(125,211,252,0.16)]"
+        className="pointer-events-none fixed z-40 rounded-md border border-border/50 bg-background/80 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:bg-muted/10 dark:shadow-none"
         style={{
           top: position.highlightTop,
           left: position.highlightLeft,
@@ -935,7 +935,7 @@ export function EmptyLineBlockMenu({ editor }: { editor: Editor }) {
       {menuOpen && (
         <div
           ref={menuRef}
-          className="fixed z-50 max-h-[360px] overflow-visible rounded-lg border border-border bg-background p-2 shadow-lg"
+          className="fixed z-50 max-h-[360px] overflow-visible rounded-lg border border-border bg-background p-2 shadow-xl ring-1 ring-border/40"
           style={{ top: position.menuTop, left: position.menuLeft, width: MENU_WIDTH }}
           onMouseDown={(event) => {
             const target = event.target as HTMLElement

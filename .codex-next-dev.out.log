@@ -1,0 +1,14 @@
+   ▲ Next.js 15.5.18
+   - Local:        http://localhost:3456
+   - Network:      http://0.0.0.0:3456
+   - Environments: .env.local, .env
+   - Experiments (use with caution):
+     · optimizePackageImports
+
+ ✓ Starting...
+ ✓ Ready in 11.6s
+ ○ Compiling / ...
+ ✓ Compiled /core/main in 149.9s (13686 modules)
+ GET / 200 in 44726ms
+ GET /core/main 200 in 130ms
+[?25h

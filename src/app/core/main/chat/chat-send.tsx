@@ -7,11 +7,12 @@ import { TooltipButton } from "@/components/tooltip-button"
 import { useImperativeHandle, forwardRef, useRef, useEffect } from "react"
 import { useTranslations } from "next-intl"
 import useVectorStore from "@/stores/vector"
-import { fetchAiStream } from "@/lib/ai/chat"
+import { fetchAiStream, type AiStreamFinishMetadata } from "@/lib/ai/chat"
 import { type LinkedResource } from "@/lib/files"
 import { getWorkspacePath, getFilePathOptions } from "@/lib/workspace"
 import {
   AgentHandler,
+  createAgentEventBus,
   getToolByName,
   getSessionApprovalScope,
   matchesSessionApproval,
@@ -20,6 +21,10 @@ import {
   recordPersistentApprovalHistory,
 } from "@/lib/agent"
 import { AgentOrchestrator } from "@/lib/agent-harness/orchestrator"
+import type { ContextItem } from "@/lib/agent-harness/types"
+import { buildWriterSkillInstruction } from "@/lib/agent/writer-executor"
+import { skillManager } from "@/lib/skills"
+import { estimateTokens } from "@/lib/ai/token-counter"
 import { ImageAttachment } from "./image-attachments"
 import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
 import {
@@ -32,12 +37,19 @@ import {
 } from "@/lib/research/deep-research"
 import {
   listUnfinishedResearchSessions,
+  encodeResearchResumeData,
   type DeepResearchSessionSummary,
+  type ResearchResumeMeta,
 } from "@/lib/research/session-store"
 import {
   buildResearchProgressView,
   encodeResearchProgressView,
+  type ResearchProgressView,
 } from "@/lib/research/progress-status"
+import {
+  buildUniqueResearchReportTarget,
+  formatYamlScalar,
+} from "@/lib/research/report-file"
 import type { Chat } from "@/db/chats"
 import { toast } from "@/hooks/use-toast"
 import { ToastAction } from "@/components/ui/toast"
@@ -68,11 +80,77 @@ export interface ChatSendOptions {
   displayText?: string
   modeOverride?: 'chat' | 'agent' | 'research'
   routeOverride?: 'writer' | 'advisor' | 'agent' | 'workflow' | 'chat' | 'research'
+  researchDepthPreset?: 'auto' | 'quick' | 'deep'
+  researchBreadth?: number
+  researchDepth?: number
 }
 
 const MIN_AUTO_EXTRACT_CHAR_COUNT = 500
 const AGENT_CONTEXT_TOTAL_LIMIT = 70000
 const AI_DOC_COMMAND_PREFIX = '你正在执行一个应用内命令：'
+
+function buildHarnessContextItems(input: {
+  userInput: string
+  context: string
+  ragSourceDetails: ChatCitationSource[]
+  forcedSkillIds?: string[]
+}): ContextItem[] {
+  const items: ContextItem[] = [{
+    id: 'user-goal',
+    source: 'user',
+    priority: 100,
+    content: input.userInput,
+    tokenEstimate: estimateTokens(input.userInput),
+  }]
+
+  if (input.context.trim()) {
+    items.push({
+      id: 'assembled-chat-context',
+      source: 'history',
+      priority: 70,
+      content: input.context,
+      tokenEstimate: estimateTokens(input.context),
+    })
+  }
+
+  input.ragSourceDetails.slice(0, 20).forEach((source, index) => {
+    const content = source.content || ''
+    if (!content.trim()) return
+    items.push({
+      id: `source-${index + 1}`,
+      source: source.sourceType === 'quote'
+        ? 'quote'
+        : source.sourceType === 'current' || source.sourceType === 'linked'
+          ? 'file'
+          : 'history',
+      priority: source.sourceType === 'quote' ? 95 : 80 - index,
+      content,
+      tokenEstimate: estimateTokens(content),
+      ref: source.filepath || source.filename,
+    })
+  })
+
+  for (const skillId of input.forcedSkillIds || []) {
+    items.push({
+      id: `skill-${skillId}`,
+      source: 'skill',
+      priority: 90,
+      content: skillId,
+      tokenEstimate: estimateTokens(skillId),
+      ref: skillId,
+    })
+  }
+
+  return items
+}
+
+function formatResearchQualityNote(result: Awaited<ReturnType<typeof runDeepResearch>>) {
+  if (!result.quality) return ''
+  return [
+    `> 研究质量：${result.quality.grade}（${result.quality.overall}/100）。${result.quality.summary}`,
+    '',
+  ].join('\n')
+}
 
 function buildAutoNoteTitle(userInput: string) {
   const normalized = userInput
@@ -86,6 +164,20 @@ function buildAutoNoteTitle(userInput: string) {
 
 function isLikelyErrorContent(content: string) {
   return /^工具 .+执行失败[:：]|^工具 .+执行出错[:：]|^Error:/.test(content.trim())
+}
+
+function formatEmptyAiResponseMessage(meta?: AiStreamFinishMetadata | null, thinkingContent?: string) {
+  const finishReason = meta?.finishReason || meta?.finishReasons.find(Boolean)
+  const details = [
+    finishReason ? `finish_reason: ${finishReason}` : '',
+    thinkingContent?.trim() ? '模型只返回了思考内容，没有返回可展示正文' : '',
+  ].filter(Boolean)
+
+  return [
+    '模型本次响应已结束，但没有返回可展示正文。',
+    details.length > 0 ? `（${details.join('；')}）` : '',
+    '请重试一次；如果仍然出现，建议切换到非推理模型，或检查当前模型服务是否把正文放在 reasoning_content 而不是 content。',
+  ].filter(Boolean).join('\n')
 }
 
 /** 判断内容是否包含值得沉淀的知识性结构（而非简单问答/闲聊） */
@@ -144,17 +236,17 @@ function formatResearchProgress(progress: DeepResearchProgress, query: string, s
   return encodeResearchProgressView(view)
 }
 
-function formatResearchBackgroundStatus(
+function buildResearchBackgroundView(
   status: 'starting' | 'collecting' | 'writing',
   query: string,
   startedAt: number,
-) {
+): ResearchProgressView {
   const view = buildResearchProgressView(null, {
     query,
     startedAt,
     estimatedMinutes: '3-6 分钟',
   })
-  return encodeResearchProgressView({
+  return {
     ...view,
     statusText: {
       starting: '正在准备任务',
@@ -170,7 +262,7 @@ function formatResearchBackgroundStatus(
       ...step,
       status: index === 0 ? 'active' : 'pending',
     })),
-  })
+  }
 }
 
 const RESEARCH_CLARIFICATION_PREFIX = '<!-- deep-research-clarification '
@@ -219,16 +311,25 @@ function formatResearchClarificationMessage(originalQuery: string, questions: st
 function formatResearchResumeMessage(session: DeepResearchSessionSummary) {
   const started = new Date(session.startedAt)
   const startedText = Number.isNaN(started.getTime()) ? session.startedAt : started.toLocaleString()
+  const meta = encodeResearchResumeData({
+    sessionId: session.id,
+    query: session.query,
+    startedAt: session.startedAt,
+    pendingQueriesCount: session.pendingQueriesCount,
+    sourcesCount: session.sourcesCount,
+    evidencesCount: session.evidencesCount,
+  })
   return [
-    '## 发现未完成的 Research',
+    meta,
+    '## 发现未完成的研究任务',
     '',
-    `主题：${session.query}`,
-    `开始时间：${startedText}`,
-    `剩余查询：${session.pendingQueriesCount}`,
-    `已找到来源：${session.sourcesCount}`,
-    `已提取证据：${session.evidencesCount}`,
+    `**主题：** ${session.query}`,
+    `**开始时间：** ${startedText}`,
+    `**剩余查询：** ${session.pendingQueriesCount}`,
+    `**已找到来源：** ${session.sourcesCount}`,
+    `**已提取证据：** ${session.evidencesCount}`,
     '',
-    '已在右下角提供“继续研究”入口。点击后会从保存的断点继续执行。若要新建研究，请再次发送并包含“直接开始研究”。',
+    '点击下方「继续研究」按钮，或输入「继续研究」可从断点恢复。若要新建研究，请发送新主题并包含「直接开始研究」。',
   ].join('\n')
 }
 
@@ -290,6 +391,9 @@ export const ChatSend = forwardRef<{
     chatMode,
     setLoading,
     setResearchRunning,
+    startResearchRun,
+    updateResearchProgressView,
+    finishResearchRun,
     ensureCurrentConversation,
     saveChat,
     setAgentState,
@@ -312,6 +416,58 @@ export const ChatSend = forwardRef<{
 
   // 跟踪上一次的 loading 状态
   const wasLoadingRef = useRef(false)
+
+  // 持久化 ref：让 resume-research 事件监听器始终能拿到最新闭包
+  const resumeContextRef = useRef<{
+    insertTagId: number | undefined
+    doInsert: typeof insert
+    doSetLoading: typeof setLoading
+    doBuildLocalCtx: typeof buildResearchLocalContext
+    doStartResearch: typeof startBackgroundDeepResearch
+  } | null>(null)
+
+  resumeContextRef.current = {
+    insertTagId: currentTagId ?? undefined,
+    doInsert: insert,
+    doSetLoading: setLoading,
+    doBuildLocalCtx: buildResearchLocalContext,
+    doStartResearch: startBackgroundDeepResearch,
+  }
+
+  // 监听来自 ResearchResumeCard 的 custom event
+  useEffect(() => {
+    const handleResumeEvent = async (e: Event) => {
+      const data = (e as CustomEvent<ResearchResumeMeta>).detail
+      if (!data?.sessionId || !data?.query) return
+
+      const ctx = resumeContextRef.current
+      if (!ctx) return
+
+      const placeholderMessage = await ctx.doInsert({
+        tagId: ctx.insertTagId,
+        role: 'system',
+        content: '',
+        type: 'chat',
+        inserted: false,
+      })
+      if (!placeholderMessage) return
+
+      const resumeController = new AbortController()
+      abortControllerRef.current = resumeController
+      ctx.doSetLoading(true)
+
+      const localCtx = await ctx.doBuildLocalCtx(data.query)
+      ctx.doStartResearch(placeholderMessage, data.query, resumeController, {
+        sessionId: data.sessionId,
+        localContext: localCtx?.localContext,
+        localRagSources: localCtx?.ragSources,
+        localRagSourceDetails: localCtx?.ragSourceDetails,
+      })
+    }
+
+    document.addEventListener('resume-research', handleResumeEvent)
+    return () => document.removeEventListener('resume-research', handleResumeEvent)
+  }, [])
 
   // 在 AI 响应完成后，触发压缩检查
   useEffect(() => {
@@ -426,8 +582,9 @@ export const ChatSend = forwardRef<{
 
   function notifyResearchResumeAvailable(session: DeepResearchSessionSummary, onResume: () => void) {
     toast({
-      title: '发现未完成的 Research',
-      description: `还有 ${session.pendingQueriesCount} 个查询未完成，来源 ${session.sourcesCount} 个。`,
+      title: '发现未完成的研究任务',
+      description: `还有 ${session.pendingQueriesCount} 个查询未完成，来源 ${session.sourcesCount} 个。点击下方按钮或输入「继续研究」恢复。`,
+      duration: 15000,
       action: (
         <ToastAction
           altText="继续研究"
@@ -625,6 +782,7 @@ export const ChatSend = forwardRef<{
 
       let finalContent = ''
       let thinkingContent = ''
+      let streamMeta: AiStreamFinishMetadata | null = null
       const result = await fetchAiStream(
         effectiveInstruction,
         async (content) => {
@@ -654,9 +812,16 @@ export const ChatSend = forwardRef<{
         },
         messages,
         options?.maxTokens,
+        (metadata) => {
+          streamMeta = metadata
+        },
       )
       if (!finalContent && result) {
         finalContent = result
+      }
+
+      if (!abortController.signal.aborted && !cleanAssistantGeneratedContent(finalContent).trim()) {
+        finalContent = formatEmptyAiResponseMessage(streamMeta, thinkingContent)
       }
 
       await saveChat({
@@ -675,8 +840,158 @@ export const ChatSend = forwardRef<{
     }
   }
 
-  async function handleWriterMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions) {
-    await handleChatMode(imageUrls, instructionOverride, options)
+  async function handleWriterMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions): Promise<string> {
+    const effectiveInstruction = instructionOverride ?? inputValue
+    const placeholderMessage = await insert({
+      tagId: currentTagId,
+      role: 'system',
+      content: '',
+      type: 'chat',
+      inserted: false,
+    })
+
+    if (!placeholderMessage) return ''
+
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+
+    try {
+      const useArticleStore = (await import('@/stores/article')).default
+      const articleStore = useArticleStore.getState()
+
+      const contextResult = await buildChatContext({
+        linkedResources: effectiveLinkedResources,
+        linkedResourcePreviews,
+        linkedResourcePreview,
+        quoteData,
+        isRagEnabled,
+        webSearchEnabled,
+        userQuery: effectiveInstruction,
+        webSearchQuery: webSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
+        contextBudget: 24000,
+        currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
+        activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
+      })
+
+      const { context, ragSources, ragSourceDetails } = contextResult
+      const visibleRagSourceDetails = ragSourceDetails
+      const visibleRagSources = ragSources
+
+      if (ragSources.length > 0 || ragSourceDetails.length > 0) {
+        await saveChat({
+          ...placeholderMessage,
+          ragSources: JSON.stringify(visibleRagSources),
+          ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
+        }, true)
+      }
+
+      const skillId = options?.forcedSkillIds?.find(id => id.trim())
+      let writerInstruction = effectiveInstruction
+      if (skillId) {
+        try {
+          const { useSkillsStore } = await import('@/stores/skills')
+          await useSkillsStore.getState().initSkills()
+          const skill = skillManager.getSkill(skillId)
+          if (skill) {
+            writerInstruction = buildWriterSkillInstruction(skill, effectiveInstruction)
+          }
+        } catch (error) {
+          console.warn('[WriterSkill] Failed to load invoked skill, falling back to plain writer mode:', error)
+        }
+      }
+
+      const { chats: currentChats } = useChatStore.getState()
+      const latestUserChatId = currentChats
+        .filter(chat => chat.role === 'user')
+        .at(-1)?.id
+      const messages = [
+        ...currentChats
+          .filter(chat => chat.id !== latestUserChatId)
+          .filter(chat => chat.type === 'chat' && (chat.role === 'user' || chat.role === 'system') && chat.content)
+          .map(chat => ({
+            role: chat.role === 'user' ? 'user' as const : 'assistant' as const,
+            content: chat.condensedContent || chat.content || '',
+          })),
+        {
+          role: 'system' as const,
+          content: [
+            '你正在执行一个写作型 Skill。请直接输出用户可用的正文，保持自然连贯。',
+            '不要输出工具调用、执行日志、JSON 包装、Action/Observation、Final Answer 标签或对 Skill 包装提示的解释。',
+            '中文内容必须保持 UTF-8 正常字符，避免 mojibake、替换字符和乱码。',
+            context ? `\n## 可用上下文\n\n${context}` : '',
+          ].filter(Boolean).join('\n'),
+        },
+        {
+          role: 'user' as const,
+          content: writerInstruction,
+        },
+      ]
+
+      let finalContent = ''
+      let thinkingContent = ''
+      let streamMeta: AiStreamFinishMetadata | null = null
+      const result = await fetchAiStream(
+        writerInstruction,
+        async (content) => {
+          finalContent = cleanAssistantGeneratedContent(content)
+          await saveChat({
+            ...placeholderMessage,
+            content: finalContent,
+            thinking: thinkingContent || undefined,
+            ragSources: JSON.stringify(visibleRagSources),
+            ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
+          }, false)
+        },
+        abortController.signal,
+        undefined,
+        t,
+        placeholderMessage.id,
+        imageUrls,
+        async (thinking: string) => {
+          thinkingContent = thinking
+          await saveChat({
+            ...placeholderMessage,
+            thinking,
+            ragSources: JSON.stringify(visibleRagSources),
+            ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
+          }, false)
+        },
+        messages,
+        options?.maxTokens,
+        (metadata) => {
+          streamMeta = metadata
+        },
+      )
+
+      if (!finalContent && result) {
+        finalContent = cleanAssistantGeneratedContent(result)
+      }
+
+      if (!abortController.signal.aborted && !finalContent.trim()) {
+        finalContent = formatEmptyAiResponseMessage(streamMeta, thinkingContent)
+      }
+
+      const savedContent = abortController.signal.aborted
+        ? (finalContent || t('record.chat.input.stopped'))
+        : finalContent
+      await saveChat({
+        ...placeholderMessage,
+        content: savedContent,
+        ragSources: JSON.stringify(visibleRagSources),
+        ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
+      }, true)
+
+      return savedContent
+    } catch (error) {
+      const errorContent = `Error: ${error instanceof Error ? error.message : String(error)}`
+      await saveChat({
+        ...placeholderMessage,
+        content: errorContent,
+      }, true)
+      return errorContent
+    } finally {
+      abortControllerRef.current = null
+    }
   }
 
   async function executeDeepResearch(
@@ -688,29 +1003,58 @@ export const ChatSend = forwardRef<{
       localContext?: ResearchLocalContext
       localRagSources?: string[]
       localRagSourceDetails?: ChatCitationSource[]
+      researchDepthPreset?: ChatSendOptions['researchDepthPreset']
+      researchBreadth?: number
+      researchDepth?: number
     } = {}
   ) {
     if (!placeholderMessage) return
     const startedAt = Date.now()
     let researchFinished = false
     let lastProgressSavedAt = 0
+    const researchRunId = `research-${placeholderMessage.id}-${startedAt}`
+    const eventBus = createAgentEventBus({
+      runId: researchRunId,
+      onEvent: (event) => {
+        useChatStore.getState().recordResearchEvent(event)
+      },
+    })
     setResearchRunning(true)
+    startResearchRun({
+      runId: researchRunId,
+      activeChatId: placeholderMessage.id,
+      query,
+      startedAt,
+      sessionId: options.sessionId,
+    })
 
     try {
+      const startingView = buildResearchBackgroundView('starting', query, startedAt)
+      updateResearchProgressView(startingView)
       await saveChat({
         ...placeholderMessage,
-        content: formatResearchBackgroundStatus('starting', query, startedAt),
+        content: encodeResearchProgressView(startingView),
       }, false)
 
       const result = await runDeepResearch({
         query,
+        breadth: options.researchBreadth,
+        depth: options.researchDepth,
         abortSignal: abortController.signal,
         sessionId: options.sessionId,
         localContext: options.localContext,
+        eventBus,
         onProgress: (progress) => {
           if (researchFinished) {
             return
           }
+
+          const progressView = buildResearchProgressView(progress, {
+            query,
+            startedAt,
+            estimatedMinutes: progress.estimatedMinutes,
+          })
+          updateResearchProgressView(progressView)
 
           const now = Date.now()
           const shouldSaveImmediately = progress.stage === 'writing' || progress.stage === 'done'
@@ -772,6 +1116,7 @@ export const ChatSend = forwardRef<{
         ragSources: mergedRagSources.length > 0 ? JSON.stringify(mergedRagSources) : undefined,
         ragSourceDetails: mergedRagSourceDetails.length > 0 ? JSON.stringify(mergedRagSourceDetails) : undefined,
       }, true)
+      finishResearchRun()
 
       if (!abortController.signal.aborted) {
         // 保存报告为文件并在编辑器中打开
@@ -780,27 +1125,51 @@ export const ChatSend = forwardRef<{
 
           const workspace = await getWorkspacePath()
           const now = new Date()
-          const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
-          const timeStr = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
-          // 从 query 中提取简短标题（取前20个字符，去除特殊字符）
-          const shortTitle = query.replace(/[\\/:*?"<>|\n\r]/g, '').trim().slice(0, 20).trim() || '研究报告'
-          const fileName = `${dateStr}-${timeStr}-${shortTitle}.md`
-          const sessionFileName = `${dateStr}-${timeStr}-${shortTitle}.research.json`
           const researchDir = 'research'
-          // 相对于工作区的文件路径（用于 setActiveFilePath）
-          const relativeFilePath = `${researchDir}/${fileName}`
-          const relativeSessionFilePath = `${researchDir}/${sessionFileName}`
-          const reportFileContent = [
+          const reportTarget = await buildUniqueResearchReportTarget({
+            query,
+            report: result.report,
+            date: now,
+            researchDir,
+          })
+          const quality = result.quality
+          const qualityNote = formatResearchQualityNote(result)
+          const frontmatter = [
             '---',
-            `title: "${shortTitle}"`,
+            `title: ${formatYamlScalar(reportTarget.title)}`,
             `date: ${now.toISOString()}`,
             'type: research_report',
             `session_id: ${result.session.id}`,
+            `strategy: ${result.session.strategy}`,
+            typeof result.session.breadth === 'number' ? `research_breadth: ${result.session.breadth}` : '',
+            typeof result.session.depth === 'number' ? `research_depth: ${result.session.depth}` : '',
             `sources_count: ${result.sources.length}`,
             `evidence_count: ${result.evidences.length}`,
             `visited_urls: ${result.visitedUrls.length}`,
+            result.session.cacheStats ? `search_cache_hits: ${result.session.cacheStats.hits}` : '',
+            result.session.cacheStats ? `search_cache_misses: ${result.session.cacheStats.misses}` : '',
+            result.session.cacheStats ? `search_cache_writes: ${result.session.cacheStats.writes}` : '',
+            result.session.cacheStats
+              ? `search_cache_hit_rate: ${(
+                  result.session.cacheStats.hits /
+                  Math.max(1, result.session.cacheStats.hits + result.session.cacheStats.misses)
+                ).toFixed(3)}`
+              : '',
+            result.session.providerHealth?.length
+              ? `search_provider_health: ${formatYamlScalar(JSON.stringify(result.session.providerHealth))}`
+              : '',
+            quality ? `quality_grade: ${quality.grade}` : '',
+            quality ? `quality_score: ${quality.overall}` : '',
+            quality ? `quality_source_diversity: ${quality.sourceDiversity}` : '',
+            quality ? `quality_evidence_strength: ${quality.evidenceStrength}` : '',
+            quality ? `quality_coverage: ${quality.coverage}` : '',
+            quality ? `quality_summary: ${formatYamlScalar(quality.summary)}` : '',
             '---',
+          ].filter(Boolean)
+          const reportFileContent = [
+            ...frontmatter,
             '',
+            qualityNote,
             result.report,
           ].join('\n')
 
@@ -815,8 +1184,8 @@ export const ChatSend = forwardRef<{
           }
 
           // 写入文件
-          const fileOptions = await getFilePathOptions(relativeFilePath)
-          const sessionOptions = await getFilePathOptions(relativeSessionFilePath)
+          const fileOptions = await getFilePathOptions(reportTarget.relativeFilePath)
+          const sessionOptions = await getFilePathOptions(reportTarget.relativeSessionFilePath)
           const sessionJson = JSON.stringify(result.session, null, 2)
           if (workspace.isCustom) {
             await writeTextFile(fileOptions.path, reportFileContent)
@@ -824,6 +1193,17 @@ export const ChatSend = forwardRef<{
           } else {
             await writeTextFile(fileOptions.path, reportFileContent, { baseDir: fileOptions.baseDir })
             await writeTextFile(sessionOptions.path, sessionJson, { baseDir: sessionOptions.baseDir })
+          }
+          try {
+            const { upsertResearchHistorySession } = await import('@/lib/research/history-index-store')
+            await upsertResearchHistorySession({
+              session: result.session,
+              reportContent: reportFileContent,
+              reportPath: reportTarget.relativeFilePath,
+              sessionPath: reportTarget.relativeSessionFilePath,
+            })
+          } catch (indexError) {
+            console.warn('[DeepResearch] Failed to update research history index:', indexError)
           }
 
           // 在编辑器中打开
@@ -835,13 +1215,13 @@ export const ChatSend = forwardRef<{
           await articleStore.loadFileTree({ skipRemoteSync: true })
           await sidebarStore.setLeftSidebarTab('files')
           // 先设置路径，再手动设置内容（避免 readArticle 的竞态问题）
-          await articleStore.setActiveFilePath(relativeFilePath)
+          await articleStore.setActiveFilePath(reportTarget.relativeFilePath)
           // 确保编辑器显示报告内容
           articleStore.setCurrentArticle(reportFileContent)
 
           toast({
             title: '深度研究已完成',
-            description: '报告已保存并在编辑器中打开。',
+            description: `报告已保存为 ${reportTarget.fileName} 并在编辑器中打开。`,
           })
         } catch (fileError) {
           console.error('[DeepResearch] Failed to save report as file:', fileError, 
@@ -854,6 +1234,10 @@ export const ChatSend = forwardRef<{
       }
     } catch (error) {
       researchFinished = true
+      eventBus.emit('research.error', {
+        sessionId: options.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      }, { level: 'error' })
       await saveChat({
         ...placeholderMessage,
         content: abortController.signal.aborted
@@ -868,6 +1252,7 @@ export const ChatSend = forwardRef<{
           variant: 'destructive',
         })
       }
+      finishResearchRun()
     } finally {
       researchFinished = true
       if (abortControllerRef.current === abortController) {
@@ -875,6 +1260,7 @@ export const ChatSend = forwardRef<{
       }
       setResearchRunning(false)
       setLoading(false)
+      finishResearchRun()
     }
   }
 
@@ -887,6 +1273,9 @@ export const ChatSend = forwardRef<{
       localContext?: ResearchLocalContext
       localRagSources?: string[]
       localRagSourceDetails?: ChatCitationSource[]
+      researchDepthPreset?: ChatSendOptions['researchDepthPreset']
+      researchBreadth?: number
+      researchDepth?: number
     } = {}
   ) {
     void executeDeepResearch(placeholderMessage, query, abortController, options)
@@ -898,7 +1287,7 @@ export const ChatSend = forwardRef<{
       })
   }
 
-  async function handleClarifiedResearchMode(instructionOverride?: string) {
+  async function handleClarifiedResearchMode(instructionOverride?: string, options?: ChatSendOptions) {
     const effectiveInstruction = instructionOverride ?? inputValue
     const trimmedInstruction = effectiveInstruction.trim()
     let backgroundResearchStarted = false
@@ -918,6 +1307,35 @@ export const ChatSend = forwardRef<{
 
     try {
       const wantsDirectStart = /直接开始研究|直接研究|开始研究|跳过|不用问|no questions/i.test(trimmedInstruction)
+      const wantsResume = /继续研究|恢复研究|接着研究|继续.*研究|resume\s*research/i.test(trimmedInstruction)
+
+      // ── 恢复研究：用户输入"继续研究"等关键词时，直接从断点恢复 ──
+      if (wantsResume) {
+        const resumeSession = await getLatestUnfinishedResearchSession()
+
+        if (!resumeSession) {
+          await saveChat({
+            ...placeholderMessage,
+            content: '当前没有未完成的研究任务。请直接发送研究主题开始新的深度研究。',
+          }, true)
+          return
+        }
+
+        researchLocalContextResult = await buildResearchLocalContext(resumeSession.query)
+        backgroundResearchStarted = true
+
+        startBackgroundDeepResearch(placeholderMessage, resumeSession.query, abortController, {
+          sessionId: resumeSession.id,
+          localContext: researchLocalContextResult?.localContext,
+          localRagSources: researchLocalContextResult?.ragSources,
+          localRagSourceDetails: researchLocalContextResult?.ragSourceDetails,
+          researchDepthPreset: options?.researchDepthPreset,
+          researchBreadth: options?.researchBreadth,
+          researchDepth: options?.researchDepth,
+        })
+        return
+      }
+
       researchLocalContextResult = await buildResearchLocalContext(trimmedInstruction)
       const { chats: currentChats } = useChatStore.getState()
       const previousResearchMessage = [...currentChats]
@@ -970,6 +1388,9 @@ export const ChatSend = forwardRef<{
           localContext: researchLocalContextResult.localContext,
           localRagSources: researchLocalContextResult.ragSources,
           localRagSourceDetails: researchLocalContextResult.ragSourceDetails,
+          researchDepthPreset: options?.researchDepthPreset,
+          researchBreadth: options?.researchBreadth,
+          researchDepth: options?.researchDepth,
         })
         return
       }
@@ -980,6 +1401,9 @@ export const ChatSend = forwardRef<{
           localContext: researchLocalContextResult.localContext,
           localRagSources: researchLocalContextResult.ragSources,
           localRagSourceDetails: researchLocalContextResult.ragSourceDetails,
+          researchDepthPreset: options?.researchDepthPreset,
+          researchBreadth: options?.researchBreadth,
+          researchDepth: options?.researchDepth,
         })
         return
       }
@@ -1025,6 +1449,9 @@ export const ChatSend = forwardRef<{
             localContext: researchLocalContextResult?.localContext,
             localRagSources: researchLocalContextResult?.ragSources,
             localRagSourceDetails: researchLocalContextResult?.ragSourceDetails,
+            researchDepthPreset: options?.researchDepthPreset,
+            researchBreadth: options?.researchBreadth,
+            researchDepth: options?.researchDepth,
           })
         })
         return
@@ -1034,6 +1461,9 @@ export const ChatSend = forwardRef<{
         localContext: researchLocalContextResult.localContext,
         localRagSources: researchLocalContextResult.ragSources,
         localRagSourceDetails: researchLocalContextResult.ragSourceDetails,
+        researchDepthPreset: options?.researchDepthPreset,
+        researchBreadth: options?.researchBreadth,
+        researchDepth: options?.researchDepth,
       })
     } catch (error) {
       await saveChat({
@@ -1176,223 +1606,264 @@ export const ChatSend = forwardRef<{
       activeChatId: placeholderMessage.id,
     })
 
-    // 每次都创建新的 AgentHandler，使用当前的 placeholderMessage
-    const agentHandler = new AgentHandler({
-      activeChatId: placeholderMessage.id,
-      webSearchEnabled,
-      forcedSkillIds: options?.forcedSkillIds,
-      requestConfirmation,
-      currentQuote: quoteData
-        ? {
-            fileName: quoteData.fileName,
-            startLine: quoteData.startLine,
-            endLine: quoteData.endLine,
-            from: quoteData.from,
-            to: quoteData.to,
-            fullContent: quoteData.fullContent,
-          }
-        : undefined,
-      onFinalAnswerRender: (markdownContent) => {
-        const visibleMarkdownContent = cleanAssistantGeneratedContent(markdownContent)
-        // 检测到 Final Answer 时触发渲染
-        setAgentState({
-          activeChatId: placeholderMessage.id,
-          isFinalAnswerMode: true,
-          finalAnswerContent: visibleMarkdownContent
-        })
-      },
-      formatAutoFinalAnswer: (key, values) => t(key as any, values),
-      onComplete: async (result, steps, stopped) => {
-        // 获取 Agent 执行历史，保存完整的 ReAct 步骤
-        const { agentState } = useChatStore.getState()
-        const completedSteps = steps && steps.length > 0
-          ? steps
-          : agentState.completedSteps || []
-        const agentHistory = {
-          steps: completedSteps,
-          toolCalls: agentState.toolCalls,
-          events: agentState.agentEvents,
-          contextSnapshot: agentState.agentContextSnapshot,
-          runId: agentState.agentRunId,
-          iterations: agentState.currentIteration,
-        }
-
-        // 如果是被终止的，构建包含终止信息的消息
-        let finalContent = result
-        if (stopped) {
-          // 保留已产生的步骤，并添加终止信息
-          const stepCount = completedSteps.length
-          if (stepCount > 0) {
-            // 有已完成的步骤，显示这些步骤的内容
-            finalContent = `${t('record.chat.input.stopped')}\n\n已完成 ${stepCount} 个步骤：\n${completedSteps.map((step, i) =>
-              `${i + 1}. ${step.action?.tool || '思考'}`
-            ).join('\n')}`
-          } else {
-            // 没有已完成步骤，显示简单的终止信息
-            finalContent = t('record.chat.input.stopped')
-          }
-        }
-
-        if (!stopped) {
-          const partialSuccessContent = buildPartialSuccessContent(result, agentState.toolCalls)
-          if (partialSuccessContent && /^工具 .+执行失败：|^工具 .+执行出错：|^Error:/.test(finalContent.trim())) {
-            finalContent = partialSuccessContent
-          }
-        }
-
-        finalContent = sanitizeAgentFinalContent(finalContent)
-
-        // 获取当前消息状态，保留 ragSources 和 ragSourceDetails
-        const currentState = useChatStore.getState()
-        const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
-
-        // 更新占位消息，保留 RAG 相关字段
-        await saveChat({
-          id: placeholderMessage.id,
-          tagId: placeholderMessage.tagId,
-          conversationId: placeholderMessage.conversationId,
-          role: placeholderMessage.role,
-          type: placeholderMessage.type,
-          inserted: placeholderMessage.inserted,
-          createdAt: placeholderMessage.createdAt,
-          // 保留来自 currentMessage 的 RAG 相关字段
-          ragSources: currentMessage?.ragSources,
-          ragSourceDetails: currentMessage?.ragSourceDetails,
-          // 设置新的内容
-          content: finalContent,
-          agentHistory: JSON.stringify(agentHistory),
-        }, true)
-
-        if (!stopped) {
-          const hasSuccessfulToolCall = agentState.toolCalls.some(call => call.result?.success)
-          await triggerAutoExtractSuggestion({
-            finalContent,
-            placeholderMessageId: placeholderMessage.id,
-            conversationId: placeholderMessage.conversationId,
-            userInput: options?.displayText || effectiveInstruction,
-            hasSuccessfulToolCall,
-          })
-        }
-
-        // 清空 Final Answer 模式状态
-        setAgentState({
-          activeChatId: undefined,
-          isFinalAnswerMode: false,
-          finalAnswerContent: undefined
-        })
-
-        // 清空 ref
-        agentHandlerRef.current = null
-      },
-      onError: async (error) => {
-        // 获取当前消息状态，保留 ragSources 和 ragSourceDetails
-        const currentState = useChatStore.getState()
-        const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
-
-        // 更新占位消息为错误信息，保留 RAG 相关字段
-        await saveChat({
-          id: placeholderMessage.id,
-          tagId: placeholderMessage.tagId,
-          conversationId: placeholderMessage.conversationId,
-          role: placeholderMessage.role,
-          type: placeholderMessage.type,
-          inserted: placeholderMessage.inserted,
-          createdAt: placeholderMessage.createdAt,
-          // 保留来自 currentMessage 的 RAG 相关字段
-          ragSources: currentMessage?.ragSources,
-          ragSourceDetails: currentMessage?.ragSourceDetails,
-          content: `Error: ${error}`,
-        }, true)
-
-        // 清空 Final Answer 模式状态
-        setAgentState({
-          activeChatId: undefined,
-          isFinalAnswerMode: false,
-          finalAnswerContent: undefined
-        })
-
-        // 清空 ref
-        agentHandlerRef.current = null
-      },
-    })
-
-    // 保存到 ref
-    agentHandlerRef.current = agentHandler
-
     try {
-      // 使用统一的上下文构建器
-      const useArticleStore = (await import('@/stores/article')).default
-      const articleStore = useArticleStore.getState()
-
-      const contextResult = await buildChatContext({
-        linkedResources: effectiveLinkedResources,
-        linkedResourcePreviews,
-        linkedResourcePreview,
-        quoteData,
-        isRagEnabled,
+      const orchestrator = new AgentOrchestrator()
+      await orchestrator.run({
+        userInput: effectiveInstruction,
+        route: options?.routeOverride === 'workflow' ? 'workflow' : 'agent',
+        forcedSkillIds: options?.forcedSkillIds,
         webSearchEnabled,
-        userQuery: effectiveInstruction,
-        contextBudget: AGENT_CONTEXT_TOTAL_LIMIT,
-        currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
-        activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
+        agentExecutor: async (runControl) => {
+          setAgentState({
+            activeChatId: placeholderMessage.id,
+            agentRunId: runControl.runId,
+          })
+
+          // 每次都创建新的 AgentHandler，使用当前的 placeholderMessage
+          const agentHandler = new AgentHandler({
+            runControl,
+            activeChatId: placeholderMessage.id,
+            webSearchEnabled,
+            forcedSkillIds: options?.forcedSkillIds,
+            requestConfirmation,
+            currentQuote: quoteData
+              ? {
+                  fileName: quoteData.fileName,
+                  startLine: quoteData.startLine,
+                  endLine: quoteData.endLine,
+                  from: quoteData.from,
+                  to: quoteData.to,
+                  fullContent: quoteData.fullContent,
+                }
+              : undefined,
+            onFinalAnswerRender: (markdownContent) => {
+              const visibleMarkdownContent = cleanAssistantGeneratedContent(markdownContent)
+              // 检测到 Final Answer 时触发渲染
+              setAgentState({
+                activeChatId: placeholderMessage.id,
+                isFinalAnswerMode: true,
+                finalAnswerContent: visibleMarkdownContent
+              })
+            },
+            onAnswerDelta: (markdownContent) => {
+              const visibleMarkdownContent = cleanAssistantGeneratedContent(markdownContent)
+              if (!visibleMarkdownContent.trim()) {
+                return
+              }
+              setAgentState({
+                activeChatId: placeholderMessage.id,
+                isFinalAnswerMode: true,
+                finalAnswerContent: visibleMarkdownContent
+              })
+            },
+            onComplete: async (result, steps, stopped) => {
+              // 获取 Agent 执行历史，保存完整的 ReAct 步骤
+              const { agentState } = useChatStore.getState()
+              const completedSteps = steps && steps.length > 0
+                ? steps
+                : agentState.completedSteps || []
+
+              // 如果是被终止的，构建包含终止信息的消息
+              let finalContent = result
+              if (stopped) {
+                // 保留已产生的步骤，并添加终止信息
+                const stepCount = completedSteps.length
+                if (stepCount > 0) {
+                  // 有已完成的步骤，显示这些步骤的内容
+                  finalContent = `${t('record.chat.input.stopped')}\n\n已完成 ${stepCount} 个步骤：\n${completedSteps.map((step, i) =>
+                    `${i + 1}. ${step.action?.tool || '思考'}`
+                  ).join('\n')}`
+                } else {
+                  // 没有已完成步骤，显示简单的终止信息
+                  finalContent = t('record.chat.input.stopped')
+                }
+              }
+
+              if (!stopped) {
+                const partialSuccessContent = buildPartialSuccessContent(result, agentState.toolCalls)
+                if (partialSuccessContent && /^工具 .+执行失败：|^工具 .+执行出错：|^Error:/.test(finalContent.trim())) {
+                  finalContent = partialSuccessContent
+                }
+              }
+
+              finalContent = sanitizeAgentFinalContent(finalContent)
+
+              if (finalContent) {
+                await runControl.writeDraft('final-answer.md', finalContent, finalContent.replace(/\s+/g, ' ').slice(0, 240))
+              }
+
+              const agentHistory = {
+                steps: completedSteps,
+                toolCalls: agentState.toolCalls,
+                events: agentState.agentEvents,
+                contextSnapshot: agentState.agentContextSnapshot,
+                harnessSnapshot: runControl.getSnapshot(),
+                runId: agentState.agentRunId || runControl.runId,
+                iterations: agentState.currentIteration,
+              }
+
+              // 获取当前消息状态，保留 ragSources 和 ragSourceDetails
+              const currentState = useChatStore.getState()
+              const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
+
+              // 更新占位消息，保留 RAG 相关字段
+              await saveChat({
+                id: placeholderMessage.id,
+                tagId: placeholderMessage.tagId,
+                conversationId: placeholderMessage.conversationId,
+                role: placeholderMessage.role,
+                type: placeholderMessage.type,
+                inserted: placeholderMessage.inserted,
+                createdAt: placeholderMessage.createdAt,
+                // 保留来自 currentMessage 的 RAG 相关字段
+                ragSources: currentMessage?.ragSources,
+                ragSourceDetails: currentMessage?.ragSourceDetails,
+                // 设置新的内容
+                content: finalContent,
+                agentHistory: JSON.stringify(agentHistory),
+              }, true)
+
+              if (!stopped) {
+                const hasSuccessfulToolCall = agentState.toolCalls.some(call => call.result?.success)
+                await triggerAutoExtractSuggestion({
+                  finalContent,
+                  placeholderMessageId: placeholderMessage.id,
+                  conversationId: placeholderMessage.conversationId,
+                  userInput: options?.displayText || effectiveInstruction,
+                  hasSuccessfulToolCall,
+                })
+              }
+
+              // 清空 Final Answer 模式状态
+              setAgentState({
+                activeChatId: undefined,
+                isFinalAnswerMode: false,
+                finalAnswerContent: undefined
+              })
+
+              // 清空 ref
+              agentHandlerRef.current = null
+            },
+            onError: async (error) => {
+              // 获取当前消息状态，保留 ragSources 和 ragSourceDetails
+              const currentState = useChatStore.getState()
+              const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
+
+              // 更新占位消息为错误信息，保留 RAG 相关字段
+              await saveChat({
+                id: placeholderMessage.id,
+                tagId: placeholderMessage.tagId,
+                conversationId: placeholderMessage.conversationId,
+                role: placeholderMessage.role,
+                type: placeholderMessage.type,
+                inserted: placeholderMessage.inserted,
+                createdAt: placeholderMessage.createdAt,
+                // 保留来自 currentMessage 的 RAG 相关字段
+                ragSources: currentMessage?.ragSources,
+                ragSourceDetails: currentMessage?.ragSourceDetails,
+                content: `Error: ${error}`,
+              }, true)
+
+              // 清空 Final Answer 模式状态
+              setAgentState({
+                activeChatId: undefined,
+                isFinalAnswerMode: false,
+                finalAnswerContent: undefined
+              })
+
+              // 清空 ref
+              agentHandlerRef.current = null
+            },
+          })
+
+          // 保存到 ref
+          agentHandlerRef.current = agentHandler
+
+          // 使用统一的上下文构建器
+          const useArticleStore = (await import('@/stores/article')).default
+          const articleStore = useArticleStore.getState()
+
+          const contextResult = await buildChatContext({
+            linkedResources: effectiveLinkedResources,
+            linkedResourcePreviews,
+            linkedResourcePreview,
+            quoteData,
+            isRagEnabled,
+            webSearchEnabled,
+            userQuery: effectiveInstruction,
+            contextBudget: AGENT_CONTEXT_TOTAL_LIMIT,
+            currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
+            activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
+          })
+
+          const { context, ragSources, ragSourceDetails } = contextResult
+          const visibleRagSourceDetails = ragSourceDetails
+          const visibleRagSources = ragSources
+
+          // 如果启用了 Web 搜索，添加提示
+          let agentContext = context
+          if (webSearchEnabled) {
+            agentContext = `## 联网搜索\n\n用户已为本轮对话开启联网搜索。请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或正文提取不可用时再使用 web_fetch。\n\n当输出热门、最新、近期信息总结时，每个来源都必须用可点击 Markdown 链接呈现，例如 [来源标题](https://example.com)。总结语气要像给用户做清晰 briefing：说重点、讲影响、少用官方腔和学术腔。\n\n${context}`
+          }
+
+          await runControl.setContextPack({
+            tokenBudget: AGENT_CONTEXT_TOTAL_LIMIT,
+            items: buildHarnessContextItems({
+              userInput: effectiveInstruction,
+              context: agentContext,
+              ragSourceDetails: visibleRagSourceDetails,
+              forcedSkillIds: options?.forcedSkillIds,
+            }),
+          })
+
+          // 设置到 agentState，用于实时显示
+          if (visibleRagSources.length > 0) {
+            const filteredSourceDetails = visibleRagSourceDetails
+              .filter(d => d.sourceType !== 'web')
+              .map(d => ({
+                filepath: d.filepath,
+                filename: d.filename,
+                content: d.content,
+                sourceType: d.sourceType as 'rag' | 'current' | 'linked' | 'quote' | undefined,
+                startLine: d.startLine,
+                endLine: d.endLine,
+                from: d.from,
+                to: d.to,
+              }))
+            setAgentState({
+              ragSources: visibleRagSources,
+              ragSourceDetails: filteredSourceDetails,
+            })
+          }
+
+          // 保存本轮上下文来源到 AI 消息中
+          if (visibleRagSources.length > 0 || visibleRagSourceDetails.length > 0) {
+            await saveChat({
+              ...placeholderMessage,
+              ragSources: JSON.stringify(visibleRagSources),
+              ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
+            }, true)
+          }
+
+          // 构建消息数组
+          const { chats } = useChatStore.getState()
+          const { buildMessagesWithHistory } = await import('@/lib/ai/condense')
+
+          const messages = buildMessagesWithHistory(
+            chats,
+            undefined,
+            agentContext,
+            effectiveInstruction,
+            {
+              includeAssistantMessages: true,
+              includeLatestUserMessage: false,
+              maxUserMessages: shouldCarryUserHistoryForAgent(effectiveInstruction) ? 3 : 0,
+            }
+          )
+
+          return agentHandler.execute(effectiveInstruction, messages, imageUrls)
+        },
       })
-
-      const { context, ragSources, ragSourceDetails } = contextResult
-      const visibleRagSourceDetails = ragSourceDetails
-      const visibleRagSources = ragSources
-
-      // 如果启用了 Web 搜索，添加提示
-      let agentContext = context
-      if (webSearchEnabled) {
-        agentContext = `## 联网搜索\n\n用户已为本轮对话开启联网搜索。请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或正文提取不可用时再使用 web_fetch。\n\n${context}`
-      }
-
-      // 设置到 agentState，用于实时显示
-      if (visibleRagSources.length > 0) {
-        const filteredSourceDetails = visibleRagSourceDetails
-          .filter(d => d.sourceType !== 'web')
-          .map(d => ({
-            filepath: d.filepath,
-            filename: d.filename,
-            content: d.content,
-            sourceType: d.sourceType as 'rag' | 'current' | 'linked' | 'quote' | undefined,
-            startLine: d.startLine,
-            endLine: d.endLine,
-            from: d.from,
-            to: d.to,
-          }))
-        setAgentState({
-          ragSources: visibleRagSources,
-          ragSourceDetails: filteredSourceDetails,
-        })
-      }
-
-      // 保存本轮上下文来源到 AI 消息中
-      if (visibleRagSources.length > 0 || visibleRagSourceDetails.length > 0) {
-        await saveChat({
-          ...placeholderMessage,
-          ragSources: JSON.stringify(visibleRagSources),
-          ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
-        }, true)
-      }
-
-      // 构建消息数组
-      const { chats } = useChatStore.getState()
-      const { buildMessagesWithHistory } = await import('@/lib/ai/condense')
-
-      const messages = buildMessagesWithHistory(
-        chats,
-        undefined,
-        agentContext,
-        effectiveInstruction,
-        {
-          includeAssistantMessages: true,
-          includeLatestUserMessage: false,
-          maxUserMessages: shouldCarryUserHistoryForAgent(effectiveInstruction) ? 3 : 0,
-        }
-      )
-
-      await agentHandler.execute(effectiveInstruction, messages, imageUrls)
     } catch (error) {
       console.error('Agent execution error:', error)
     } finally {
@@ -1435,15 +1906,14 @@ export const ChatSend = forwardRef<{
       await orchestrator.run({
         userInput: requestText,
         route: effectiveRoute,
-        writerExecutor: async () => {
-          await handleWriterMode(imageUrls, effectiveInstruction, options)
-          return ''
-        },
+        forcedSkillIds: options?.forcedSkillIds,
+        webSearchEnabled,
+        writerExecutor: async () => handleWriterMode(imageUrls, effectiveInstruction, options),
       })
     } else if (effectiveRoute === 'chat') {
       await handleChatMode(imageUrls, effectiveInstruction, options)
     } else if (effectiveRoute === 'research') {
-      await handleClarifiedResearchMode(effectiveInstruction)
+      await handleClarifiedResearchMode(effectiveInstruction, options)
       keepLoading = abortControllerRef.current !== null
     } else {
       await handleAgentMode(imageUrls, effectiveInstruction, options)

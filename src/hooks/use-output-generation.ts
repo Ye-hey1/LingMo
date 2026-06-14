@@ -24,6 +24,8 @@ import {
   buildAccordionManualStyle,
   buildDarkTechStyle,
 } from "@/lib/output-workshop/html-builders"
+import { buildWechatArticle } from "@/lib/output-workshop/wechat-builder"
+import { isWechatStyleId } from "@/lib/output-workshop/wechat-styles"
 import {
   toWechatHtml,
   copyHtmlToClipboard,
@@ -64,6 +66,16 @@ import {
 } from "@/components/output-workshop/utils"
 import { normalizeOutputWorkshopHtml } from "@/lib/output-workshop/html-normalizer"
 import { buildTemplateOverridePrompt } from "@/components/output-workshop/workshop-controls"
+import {
+  buildMokaGenerationPrompt,
+  buildMokaRepairPrompt,
+  buildMokaHtml,
+  getMokaPalette,
+  hasMokaContentQualityIssue,
+  isMokaTemplateId,
+  parseMokaGenerationResult,
+} from "@/lib/output-workshop/moka"
+import type { MokaParsedResult } from "@/lib/output-workshop/moka"
 
 interface UseOutputGenerationOptions {
   // 外部只读值（通过 ref 避免频繁闭包更新）
@@ -77,6 +89,12 @@ interface UseOutputGenerationOptions {
   parsedDeckData: DeckParsed
   iframeRef: React.RefObject<HTMLIFrameElement | null>
   templateOverrides: TemplateOverrides
+  mokaMode?: "single" | "split"
+  mokaPlatform?: "xhs" | "wechat"
+  mokaStyleId?: string
+  mokaPaletteId?: string
+  mokaReferenceImageDataUrl?: string
+  mokaReferenceImageName?: string
   // 父组件 setters
   setGeneratedHtml: (html: string) => void
   // 跨切面回调
@@ -87,6 +105,127 @@ interface UseOutputGenerationOptions {
     instructions: string,
     source: string
   ) => void
+}
+
+const OUTPUT_WORKSHOP_MODEL_STORE_KEY = "outputWorkshopModel"
+
+interface MokaRenderMemory {
+  templateId: string
+  title: string
+  sourceLabel: string
+  generatedAt: string
+  referenceImageName?: string
+  result: MokaParsedResult
+}
+
+function fetchOutputWorkshopAiStream(
+  text: string,
+  onUpdate: (content: string) => void,
+  abortSignal?: AbortSignal,
+  imageUrls?: string[],
+  maxTokens?: number
+): Promise<string> {
+  return fetchAiStream(
+    text,
+    onUpdate,
+    abortSignal,
+    undefined,
+    undefined,
+    undefined,
+    imageUrls,
+    undefined,
+    undefined,
+    maxTokens,
+    undefined,
+    OUTPUT_WORKSHOP_MODEL_STORE_KEY
+  )
+}
+
+function cloneMokaResult(result: MokaParsedResult): MokaParsedResult {
+  return JSON.parse(JSON.stringify(result)) as MokaParsedResult
+}
+
+function isPathIndex(segment: string): boolean {
+  return /^\d+$/.test(segment)
+}
+
+function getPathValue(root: Record<string, unknown>, path: string): unknown {
+  const parts = path.split(".").filter(Boolean)
+  let current: unknown = root
+  for (const part of parts) {
+    if (!current || typeof current !== "object") return undefined
+    current = (current as Record<string, unknown>)[part]
+  }
+  return current
+}
+
+function setPathValue(root: Record<string, unknown>, path: string, value: unknown): boolean {
+  const parts = path.split(".").filter(Boolean)
+  if (parts.length === 0) return false
+
+  let current: Record<string, unknown> | unknown[] = root
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const part = parts[i]
+    const nextPart = parts[i + 1]
+    const key = isPathIndex(part) ? Number(part) : part
+    const holder = current as Record<string, unknown>
+    if (!holder[key] || typeof holder[key] !== "object") {
+      holder[key] = isPathIndex(nextPart) ? [] : {}
+    }
+    current = holder[key] as Record<string, unknown> | unknown[]
+  }
+
+  const finalPart = parts[parts.length - 1]
+  const finalKey = isPathIndex(finalPart) ? Number(finalPart) : finalPart
+  ;(current as Record<string, unknown>)[finalKey] = value
+  return true
+}
+
+function applyMokaTextEdit(result: MokaParsedResult, path: string, value: string): MokaParsedResult | null {
+  if (result.kind !== "ai-single" && result.kind !== "ai-split") return null
+  const next = cloneMokaResult(result)
+  if (next.kind !== "ai-single" && next.kind !== "ai-split") return null
+  const root = next.design as unknown as Record<string, unknown>
+  const normalizedValue = path.includes(".tags.") ? value.replace(/^#/, "").trim() : value.trim()
+  return setPathValue(root, path, normalizedValue) ? next : null
+}
+
+function sanitizeMokaInlineStyle(style: Record<string, string>): Record<string, string> {
+  const allowed = new Set(["left", "top", "marginLeft", "marginTop"])
+  return Object.fromEntries(
+    Object.entries(style).filter(([key, value]) => allowed.has(key) && /^-?\d+(?:\.\d+)?px$/.test(value))
+  )
+}
+
+function applyMokaStyleEdit(result: MokaParsedResult, path: string, style: Record<string, string>): MokaParsedResult | null {
+  if (result.kind !== "ai-single" && result.kind !== "ai-split") return null
+  const cleanStyle = sanitizeMokaInlineStyle(style)
+  if (Object.keys(cleanStyle).length === 0) return null
+  const next = cloneMokaResult(result)
+  if (next.kind !== "ai-single" && next.kind !== "ai-split") return null
+  const root = next.design as unknown as Record<string, unknown>
+  const existing = getPathValue(root, path)
+  const merged = {
+    ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing as Record<string, unknown> : {}),
+    ...cleanStyle,
+  }
+  if ("left" in cleanStyle || "top" in cleanStyle) {
+    delete merged.marginLeft
+    delete merged.marginTop
+  }
+  return setPathValue(root, path, merged) ? next : null
+}
+
+function applyMokaReorder(result: MokaParsedResult, from: number, to: number): MokaParsedResult | null {
+  if (result.kind !== "ai-split") return null
+  const slides = result.design.slides
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return null
+  if (from < 0 || to < 0 || from >= slides.length || to >= slides.length || from === to) return null
+  const next = cloneMokaResult(result)
+  if (next.kind !== "ai-split") return null
+  const [moved] = next.design.slides.splice(from, 1)
+  next.design.slides.splice(to > from ? to - 1 : to, 0, moved)
+  return next
 }
 
 export function useOutputGeneration({
@@ -100,6 +239,12 @@ export function useOutputGeneration({
   parsedDeckData,
   iframeRef,
   templateOverrides,
+  mokaMode = "split",
+  mokaPlatform = "xhs",
+  mokaStyleId = "ai",
+  mokaPaletteId = "coral",
+  mokaReferenceImageDataUrl,
+  mokaReferenceImageName,
   setGeneratedHtml,
   saveSnapshot,
 }: UseOutputGenerationOptions) {
@@ -108,6 +253,8 @@ export function useOutputGeneration({
   const [elapsed, setElapsed] = React.useState(0)
   const [progressText, setProgressText] = React.useState("")
   const [streamingHtml, setStreamingHtml] = React.useState("")
+  const [mokaRenderMemory, setMokaRenderMemory] = React.useState<MokaRenderMemory | null>(null)
+  const mokaRenderMemoryRef = React.useRef<MokaRenderMemory | null>(null)
 
   const [refining, setRefining] = React.useState(false)
   const [refineQuery, setRefineQuery] = React.useState("")
@@ -138,6 +285,12 @@ export function useOutputGeneration({
     customInstructions,
     generatedHtml,
     templateOverrides,
+    mokaMode,
+    mokaPlatform,
+    mokaStyleId,
+    mokaPaletteId,
+    mokaReferenceImageDataUrl,
+    mokaReferenceImageName,
   })
   latestRef.current = {
     selectedTemplateId,
@@ -148,6 +301,12 @@ export function useOutputGeneration({
     customInstructions,
     generatedHtml,
     templateOverrides,
+    mokaMode,
+    mokaPlatform,
+    mokaStyleId,
+    mokaPaletteId,
+    mokaReferenceImageDataUrl,
+    mokaReferenceImageName,
   }
 
   const buildExportBaseName = React.useCallback(() => {
@@ -178,6 +337,11 @@ export function useOutputGeneration({
     setLastExportRecord({ ...record, finishedAt: Date.now() })
   }, [])
 
+  const clearMokaRenderMemory = React.useCallback(() => {
+    mokaRenderMemoryRef.current = null
+    setMokaRenderMemory(null)
+  }, [])
+
   const resetGenerationState = React.useCallback(() => {
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
@@ -186,10 +350,11 @@ export function useOutputGeneration({
     setElapsed(0)
     setProgressText("")
     setStreamingHtml("")
+    clearMokaRenderMemory()
     setRefining(false)
     setRefineQuery("")
     setBuildStageId(null)
-  }, [])
+  }, [clearMokaRenderMemory])
 
   // 耗时计时器
   React.useEffect(() => {
@@ -207,6 +372,80 @@ export function useOutputGeneration({
     }
   }, [])
 
+  const renderMokaFromMemory = React.useCallback((memory: MokaRenderMemory) => {
+    const current = latestRef.current
+    const html = normalizeOutputWorkshopHtml(buildMokaHtml({
+      templateId: current.selectedTemplateId,
+      title: memory.title,
+      styleId: current.mokaStyleId,
+      sourceLabel: memory.sourceLabel,
+      generatedAt: memory.generatedAt,
+      themeColor: current.templateOverrides.themeColor,
+      paletteId: current.mokaPaletteId,
+      referenceImageName: memory.referenceImageName,
+      result: memory.result,
+    }))
+    return html
+  }, [])
+
+  React.useEffect(() => {
+    mokaRenderMemoryRef.current = mokaRenderMemory
+  }, [mokaRenderMemory])
+
+  const commitMokaResultUpdate = React.useCallback((updater: (result: MokaParsedResult) => MokaParsedResult | null) => {
+    const current = mokaRenderMemoryRef.current
+    if (!current) return
+    const nextResult = updater(current.result)
+    if (!nextResult) return
+    const nextMemory: MokaRenderMemory = {
+      ...current,
+      result: nextResult,
+    }
+    mokaRenderMemoryRef.current = nextMemory
+    setMokaRenderMemory(nextMemory)
+    setStreamingHtml("")
+    setGeneratedHtml(renderMokaFromMemory(nextMemory))
+  }, [renderMokaFromMemory, setGeneratedHtml])
+
+  const handleMokaTextEdit = React.useCallback((path: string, value: string) => {
+    commitMokaResultUpdate((result) => applyMokaTextEdit(result, path, value))
+  }, [commitMokaResultUpdate])
+
+  const handleMokaStyleEdit = React.useCallback((path: string, style: Record<string, string>) => {
+    commitMokaResultUpdate((result) => applyMokaStyleEdit(result, path, style))
+  }, [commitMokaResultUpdate])
+
+  const handleMokaReorder = React.useCallback((from: number, to: number) => {
+    commitMokaResultUpdate((result) => applyMokaReorder(result, from, to))
+  }, [commitMokaResultUpdate])
+
+  React.useEffect(() => {
+    if (!mokaRenderMemory) return
+    if (status === "generating" || status === "streaming" || refining) return
+
+    const current = latestRef.current
+    if (!isMokaTemplateId(current.selectedTemplateId)) return
+
+    const expectedKind = current.mokaMode === "single" ? "ai-single" : "ai-split"
+    if (mokaRenderMemory.result.kind !== expectedKind) return
+
+    const nextHtml = renderMokaFromMemory(mokaRenderMemory)
+    if (nextHtml && nextHtml !== current.generatedHtml) {
+      setGeneratedHtml(nextHtml)
+    }
+  }, [
+    mokaRenderMemory,
+    mokaMode,
+    mokaPaletteId,
+    mokaStyleId,
+    selectedTemplateId,
+    templateOverrides.themeColor,
+    status,
+    refining,
+    renderMokaFromMemory,
+    setGeneratedHtml,
+  ])
+
   // ---------------------------------------------------------------------------
   // AI 结构化内容生成
   // ---------------------------------------------------------------------------
@@ -219,6 +458,12 @@ export function useOutputGeneration({
       sourceContent: src,
       sourceLabel: label,
       customInstructions: instructions,
+      mokaMode: currentMokaMode,
+      mokaPlatform: currentMokaPlatform,
+      mokaStyleId: currentMokaStyleId,
+      mokaPaletteId: currentMokaPaletteId,
+      mokaReferenceImageDataUrl: referenceImage,
+      mokaReferenceImageName: referenceImageName,
     } = latestRef.current
 
     const trimmed = src.trim()
@@ -236,7 +481,8 @@ export function useOutputGeneration({
     setErrorMessage("")
     setGeneratedHtml("")
     setStreamingHtml("")
-    setProgressText("正在分析内容结构...")
+    clearMokaRenderMemory()
+    setProgressText("正在提炼内容结构...")
     setBuildStageId("parse")
     startTimeRef.current = Date.now()
     setElapsed(0)
@@ -245,18 +491,222 @@ export function useOutputGeneration({
     abortControllerRef.current = abortController
 
     try {
-      const isCustomAiOrSkillTemplate = tplId === "custom-ai-design" || !!tpl?.skillPrompt
-      if (isCustomAiOrSkillTemplate) {
-        setProgressText(tpl?.skillPrompt ? "AI 正在根据 Skill 设计规范直绘页面..." : "AI 正在根据设计规范自主构思并绘制排版中...")
+      if (isWechatStyleId(tplId)) {
+        setProgressText("正在套用公众号排版...")
+        setBuildStageId("template")
+
+        const html = normalizeOutputWorkshopHtml(buildWechatArticle({
+          styleId: tplId,
+          title: t || tpl?.name || "公众号图文",
+          subtitle: instructions || tpl?.description,
+          markdown: trimmed,
+          sourceLabel: label || "手动输入",
+          generatedAt: new Date().toLocaleString(),
+        }))
+
+        if (abortController.signal.aborted) {
+          setStatus("idle")
+          return
+        }
+
+        setProgressText("正在生成预览...")
+        setBuildStageId("preview")
+        setGeneratedHtml(html)
+        setStreamingHtml("")
+        saveSnapshot(html, t || tpl?.name || "公众号图文", tplId, instructions, trimmed)
+        setStatus("done")
+        setProgressText("生成完成")
+        toast({ title: "公众号排版生成完成！" })
+
+        try {
+          await saveCachedOutput(html)
+        } catch (debugError) {
+          console.error("缓存写入失败:", debugError)
+        }
+        return
+      }
+
+      if (isMokaTemplateId(tplId)) {
+        const forceMokaAiDesign = currentMokaStyleId === "ai"
+        const effectiveMokaKind = currentMokaMode === "single" ? "ai-single" : "ai-split"
+        const streamingReadyPattern = forceMokaAiDesign ? "styleConfig" : currentMokaMode === "single" ? "sections" : "slides"
+        const imageUrls = forceMokaAiDesign && referenceImage ? [referenceImage] : undefined
+        const mokaGenerationMaxTokens = forceMokaAiDesign
+          ? currentMokaMode === "single" ? 3200 : 4200
+          : currentMokaMode === "single" ? 1800 : 2800
+        const mokaRepairMaxTokens = forceMokaAiDesign
+          ? currentMokaMode === "single" ? 3600 : 4600
+          : currentMokaMode === "single" ? 2000 : 3000
+        const generatedAt = new Date().toLocaleString()
+        setProgressText(
+          forceMokaAiDesign
+            ? imageUrls ? "Moka AI 正在参考图片生成设计..." : "Moka AI 正在生成视觉设计..."
+            : "Moka AI 正在提炼卡片内容..."
+        )
+        setBuildStageId("parse")
+
+        const mokaPrompt = buildMokaGenerationPrompt({
+          templateId: tplId,
+          templateName: tpl?.name || "Moka 模板",
+          mokaMode: currentMokaMode,
+          mokaPlatform: currentMokaPlatform,
+          mokaStyleId: currentMokaStyleId,
+          mokaPaletteLabel: `${getMokaPalette(currentMokaPaletteId).label} ${getMokaPalette(currentMokaPaletteId).a}`,
+          forceAiDesign: forceMokaAiDesign,
+          title: t || tpl?.name || "Moka 卡片",
+          sourceLabel: label || "手动输入",
+          customInstructions: instructions,
+          sourceContent: trimmed,
+          hasReferenceImage: Boolean(imageUrls?.length),
+        })
+
+        let rawMokaJson = ""
+        await fetchOutputWorkshopAiStream(
+          mokaPrompt,
+          (content) => {
+            if (abortController.signal.aborted) return
+            rawMokaJson = content
+            setProgressText(forceMokaAiDesign ? "Moka AI 正在完善视觉结构..." : "Moka AI 正在提炼内容结构...")
+            setBuildStageId("parse")
+            const now = Date.now()
+            if (now - lastStreamingUpdateRef.current > 650 && content.includes(streamingReadyPattern)) {
+              lastStreamingUpdateRef.current = now
+              try {
+                const partial = parseMokaGenerationResult(tplId, content, trimmed, t || tpl?.name || "Moka 卡片", effectiveMokaKind)
+                if (!hasMokaContentQualityIssue(partial)) {
+                  const partialHtml = normalizeOutputWorkshopHtml(buildMokaHtml({
+                    templateId: tplId,
+                    title: t || tpl?.name || "Moka 卡片",
+                    styleId: currentMokaStyleId,
+                    sourceLabel: label || "手动输入",
+                    generatedAt,
+                    themeColor: latestRef.current.templateOverrides.themeColor,
+                    paletteId: currentMokaPaletteId,
+                    referenceImageName,
+                    result: partial,
+                  }))
+                  setStreamingHtml(partialHtml)
+                }
+              } catch {
+                // Partial AI design output can be incomplete while streaming.
+              }
+            }
+          },
+          abortController.signal,
+          imageUrls,
+          mokaGenerationMaxTokens
+        )
+
+        if (abortController.signal.aborted) {
+          setStatus("idle")
+          return
+        }
+
+        setProgressText(forceMokaAiDesign ? "正在渲染 Moka AI 设计..." : "正在套用 Moka 模板结构...")
+        setBuildStageId("template")
+
+        let parsed = parseMokaGenerationResult(tplId, rawMokaJson, trimmed, t || tpl?.name || "Moka 卡片", effectiveMokaKind)
+        if (hasMokaContentQualityIssue(parsed)) {
+          console.warn("【输出工坊】Moka AI 内容提炼未通过:", parsed.warning)
+          setProgressText("Moka AI 正在重新提炼文章精华...")
+          setBuildStageId("parse")
+
+          let repairedMokaJson = ""
+          const repairPrompt = buildMokaRepairPrompt({
+            mokaMode: currentMokaMode,
+            mokaPlatform: currentMokaPlatform,
+            mokaStyleId: currentMokaStyleId,
+            mokaPaletteLabel: `${getMokaPalette(currentMokaPaletteId).label} ${getMokaPalette(currentMokaPaletteId).a}`,
+            forceAiDesign: forceMokaAiDesign,
+            title: t || tpl?.name || "Moka 卡片",
+            sourceLabel: label || "手动输入",
+            customInstructions: instructions,
+            sourceContent: trimmed,
+            previousWarning: parsed.warning || "内容没有充分提炼原文核心观点",
+          })
+
+          await fetchOutputWorkshopAiStream(
+            repairPrompt,
+            (content) => {
+              if (abortController.signal.aborted) return
+              repairedMokaJson = content
+            },
+            abortController.signal,
+            imageUrls,
+            mokaRepairMaxTokens
+          )
+
+          if (abortController.signal.aborted) {
+            setStatus("idle")
+            return
+          }
+
+          const repaired = parseMokaGenerationResult(tplId, repairedMokaJson, trimmed, t || tpl?.name || "Moka 卡片", effectiveMokaKind)
+          const repairedHasIssue = hasMokaContentQualityIssue(repaired)
+          if (!repairedHasIssue) {
+            parsed = repaired
+          } else {
+            console.warn("【输出工坊】Moka AI 二次提炼仍未通过:", repaired.warning)
+          }
+        }
+
+        if (hasMokaContentQualityIssue(parsed)) {
+          throw new Error("Moka AI 没有从原文中提炼出可用的真实卡片内容，请补充材料细节或重新生成。")
+        }
+
+        const html = normalizeOutputWorkshopHtml(buildMokaHtml({
+          templateId: tplId,
+          title: t || tpl?.name || "Moka 卡片",
+          styleId: currentMokaStyleId,
+          sourceLabel: label || "手动输入",
+          generatedAt,
+          themeColor: latestRef.current.templateOverrides.themeColor,
+          paletteId: currentMokaPaletteId,
+          referenceImageName,
+          result: parsed,
+        }))
+
+        setProgressText("正在生成预览...")
+        setBuildStageId("preview")
+        setGeneratedHtml(html)
+        setStreamingHtml("")
+        const nextMokaMemory: MokaRenderMemory = {
+          templateId: tplId,
+          title: t || tpl?.name || "Moka 卡片",
+          sourceLabel: label || "手动输入",
+          generatedAt,
+          referenceImageName,
+          result: parsed,
+        }
+        mokaRenderMemoryRef.current = nextMokaMemory
+        setMokaRenderMemory(nextMokaMemory)
+        saveSnapshot(html, t || tpl?.name || "Moka 卡片", tplId, instructions, trimmed)
+        setStatus("done")
+        setProgressText("生成完成")
+        toast({ title: forceMokaAiDesign ? "Moka AI 设计生成完成！" : "Moka 卡片生成完成！" })
+
+        try {
+          await saveCachedOutput(html)
+        } catch (debugError) {
+          console.error("缓存写入失败:", debugError)
+        }
+        return
+      }
+
+      const isCustomAiOrCreativeTemplate = tplId === "custom-ai-design" || !!tpl?.skillPrompt
+      if (isCustomAiOrCreativeTemplate) {
+        setProgressText(tpl?.skillPrompt ? "AI 正在根据创意模板规范直绘页面..." : "AI 正在根据设计规范自主构思并绘制排版中...")
         setBuildStageId("template")
         setStatus("streaming")
 
         const customTemplateConstraints = tpl?.skillPrompt
-          ? `\n**当前选用的 AI 自由设计 Skill 规范 (${tpl.name})**:\n${tpl.skillPrompt}\n`
+          ? `\n**当前选用的 AI 自由创意模板规范 (${tpl.name})**:\n${tpl.skillPrompt}\n`
           : ""
 
         const creativePrompt = `${CREATIVE_DESIGN_PROMPT}
 ${customTemplateConstraints}
+**界面参数偏好（只作为输出边界，不是固定模板）**:
+下面的参数只约束尺寸、字体、主题色、安全区和导出偏好。请优先依据输入材料决定视觉母题、信息结构和布局骨架，不要因为这些参数生成固定套路。
 ${buildTemplateOverridePrompt(templateOverrides)}
 ${instructions ? `**用户额外设计要求**: ${instructions}\n` : ""}
 **主标题**: ${t || tpl?.name || "AI 创意设计成果"}
@@ -268,7 +718,7 @@ ${trimmed.slice(0, 15000)}
 ---`
 
         let finalHtml = ""
-        const rawHtml = await fetchAiStream(
+        const rawHtml = await fetchOutputWorkshopAiStream(
           creativePrompt,
           (content) => {
             if (abortController.signal.aborted) return
@@ -316,7 +766,7 @@ ${trimmed.slice(0, 15000)}
         return
       }
 
-      setProgressText("AI 正在提取结构化数据...")
+      setProgressText("AI 正在提炼页面数据...")
       setBuildStageId("parse")
 
       const extractionPrompt = `${EXTRACTION_PROMPT}
@@ -333,12 +783,12 @@ ${trimmed.slice(0, 15000)}
 
       let extractedJson = ""
 
-      await fetchAiStream(
+      await fetchOutputWorkshopAiStream(
         extractionPrompt,
         (content) => {
           if (abortController.signal.aborted) return
           extractedJson = content
-          setProgressText("AI 正在解析页面数据...")
+          setProgressText("AI 正在提炼页面数据...")
           setBuildStageId("parse")
         },
         abortController.signal
@@ -367,7 +817,7 @@ ${trimmed.slice(0, 15000)}
 
       const buildOptions = {
         title: reportTitle,
-        subtitle: reportSubtitle || `由 LingMo 输出工坊生成`,
+        subtitle: reportSubtitle || '',
         sections,
         sourceLabel: label || "手动输入",
         generatedAt: new Date().toLocaleString(),
@@ -498,7 +948,7 @@ ${query}
 `
 
       let finalHtml = ""
-      await fetchAiStream(
+      await fetchOutputWorkshopAiStream(
         refinePrompt,
         (content) => {
           if (abortController.signal.aborted) return
@@ -541,6 +991,7 @@ ${query}
 
       const repairedHtml = prepareOutputHtml(finalHtml)
       console.log("【输出工坊】AI微调修补完成。原始长度:", finalHtml.length, "修复后长度:", repairedHtml.length)
+      clearMokaRenderMemory()
       setGeneratedHtml(repairedHtml)
       setStreamingHtml("")
       const { title: t, selectedTemplateId: tplId, customInstructions: instr, sourceContent: src } = latestRef.current
@@ -674,6 +1125,14 @@ ${query}
       )
       if (result.canceled) return false
       rememberExport({ target: "smart-card", label: "智能卡片导出", fileName: result.fileName, filePath: result.filePath })
+      if (result.skipped?.length) {
+        const skippedPages = result.skipped.slice(0, 4).map((item) => `#${item.index + 1}`).join("、")
+        toast({
+          title: "智能卡片导出完成，部分页面已跳过",
+          description: `已导出 ${result.exportedCount ?? 0}/${result.totalCount ?? selectedIndices.length} 张；跳过 ${skippedPages}${result.skipped.length > 4 ? " 等页面" : ""}。`,
+        })
+        return false
+      }
     })
   }, [runExportTask, buildExportBaseName, rememberExport])
 
@@ -834,6 +1293,7 @@ ${query}
     exportProgressText,
     lastExportRecord,
     buildStageId,
+    mokaRenderMemory,
 
     // 部署状态
     vercelToken,
@@ -849,6 +1309,9 @@ ${query}
     handleGenerate,
     handleRefine,
     handleStop,
+    handleMokaTextEdit,
+    handleMokaStyleEdit,
+    handleMokaReorder,
 
     // 导出方法
     handleCopyWechatHtml,

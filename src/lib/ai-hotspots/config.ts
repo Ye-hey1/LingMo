@@ -2,6 +2,8 @@ export const AI_HOTSPOT_CONFIG = {
   refresh: {
     defaultCooldownMinutes: 30,
     archiveDays: 20,
+    dailyArchiveDays: 45,
+    trashRetentionDays: 14,
     defaultTranslateMaxNew: 80,
   },
   http: {
@@ -55,9 +57,13 @@ export const AI_HOTSPOT_CONFIG = {
       '机器人',
       '具身',
     ],
-    noiseKeywords: ['娱乐', '明星', '八卦', '足球', '篮球', '彩票', '旅游', '美食'],
+    noiseKeywords: ['娱乐', '明星', '八卦', '足球', '篮球', '彩票', '旅游', '美食', 'github.com', 'github.io', 'githubusercontent'],
     commerceNoiseKeywords: ['淘宝', '天猫', '京东', '拼多多', '促销', '优惠', '补贴', '下单'],
-    trustedAiSourceIds: ['aihot', 'aibase', 'aihubtoday'],
+    trustedAiSourceIds: [
+      'aihot', 'ai-hot-rss', 'aibase', 'aihubtoday',
+      'newsnow', 'wechat-rss', 'buzzing', 'zeli', 'techurls',
+      'lobsters', 'ithome', 'huxiu', '36kr', 'sspai',
+    ],
     enSignalPattern: /(?<![a-z0-9])(ai|aigc|llm|gpt|openai|anthropic|deepseek|gemini|claude|robot|robotics|machine learning|artificial intelligence|transformer|diffusion|agent)(?![a-z0-9])/i,
   },
 }

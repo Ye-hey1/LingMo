@@ -3,6 +3,8 @@
  * 为每种模板提供独特的视觉风格
  */
 
+import { escapeHtml } from "./shared/escape"
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -25,15 +27,6 @@ export interface BuildHtmlOptions {
 // ---------------------------------------------------------------------------
 // 辅助函数
 // ---------------------------------------------------------------------------
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
 
 function renderMarkdown(text: string): string {
   if (!text) return ''
@@ -995,7 +988,10 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
           <div class="rule rule-top"></div>
           <div class="rule rule-left"></div>
           <p class="kicker">${escapeHtml(contentBrand)} / Swiss Locked Mode</p>
-          <h2>${escapeHtml(section.title)}</h2>
+          <div class="slide-title-block">
+            <span class="slide-section-index">${String(index + 1).padStart(2, '0')}</span>
+            <h2>${escapeHtml(section.title)}</h2>
+          </div>
           <div class="statement">${renderMarkdown(statement)}</div>
           <div class="body-block">${body}</div>
           <div class="evidence-block">${bullets}</div>
@@ -1037,30 +1033,34 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       position: fixed;
       inset: 0 auto auto 0;
       width: 0;
-      height: 2px;
+      height: 3px;
       background: var(--accent);
       z-index: 20;
-      transition: width 240ms linear;
+      transition: width 180ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .deck {
       width: 100vw;
       height: 100vh;
-      display: flex;
-      overflow-x: auto;
-      scroll-snap-type: x mandatory;
-      scroll-behavior: smooth;
-      scrollbar-width: none;
-    }
-    .deck::-webkit-scrollbar { display: none; }
-    .gz-deck-slide {
-      min-width: 100vw;
-      height: 100vh;
-      flex-shrink: 0;
-      scroll-snap-align: center;
-      display: flex;
-      justify-content: center;
-      align-items: center;
       position: relative;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+    .gz-deck-slide {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 28px 28px 88px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(10px);
+      transition: opacity 180ms cubic-bezier(0.22, 1, 0.36, 1), transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .gz-deck-slide.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
     }
     .slide-frame {
       width: 1280px;
@@ -1069,7 +1069,7 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       border: 1px solid var(--ink);
       transform-origin: center center;
       flex-shrink: 0;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.12);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.08);
     }
     .slide-grid {
       position: relative;
@@ -1136,6 +1136,28 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       grid-column: 4 / 11;
       grid-row: 1 / 2;
     }
+    .slide-title-block {
+      position: relative;
+      z-index: 1;
+      grid-column: 2 / 8;
+      grid-row: 3 / 7;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto;
+      align-content: start;
+      gap: 18px;
+      overflow: hidden;
+    }
+    .slide-section-index {
+      width: max-content;
+      color: var(--accent);
+      border-top: 1px solid var(--accent);
+      padding-top: 8px;
+      font-size: 14px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
     h1,
     h2 {
       position: relative;
@@ -1153,10 +1175,10 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       line-height: 0.94;
     }
     h2 {
-      grid-column: 2 / 8;
-      grid-row: 3 / 6;
-      font-size: 52px;
-      line-height: 1;
+      min-height: 0;
+      overflow: hidden;
+      font-size: 42px;
+      line-height: 1.08;
     }
     .subtitle {
       position: relative;
@@ -1174,8 +1196,10 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       grid-column: 8 / 16;
       grid-row: 3 / 6;
       color: var(--accent);
-      font-size: 38px;
-      line-height: 1.08;
+      min-height: 0;
+      overflow: hidden;
+      font-size: 30px;
+      line-height: 1.18;
       font-weight: 300;
       text-wrap: balance;
     }
@@ -1188,6 +1212,7 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       font-size: 16px;
       line-height: 1.75;
       overflow: hidden;
+      min-height: 0;
     }
     .evidence-block {
       position: relative;
@@ -1195,6 +1220,7 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       grid-column: 12 / 16;
       grid-row: 6 / 9;
       overflow: hidden;
+      min-height: 0;
     }
     .slide-body,
     .point-list li {
@@ -1231,7 +1257,7 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
     .cover .template-code {
       grid-column: 1 / 3;
       grid-row: 1 / 2;
-      font-size: 72px;
+      font-size: 62px;
       line-height: 0.82;
       font-weight: 300;
       letter-spacing: 0;
@@ -1257,6 +1283,7 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
     .agenda h2 {
       grid-column: 2 / 7;
       grid-row: 3 / 5;
+      font-size: 48px;
     }
     .agenda-list {
       position: relative;
@@ -1287,12 +1314,17 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       line-height: 1.18;
       font-weight: 300;
     }
-    .layout-split h2 { grid-column: 2 / 9; }
+    .layout-split .slide-title-block {
+      grid-column: 2 / 9;
+      grid-row: 3 / 6;
+    }
     .layout-split .statement {
       grid-column: 2 / 9;
-      grid-row: 6 / 8;
-      font-size: 28px;
+      grid-row: 6 / 9;
+      font-size: 26px;
       color: var(--ink);
+      border-top: 1px solid var(--fine-line);
+      padding-top: 14px;
     }
     .layout-split .body-block {
       grid-column: 10 / 13;
@@ -1302,10 +1334,12 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       grid-column: 13 / 16;
       grid-row: 3 / 8;
     }
-    .layout-evidence h2 {
+    .layout-evidence .slide-title-block {
       grid-column: 2 / 15;
       grid-row: 3 / 5;
-      font-size: 64px;
+    }
+    .layout-evidence h2 {
+      font-size: 44px;
     }
     .layout-evidence .statement {
       grid-column: 2 / 8;
@@ -1320,6 +1354,14 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
     .layout-evidence .evidence-block {
       grid-column: 12 / 16;
       grid-row: 6 / 8;
+    }
+    .layout-statement:last-child h2 {
+      grid-column: 2 / 8;
+      grid-row: 3 / 5;
+    }
+    .layout-statement:last-child .statement {
+      grid-column: 8 / 16;
+      grid-row: 3 / 7;
     }
     table {
       width: 100%;
@@ -1354,23 +1396,33 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       gap: 10px;
       transform: translateX(-50%);
       border: 1px solid var(--ink);
-      padding: 4px;
+      padding: 5px;
       background: var(--paper);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
     }
     .nav button {
       border: 1px solid transparent;
-      padding: 7px 12px;
+      min-width: 68px;
+      padding: 8px 12px;
       color: var(--ink);
       background: transparent;
       cursor: pointer;
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 0.1em;
-      transition: background 160ms ease, color 160ms ease;
+      transition: background 160ms cubic-bezier(0.22, 1, 0.36, 1), color 160ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .nav button:hover {
       background: var(--ink);
       color: var(--paper);
+    }
+    .nav button:disabled {
+      cursor: not-allowed;
+      opacity: 0.38;
+    }
+    .nav button:disabled:hover {
+      background: transparent;
+      color: var(--ink);
     }
     .dots { display: flex; gap: 5px; padding: 0 5px; }
     .dot {
@@ -1381,39 +1433,24 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
     }
     .dot.active { background: var(--accent); }
     @media (max-width: 860px) {
-      body { overflow: auto; }
-      .deck { height: auto; min-height: 100vh; display: block; overflow: visible; }
-      .gz-deck-slide { min-width: 0; height: auto; min-height: 100vh; padding: 18px; display: block; }
-      .slide-frame { width: 100%; aspect-ratio: auto; min-height: calc(100vh - 36px); }
+      body { overflow: hidden; }
+      .deck { height: 100vh; overflow: hidden; }
+      .gz-deck-slide { padding: 14px 12px 74px; }
+      .slide-frame { width: 1280px; height: 720px; min-height: 0; }
       .slide-grid {
-        min-height: calc(100vh - 36px);
-        display: block;
-        padding: 28px 24px;
+        height: 100%;
+        display: grid;
+        padding: 40px 48px;
       }
-      .slide-grid::before,
-      .rule { display: none; }
-      .template-code,
-      .slide-count,
-      .kicker,
-      h1,
-      h2,
-      .subtitle,
-      .statement,
-      .body-block,
-      .evidence-block,
-      .slide-footer,
-      .cover .cover-meta,
-      .agenda-list {
-        display: block;
-        margin-bottom: 18px;
+      .nav { bottom: 12px; transform: translateX(-50%) scale(0.88); transform-origin: bottom center; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .deck-progress,
+      .gz-deck-slide,
+      .nav button,
+      .dot {
+        transition: none;
       }
-      h1 { font-size: 46px; }
-      h2,
-      .layout-evidence h2 { font-size: 36px; }
-      .statement,
-      .layout-split .statement,
-      .layout-evidence .statement { font-size: 22px; }
-      .nav { display: none; }
     }
   </style>
 </head>
@@ -1480,12 +1517,11 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
     </section>
   </div>
   <nav class="nav" aria-label="Deck navigation">
-    <button id="prevBtn">←</button>
+    <button id="prevBtn" aria-label="上一页">Prev</button>
     <div class="dots" id="dotsContainer"></div>
-    <button id="nextBtn">→</button>
+    <button id="nextBtn" aria-label="下一页">Next</button>
   </nav>
   <script>
-    const deck = document.querySelector('.deck');
     const slides = Array.from(document.querySelectorAll('.gz-deck-slide'));
     const prevBtn = document.getElementById('prevBtn');
     const nextBtn = document.getElementById('nextBtn');
@@ -1505,11 +1541,15 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
       slides.forEach((slide, i) => slide.classList.toggle('active', i === activeIndex));
       dots.forEach((dot, i) => dot.classList.toggle('active', i === activeIndex));
       progress.style.width = ((activeIndex / Math.max(1, slides.length - 1)) * 100) + '%';
+      prevBtn.disabled = activeIndex === 0;
+      nextBtn.disabled = activeIndex === slides.length - 1;
+      prevBtn.setAttribute('aria-disabled', String(prevBtn.disabled));
+      nextBtn.setAttribute('aria-disabled', String(nextBtn.disabled));
     }
  
     function go(delta) {
       const next = Math.max(0, Math.min(slides.length - 1, activeIndex + delta));
-      deck.scrollTo({ left: next * window.innerWidth, behavior: 'smooth' });
+      if (next === activeIndex) return;
       setActive(next);
     }
  
@@ -1521,35 +1561,19 @@ export function buildGuizangDeck(options: BuildHtmlOptions): string {
     });
 
     function resizeSlides() {
-      if (window.innerWidth <= 860) {
-        const frames = document.querySelectorAll('.slide-frame');
-        frames.forEach(frame => {
-          frame.style.transform = '';
-        });
-        return;
-      }
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       const frames = document.querySelectorAll('.slide-frame');
       frames.forEach(frame => {
-        const scaleX = (vw - 80) / 1280;
-        const scaleY = (vh - 80) / 720;
-        const scale = Math.min(scaleX, scaleY);
+        const scaleX = (vw - 56) / 1280;
+        const scaleY = (vh - 126) / 720;
+        const scale = Math.max(0.12, Math.min(1, scaleX, scaleY));
         frame.style.transform = \`scale(\${scale})\`;
       });
     }
     window.addEventListener('resize', resizeSlides);
     window.addEventListener('load', resizeSlides);
  
-    let scrollFrame = 0;
-    deck.addEventListener('scroll', () => {
-      if (scrollFrame) return;
-      scrollFrame = window.requestAnimationFrame(() => {
-        setActive(Math.round(deck.scrollLeft / Math.max(1, window.innerWidth)));
-        scrollFrame = 0;
-      });
-    }, { passive: true });
-
     // 初始化
     resizeSlides();
     setTimeout(resizeSlides, 100);
@@ -3301,7 +3325,7 @@ export function buildGuizangSocialCard(options: BuildHtmlOptions): string {
       font-family: 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
     }
     .card-stack {
-      width: min(100%, 540px);
+      width: min(100%, 520px);
       display: grid;
       gap: 28px;
     }
@@ -3312,7 +3336,7 @@ export function buildGuizangSocialCard(options: BuildHtmlOptions): string {
       overflow: hidden;
       background: var(--paper);
       border: 1px solid var(--ink);
-      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.06);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.06);
     }
     .card-grid {
       position: absolute;
@@ -3321,12 +3345,12 @@ export function buildGuizangSocialCard(options: BuildHtmlOptions): string {
       grid-template-columns: repeat(12, minmax(0, 1fr));
       grid-template-rows: repeat(16, minmax(0, 1fr));
       gap: 8px;
-      padding: 44px 42px 36px;
+      padding: 36px 38px 32px;
     }
     .card-grid::before {
       content: "";
       position: absolute;
-      inset: 44px 42px 36px;
+      inset: 36px 38px 32px;
       pointer-events: none;
       background:
         repeating-linear-gradient(90deg, transparent 0, transparent calc(8.333% - 1px), rgba(17,17,17,0.035) calc(8.333% - 1px), rgba(17,17,17,0.035) 8.333%),
@@ -3382,12 +3406,14 @@ export function buildGuizangSocialCard(options: BuildHtmlOptions): string {
     h1 {
       position: relative;
       z-index: 1;
-      grid-column: 1 / 12;
-      grid-row: 4 / 8;
-      align-self: end;
+      grid-column: 1 / 11;
+      grid-row: 3 / 7;
+      align-self: start;
       color: var(--ink);
-      font-size: 50px;
-      line-height: 0.98;
+      min-height: 0;
+      overflow: hidden;
+      font-size: 42px;
+      line-height: 1.04;
       font-weight: 300;
       letter-spacing: 0;
       text-wrap: balance;
@@ -3396,11 +3422,13 @@ export function buildGuizangSocialCard(options: BuildHtmlOptions): string {
       position: relative;
       z-index: 1;
       grid-column: 1 / 10;
-      grid-row: 4 / 8;
-      align-self: end;
+      grid-row: 3 / 6;
+      align-self: start;
       color: var(--ink);
-      font-size: 42px;
-      line-height: 1.02;
+      min-height: 0;
+      overflow: hidden;
+      font-size: 34px;
+      line-height: 1.1;
       font-weight: 300;
       letter-spacing: 0;
       text-wrap: balance;
@@ -3409,24 +3437,46 @@ export function buildGuizangSocialCard(options: BuildHtmlOptions): string {
       position: relative;
       z-index: 1;
       grid-column: 1 / 8;
-      grid-row: 9 / 12;
+      grid-row: 7 / 9;
       color: var(--accent);
-      font-size: 22px;
-      line-height: 1.35;
+      min-height: 0;
+      overflow: hidden;
+      font-size: 18px;
+      line-height: 1.42;
       font-weight: 300;
       text-wrap: balance;
     }
-    .directory {
+    .hero-line {
+      position: relative;
+      z-index: 1;
+      grid-column: 8 / 12;
+      grid-row: 7 / 9;
+      min-height: 0;
+      overflow: hidden;
+      align-self: start;
+      border-top: 1px solid var(--ink);
+      padding-top: 12px;
+      color: #302d29;
+      font-size: 15px;
+      line-height: 1.55;
+      font-weight: 500;
+      text-wrap: pretty;
+    }
+    .directory,
+    .directory-list {
       position: relative;
       z-index: 1;
       grid-column: 1 / 12;
-      grid-row: 12 / 16;
+      grid-row: 10 / 15;
       list-style: none;
       display: grid;
-      align-content: end;
-      gap: 10px;
+      align-content: start;
+      gap: 8px;
+      min-height: 0;
+      overflow: hidden;
     }
-    .directory li {
+    .directory li,
+    .directory-list li {
       display: grid;
       grid-template-columns: 42px minmax(0, 1fr);
       gap: 12px;
@@ -3434,54 +3484,77 @@ export function buildGuizangSocialCard(options: BuildHtmlOptions): string {
       border-top: 1px solid var(--fine-line);
       padding-top: 8px;
     }
-    .directory span {
+    .directory span,
+    .directory-list span {
       color: var(--accent);
       font-size: 10px;
       font-weight: 700;
     }
-    .directory strong {
+    .directory strong,
+    .directory-list strong {
       color: var(--ink);
       font-size: 14px;
       line-height: 1.22;
       font-weight: 400;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
     }
     .detail-index {
       position: relative;
       z-index: 1;
-      grid-column: 1 / 4;
-      grid-row: 9 / 13;
+      grid-column: 10 / 13;
+      grid-row: 3 / 5;
+      justify-self: end;
+      align-self: start;
       color: var(--accent);
-      font-size: 96px;
-      line-height: 0.82;
+      font-size: 56px;
+      line-height: 0.9;
       font-weight: 300;
       letter-spacing: 0;
     }
     .detail-body {
       position: relative;
       z-index: 1;
-      grid-column: 5 / 12;
-      grid-row: 9 / 15;
+      grid-column: 1 / 12;
+      grid-row: 7 / 15;
       overflow: hidden;
       border-top: 1px solid var(--ink);
-      padding-top: 14px;
+      padding-top: 12px;
+      display: grid;
+      align-content: start;
+      gap: 12px;
     }
     .card-copy,
     .card-list li {
       color: #302d29;
-      font-size: 15px;
-      line-height: 1.62;
+      font-size: 14px;
+      line-height: 1.58;
       font-weight: 400;
+    }
+    .card-copy {
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 5;
+      -webkit-box-orient: vertical;
     }
     .card-list {
       list-style: none;
       display: flex;
       flex-direction: column;
-      gap: 9px;
-      margin-top: 12px;
+      gap: 8px;
+      margin-top: 0;
+      min-height: 0;
+      overflow: hidden;
     }
     .card-list li {
       position: relative;
       padding-left: 18px;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
     }
     .card-list li::before {
       content: "—";
@@ -3491,22 +3564,24 @@ export function buildGuizangSocialCard(options: BuildHtmlOptions): string {
     }
     .card-footer {
       grid-column: 1 / 13;
-      grid-row: 16 / 17;
+      grid-row: 15 / 17;
       align-self: end;
       display: flex;
       justify-content: space-between;
       border-top: 1px solid var(--fine-line);
-      padding-top: 10px;
+      padding-top: 8px;
+      line-height: 1.2;
     }
     .cover-card::after {
       content: "";
       position: absolute;
       right: 42px;
-      top: 50%;
-      width: 76px;
-      height: 76px;
+      top: 92px;
+      width: 40px;
+      height: 40px;
       border: 1px solid var(--accent);
-      transform: translateY(-50%);
+      opacity: 0.45;
+      pointer-events: none;
     }
     .detail-card:nth-of-type(odd) {
       background: #fbfaf6;
@@ -3514,14 +3589,19 @@ export function buildGuizangSocialCard(options: BuildHtmlOptions): string {
     @media (max-width: 560px) {
       body { padding: 12px; }
       .card-stack { width: 100%; gap: 16px; }
-      .card-grid { padding: 30px 28px 26px; gap: 6px; }
-      .card-grid::before { inset: 30px 28px 26px; }
-      h1 { font-size: 36px; }
-      h2 { font-size: 30px; }
-      .lead { font-size: 18px; }
-      .detail-index { font-size: 64px; }
+      .card-grid { padding: 28px 26px 24px; gap: 6px; }
+      .card-grid::before { inset: 28px 26px 24px; }
+      h1 { font-size: 32px; }
+      h2 { font-size: 26px; }
+      .lead,
+      .hero-line { font-size: 14px; }
+      .directory-list { gap: 5px; }
+      .directory-list li { grid-template-columns: 30px minmax(0, 1fr); gap: 8px; padding-top: 5px; }
+      .directory-list strong { font-size: 12px; -webkit-line-clamp: 1; }
+      .detail-index { font-size: 42px; }
       .card-copy,
-      .card-list li { font-size: 14px; }
+      .card-list li { font-size: 13px; }
+      .card-footer { font-size: 8px; padding-top: 6px; }
     }
   </style>
 </head>

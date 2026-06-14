@@ -239,6 +239,13 @@ export function ControlLink() {
       return error
     }
     if (error instanceof Error) {
+      const httpStatus = error.message.match(/HTTP\s+(\d+)/i)?.[1]
+      if (httpStatus) {
+        return new LinkCaptureError(error.message, 'http', {
+          status: Number(httpStatus),
+        })
+      }
+
       const lowered = error.message.toLowerCase()
       if (
         lowered.includes('network')
@@ -267,6 +274,9 @@ export function ControlLink() {
       }
       if (error.status === 404) {
         return '目标网页不存在（404），请检查链接是否正确。'
+      }
+      if (error.status === 429) {
+        return '目标站点或提取服务请求过于频繁（429），暂时限流了。请稍后重试，或换一个可直接访问的链接。'
       }
       return `链接抓取失败（HTTP ${error.status ?? 'unknown'}）。请稍后重试，或更换链接。`
     }

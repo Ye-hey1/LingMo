@@ -1,6 +1,9 @@
 import type { AiHotspotItem } from './types'
 
-type DigestItem = Pick<AiHotspotItem, 'title' | 'url' | 'sourceName' | 'publishedAt' | 'tags'>
+type DigestItem = Pick<
+  AiHotspotItem,
+  'title' | 'url' | 'sourceName' | 'publishedAt' | 'tags' | 'score' | 'signalSummary' | 'signalEssence'
+>
 
 export function buildHotspotDigestMarkdown(params: {
   date: string
@@ -12,7 +15,9 @@ export function buildHotspotDigestMarkdown(params: {
   return [
     `# ${params.title} ${params.date}`,
     '',
-    '## 速览',
+    '> AI 信号雷达快照：用于快速复盘、筛选与后续笔记沉淀。',
+    '',
+    '## 精选速览',
     '',
     ...params.items.slice(0, 5).map(formatDigestItem),
     '',
@@ -43,5 +48,12 @@ function groupItemsByPrimaryTag(items: DigestItem[]): Record<string, DigestItem[
 }
 
 function formatDigestItem(item: DigestItem): string {
-  return `- [${item.title}](${item.url}) - ${item.sourceName}`
+  const details = [
+    `来源：${item.sourceName}`,
+    `热度：${item.score}`,
+    item.signalSummary ? `墨摘：${item.signalSummary}` : '',
+    item.signalEssence ? `精华：${item.signalEssence}` : '',
+  ].filter(Boolean)
+
+  return `- [${item.title}](${item.url})\n  ${details.join('\n  ')}`
 }

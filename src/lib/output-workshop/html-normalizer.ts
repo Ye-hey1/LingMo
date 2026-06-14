@@ -3,11 +3,32 @@
  */
 
 const STYLE_ID = "lingmo-output-workshop-layout-guard"
+const STYLE_VERSION = "2026-06-layout-animate-typeset"
 
 const LAYOUT_GUARD_CSS = `
+  /* Output Workshop quality guard: layout, motion, and typography polish. */
   *, *::before, *::after {
     box-sizing: border-box;
     min-width: 0;
+  }
+
+  :root {
+    --ow-space-1: 4px;
+    --ow-space-2: 8px;
+    --ow-space-3: 12px;
+    --ow-space-4: 16px;
+    --ow-space-6: 24px;
+    --ow-space-8: 32px;
+    --ow-space-12: 48px;
+    --ow-text-xs: 0.75rem;
+    --ow-text-sm: 0.875rem;
+    --ow-text-base: 1rem;
+    --ow-text-lg: 1.125rem;
+    --ow-text-xl: 1.35rem;
+    --ow-text-2xl: 1.65rem;
+    --ow-text-3xl: 2rem;
+    --ow-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ow-ease-quick: cubic-bezier(0.25, 1, 0.5, 1);
   }
 
   html {
@@ -16,6 +37,8 @@ const LAYOUT_GUARD_CSS = `
     overflow-x: hidden;
     text-size-adjust: 100%;
     -webkit-text-size-adjust: 100%;
+    font-kerning: normal;
+    font-optical-sizing: auto;
   }
 
   body {
@@ -24,6 +47,8 @@ const LAYOUT_GUARD_CSS = `
     overflow-x: hidden;
     overflow-wrap: anywhere;
     word-break: normal;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
   }
 
   img, svg, video, canvas, iframe {
@@ -36,6 +61,22 @@ const LAYOUT_GUARD_CSS = `
 
   table {
     max-width: 100%;
+    border-collapse: collapse;
+  }
+
+  table:not(.gz-deck-grid):not(.slide-grid) {
+    display: block;
+    overflow-x: auto;
+  }
+
+  th, td {
+    vertical-align: top;
+  }
+
+  pre {
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: pre-wrap;
   }
 
   pre, code {
@@ -43,8 +84,32 @@ const LAYOUT_GUARD_CSS = `
     overflow-wrap: anywhere;
   }
 
-  p, li, blockquote, figcaption, td, th, h1, h2, h3, h4, h5, h6 {
+  p, li, blockquote, figcaption, td, th, h1, h2, h3, h4, h5, h6,
+  [class*="title"],
+  [class*="heading"],
+  [class*="subtitle"],
+  [class*="body"],
+  [class*="caption"],
+  [class*="summary"],
+  [class*="label"] {
     overflow-wrap: anywhere;
+    hyphens: auto;
+  }
+
+  h1, h2, h3 {
+    text-wrap: balance;
+    letter-spacing: 0 !important;
+  }
+
+  p, li, blockquote, figcaption {
+    text-wrap: pretty;
+  }
+
+  p, blockquote, figcaption,
+  [class*="body"],
+  [class*="copy"],
+  [class*="description"] {
+    line-height: 1.6;
   }
 
   ul, ol {
@@ -64,6 +129,42 @@ const LAYOUT_GUARD_CSS = `
     min-width: 0;
   }
 
+  :is(a, button, summary, input, textarea, select, [role="button"], [tabindex]):focus-visible {
+    outline: 2px solid color-mix(in srgb, currentColor 55%, transparent);
+    outline-offset: 3px;
+  }
+
+  :is(a, button, summary, [role="button"]) {
+    touch-action: manipulation;
+  }
+
+  :is(a, button, summary, [role="button"],
+    [class*="card"],
+    [class*="section"],
+    [class*="panel"],
+    [class*="block"],
+    [class*="slide"],
+    [class*="tag"],
+    [class*="badge"]) {
+    transition-property: transform, opacity, color, background-color, border-color, box-shadow, filter;
+    transition-duration: 180ms;
+    transition-timing-function: var(--ow-ease-out);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    :is(button, summary, [role="button"]):hover {
+      transform: translateY(-1px);
+    }
+  }
+
+  [style*="background-clip: text"],
+  [style*="-webkit-background-clip: text"],
+  [class*="gradient-text"] {
+    background-image: none !important;
+    -webkit-text-fill-color: currentColor !important;
+    color: inherit;
+  }
+
   .gz-deck-slide,
   .slide-frame,
   .deck-slide,
@@ -79,6 +180,58 @@ const LAYOUT_GUARD_CSS = `
   .learning-card,
   .flashcard {
     max-width: 100%;
+  }
+
+  .gz-deck-slide,
+  .slide-frame,
+  .deck-slide,
+  .slide,
+  .gz-social-card,
+  .cover-card,
+  .detail-card,
+  .xhs-card,
+  .waterfall-card,
+  .learning-card,
+  .flashcard {
+    overflow: hidden;
+  }
+
+  @media (max-width: 720px) {
+    body {
+      min-height: 100dvh;
+    }
+
+    h1 {
+      font-size: clamp(1.75rem, 9vw, 3rem);
+      line-height: 1.12;
+    }
+
+    h2 {
+      font-size: clamp(1.3rem, 6vw, 2rem);
+    }
+
+    :is(.reader-container, .manual-wrapper, .tech-wrapper, .dashboard-wrapper, .business-layout, .bento-grid, .waterfall-grid, .cards-grid, main):not(.gz-deck-slide):not(.slide) {
+      max-width: 100% !important;
+    }
+
+    :is(.columns, .grid, .bento-grid, .dashboard-grid, .stats-grid, .content-grid, .waterfall-grid):not(.gz-deck-grid):not(.slide-grid) {
+      grid-template-columns: 1fr !important;
+    }
+
+    :is(.sidebar, .toc, .glass-sidebar, .business-sidebar) {
+      max-width: 100% !important;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 
 `
@@ -165,9 +318,14 @@ function ensureMetaViewport(html: string): string {
 }
 
 export function injectOutputWorkshopLayoutGuard(html: string): string {
-  if (!html || html.includes(`id="${STYLE_ID}"`) || html.includes(`id='${STYLE_ID}'`)) return html
+  if (!html) return html
 
-  const style = `<style id="${STYLE_ID}">${LAYOUT_GUARD_CSS}</style>`
+  const style = `<style id="${STYLE_ID}" data-version="${STYLE_VERSION}">${LAYOUT_GUARD_CSS}</style>`
+  const existingStyleRegex = new RegExp(`<style\\b(?=[^>]*\\bid=["']${STYLE_ID}["'])[^>]*>[\\s\\S]*?<\\/style>`, "i")
+  if (existingStyleRegex.test(html)) {
+    return html.replace(existingStyleRegex, style)
+  }
+
   if (/<\/head>/i.test(html)) {
     return html.replace(/<\/head>/i, `${style}</head>`)
   }

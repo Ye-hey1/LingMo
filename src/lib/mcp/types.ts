@@ -91,7 +91,16 @@ export interface CallToolResult {
 }
 
 // 服务器状态
-export type ServerStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+export type ServerStatus =
+  | 'disabled'
+  | 'pending'
+  | 'disconnected'
+  | 'connecting'
+  | 'connected'
+  | 'failed'
+  | 'error'
+  | 'needs_auth'
+  | 'needs_permission'
 
 // 服务器运行时状态
 export interface MCPServerState {
@@ -101,4 +110,9 @@ export interface MCPServerState {
   resources: MCPResource[]
   error?: string
   connectedAt?: number
+  lastAttemptedAt?: number
+  lastToolRefreshAt?: number
+  staleTools?: boolean
+  authRequired?: boolean
+  permissionRequired?: boolean
 }

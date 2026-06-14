@@ -10,7 +10,8 @@ import { getSyncRepoName } from '@/lib/sync/repo-utils';
 import { getRemoteFileContent } from '@/lib/sync/remote-file';
 import { Store } from '@tauri-apps/plugin-store';
 import { locales } from '@/lib/locales';
-import { type AgentState, type ToolCall } from '@/lib/agent'
+import { type AgentEvent, type AgentState, type ToolCall } from '@/lib/agent'
+import type { ResearchProgressView } from '@/lib/research/progress-status'
 import type { LinkedResource } from '@/lib/files'
 import type { Conversation } from '@/db/conversations'
 import { S3Config, WebDAVConfig } from '@/types/sync'
@@ -200,11 +201,50 @@ export interface McpToolCall {
   timestamp: number
 }
 
+export interface ResearchRuntimeState {
+  runId?: string
+  sessionId?: string
+  activeChatId?: number
+  query?: string
+  startedAt?: number
+  isRunning: boolean
+  progressView: ResearchProgressView | null
+  events: AgentEvent[]
+  sourceCount: number
+  evidenceCount: number
+  cacheHits: number
+  cacheMisses: number
+}
+
+function createEmptyResearchRun(): ResearchRuntimeState {
+  return {
+    isRunning: false,
+    progressView: null,
+    events: [],
+    sourceCount: 0,
+    evidenceCount: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+  }
+}
+
 interface ChatState {
   loading: boolean
   setLoading: (loading: boolean) => void
   researchRunning: boolean
   setResearchRunning: (running: boolean) => void
+  researchRun: ResearchRuntimeState
+  startResearchRun: (payload: {
+    runId: string
+    activeChatId?: number
+    query?: string
+    startedAt?: number
+    sessionId?: string
+  }) => void
+  recordResearchEvent: (event: AgentEvent) => void
+  updateResearchProgressView: (view: ResearchProgressView | null) => void
+  finishResearchRun: () => void
+  resetResearchRun: () => void
   chatMode: ChatMode
   setChatMode: (mode: ChatMode) => Promise<void>
 
@@ -313,6 +353,97 @@ const useChatStore = create<ChatState>((set, get) => ({
   researchRunning: false,
   setResearchRunning: (researchRunning: boolean) => {
     set({ researchRunning })
+  },
+
+  researchRun: createEmptyResearchRun(),
+  startResearchRun: (payload) => {
+    set({
+      researchRun: {
+        ...createEmptyResearchRun(),
+        ...payload,
+        startedAt: payload.startedAt || Date.now(),
+        isRunning: true,
+      },
+    })
+  },
+  recordResearchEvent: (event) => {
+    const current = get().researchRun
+    const payload = event.payload || {}
+    const cacheStats = payload.cacheStats && typeof payload.cacheStats === 'object'
+      ? payload.cacheStats as { hits?: unknown; misses?: unknown }
+      : null
+    const nextCacheHits = typeof cacheStats?.hits === 'number'
+      ? cacheStats.hits
+      : typeof payload.cacheHits === 'number'
+        ? payload.cacheHits
+        : current.cacheHits
+    const nextCacheMisses = typeof cacheStats?.misses === 'number'
+      ? cacheStats.misses
+      : typeof payload.cacheMisses === 'number'
+        ? payload.cacheMisses
+        : current.cacheMisses
+    const nextSourceCount = typeof payload.sourceCount === 'number'
+      ? payload.sourceCount
+      : event.type === 'research.source_added'
+        ? current.sourceCount + 1
+        : current.sourceCount
+    const nextEvidenceCount = typeof payload.evidenceCount === 'number'
+      ? payload.evidenceCount
+      : event.type === 'research.evidence_added'
+        ? current.evidenceCount + 1
+        : current.evidenceCount
+
+    set({
+      researchRun: {
+        ...current,
+        runId: event.runId || current.runId,
+        sessionId: typeof payload.sessionId === 'string' ? payload.sessionId : current.sessionId,
+        events: [...current.events, event].slice(-500),
+        sourceCount: nextSourceCount,
+        evidenceCount: nextEvidenceCount,
+        cacheHits: nextCacheHits,
+        cacheMisses: nextCacheMisses,
+        isRunning: event.type === 'research.error' ? false : current.isRunning,
+        progressView: current.progressView
+          ? {
+              ...current.progressView,
+              sourceCount: Math.max(current.progressView.sourceCount, nextSourceCount),
+              evidenceCount: Math.max(current.progressView.evidenceCount, nextEvidenceCount),
+              cacheHits: nextCacheHits,
+              cacheMisses: nextCacheMisses,
+            }
+          : current.progressView,
+      },
+    })
+  },
+  updateResearchProgressView: (progressView) => {
+    const current = get().researchRun
+    set({
+      researchRun: {
+        ...current,
+        progressView: progressView
+          ? {
+              ...progressView,
+              cacheHits: current.cacheHits || progressView.cacheHits,
+              cacheMisses: current.cacheMisses || progressView.cacheMisses,
+            }
+          : null,
+      },
+    })
+  },
+  finishResearchRun: () => {
+    const current = get().researchRun
+    set({
+      researchRun: {
+        ...current,
+        activeChatId: undefined,
+        isRunning: false,
+        progressView: null,
+      },
+    })
+  },
+  resetResearchRun: () => {
+    set({ researchRun: createEmptyResearchRun() })
   },
 
   chatMode: 'agent',

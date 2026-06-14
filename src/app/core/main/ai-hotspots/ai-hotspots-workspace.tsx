@@ -1,38 +1,43 @@
 'use client'
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   AlertCircle,
-  BookOpenCheck,
   Bookmark,
   Clipboard,
-  Clock,
+  Copy,
+  ExternalLink,
+  FileText,
   Heart,
   Layers3,
-  Loader2,
   Newspaper,
-  RefreshCcw,
+  Radar,
   Rss,
-  Settings,
+  Save,
+  Search,
   Sparkles,
-  Tag,
+  Trash2,
+  WandSparkles,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { toast } from '@/hooks/use-toast'
 import emitter from '@/lib/emitter'
-import type { AiHotspotItem, AiHotspotSourceStatus, AiHotspotView } from '@/lib/ai-hotspots'
+import { AI_HOT_FEATURED_FEED_NAME } from '@/lib/ai-hotspots'
+import type { AiHotspotFilters, AiHotspotItem, AiHotspotSourceStatus, AiHotspotView } from '@/lib/ai-hotspots'
 import { createAiHotspotChatContext } from '@/lib/ai-hotspots/chat-context'
 import { cn } from '@/lib/utils'
 import useArticleStore from '@/stores/article'
 import { useAiHotspotsStore } from '@/stores/ai-hotspots'
 import { useSidebarStore } from '@/stores/sidebar'
 import { HotspotDigestView, type HotspotDigestScope } from './hotspot-digest-view'
-import { HotspotFilterBar } from './hotspot-filter-bar'
+import { HotspotFilterBar, type HotspotViewMode } from './hotspot-filter-bar'
+import { HotspotItem } from './hotspot-item'
 import { HotspotList } from './hotspot-list'
 import { HotspotSettingsDialog } from './hotspot-settings-dialog'
 import { HotspotSourceView } from './hotspot-source-view'
-import { formatHotspotTime, getPrimaryHotspotTag, getSourceHealthText } from './hotspot-utils'
+import { formatHotspotTime, getHotspotHost, getPrimaryHotspotTag } from './hotspot-utils'
 
 type TopicOption = {
   key: string
@@ -40,18 +45,183 @@ type TopicOption = {
   count: number
 }
 
+type RadarViewMeta = {
+  view: AiHotspotView
+  label: string
+  hint: string
+  icon: ReactNode
+}
+
+interface AiHotspotsWorkspaceProps {
+  onClose?: () => void
+}
+
+const RADAR_VIEWS: RadarViewMeta[] = [
+  { view: 'featured', label: '精选', hint: '高价值信号', icon: <Sparkles className="size-4" /> },
+  { view: 'all', label: '全部信号', hint: '按时间浏览', icon: <Newspaper className="size-4" /> },
+  { view: 'clusters', label: '主题簇', hint: '按分类聚合', icon: <Layers3 className="size-4" /> },
+  { view: 'digest', label: 'AI 日报', hint: '生成 Markdown', icon: <Clipboard className="size-4" /> },
+  { view: 'sources', label: '信源库', hint: '增删改来源', icon: <Rss className="size-4" /> },
+  { view: 'favorites', label: '收藏', hint: '重点跟进', icon: <Heart className="size-4" /> },
+  { view: 'saved', label: '已沉淀', hint: '快照笔记', icon: <Bookmark className="size-4" /> },
+  { view: 'trash', label: '回收站', hint: '自动清理', icon: <Trash2 className="size-4" /> },
+]
+
+const SIGNAL_PAGE_SIZE = 50
+
+/** 将 feedName 显示名称映射表（与 store 中一致） */
+const FEED_NAME_MAP_WS: Record<string, string> = {
+  'www.axios.com': 'Axios', 'axios.com': 'Axios',
+  'www.bbc.com': 'BBC', 'bbc.com': 'BBC',
+  'www.newyorker.com': 'The New Yorker', 'newyorker.com': 'The New Yorker',
+  'www.producthunt.com': 'Product Hunt', 'producthunt.com': 'Product Hunt',
+  'www.theatlantic.com': 'The Atlantic', 'theatlantic.com': 'The Atlantic',
+  'econ.st': 'The Economist', 'dlvr.it': 'DLVR.it',
+  // github removed - not AI news focused
+  'zhihu': '知乎', 'weibo': '微博', 'bilibili': 'B站',
+  'juejin': '掘金', 'v2ex': 'V2EX', 'sspai': '少数派',
+  '36kr': '36氪', 'huxiu': '虎嗅', 'ithome': 'IT之家',
+  'solidot': 'Solidot', 'guokr': '果壳', 'oschina': '开源中国',
+  'hackernews': 'Hacker News', 'producthunt': 'Product Hunt',
+}
+
+function normalizeFeedNameForFilter(raw: string): string {
+  const trimmed = raw.trim()
+  if (FEED_NAME_MAP_WS[trimmed]) return FEED_NAME_MAP_WS[trimmed]
+  const noWww = trimmed.replace(/^www\./, '')
+  if (FEED_NAME_MAP_WS[noWww]) return FEED_NAME_MAP_WS[noWww]
+  if (/^[a-z0-9-]+\.(com|org|net|io|co|app|dev|cc|st)$/.test(noWww)) {
+    const name = noWww.split('.')[0]
+    return name.charAt(0).toUpperCase() + name.slice(1)
+  }
+  return trimmed
+}
+
 function normalizeTopic(value: string) {
   return value.trim().toLowerCase()
 }
 
-function getTopicKeyForItem(item: AiHotspotItem) {
-  return normalizeTopic(getPrimaryHotspotTag(item))
+/** 优先使用 lastSeenAt（抓取时间），让最新抓取的条目排在最前面 */
+function getItemTime(item: AiHotspotItem) {
+  const value = item.lastSeenAt ?? item.publishedAt ?? item.firstSeenAt
+  const time = value ? Date.parse(value) : 0
+  return Number.isFinite(time) ? time : 0
+}
+
+/** 按抓取时间倒序排列，最新抓取的在最前面 */
+function sortHotspotItems(items: AiHotspotItem[]) {
+  return [...items].sort((left, right) => getItemTime(right) - getItemTime(left))
+}
+
+function getPublishedItemTime(item: AiHotspotItem) {
+  const value = item.publishedAt ?? item.lastSeenAt ?? item.firstSeenAt
+  const time = value ? Date.parse(value) : 0
+  return Number.isFinite(time) ? time : 0
+}
+
+function sortFeedItems(items: AiHotspotItem[]) {
+  return [...items].sort((left, right) => getPublishedItemTime(right) - getPublishedItemTime(left))
+}
+
+function isActiveSignal(item: AiHotspotItem) {
+  return !item.deletedAt && !item.isIgnored
+}
+
+function isSavedSignal(item: AiHotspotItem) {
+  return Boolean(item.savedNotePath) || item.digestStatus === 'saved'
+}
+
+function isDailyIssueSignal(item: AiHotspotItem) {
+  return item.sourceId === 'ai-hot-rss' && item.feedName === 'AI HOT 日报'
+}
+
+function isFeaturedFeedSignal(item: AiHotspotItem) {
+  return item.sourceId === 'ai-hot-rss' && item.feedName === AI_HOT_FEATURED_FEED_NAME
+}
+
+function isDailyArticleSignal(item: AiHotspotItem) {
+  return item.meta?.feedRole === 'daily-article'
+}
+
+function isDailyDigestSignal(item: AiHotspotItem) {
+  return isDailyIssueSignal(item) || isDailyArticleSignal(item)
+}
+
+function getDailyArticleCount(items: AiHotspotItem[]) {
+  return items.filter(isDailyArticleSignal).length
+}
+
+function getLatestDailyIssueDate(items: AiHotspotItem[]) {
+  return items
+    .filter(isDailyIssueSignal)
+    .map(item => {
+      const fromTitle = item.title.match(/(\d{4}-\d{2}-\d{2})/)?.[1]
+      const time = item.publishedAt || item.lastSeenAt || item.firstSeenAt
+      return fromTitle || (time ? new Date(time).toISOString().slice(0, 10) : '')
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.localeCompare(left))[0] || ''
+}
+
+function formatRefreshTime(value: string | null) {
+  if (!value) return '尚未刷新'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '刷新时间未知'
+  return `上次刷新 ${date.toLocaleString()}`
+}
+
+function getLocalDayKey(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function itemMatchesTopic(item: AiHotspotItem, activeTopic: string) {
   if (activeTopic === 'all') return true
   const tags = item.tags.length > 0 ? item.tags : [getPrimaryHotspotTag(item)]
   return tags.some(tag => normalizeTopic(tag) === activeTopic)
+}
+
+function matchesQuery(item: AiHotspotItem, query: string) {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return true
+
+  const haystack = [
+    item.title,
+    item.titleOriginal || '',
+    item.titleEn || '',
+    item.titleZh || '',
+    item.summary || '',
+    item.signalSummary || '',
+    item.signalEssence || '',
+    item.sourceName,
+    item.feedName,
+    item.url,
+    ...item.tags,
+    ...item.impactAudience,
+  ].join(' ').toLowerCase()
+
+  return words.every(word => haystack.includes(word))
+}
+
+function matchesLooseFilters(item: AiHotspotItem, filters: AiHotspotFilters) {
+  if (filters.sourceId !== 'all' && item.sourceId !== filters.sourceId) return false
+  if (
+    filters.feedName !== 'all' &&
+    normalizeFeedNameForFilter(item.feedName) !== filters.feedName &&
+    normalizeFeedNameForFilter(item.sourceName) !== filters.feedName
+  ) return false
+  if (filters.status === 'unread' && item.isRead) return false
+  if (filters.status === 'favorite' && !item.isFavorite) return false
+  if (filters.status === 'saved' && !isSavedSignal(item)) return false
+  if (filters.status === 'ignored' && !item.isIgnored) return false
+  if (filters.status === 'deleted' && !item.deletedAt) return false
+  return matchesQuery(item, filters.query)
+}
+
+function pickFeaturedItems(items: AiHotspotItem[]) {
+  return sortFeedItems(items.filter(isFeaturedFeedSignal))
 }
 
 function buildTopicOptions(items: AiHotspotItem[]): TopicOption[] {
@@ -62,7 +232,6 @@ function buildTopicOptions(items: AiHotspotItem[]): TopicOption[] {
     for (const tag of tags.slice(0, 6)) {
       const key = normalizeTopic(tag)
       if (!key) continue
-
       const existing = counts.get(key)
       if (existing) {
         existing.count += 1
@@ -74,103 +243,106 @@ function buildTopicOptions(items: AiHotspotItem[]): TopicOption[] {
 
   return Array.from(counts.values())
     .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
-    .slice(0, 10)
+    .slice(0, 12)
 }
 
-function formatRefreshTime(value: string | null) {
-  if (!value) return '尚未刷新'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '刷新时间未知'
-  return `上次刷新 ${date.toLocaleString()}`
+function buildClusterGroups(items: AiHotspotItem[]) {
+  const groups = new Map<string, AiHotspotItem[]>()
+  for (const item of items) {
+    const tag = getPrimaryHotspotTag(item)
+    groups.set(tag, [...(groups.get(tag) || []), item])
+  }
+  return Array.from(groups.entries())
+    .map(([tag, groupItems]) => ({ tag, items: sortHotspotItems(groupItems) }))
+    .sort((left, right) => right.items.length - left.items.length || left.tag.localeCompare(right.tag))
 }
 
-function ViewPill({
+function getViewItems(params: {
+  view: AiHotspotView
+  items: AiHotspotItem[]
+  filteredItems: AiHotspotItem[]
+  filters: AiHotspotFilters
+}) {
+  const { view, items, filteredItems, filters } = params
+  const activeItems = items.filter(isActiveSignal)
+  const signalItems = filteredItems.filter(item => !isDailyDigestSignal(item))
+
+  if (view === 'featured') return pickFeaturedItems(signalItems)
+  if (view === 'all' || view === 'clusters') return signalItems
+  if (view === 'favorites') {
+    return sortHotspotItems(activeItems.filter(item => !isDailyDigestSignal(item) && item.isFavorite && matchesLooseFilters(item, filters)))
+  }
+  if (view === 'saved') {
+    return sortHotspotItems(activeItems.filter(item => !isDailyDigestSignal(item) && isSavedSignal(item) && matchesLooseFilters(item, filters)))
+  }
+  if (view === 'trash') {
+    return sortHotspotItems(items.filter(item => Boolean(item.deletedAt) && matchesLooseFilters(item, filters)))
+  }
+  return filteredItems
+}
+
+function getEmptyCopy(view: AiHotspotView, hasCachedItems: boolean, hasActiveFilters: boolean) {
+  if (view === 'featured') {
+    return {
+      title: hasCachedItems ? '当前没有匹配的精选信号' : '暂无精选信号',
+      description: hasCachedItems ? '调整筛选或刷新后，雷达会重新挑出高价值热点。' : '刷新后会从信源中提炼高价值 AI 信号。',
+    }
+  }
+  if (view === 'favorites') {
+    return {
+      title: hasActiveFilters ? '没有匹配的收藏' : '还没有收藏信号',
+      description: '点亮信号笺上的星标后，会集中放在这里。',
+    }
+  }
+  if (view === 'saved') {
+    return {
+      title: '还没有沉淀快照',
+      description: '在信号笺上点击保存快照，会生成 Markdown 笔记。',
+    }
+  }
+  if (view === 'trash') {
+    return {
+      title: '回收站是空的',
+      description: '删除的信号会短暂停留在这里，并按时间自动清理。',
+    }
+  }
+  return {
+    title: hasCachedItems && hasActiveFilters ? '没有匹配的信号' : '暂无 AI 热点缓存',
+    description: hasCachedItems && hasActiveFilters ? '调整搜索、来源或状态筛选后再看看。' : '点击刷新后会聚合默认来源和用户 RSS。',
+  }
+}
+
+function NavButton({
   active,
   count,
-  icon,
-  label,
-  onClick,
-}: {
-  active?: boolean
-  count?: number
-  icon: ReactNode
-  label: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      className={cn(
-        'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-all duration-150',
-        active
-          ? 'bg-foreground text-background shadow-sm'
-          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-      )}
-      title={label}
-      onClick={onClick}
-    >
-      {icon}
-      {label}
-      {typeof count === 'number' ? (
-        <span className={cn(
-          'ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] tabular-nums',
-          active ? 'bg-background/15 text-background' : 'bg-muted text-muted-foreground',
-        )}>
-          {count}
-        </span>
-      ) : null}
-    </button>
-  )
-}
-
-function MetricTile({
-  icon,
-  label,
-  value,
-}: {
-  icon: ReactNode
-  label: string
-  value: number | string
-}) {
-  return (
-    <div className="rounded-md border bg-background px-3 py-2">
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        {icon}
-        {label}
-      </div>
-      <div className="mt-1 text-lg font-semibold tabular-nums text-foreground">{value}</div>
-    </div>
-  )
-}
-
-function TopicButton({
-  active,
-  count,
-  label,
+  item,
   onClick,
 }: {
   active: boolean
   count: number
-  label: string
+  item: RadarViewMeta
   onClick: () => void
 }) {
   return (
     <button
       type="button"
-      aria-pressed={active}
       className={cn(
-        'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors',
+        'flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-left transition-colors',
         active
-          ? 'bg-foreground text-background'
-          : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground',
+          ? 'bg-[#165DFF] text-white shadow-sm'
+          : 'text-[#4E5968] hover:bg-[#F2F3F5] hover:text-[#1D2129]',
       )}
       onClick={onClick}
     >
-      <Tag className="size-3.5 shrink-0" />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className={cn('flex size-5 shrink-0 items-center justify-center', active ? 'text-white' : 'text-[#86909C]')}>
+        {item.icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-medium">{item.label}</span>
+      </span>
       <span className={cn(
-        'rounded-full px-1.5 py-0.5 text-[10px] tabular-nums',
-        active ? 'bg-background/15 text-background' : 'bg-background text-muted-foreground',
+        'text-[11px] tabular-nums',
+        active ? 'text-white/80' : 'text-[#C9CDD4]',
       )}>
         {count}
       </span>
@@ -178,153 +350,317 @@ function TopicButton({
   )
 }
 
-function SourceHealthRow({ source }: { source: AiHotspotSourceStatus }) {
+// Metric component removed - no longer used in sidebar
+
+function SourceMiniList({ sources }: { sources: AiHotspotSourceStatus[] }) {
+  const topSources = sources
+    .slice()
+    .sort((left, right) => Number(right.ok) - Number(left.ok) || right.itemCount - left.itemCount)
+    .slice(0, 5)
+
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs">
-      <span className={cn('size-2 shrink-0 rounded-full', source.ok ? 'bg-emerald-500' : 'bg-destructive')} />
-      <span className="min-w-0 flex-1 truncate text-foreground">{source.sourceName}</span>
-      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{source.itemCount}</span>
+    <div className="space-y-1">
+      {topSources.map(source => (
+        <div key={source.sourceId} className="flex min-w-0 items-center gap-2 rounded px-1 py-1 text-[12px] hover:bg-[#F2F3F5]">
+          <span className={cn('size-1.5 shrink-0 rounded-full', source.ok ? 'bg-[#00B42A]' : 'bg-[#F53F3F]')} />
+          <span className="min-w-0 flex-1 truncate text-[#4E5968]">{source.sourceName}</span>
+          <span className="shrink-0 tabular-nums text-[#86909C]">{source.itemCount}</span>
+        </div>
+      ))}
+      {topSources.length === 0 ? (
+        <div className="rounded bg-white px-2 py-3 text-center text-[12px] leading-5 text-[#86909C]">
+          刷新后显示信源状态。
+        </div>
+      ) : null}
     </div>
   )
 }
 
-function HotspotInsightPanel({
-  activeTopic,
-  favoriteCount,
-  items,
-  lastRefreshAt,
-  onTopicChange,
-  savedCount,
-  sources,
-  topicOptions,
-  unreadCount,
-  visibleItems,
+function SignalDetailPanel({
+  item,
+  open,
+  relatedItems,
+  onAddToDigest,
+  onClose,
+  onDeepDive,
+  onGenerateInsight,
+  onSaveSnapshot,
+  onSelectRelated,
 }: {
-  activeTopic: string
-  favoriteCount: number
-  items: AiHotspotItem[]
-  lastRefreshAt: string | null
-  onTopicChange: (topic: string) => void
-  savedCount: number
-  sources: AiHotspotSourceStatus[]
-  topicOptions: TopicOption[]
-  unreadCount: number
-  visibleItems: AiHotspotItem[]
+  item: AiHotspotItem | null
+  open: boolean
+  relatedItems: AiHotspotItem[]
+  onAddToDigest: (id: string) => void
+  onClose: () => void
+  onDeepDive: (id: string) => void
+  onGenerateInsight: (id: string) => void
+  onSaveSnapshot: (id: string) => void
+  onSelectRelated: (id: string) => void
 }) {
-  const okSourceCount = sources.filter(source => source.ok).length
-  const topSources = sources
-    .slice()
-    .sort((left, right) => Number(right.ok) - Number(left.ok) || right.itemCount - left.itemCount)
-    .slice(0, 6)
-  const readingQueue = visibleItems
-    .filter(item => !item.isRead)
-    .slice(0, 4)
-  const activeTopicLabel = activeTopic === 'all'
-    ? '全部分类'
-    : topicOptions.find(topic => topic.key === activeTopic)?.label || '当前分类'
+  if (!open || !item) {
+    return (
+      <aside className="hidden w-0 shrink-0 border-l border-transparent bg-white transition-[width] duration-200 xl:flex" aria-hidden="true">
+        <div className="hidden flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[#86909C]">
+          <Radar className="mb-3 size-9" />
+          选择一条信号查看详情
+        </div>
+      </aside>
+    )
+  }
+
+  const summary = item.signalSummary || item.summary || ''
+  const essence = item.signalEssence || ''
 
   return (
-    <aside className="hidden min-h-0 w-[320px] shrink-0 flex-col overflow-hidden border-l bg-muted/10 xl:flex">
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-4 p-4">
-          <section className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <Layers3 className="size-4 text-muted-foreground" />
-                热点概览
-              </div>
-              <span className="text-[11px] text-muted-foreground" title={formatRefreshTime(lastRefreshAt)}>
-                {formatRefreshTime(lastRefreshAt)}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <MetricTile icon={<Newspaper className="size-3.5" />} label="当前" value={visibleItems.length} />
-              <MetricTile icon={<BookOpenCheck className="size-3.5" />} label="未读" value={unreadCount} />
-              <MetricTile icon={<Heart className="size-3.5" />} label="收藏" value={favoriteCount} />
-              <MetricTile icon={<Bookmark className="size-3.5" />} label="已保存" value={savedCount} />
-            </div>
-          </section>
+    <aside className="hidden w-[360px] shrink-0 border-l border-[#E5E7EB] bg-[#FAFAFA] transition-[width] duration-200 xl:flex">
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* 顶部：标题 + 关闭 */}
+        <div className="shrink-0 border-b border-[#E5E7EB] bg-white px-4 py-3">
+          <div className="flex items-start justify-between gap-2">
+            <h3 className="flex-1 break-words text-sm font-semibold leading-5 text-[#1D2129]">{item.title}</h3>
+            <button
+              type="button"
+              className="shrink-0 rounded p-1 text-[#C9CDD4] hover:bg-[#F2F3F5] hover:text-[#4E5968]"
+              onClick={onClose}
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          <div className="mt-2 flex items-center gap-2 text-xs text-[#86909C]">
+            <span className="rounded bg-[#F7F8FA] px-1.5 py-0.5">{item.sourceName}</span>
+            <span>{formatHotspotTime(item.lastSeenAt || item.publishedAt)}</span>
+          </div>
+        </div>
 
-          <section className="rounded-md border bg-background p-2">
-            <div className="mb-2 flex items-center justify-between gap-2 px-1">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <Tag className="size-4 text-muted-foreground" />
-                分类聚合
-              </div>
-              <span className="text-[11px] text-muted-foreground">{activeTopicLabel}</span>
+        {/* 内容区 */}
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="space-y-3 p-4">
+            {/* 操作按钮 - 横向排列 */}
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
+                onClick={() => onSaveSnapshot(item.id)}
+              >
+                <Save className="size-3" />
+                {item.savedNotePath ? '快照' : '沉淀'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
+                onClick={() => onAddToDigest(item.id)}
+              >
+                <FileText className="size-3" />
+                日报
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
+                onClick={() => onDeepDive(item.id)}
+              >
+                <Search className="size-3" />
+                深挖
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
+                onClick={() => window.open(item.url, '_blank')}
+              >
+                <ExternalLink className="size-3" />
+                原文
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
+                onClick={() => navigator.clipboard?.writeText(item.url)}
+              >
+                <Copy className="size-3" />
+              </Button>
             </div>
-            <div className="space-y-1">
-              <TopicButton
-                active={activeTopic === 'all'}
-                count={items.length}
-                label="全部分类"
-                onClick={() => onTopicChange('all')}
-              />
-              {topicOptions.map(topic => (
-                <TopicButton
-                  key={topic.key}
-                  active={activeTopic === topic.key}
-                  count={topic.count}
-                  label={topic.label}
-                  onClick={() => onTopicChange(topic.key)}
-                />
+
+            {/* 标签 + 热度 */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {item.score >= 36 && <span className="rounded bg-[#F53F3F] px-1.5 py-0.5 text-[11px] font-medium text-white">高强度</span>}
+              {!item.isRead && <span className="rounded bg-[#165DFF] px-1.5 py-0.5 text-[11px] font-medium text-white">新信号</span>}
+              <span className={cn(
+                'rounded px-1.5 py-0.5 text-[11px] font-medium',
+                item.score >= 24 ? 'bg-[#FFF7E8] text-[#FF7D00]' : 'bg-[#F2F3F5] text-[#86909C]',
+              )}>
+                热度 {item.score}
+              </span>
+              {item.tags.slice(0, 3).map(tag => (
+                <span key={tag} className="rounded bg-[#F2F3F5] px-1.5 py-0.5 text-[11px] text-[#4E5968]">{tag}</span>
               ))}
             </div>
-          </section>
 
-          <section className="rounded-md border bg-background p-2">
-            <div className="mb-2 flex items-center justify-between gap-2 px-1">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <Rss className="size-4 text-muted-foreground" />
-                来源健康
-              </div>
-              <span className="text-[11px] text-muted-foreground">{okSourceCount}/{sources.length}</span>
-            </div>
-            {topSources.length > 0 ? (
-              <div className="space-y-0.5">
-                {topSources.map(source => (
-                  <SourceHealthRow key={source.sourceId} source={source} />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-md bg-muted/30 px-3 py-6 text-center text-xs leading-5 text-muted-foreground">
-                刷新后会显示每个来源的可用状态。
+            {/* 摘要 */}
+            {summary && (
+              <div className="rounded-lg border border-[#E5E7EB] bg-white p-3">
+                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#4E5968]">
+                  <Sparkles className="size-3.5 text-[#165DFF]" />
+                  内容摘要
+                </div>
+                <p className="text-sm leading-6 text-[#1D2129]">{summary}</p>
               </div>
             )}
-          </section>
 
-          <section className="rounded-md border bg-background p-3">
-            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-              <Clock className="size-4 text-muted-foreground" />
-              待读建议
-            </div>
-            {readingQueue.length > 0 ? (
-              <div className="space-y-3">
-                {readingQueue.map(item => (
-                  <div key={item.id} className="min-w-0">
-                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <span className="rounded bg-muted px-1.5 py-0.5">{getTopicKeyForItem(item).slice(0, 12)}</span>
-                      <span>{formatHotspotTime(item.publishedAt || item.lastSeenAt)}</span>
-                    </div>
-                    <div className="mt-1 line-clamp-2 text-xs font-medium leading-5 text-foreground">
-                      {item.title}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-md bg-muted/30 px-3 py-5 text-center text-xs leading-5 text-muted-foreground">
-                当前列表没有未读热点。
+            {/* 精华判断 */}
+            {essence && (
+              <div className="rounded-lg border border-[#FFE7BA] bg-[#FFFDF5] p-3">
+                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#946500]">
+                  <WandSparkles className="size-3.5" />
+                  精华判断
+                </div>
+                <p className="text-sm leading-6 text-[#4E5968]">{essence}</p>
               </div>
             )}
-          </section>
-        </div>
-      </ScrollArea>
+
+            {/* 生成按钮 */}
+            {(!item.signalSummary || !item.signalEssence) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-full gap-1.5 rounded text-xs shadow-none hover:bg-[#F2F3F5]"
+                onClick={() => onGenerateInsight(item.id)}
+              >
+                <WandSparkles className="size-3.5" />
+                AI 生成摘要
+              </Button>
+            )}
+
+            {/* 影响对象 */}
+            {item.impactAudience.length > 0 && (
+              <div>
+                <div className="mb-1.5 text-xs font-medium text-[#4E5968]">影响对象</div>
+                <div className="flex flex-wrap gap-1">
+                  {item.impactAudience.map(a => (
+                    <span key={a} className="rounded bg-[#E8F3FF] px-2 py-0.5 text-xs text-[#165DFF]">{a}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 证据线 */}
+            <div className="rounded-lg border border-[#E5E7EB] bg-white p-3">
+              <div className="mb-1.5 text-xs font-medium text-[#4E5968]">来源信息</div>
+              <div className="space-y-1 text-xs text-[#86909C]">
+                <div>信源：{item.sourceName} / {item.feedName}</div>
+                <div>站点：{getHotspotHost(item.url) || '未知'}</div>
+                <div>时间：{item.lastSeenAt || item.publishedAt}</div>
+              </div>
+            </div>
+
+            {/* 相关信号 */}
+            {relatedItems.length > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#4E5968]">
+                  <Layers3 className="size-3.5" />
+                  相关信号
+                </div>
+                <div className="space-y-1.5">
+                  {relatedItems.map(related => (
+                    <button
+                      key={related.id}
+                      type="button"
+                      className="w-full rounded border border-[#E5E7EB] bg-white px-3 py-2 text-left transition-colors hover:border-[#165DFF] hover:bg-[#F7FBFF]"
+                      onClick={() => onSelectRelated(related.id)}
+                    >
+                      <div className="line-clamp-2 text-xs font-medium leading-4 text-[#1D2129]">{related.title}</div>
+                      <div className="mt-1 text-[11px] text-[#C9CDD4]">{related.sourceName} · {formatHotspotTime(related.lastSeenAt || related.publishedAt)}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </ScrollArea>
+      </div>
     </aside>
   )
 }
 
-export function AiHotspotsWorkspace() {
+function ClusterView({
+  groups,
+  selectedItemId,
+  onAddToDigest,
+  onDelete,
+  onDeepDive,
+  onGenerateInsight,
+  onIgnore,
+  onMarkRead,
+  onRestore,
+  onSaveSnapshot,
+  onSelectItem,
+  onSendToChat,
+  onToggleFavorite,
+}: {
+  groups: Array<{ tag: string; items: AiHotspotItem[] }>
+  selectedItemId: string | null
+  onAddToDigest: (id: string) => void
+  onDelete: (id: string) => void
+  onDeepDive: (id: string) => void
+  onGenerateInsight: (id: string) => void
+  onIgnore: (id: string, ignored: boolean) => void
+  onMarkRead: (id: string, read: boolean) => void
+  onRestore: (id: string) => void
+  onSaveSnapshot: (id: string) => void
+  onSelectItem: (id: string) => void
+  onSendToChat: (id: string) => void
+  onToggleFavorite: (id: string) => void
+}) {
+  if (groups.length === 0) {
+    return (
+      <div className="flex h-[360px] flex-col items-center justify-center rounded-md border bg-background px-4 text-center">
+        <Layers3 className="mb-3 size-10 text-muted-foreground" />
+        <div className="text-sm font-medium">暂无主题簇</div>
+        <div className="mt-1 max-w-md text-sm leading-6 text-muted-foreground">
+          刷新或放宽筛选后，会按模型、工具、研究、算力等主题自动聚合。
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {groups.map(group => (
+        <section key={group.tag} className="space-y-2">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Layers3 className="size-4 text-muted-foreground" />
+            <h3 className="text-sm font-semibold">{group.tag}</h3>
+            <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{group.items.length} 条</span>
+          </div>
+          <div className="space-y-2">
+            {group.items.slice(0, 5).map(item => (
+              <HotspotItem
+                key={item.id}
+                item={item}
+                selected={selectedItemId === item.id}
+                onSelect={onSelectItem}
+                onToggleFavorite={onToggleFavorite}
+                onMarkRead={onMarkRead}
+                onSaveSnapshot={onSaveSnapshot}
+                onSendToChat={onSendToChat}
+                onDeepDive={onDeepDive}
+                onAddToDigest={onAddToDigest}
+                onIgnore={onIgnore}
+                onDelete={onDelete}
+                onRestore={onRestore}
+                onGenerateInsight={onGenerateInsight}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
+}
+
+export function AiHotspotsWorkspace({ onClose }: AiHotspotsWorkspaceProps) {
   const {
     view,
     items,
@@ -336,15 +672,23 @@ export function AiHotspotsWorkspace() {
     isLoading,
     isRefreshing,
     lastRefreshAt,
+    lastDailyAutoRefreshDate,
     error,
     refreshProgress,
     load,
     refresh,
+    refreshFeatured,
+    refreshDaily,
     setView,
     setFilters,
     toggleFavorite,
     markRead,
-    saveItemAsNote,
+    ignoreItem,
+    deleteItem,
+    restoreItem,
+    addItemToDigest,
+    generateItemInsight,
+    saveSnapshotAsNote,
     generateDigest,
     saveDigestAsNote,
     saveSettings,
@@ -360,43 +704,72 @@ export function AiHotspotsWorkspace() {
   const [isSavingDigest, setIsSavingDigest] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [activeTopic, setActiveTopic] = useState('all')
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
+  const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([])
+  const [viewMode, setViewMode] = useState<HotspotViewMode>('list')
+  const [displayCount, setDisplayCount] = useState(SIGNAL_PAGE_SIZE)
+  const dailyAutoRefreshDayRef = useRef<string | null>(null)
 
   useEffect(() => {
-    void load()
+    void load({ skipAutoRefresh: true })
   }, [load])
 
-  const baseFavoriteItems = useMemo(
-    () => filteredItems.filter(item => item.isFavorite),
-    [filteredItems],
+  const activeItems = useMemo(() => items.filter(isActiveSignal), [items])
+  const currentViewItems = useMemo(
+    () => getViewItems({ view, items, filteredItems, filters }),
+    [filters, filteredItems, items, view],
   )
-  const baseListItems = view === 'favorites' ? baseFavoriteItems : filteredItems
-  const topicOptions = useMemo(() => buildTopicOptions(baseListItems), [baseListItems])
+  const filterBarItems = view === 'featured'
+    ? pickFeaturedItems(items.filter(isActiveSignal))
+    : items
+  const topicOptions = useMemo(() => buildTopicOptions(currentViewItems), [currentViewItems])
   const visibleItems = useMemo(
-    () => baseListItems.filter(item => itemMatchesTopic(item, activeTopic)),
-    [activeTopic, baseListItems],
+    () => currentViewItems.filter(item => itemMatchesTopic(item, activeTopic)),
+    [activeTopic, currentViewItems],
   )
-  const favoriteCount = items.filter(item => item.isFavorite).length
-  const unreadCount = items.filter(item => !item.isRead).length
-  const savedCount = items.filter(item => Boolean(item.savedNotePath)).length
+  const pagedVisibleItems = useMemo(
+    () => visibleItems.slice(0, displayCount),
+    [displayCount, visibleItems],
+  )
+  const clusterGroups = useMemo(() => buildClusterGroups(visibleItems), [visibleItems])
+  const selectedItem = useMemo(
+    () => selectedItemId ? items.find(item => item.id === selectedItemId) || null : null,
+    [items, selectedItemId],
+  )
+  const relatedItems = useMemo(() => {
+    if (!selectedItem) return []
+    const relatedIds = new Set(selectedItem.relatedSignalIds)
+    return items.filter(item => relatedIds.has(item.id)).slice(0, 3)
+  }, [items, selectedItem])
+
+  const favoriteCount = activeItems.filter(item => item.isFavorite).length
+  const unreadCount = activeItems.filter(item => !item.isRead).length
+  const savedCount = activeItems.filter(isSavedSignal).length
+  const digestCount = activeItems.filter(item => item.digestStatus === 'added').length
+  const dailyIssueCount = items.filter(isDailyIssueSignal).length
+  const trashCount = items.filter(item => item.deletedAt).length
   const failedSourceCount = sources.filter(source => !source.ok).length
-  const allSourcesFailed = sources.length > 0 && failedSourceCount === sources.length
   const hasActiveFilters = Boolean(
     filters.query.trim() ||
     filters.timeRange !== '24h' ||
     filters.sourceId !== 'all' ||
+    filters.feedName !== 'all' ||
     filters.status !== 'all',
   )
-  const hasTopicFilter = activeTopic !== 'all'
-  const headerStatusText = isRefreshing
-    ? '刷新中'
-    : sources.length > 0
-      ? getSourceHealthText(sources)
-      : formatRefreshTime(lastRefreshAt)
-  const favoriteEmptyTitle = favoriteCount > 0 && hasActiveFilters ? '没有匹配的收藏热点' : '还没有收藏热点'
-  const favoriteEmptyDescription = favoriteCount > 0 && hasActiveFilters
-    ? '调整搜索、来源或状态筛选后再看看。'
-    : '在最新列表点亮星标后，会集中显示在这里。'
-  const showInsightPanel = view === 'latest' || view === 'favorites'
+  const viewCounts: Record<AiHotspotView, number> = {
+    featured: pickFeaturedItems(filteredItems).length,
+    all: filteredItems.length,
+    clusters: topicOptions.length,
+    digest: dailyIssueCount || digestCount,
+    sources: sources.length + userFeeds.length,
+    favorites: favoriteCount,
+    saved: savedCount,
+    trash: trashCount,
+  }
+  const showSignalList = view !== 'digest' && view !== 'sources'
+  const showDetailPanel = showSignalList && view !== 'trash'
+  const detailPanelOpen = showDetailPanel && Boolean(selectedItem)
+  const emptyCopy = getEmptyCopy(view, items.length > 0, hasActiveFilters || activeTopic !== 'all')
 
   useEffect(() => {
     if (activeTopic === 'all') return
@@ -405,21 +778,140 @@ export function AiHotspotsWorkspace() {
     }
   }, [activeTopic, topicOptions])
 
-  const handleViewChange = (nextView: AiHotspotView) => {
-    setView(nextView)
+  useEffect(() => {
+    setDisplayCount(SIGNAL_PAGE_SIZE)
+  }, [activeTopic, filters.query, filters.sourceId, filters.status, filters.timeRange, view])
+
+  useEffect(() => {
+    if (selectedItemId && !visibleItems.some(item => item.id === selectedItemId)) {
+      setSelectedItemId(null)
+    }
+  }, [selectedItemId, visibleItems])
+
+  useEffect(() => {
+    setSelectedBatchIds(current => current.filter(id => visibleItems.some(item => item.id === id)))
+  }, [visibleItems])
+
+  const handleRefresh = async () => {
+    const previousItemCount = items.length
+    const previousDailyArticleCount = getDailyArticleCount(items)
+    const previousLatestDailyIssueDate = getLatestDailyIssueDate(items)
+    let result = null
+    try {
+      result = await refresh({ force: true })
+    } catch (err) {
+      console.error('[handleRefresh] error:', err)
+    }
+
+    const state = useAiHotspotsStore.getState()
+    if (state.error) {
+      toast({ title: '刷新失败', description: state.error, variant: 'destructive' })
+      return
+    }
+
+    const addedItems = Math.max(0, state.items.length - previousItemCount)
+    const nextDailyArticleCount = getDailyArticleCount(state.items)
+    const addedDailyArticles = Math.max(0, nextDailyArticleCount - previousDailyArticleCount)
+    const nextLatestDailyIssueDate = getLatestDailyIssueDate(state.items)
+    const latestDailyChanged = Boolean(nextLatestDailyIssueDate && nextLatestDailyIssueDate !== previousLatestDailyIssueDate)
+    const rawCount = result?.snapshot.rawCount ?? 0
+
+    if (addedItems > 0 || addedDailyArticles > 0 || latestDailyChanged) {
+      toast({
+        title: 'AI 热点已刷新',
+        description: [
+          addedItems > 0 ? `新增 ${addedItems} 条信号` : '',
+          addedDailyArticles > 0 ? `新增 ${addedDailyArticles} 条日报详情` : '',
+          latestDailyChanged ? `最新日报 ${nextLatestDailyIssueDate}` : '',
+        ].filter(Boolean).join('，'),
+      })
+      return
+    }
+
+    toast({
+      title: rawCount > 0 ? '刷新完成，已同步最新来源' : '刷新完成，源站暂无新增内容',
+      description: nextLatestDailyIssueDate ? `当前最新日报 ${nextLatestDailyIssueDate}` : undefined,
+    })
   }
 
-  const handleRefresh = () => {
-    void refresh({ force: true })
+  const handleFeaturedRefresh = async () => {
+    const previousFeaturedCount = pickFeaturedItems(items).length
+    let result = null
+    try {
+      result = await refreshFeatured({ force: true })
+    } catch (err) {
+      console.error('[handleFeaturedRefresh] error:', err)
+    }
+
+    const state = useAiHotspotsStore.getState()
+    if (state.error) {
+      toast({ title: '刷新精选失败', description: state.error, variant: 'destructive' })
+      return
+    }
+
+    const nextFeaturedCount = pickFeaturedItems(state.items).length
+    const addedFeatured = Math.max(0, nextFeaturedCount - previousFeaturedCount)
+    const rawCount = result?.snapshot.rawCount ?? 0
+
+    toast({
+      title: addedFeatured > 0 ? 'AI HOT 精选已更新' : '精选已同步到最新',
+      description: addedFeatured > 0
+        ? `新增 ${addedFeatured} 条精选`
+        : rawCount > 0
+          ? `已按 ${AI_HOT_FEATURED_FEED_NAME} 重新校验 ${rawCount} 条`
+          : '源站暂无新增精选',
+    })
   }
 
-  const handleToggleFavorite = (id: string) => {
-    void toggleFavorite(id)
-  }
+  const handleDailyRefresh = useCallback(async (options: { autoRefreshDate?: string; silent?: boolean } = {}) => {
+    const previousDailyArticleCount = getDailyArticleCount(items)
+    const previousLatestDailyIssueDate = getLatestDailyIssueDate(items)
+    let result = null
+    try {
+      result = await refreshDaily({ force: true, autoRefreshDate: options.autoRefreshDate })
+    } catch (err) {
+      console.error('[handleDailyRefresh] error:', err)
+    }
 
-  const handleMarkRead = (id: string, read: boolean) => {
-    void markRead(id, read)
-  }
+    const state = useAiHotspotsStore.getState()
+    if (state.error) {
+      if (!options.silent) {
+        toast({ title: '刷新日报失败', description: state.error, variant: 'destructive' })
+      }
+      return
+    }
+
+    if (!result) return
+
+    const nextDailyArticleCount = getDailyArticleCount(state.items)
+    const addedDailyArticles = Math.max(0, nextDailyArticleCount - previousDailyArticleCount)
+    const nextLatestDailyIssueDate = getLatestDailyIssueDate(state.items)
+    const latestDailyChanged = Boolean(nextLatestDailyIssueDate && nextLatestDailyIssueDate !== previousLatestDailyIssueDate)
+    const latestDate = nextLatestDailyIssueDate || previousLatestDailyIssueDate
+
+    if (options.silent && !latestDailyChanged && addedDailyArticles === 0) {
+      return
+    }
+
+    toast({
+      title: latestDailyChanged ? 'AI 日报已更新' : '日报已同步到最新',
+      description: [
+        latestDate ? `当前最新日报 ${latestDate}` : '',
+        addedDailyArticles > 0 ? `新增 ${addedDailyArticles} 条日报详情` : '',
+        result.snapshot.rawCount > 0 && addedDailyArticles === 0 ? '已重新校验最新日报源' : '',
+      ].filter(Boolean).join('，'),
+    })
+  }, [items, refreshDaily])
+
+  useEffect(() => {
+    if (view !== 'digest' || isRefreshing) return
+
+    const today = getLocalDayKey()
+    if (lastDailyAutoRefreshDate === today || dailyAutoRefreshDayRef.current === today) return
+
+    dailyAutoRefreshDayRef.current = today
+    void handleDailyRefresh({ autoRefreshDate: today, silent: true })
+  }, [handleDailyRefresh, isRefreshing, lastDailyAutoRefreshDate, view])
 
   const openSavedNote = async (path: string) => {
     await loadFileTree({ skipRemoteSync: true })
@@ -427,7 +919,7 @@ export function AiHotspotsWorkspace() {
     setActiveFilePath(path)
   }
 
-  const handleSaveAsNote = async (id: string) => {
+  const handleSaveSnapshot = async (id: string) => {
     try {
       const existing = items.find(candidate => candidate.id === id)
       if (existing?.savedNotePath) {
@@ -435,17 +927,108 @@ export function AiHotspotsWorkspace() {
         return
       }
 
-      const path = await saveItemAsNote(id)
+      const path = await saveSnapshotAsNote(id)
       if (!path) return
       await openSavedNote(path)
-      toast({ title: '已保存为笔记', description: path })
+      toast({ title: '已保存热点快照', description: path })
     } catch (err) {
       toast({
-        title: '保存为笔记失败',
+        title: '保存快照失败',
         description: err instanceof Error ? err.message : String(err),
         variant: 'destructive',
       })
     }
+  }
+
+  const handleGenerateInsight = async (id: string) => {
+    try {
+      await generateItemInsight(id)
+      toast({ title: '信号概要已生成' })
+    } catch (err) {
+      toast({
+        title: '生成概要失败',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    await deleteItem(id)
+    toast({ title: '已移入回收站' })
+  }
+
+  const handleRestore = async (id: string) => {
+    await restoreItem(id)
+    toast({ title: '信号已恢复' })
+  }
+
+  const handleAddToDigest = async (id: string) => {
+    await addItemToDigest(id)
+    toast({ title: '已加入 AI 日报' })
+  }
+
+  const handleSelectItem = (id: string) => {
+    setSelectedItemId(id)
+  }
+
+  const handleSelectRelated = (id: string) => {
+    setSelectedItemId(id)
+  }
+
+  const handleCheckedChange = (id: string, checked: boolean) => {
+    setSelectedBatchIds(current => {
+      if (checked) {
+        return current.includes(id) ? current : [...current, id]
+      }
+      return current.filter(candidate => candidate !== id)
+    })
+  }
+
+  const handleBatchMarkRead = async (ids: string[]) => {
+    for (const id of ids) {
+      await markRead(id, true)
+    }
+    setSelectedBatchIds([])
+    toast({ title: `已标记 ${ids.length} 条信号为已读` })
+  }
+
+  const handleBatchFavorite = async (ids: string[]) => {
+    for (const id of ids) {
+      const item = items.find(candidate => candidate.id === id)
+      if (item && !item.isFavorite) {
+        await toggleFavorite(id)
+      }
+    }
+    setSelectedBatchIds([])
+    toast({ title: `已收藏 ${ids.length} 条信号` })
+  }
+
+  const handleBatchSaveSnapshot = async (ids: string[]) => {
+    try {
+      for (const id of ids) {
+        await saveSnapshotAsNote(id)
+      }
+      setSelectedBatchIds([])
+      toast({ title: `已沉淀 ${ids.length} 条快照` })
+    } catch (err) {
+      toast({
+        title: '批量沉淀失败',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleBatchDelete = async (ids: string[]) => {
+    for (const id of ids) {
+      await deleteItem(id)
+    }
+    setSelectedBatchIds([])
+    if (selectedItemId && ids.includes(selectedItemId)) {
+      setSelectedItemId(null)
+    }
+    toast({ title: `已移入回收站 ${ids.length} 条信号` })
   }
 
   const sendItemToChat = (id: string, mode: 'discuss' | 'deep-dive') => {
@@ -463,10 +1046,10 @@ export function AiHotspotsWorkspace() {
     try {
       const markdown = await generateDigest(scope)
       setDigestMarkdown(markdown)
-      toast({ title: '已生成热点摘要预览' })
+      toast({ title: '已生成日报预览' })
     } catch (err) {
       toast({
-        title: '生成摘要失败',
+        title: '生成日报失败',
         description: err instanceof Error ? err.message : String(err),
         variant: 'destructive',
       })
@@ -481,10 +1064,10 @@ export function AiHotspotsWorkspace() {
       const result = await saveDigestAsNote(scope)
       setDigestMarkdown(result.markdown)
       await openSavedNote(result.path)
-      toast({ title: '热点摘要已保存', description: result.path })
+      toast({ title: 'AI 日报已保存为 Markdown', description: result.path })
     } catch (err) {
       toast({
-        title: '保存摘要失败',
+        title: '保存日报失败',
         description: err instanceof Error ? err.message : String(err),
         variant: 'destructive',
       })
@@ -497,171 +1080,231 @@ export function AiHotspotsWorkspace() {
     if (!digestMarkdown) return
     try {
       await navigator.clipboard.writeText(digestMarkdown)
-      toast({ title: '已复制摘要 Markdown' })
+      toast({ title: '已复制 Markdown' })
     } catch {
       toast({ title: '复制失败', variant: 'destructive' })
     }
   }
 
+  const renderMain = () => {
+    if (view === 'digest') {
+      return (
+        <HotspotDigestView
+          items={items}
+          currentCount={filteredItems.length}
+          favoriteCount={favoriteCount}
+          unreadCount={unreadCount}
+          markdown={digestMarkdown}
+          isGenerating={isGeneratingDigest}
+          isRefreshing={isRefreshing}
+          isSaving={isSavingDigest}
+          refreshMessage={refreshProgress?.message}
+          onGenerate={(scope) => void handleGenerateDigest(scope)}
+          onSave={(scope) => void handleSaveDigest(scope)}
+          onCopy={() => void handleCopyDigest()}
+          onRefreshDaily={() => void handleDailyRefresh()}
+          onToggleFavorite={(id) => void toggleFavorite(id)}
+          onSaveSnapshot={(id) => void handleSaveSnapshot(id)}
+        />
+      )
+    }
+
+    if (view === 'sources') {
+      return (
+        <HotspotSourceView
+          sources={sources}
+          userFeeds={userFeeds}
+          isRefreshing={isRefreshing}
+          onRefresh={handleRefresh}
+          onAddUserFeed={addUserFeed}
+          onUpdateUserFeed={updateUserFeed}
+          onToggleUserFeed={async (id, enabled) => updateUserFeed(id, { enabled })}
+          onDeleteUserFeed={deleteUserFeed}
+        />
+      )
+    }
+
+    if (view === 'clusters') {
+      return (
+        <ClusterView
+          groups={clusterGroups}
+          selectedItemId={selectedItemId}
+          onSelectItem={setSelectedItemId}
+          onToggleFavorite={(id) => void toggleFavorite(id)}
+          onMarkRead={(id, read) => void markRead(id, read)}
+          onSaveSnapshot={(id) => void handleSaveSnapshot(id)}
+          onSendToChat={(id) => sendItemToChat(id, 'discuss')}
+          onDeepDive={(id) => sendItemToChat(id, 'deep-dive')}
+          onAddToDigest={(id) => void handleAddToDigest(id)}
+          onIgnore={(id, ignored) => void ignoreItem(id, ignored)}
+          onDelete={(id) => void handleDelete(id)}
+          onRestore={(id) => void handleRestore(id)}
+          onGenerateInsight={(id) => void handleGenerateInsight(id)}
+        />
+      )
+    }
+
+    return (
+      <HotspotList
+        activeTopicLabel={activeTopic === 'all' ? '' : topicOptions.find(topic => topic.key === activeTopic)?.label || '当前分类'}
+        items={pagedVisibleItems}
+        isLoading={isLoading}
+        isRefreshing={isRefreshing}
+        hasCachedItems={items.length > 0}
+        hasActiveFilters={hasActiveFilters || activeTopic !== 'all' || view !== 'all'}
+        emptyTitle={emptyCopy.title}
+        emptyDescription={emptyCopy.description}
+        refreshMessage={refreshProgress?.message}
+        totalCount={visibleItems.length}
+        hasMore={displayCount < visibleItems.length}
+        showFeaturedTrends={view === 'featured' && activeTopic === 'all'}
+        selectedItemId={selectedItemId}
+        selectedItemIds={selectedBatchIds}
+        trashMode={view === 'trash'}
+        viewMode={viewMode}
+        query={filters.query}
+        onBatchDelete={(ids) => void handleBatchDelete(ids)}
+        onBatchFavorite={(ids) => void handleBatchFavorite(ids)}
+        onBatchMarkRead={(ids) => void handleBatchMarkRead(ids)}
+        onBatchSaveSnapshot={(ids) => void handleBatchSaveSnapshot(ids)}
+        onClearTopic={() => setActiveTopic('all')}
+        onClearSelection={() => setSelectedBatchIds([])}
+        onCheckedChange={handleCheckedChange}
+        onRefresh={view === 'featured' ? handleFeaturedRefresh : handleRefresh}
+        onLoadMore={() => setDisplayCount(current => current + SIGNAL_PAGE_SIZE)}
+        onSelectItem={handleSelectItem}
+        onToggleFavorite={(id) => void toggleFavorite(id)}
+        onMarkRead={(id, read) => void markRead(id, read)}
+        onSaveSnapshot={(id) => void handleSaveSnapshot(id)}
+        onSendToChat={(id) => sendItemToChat(id, 'discuss')}
+        onDeepDive={(id) => sendItemToChat(id, 'deep-dive')}
+        onAddToDigest={(id) => void handleAddToDigest(id)}
+        onIgnore={(id, ignored) => void ignoreItem(id, ignored)}
+        onDelete={(id) => void handleDelete(id)}
+        onRestore={(id) => void handleRestore(id)}
+        onGenerateInsight={(id) => void handleGenerateInsight(id)}
+      />
+    )
+  }
+
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background px-4">
-        <div className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-muted-foreground">
-          <Newspaper className="size-4" />
-        </div>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold tracking-tight">AI 热点</div>
-          <div className="hidden truncate text-[11px] text-muted-foreground sm:block">
-            聚合、筛选并沉淀到笔记
+    <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-[#F7F8FA] text-[#1D2129]">
+      {/* 左侧边栏 */}
+      <aside className="hidden w-[220px] shrink-0 flex-col border-r border-[#E5E7EB] bg-[#FAFAFA] lg:flex">
+        {/* Logo + 标题 */}
+        <div className="border-b border-[#F0F0F0] px-4 py-4">
+          <div className="flex items-center gap-2.5">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#165DFF] text-white">
+              <Radar className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-[#1D2129]">AI 信号雷达</div>
+              <div className="text-[11px] text-[#C9CDD4]">知识聚合 · 信号追踪</div>
+            </div>
           </div>
         </div>
 
-        <div className="ml-3 hidden items-center gap-0.5 md:flex">
-          <ViewPill active={view === 'latest'} count={filteredItems.length} icon={<Newspaper className="size-3" />} label="最新" onClick={() => handleViewChange('latest')} />
-          <ViewPill active={view === 'favorites'} count={favoriteCount} icon={<Heart className="size-3" />} label="收藏" onClick={() => handleViewChange('favorites')} />
-          <ViewPill active={view === 'digest'} icon={<Clipboard className="size-3" />} label="日报" onClick={() => handleViewChange('digest')} />
-          <ViewPill active={view === 'sources'} icon={<Rss className="size-3" />} label="来源" onClick={() => handleViewChange('sources')} />
+        {/* 导航菜单 */}
+        <div className="flex-1 overflow-y-auto px-2 py-2">
+          <div className="space-y-0.5">
+            {RADAR_VIEWS.map(item => (
+              <NavButton
+                key={item.view}
+                active={view === item.view}
+                count={viewCounts[item.view]}
+                item={item}
+                onClick={() => {
+                  setView(item.view)
+                  setActiveTopic('all')
+                  setSelectedItemId(null)
+                  setSelectedBatchIds([])
+                }}
+              />
+            ))}
+          </div>
         </div>
 
-        <span className="ml-auto hidden text-[11px] text-muted-foreground sm:inline" title={formatRefreshTime(lastRefreshAt)}>
-          {headerStatusText}
-        </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7"
-          disabled={isRefreshing}
-          title="刷新 AI 热点"
-          onClick={() => {
-            void refresh({ force: true })
-          }}
-        >
-          {isRefreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7"
-          title="AI 热点设置"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <Settings className="size-4" />
-        </Button>
-      </header>
-
-      <div className="flex shrink-0 gap-0.5 overflow-x-auto border-b bg-background px-2 py-1 md:hidden">
-        <ViewPill active={view === 'latest'} count={filteredItems.length} icon={<Newspaper className="size-3" />} label="最新" onClick={() => handleViewChange('latest')} />
-        <ViewPill active={view === 'favorites'} count={favoriteCount} icon={<Heart className="size-3" />} label="收藏" onClick={() => handleViewChange('favorites')} />
-        <ViewPill active={view === 'digest'} icon={<Clipboard className="size-3" />} label="日报" onClick={() => handleViewChange('digest')} />
-        <ViewPill active={view === 'sources'} icon={<Rss className="size-3" />} label="来源" onClick={() => handleViewChange('sources')} />
-      </div>
-
-      {error ? (
-        <div className="flex shrink-0 items-start gap-2 border-b border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <AlertCircle className="mt-0.5 size-4 shrink-0" />
-          <span>{error}</span>
+        {/* 信源状态 */}
+        <div className="border-t border-[#F0F0F0] px-3 py-3">
+          <div className="mb-2 flex items-center justify-between text-[11px] text-[#C9CDD4]">
+            <span>信源</span>
+            <span>{sources.filter(s => s.ok).length}/{sources.length}</span>
+          </div>
+          <SourceMiniList sources={sources} />
         </div>
-      ) : null}
+      </aside>
 
-      {allSourcesFailed && items.length > 0 && !isRefreshing ? (
-        <div className="flex shrink-0 items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
-          <AlertCircle className="mt-0.5 size-4 shrink-0" />
-          <span>本次所有来源均刷新失败，正在显示本地缓存。</span>
-        </div>
-      ) : null}
-
-      {showInsightPanel ? (
-        <HotspotFilterBar
-          filters={filters}
-          items={items}
-          sources={sources}
-          activeTopic={activeTopic}
-          onFiltersChange={setFilters}
-          onTopicChange={setActiveTopic}
-          topicTotalCount={baseListItems.length}
-          topicOptions={topicOptions}
-        />
-      ) : null}
-
-      <div className={cn(
-        'grid min-h-0 flex-1 grid-cols-1 overflow-hidden',
-        showInsightPanel && 'xl:grid-cols-[minmax(0,1fr)_320px]',
-      )}>
-        <ScrollArea className="min-h-0 flex-1 bg-muted/20">
-          <main className="mx-auto w-full max-w-5xl px-4 py-4 lg:px-5">
-            {showInsightPanel ? (
-              <HotspotList
-                activeTopicLabel={activeTopic === 'all' ? '' : topicOptions.find(topic => topic.key === activeTopic)?.label || '当前分类'}
-                items={visibleItems}
-                isLoading={isLoading}
-                isRefreshing={isRefreshing}
-                hasCachedItems={items.length > 0}
-                hasActiveFilters={hasActiveFilters || hasTopicFilter || view === 'favorites'}
-                emptyTitle={view === 'favorites' ? favoriteEmptyTitle : undefined}
-                emptyDescription={view === 'favorites' ? favoriteEmptyDescription : undefined}
-                refreshMessage={refreshProgress?.message}
-                totalCount={baseListItems.length}
-                onClearTopic={() => setActiveTopic('all')}
-                onRefresh={handleRefresh}
-                onToggleFavorite={handleToggleFavorite}
-                onMarkRead={handleMarkRead}
-                onSaveAsNote={(id) => void handleSaveAsNote(id)}
-                onSendToChat={(id) => sendItemToChat(id, 'discuss')}
-                onDeepDive={(id) => sendItemToChat(id, 'deep-dive')}
-              />
-            ) : view === 'digest' ? (
-              <HotspotDigestView
-                currentCount={filteredItems.length}
-                favoriteCount={favoriteCount}
-                unreadCount={unreadCount}
-                markdown={digestMarkdown}
-                isGenerating={isGeneratingDigest}
-                isSaving={isSavingDigest}
-                onGenerate={(scope) => void handleGenerateDigest(scope)}
-                onSave={(scope) => void handleSaveDigest(scope)}
-                onCopy={() => void handleCopyDigest()}
-              />
-            ) : (
-              <HotspotSourceView
-                sources={sources}
-                userFeeds={userFeeds}
-                isRefreshing={isRefreshing}
-                onRefresh={handleRefresh}
-                onToggleUserFeed={async (id, enabled) => updateUserFeed(id, { enabled })}
-                onDeleteUserFeed={deleteUserFeed}
-              />
-            )}
-          </main>
-        </ScrollArea>
-
-        {showInsightPanel ? (
-          <HotspotInsightPanel
-            activeTopic={activeTopic}
-            favoriteCount={favoriteCount}
-            items={baseListItems}
-            lastRefreshAt={lastRefreshAt}
-            onTopicChange={setActiveTopic}
-            savedCount={savedCount}
+      {/* 主内容区 */}
+      <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* 筛选栏 - 在主内容区顶部 */}
+        {view !== 'digest' && view !== 'sources' && (
+          <HotspotFilterBar
+            filters={filters}
+            items={filterBarItems}
             sources={sources}
+            activeTopic={activeTopic}
+            isRefreshing={isRefreshing}
+            viewMode={viewMode}
+            topicTotalCount={currentViewItems.length}
             topicOptions={topicOptions}
-            unreadCount={unreadCount}
-            visibleItems={visibleItems}
+            onFiltersChange={setFilters}
+            onClose={onClose}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onRefresh={view === 'featured' ? handleFeaturedRefresh : handleRefresh}
+            onTopicChange={setActiveTopic}
+            onViewModeChange={setViewMode}
           />
-        ) : null}
-      </div>
+        )}
 
-      <div className="flex h-7 shrink-0 items-center gap-2 overflow-hidden border-t bg-muted/30 px-2 text-[11px] text-muted-foreground">
-        <Sparkles className="size-3 shrink-0" />
-        <span className="whitespace-nowrap">{visibleItems.length}/{items.length} 条</span>
-        <span className="h-3 w-px bg-border/70" />
-        <span className="whitespace-nowrap">{favoriteCount} 收藏</span>
-        <span className="whitespace-nowrap">{unreadCount} 未读</span>
-        {savedCount > 0 ? <span className="whitespace-nowrap">{savedCount} 已保存</span> : null}
-        <span className="ml-auto hidden whitespace-nowrap sm:inline">{formatRefreshTime(lastRefreshAt)}</span>
-        {failedSourceCount > 0 ? (
-          <span className="whitespace-nowrap text-destructive/80">{failedSourceCount} 来源失败</span>
+        {/* 错误提示 */}
+        {error ? (
+          <div className="flex shrink-0 items-start gap-2 bg-[#FEECEC] px-4 py-2 text-xs text-[#F53F3F]">
+            <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+            <span>{error}</span>
+          </div>
         ) : null}
-      </div>
+
+        {/* 内容区 */}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {view === 'digest' ? (
+            <main className="min-h-0 flex-1 overflow-y-auto bg-[#F7F8FA] p-4 lg:overflow-hidden">
+              {renderMain()}
+            </main>
+            ) : (
+              <ScrollArea className="min-h-0 flex-1 bg-[#F7F8FA]">
+                <main className="w-full px-4 py-4">
+                  {renderMain()}
+                </main>
+              </ScrollArea>
+            )}
+
+            {showDetailPanel ? (
+              <SignalDetailPanel
+                item={selectedItem}
+                open={detailPanelOpen}
+                relatedItems={relatedItems}
+                onClose={() => setSelectedItemId(null)}
+                onSaveSnapshot={(id) => void handleSaveSnapshot(id)}
+                onGenerateInsight={(id) => void handleGenerateInsight(id)}
+                onAddToDigest={(id) => void handleAddToDigest(id)}
+                onDeepDive={(id) => sendItemToChat(id, 'deep-dive')}
+                onSelectRelated={handleSelectRelated}
+              />
+            ) : null}
+          </div>
+
+          {/* 底部状态栏 */}
+          <div className="flex h-7 shrink-0 items-center gap-2 border-t border-[#E5E7EB] bg-white px-3 text-[11px] text-[#86909C]">
+            <span className="whitespace-nowrap">{Math.min(displayCount, visibleItems.length)}/{activeItems.length} 条</span>
+            <span className="h-3 w-px bg-[#E5E7EB]" />
+            <span className="whitespace-nowrap">{favoriteCount} 收藏</span>
+            <span className="whitespace-nowrap">{savedCount} 快照</span>
+            <span className="ml-auto whitespace-nowrap">{formatRefreshTime(lastRefreshAt)}</span>
+            {failedSourceCount > 0 && (
+              <span className="whitespace-nowrap text-[#F53F3F]">{failedSourceCount} 源失败</span>
+            )}
+          </div>
+      </section>
 
       <HotspotSettingsDialog
         open={settingsOpen}

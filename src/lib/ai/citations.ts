@@ -108,11 +108,6 @@ export function extractWebCitationDetails(toolCalls: ToolCall[] = []): MessageCi
   toolCalls.forEach((toolCall) => {
     if (toolCall.status !== 'success' || !toolCall.result?.success) return
 
-    // 提取基础工具名（去掉 MCP server 前缀）
-    const baseToolName = toolCall.toolName.includes('__')
-      ? toolCall.toolName.split('__').pop()!
-      : toolCall.toolName
-
     if (matchesToolName(toolCall.toolName, 'web_search')) {
       const results = toolCall.result.data?.results
       if (!Array.isArray(results)) return

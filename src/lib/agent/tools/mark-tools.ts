@@ -2,7 +2,7 @@ import { Tool, ToolResult } from '../types'
 import { getMarks, getAllMarks, insertMark, updateMark, delMark, restoreMark, Mark, insertMarks, updateMarks, deleteMarks, restoreMarks } from '@/db/marks'
 import useTagStore from '@/stores/tag'
 import useMarkStore from '@/stores/mark'
-import emitter from '@/lib/emitter'
+import emitter, { type TodoDraftPayload } from '@/lib/emitter'
 import { EmitterRecordEvents } from '@/config/emitters'
 
 /**
@@ -23,6 +23,37 @@ async function refreshRecordState() {
   useTagStore.getState().getCurrentTag()
   await useMarkStore.getState().refreshVisibleMarks()
   emitter.emit(EmitterRecordEvents.refreshMarks)
+}
+
+function normalizeText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeTodoPriority(value: unknown): TodoDraftPayload['priority'] {
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'medium'
+}
+
+function normalizeTodoSubtasks(value: unknown): TodoDraftPayload['subtasks'] {
+  if (!Array.isArray(value)) return undefined
+
+  const subtasks = value
+    .map((item) => {
+      if (typeof item === 'string') {
+        return { title: item.trim() }
+      }
+
+      if (item && typeof item === 'object' && 'title' in item) {
+        return {
+          title: normalizeText((item as { title?: unknown }).title),
+          completed: (item as { completed?: unknown }).completed === true,
+        }
+      }
+
+      return { title: '' }
+    })
+    .filter((item) => item.title)
+
+  return subtasks.length > 0 ? subtasks : undefined
 }
 
 export const readMarksTool: Tool = {
@@ -115,6 +146,87 @@ export const createMarkTool: Tool = {
         success: false,
         error: `创建记录失败: ${error}`,
       }
+    }
+  },
+}
+
+export const openTodoDraftTool: Tool = {
+  name: 'open_todo_draft',
+  description: 'Open the LingMo todo quick panel with AI-filled draft content for the user to review and save. Use this when the user asks to set, add, create, or plan a todo/task in the record panel.',
+  category: 'mark',
+  requiresConfirmation: false,
+  risk: 'low',
+  capabilities: ['write'],
+  parameters: [
+    {
+      name: 'title',
+      type: 'string',
+      description: 'Todo title to prefill. Keep it short and action-oriented.',
+      required: true,
+    },
+    {
+      name: 'description',
+      type: 'string',
+      description: 'Optional note, context, requirement, or source text to prefill.',
+      required: false,
+    },
+    {
+      name: 'priority',
+      type: 'string',
+      description: 'Priority: low, medium, or high. Defaults to medium.',
+      required: false,
+    },
+    {
+      name: 'dueDate',
+      type: 'string',
+      description: 'Optional due date in YYYY-MM-DD format.',
+      required: false,
+    },
+    {
+      name: 'reminderAt',
+      type: 'string',
+      description: 'Optional reminder time in datetime-local format, for example 2026-06-08T09:00.',
+      required: false,
+    },
+    {
+      name: 'subtasks',
+      type: 'array',
+      description: 'Optional subtasks as strings or objects with title and completed.',
+      required: false,
+    },
+    {
+      name: 'tagId',
+      type: 'number',
+      description: 'Optional tag ID. Defaults to the current selected tag.',
+      required: false,
+    },
+  ],
+  execute: async (params): Promise<ToolResult> => {
+    const title = normalizeText(params.title)
+    if (!title) {
+      return {
+        success: false,
+        error: '待办标题不能为空',
+      }
+    }
+
+    const draft: TodoDraftPayload = {
+      title,
+      description: normalizeText(params.description) || undefined,
+      priority: normalizeTodoPriority(params.priority),
+      dueDate: normalizeText(params.dueDate) || undefined,
+      reminderAt: normalizeText(params.reminderAt) || undefined,
+      reminderEnabled: Boolean(normalizeText(params.reminderAt)),
+      subtasks: normalizeTodoSubtasks(params.subtasks),
+      tagId: typeof params.tagId === 'number' ? params.tagId : undefined,
+    }
+
+    emitter.emit('toolbar-shortcut-todo', draft)
+
+    return {
+      success: true,
+      data: draft,
+      message: '已打开待办面板，请在弹窗中确认并保存。',
     }
   },
 }
@@ -538,6 +650,7 @@ export const restoreMarksBatchTool: Tool = {
 export const markTools: Tool[] = [
   readMarksTool,
   createMarkTool,
+  openTodoDraftTool,
   updateMarkTool,
   deleteMarkTool,
   restoreMarkTool,

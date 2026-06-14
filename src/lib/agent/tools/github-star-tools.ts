@@ -82,23 +82,24 @@ function formatRecentSummary(summary: {
   }>
 }) {
   const lines = [
-    `## 最近 ${summary.rangeDays} 天新增 Star 项目`,
+    `## 你最近 ${summary.rangeDays} 天新增的 GitHub Star`,
     '',
-    `范围: ${summary.from.slice(0, 10)} 至 ${summary.to.slice(0, 10)}`,
-    `总数: ${summary.total}`,
+    `统计口径: 只基于你的 GitHub Star 记录，不代表 GitHub 全站趋势。`,
+    `时间范围: ${summary.from.slice(0, 10)} 至 ${summary.to.slice(0, 10)}`,
+    `新增收藏: ${summary.total} 个项目`,
     '',
   ]
 
   if (summary.total === 0) {
-    lines.push('这段时间没有同步到新增 Star 项目。')
+    lines.push('这段时间没有同步到你新增的 Star 项目。')
     return lines.join('\n')
   }
 
-  lines.push('### 新增项目', formatRepositoryRows(summary.repositories.slice(0, 20)), '')
-  lines.push(`### 语言分布\n${summary.languages.map(item => `- ${item.name}: ${item.count}`).join('\n') || '- 无'}`, '')
-  lines.push(`### 分类分布\n${summary.categories.map(item => `- ${item.name}: ${item.count}`).join('\n') || '- 无'}`, '')
-  lines.push(`### 高频主题\n${summary.topics.slice(0, 10).map(item => `- ${item.name}: ${item.count}`).join('\n') || '- 无'}`, '')
-  lines.push('### 值得关注', formatRepositoryRows(summary.noteworthy))
+  lines.push('### 你新增收藏的项目', formatRepositoryRows(summary.repositories.slice(0, 20)), '')
+  lines.push(`### 你的语言关注分布\n${summary.languages.map(item => `- ${item.name}: ${item.count}`).join('\n') || '- 无'}`, '')
+  lines.push(`### 你的收藏分类分布\n${summary.categories.map(item => `- ${item.name}: ${item.count}`).join('\n') || '- 无'}`, '')
+  lines.push(`### 你这周反复关注的主题\n${summary.topics.slice(0, 10).map(item => `- ${item.name}: ${item.count}`).join('\n') || '- 无'}`, '')
+  lines.push('### 你可能想优先回看的项目', formatRepositoryRows(summary.noteworthy))
   return lines.join('\n')
 }
 
@@ -177,7 +178,7 @@ export const githubListStarredTool: Tool = {
 
 export const githubSummarizeRecentStarsTool: Tool = {
   name: 'github_summarize_recent_stars',
-  description: 'Summarize personal GitHub repositories starred in the last N days. By default it first syncs latest GitHub Stars from the authenticated account, then summarizes local data. Use for questions like "最近一周我 Star 了哪些 GitHub 项目".',
+  description: 'Summarize the user personal GitHub repositories starred in the last N days from the user perspective. By default it first syncs latest GitHub Stars from the authenticated account, then summarizes local data. The result describes the user\'s own collection and attention pattern only; do not generalize it into GitHub-wide or industry trends. Use for questions like "最近一周我 Star 了哪些 GitHub 项目".',
   category: 'web',
   requiresConfirmation: false,
   risk: 'low',

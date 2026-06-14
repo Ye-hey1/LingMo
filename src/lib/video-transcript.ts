@@ -13,6 +13,29 @@ type VideoTranscriptStage = 'metadata' | 'subtitle' | 'audio' | 'transcribe' | '
 
 const AUDIO_CHUNK_SECONDS = 180
 const DEFAULT_STT_CONCURRENCY = 3
+const VIDEO_FETCH_CACHE_TTL_MS = 8 * 60 * 1000
+const VIDEO_TRANSCRIPT_CACHE_TTL_MS = 20 * 60 * 1000
+const VIDEO_REQUEST_MAX_RETRIES = 2
+const VIDEO_COMMAND_SPACING_MS = 1400
+
+type CachedText = {
+  expiresAt: number
+  text: string
+}
+
+type CachedTranscript = {
+  expiresAt: number
+  result: VideoTranscriptResult
+}
+
+const textResponseCache = new Map<string, CachedText>()
+const textRequestInflight = new Map<string, Promise<string>>()
+const transcriptResultCache = new Map<string, CachedTranscript>()
+const transcriptRequestInflight = new Map<string, Promise<VideoTranscriptResult>>()
+const hostReadyAt = new Map<string, number>()
+const hostRequestQueues = new Map<string, Promise<void>>()
+let videoCommandReadyAt = 0
+let videoCommandQueue: Promise<void> = Promise.resolve()
 
 export interface VideoTranscriptProgress {
   progress: number
@@ -358,6 +381,134 @@ function normalizeUrl(value: string) {
   return trimmed.startsWith('http') ? trimmed : `https://${trimmed}`
 }
 
+function getCacheKey(url: string, headers?: Record<string, string>) {
+  const headerKey = headers
+    ? Object.entries(headers)
+      .filter(([key]) => ['accept', 'referer', 'origin'].includes(key.toLowerCase()))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${key.toLowerCase()}=${value}`)
+      .join('&')
+    : ''
+
+  return `${normalizeUrl(url)}::${headerKey}`
+}
+
+function getTranscriptCacheKey(url: string) {
+  return normalizeUrl(url).replace(/#.*$/, '')
+}
+
+function getRequestHost(url: string) {
+  try {
+    return new URL(normalizeUrl(url)).hostname.replace(/^www\./, '')
+  } catch {
+    return 'unknown'
+  }
+}
+
+function getHostSpacingMs(host: string) {
+  if (host.includes('bilibili.com') || host === 'b23.tv') return 1300
+  if (host.includes('youtube.com') || host === 'youtu.be') return 1600
+  if (host.includes('googlevideo.com') || host.includes('ytimg.com')) return 1000
+  return 850
+}
+
+function getRetryAfterMs(response: Response) {
+  const retryAfter = response.headers.get('retry-after')
+  if (!retryAfter) return null
+
+  const seconds = Number(retryAfter)
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, seconds * 1000)
+  }
+
+  const retryAt = Date.parse(retryAfter)
+  if (Number.isFinite(retryAt)) {
+    return Math.max(0, retryAt - Date.now())
+  }
+
+  return null
+}
+
+function isRateLimitStatus(status: number) {
+  return status === 429 || status === 403
+}
+
+function isRetryableStatus(status: number) {
+  return isRateLimitStatus(status) || status === 408 || status >= 500
+}
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function waitForHostSlot(host: string) {
+  const previous = hostRequestQueues.get(host) || Promise.resolve()
+  let releaseQueue: () => void = () => {}
+  const current = new Promise<void>(resolve => {
+    releaseQueue = resolve
+  })
+  hostRequestQueues.set(host, previous.then(() => current))
+
+  await previous
+
+  const now = Date.now()
+  const readyAt = hostReadyAt.get(host) || 0
+  const waitMs = Math.max(0, readyAt - now)
+  if (waitMs > 0) {
+    await sleep(waitMs)
+  }
+
+  hostReadyAt.set(host, Date.now() + getHostSpacingMs(host))
+  releaseQueue()
+}
+
+async function waitForVideoCommandSlot() {
+  let releaseQueue: () => void = () => {}
+  const previous = videoCommandQueue
+  videoCommandQueue = previous.then(() => new Promise<void>(resolve => {
+    releaseQueue = resolve
+  }))
+
+  await previous
+
+  const waitMs = Math.max(0, videoCommandReadyAt - Date.now())
+  if (waitMs > 0) {
+    await sleep(waitMs)
+  }
+
+  videoCommandReadyAt = Date.now() + VIDEO_COMMAND_SPACING_MS
+  releaseQueue()
+}
+
+function cloneTranscriptResult(result: VideoTranscriptResult): VideoTranscriptResult {
+  return {
+    ...result,
+  }
+}
+
+async function executeVideoCommandWithRetry(createCommand: () => ReturnType<typeof Command.create>) {
+  let lastResult: Awaited<ReturnType<ReturnType<typeof Command.create>['execute']>> | null = null
+
+  for (let attempt = 0; attempt <= 1; attempt += 1) {
+    await waitForVideoCommandSlot()
+    const result = await createCommand().execute()
+    if (result.code === 0) {
+      return result
+    }
+
+    lastResult = result
+    const errorText = `${result.stderr || ''}\n${result.stdout || ''}`
+    const shouldRetry = /YT_DLP_(?:DOWNLOAD|SUBTITLE|METADATA)_FAILED|HTTP\s*(?:429|403)|too many requests|rate.?limit/i.test(errorText)
+    if (!shouldRetry || attempt >= 1) {
+      return result
+    }
+
+    await sleep(4500)
+  }
+
+  return lastResult!
+}
+
 export function getVideoPlatform(value: string): VideoPlatform | null {
   try {
     const url = new URL(normalizeUrl(value))
@@ -575,41 +726,80 @@ function selectBilibiliSubtitle(items: BilibiliSubtitleItem[]) {
 }
 
 async function fetchText(url: string, headers?: Record<string, string>) {
-  const response = await fetchWithProxy(url, {
-    method: 'GET',
-    connectTimeout: 15000,
-    maxRedirections: 5,
-    headers: {
-      Accept: '*/*',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Accept-Encoding': 'identity',
-      ...headers,
-    },
-  })
-  if (!response.ok) {
-    throw new Error(`请求失败（HTTP ${response.status}）`)
+  const cacheKey = getCacheKey(url, headers)
+  const cached = textResponseCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.text
   }
-  const bytes = new Uint8Array(await response.arrayBuffer())
-  return decodeBytes(bytes, response.headers.get('content-type'))
+
+  if (cached) {
+    textResponseCache.delete(cacheKey)
+  }
+
+  const inflight = textRequestInflight.get(cacheKey)
+  if (inflight) {
+    return inflight
+  }
+
+  const request = fetchTextUncached(url, headers, cacheKey)
+    .finally(() => {
+      textRequestInflight.delete(cacheKey)
+    })
+  textRequestInflight.set(cacheKey, request)
+  return request
 }
 
 async function fetchJson<T>(url: string, headers?: Record<string, string>) {
-  const response = await fetchWithProxy(url, {
-    method: 'GET',
-    connectTimeout: 15000,
-    maxRedirections: 5,
-    headers: {
-      Accept: 'application/json,text/plain,*/*',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Accept-Encoding': 'identity',
-      ...headers,
-    },
+  const text = await fetchText(url, {
+    Accept: 'application/json,text/plain,*/*',
+    ...headers,
   })
-  if (!response.ok) {
-    throw new Error(`请求失败（HTTP ${response.status}）`)
-  }
-  const text = await fetchText(url, headers)
   return JSON.parse(text) as T
+}
+
+async function fetchTextUncached(url: string, headers: Record<string, string> | undefined, cacheKey: string) {
+  const host = getRequestHost(url)
+  let lastStatus: number | null = null
+  let lastMessage = ''
+
+  for (let attempt = 0; attempt <= VIDEO_REQUEST_MAX_RETRIES; attempt += 1) {
+    await waitForHostSlot(host)
+
+    const response = await fetchWithProxy(url, {
+      method: 'GET',
+      connectTimeout: 15000,
+      maxRedirections: 5,
+      headers: {
+        Accept: '*/*',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'identity',
+        ...headers,
+      },
+    })
+
+    if (response.ok) {
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      const text = decodeBytes(bytes, response.headers.get('content-type'))
+      textResponseCache.set(cacheKey, {
+        expiresAt: Date.now() + VIDEO_FETCH_CACHE_TTL_MS,
+        text,
+      })
+      return text
+    }
+
+    lastStatus = response.status
+    lastMessage = `请求失败（HTTP ${response.status}）`
+
+    if (!isRetryableStatus(response.status) || attempt >= VIDEO_REQUEST_MAX_RETRIES) {
+      break
+    }
+
+    const retryAfterMs = getRetryAfterMs(response)
+    const backoffMs = retryAfterMs ?? (isRateLimitStatus(response.status) ? 4500 : 1200) * (attempt + 1)
+    await sleep(Math.min(backoffMs, 12000))
+  }
+
+  throw new Error(lastStatus ? `请求失败（HTTP ${lastStatus}）` : lastMessage || '请求失败')
 }
 
 function parseBilibiliInitialState(html: string): BilibiliViewResponse['data'] | null {
@@ -761,7 +951,7 @@ print(json.dumps({
 async function fetchVideoMetadataByYtDlp(url: string): Promise<YtDlpMetadata | null> {
   try {
     const proxyUrl = await getProxyUrl()
-    const process = Command.create('python', ['-c', buildVideoMetadataScript(), url], {
+    const createCommand = () => Command.create('python', ['-c', buildVideoMetadataScript(), url], {
       encoding: 'utf-8',
       env: {
         ...(proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, ALL_PROXY: proxyUrl } : {}),
@@ -769,7 +959,7 @@ async function fetchVideoMetadataByYtDlp(url: string): Promise<YtDlpMetadata | n
         PYTHONUTF8: '1',
       },
     })
-    const result = await process.execute()
+    const result = await executeVideoCommandWithRetry(createCommand)
     if (result.code !== 0 || !result.stdout.trim()) {
       return null
     }
@@ -1205,7 +1395,7 @@ async function downloadVideoSubtitle(url: string, options?: VideoTranscriptOptio
   const outputDir = `${cacheDir.replace(/[\\/]+$/, '')}/video-transcript`
   const resultPath = `${outputDir}/subtitle-path-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`
   const proxyUrl = await getProxyUrl()
-  const process = Command.create('python', ['-c', buildSubtitleDownloadScript(), url, outputDir, resultPath], {
+  const createCommand = () => Command.create('python', ['-c', buildSubtitleDownloadScript(), url, outputDir, resultPath], {
     encoding: 'utf-8',
     env: {
       ...(proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, ALL_PROXY: proxyUrl } : {}),
@@ -1213,7 +1403,7 @@ async function downloadVideoSubtitle(url: string, options?: VideoTranscriptOptio
       PYTHONUTF8: '1',
     },
   })
-  const result = await process.execute()
+  const result = await executeVideoCommandWithRetry(createCommand)
   if (result.code !== 0) {
     return null
   }
@@ -1257,7 +1447,7 @@ async function downloadVideoAudioChunks(url: string, options?: VideoTranscriptOp
   const resultPath = `${outputDir}/audio-chunks-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`
   const normalizedFfmpegPath = (ffmpegStatic || 'node_modules/ffmpeg-static/ffmpeg.exe').replace(/\\/g, '/')
   const proxyUrl = await getProxyUrl()
-  const process = Command.create('python', ['-c', buildAudioDownloadScript(), url, outputDir, normalizedFfmpegPath, resultPath], {
+  const createCommand = () => Command.create('python', ['-c', buildAudioDownloadScript(), url, outputDir, normalizedFfmpegPath, resultPath], {
     encoding: 'utf-8',
     env: {
       ...(proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, ALL_PROXY: proxyUrl } : {}),
@@ -1266,7 +1456,7 @@ async function downloadVideoAudioChunks(url: string, options?: VideoTranscriptOp
       PYTHONUTF8: '1',
     },
   })
-  const result = await process.execute()
+  const result = await executeVideoCommandWithRetry(createCommand)
   if (result.code !== 0) {
     const errorCode = (result.stderr || result.stdout || '').trim()
     if (errorCode.includes('FFMPEG_NOT_FOUND')) {
@@ -1465,6 +1655,40 @@ export async function fetchBilibiliTranscript(url: string, options?: VideoTransc
 }
 
 export async function fetchVideoTranscript(url: string, options?: VideoTranscriptOptions): Promise<VideoTranscriptResult> {
+  const cacheKey = getTranscriptCacheKey(url)
+  const cached = transcriptResultCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    notifyVideoProgress(options, { progress: 100, stage: 'save', message: '已复用最近一次视频提取结果' })
+    return cloneTranscriptResult(cached.result)
+  }
+
+  if (cached) {
+    transcriptResultCache.delete(cacheKey)
+  }
+
+  const inflight = transcriptRequestInflight.get(cacheKey)
+  if (inflight) {
+    notifyVideoProgress(options, { progress: 58, stage: 'metadata', message: '同一视频正在提取，已合并到当前任务' })
+    return cloneTranscriptResult(await inflight)
+  }
+
+  const request = fetchVideoTranscriptUncached(url, options)
+    .then((result) => {
+      transcriptResultCache.set(cacheKey, {
+        expiresAt: Date.now() + VIDEO_TRANSCRIPT_CACHE_TTL_MS,
+        result: cloneTranscriptResult(result),
+      })
+      return result
+    })
+    .finally(() => {
+      transcriptRequestInflight.delete(cacheKey)
+    })
+
+  transcriptRequestInflight.set(cacheKey, request)
+  return cloneTranscriptResult(await request)
+}
+
+async function fetchVideoTranscriptUncached(url: string, options?: VideoTranscriptOptions): Promise<VideoTranscriptResult> {
   const platform = getVideoPlatform(url)
   notifyVideoProgress(options, { progress: 55, stage: 'metadata', message: '正在识别视频平台' })
   try {

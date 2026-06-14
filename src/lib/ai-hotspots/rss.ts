@@ -11,6 +11,7 @@ export interface RssItemSource {
   sourceName: string
   feedName: string
   feedUrl?: string
+  feedRole?: string
 }
 
 function escapeRegExp(value: string) {
@@ -48,6 +49,23 @@ function parseDate(value: string | null) {
   if (!value) return null
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? null : date
+}
+
+function stripHtmlTags(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function readItemSummary(block: string) {
+  const value = extractXmlTag(block, 'description') ||
+    extractXmlTag(block, 'summary') ||
+    extractXmlTag(block, 'content') ||
+    extractXmlTag(block, 'encoded')
+  return value ? stripHtmlTags(value) : ''
 }
 
 export function decodeXmlEntities(text: string) {
@@ -90,7 +108,11 @@ export function parseRssItems(xml: string, source: RssItemSource): AiHotspotRawI
       url: url.trim(),
       publishedAt: parseDate(extractXmlTag(block, 'pubDate') || extractXmlTag(block, 'published') || extractXmlTag(block, 'updated')),
       meta: {
+        author: extractXmlTag(block, 'author') || '',
+        feedRole: source.feedRole || '',
         feedUrl: source.feedUrl || '',
+        guid: extractXmlTag(block, 'guid') || '',
+        summary: readItemSummary(block),
       },
     })
   }
@@ -108,7 +130,11 @@ export function parseRssItems(xml: string, source: RssItemSource): AiHotspotRawI
       url: url.trim(),
       publishedAt: parseDate(extractXmlTag(block, 'published') || extractXmlTag(block, 'updated') || extractXmlTag(block, 'pubDate')),
       meta: {
+        author: extractXmlTag(block, 'author') || '',
+        feedRole: source.feedRole || '',
         feedUrl: source.feedUrl || '',
+        guid: extractXmlTag(block, 'id') || '',
+        summary: readItemSummary(block),
       },
     })
   }

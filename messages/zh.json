@@ -1760,9 +1760,13 @@
           "process": "加工",
           "recognize": "识别",
           "organize": "整理",
+          "summarize": "摘要",
+          "extract": "要点",
           "tag": "标签",
           "title": "标题",
           "translate": "翻译",
+          "more": "更多处理",
+          "translateTo": "翻译为",
           "import": "导入记录",
           "copyText": "复制文字",
           "copyImage": "复制图片",
@@ -1842,6 +1846,9 @@
         "hoursAgo": "{count} 小时前",
         "noDescription": "无描述",
         "clearAll": "清空所有记录",
+        "confirmClearTitle": "清空识别历史？",
+        "confirmClearDesc": "将删除 {count} 条识别历史。此操作不会删除已导入的记录。",
+        "confirmClearAction": "清空历史",
         "filters": {
           "all": "全部类型",
           "image": "图片",
@@ -1898,7 +1905,10 @@
         "saveHistory": "保存历史",
         "saveHistoryDesc": "保存识别记录以便后续查看",
         "reset": "重置",
-        "maxHistoryItems": "最大记录数"
+        "maxHistoryItems": "最大记录数",
+        "saved": "设置已保存",
+        "savedIdle": "当前设置已保存",
+        "unsaved": "有未保存的更改"
       },
       "tag": {
         "searchPlaceholder": "创建或查询标签...",
@@ -3182,7 +3192,7 @@
     "description": "点击选择记录工具，快速创建记录"
   },
   "editor": {
-    "placeholder": "输入 / 唤起菜单，或直接开始写作...",
+    "placeholder": "输入 / 打开菜单，按 Ctrl/Cmd + J 使用 AI 灵感生成...",
     "outline": {
       "title": "大纲",
       "open": "打开大纲",
@@ -3216,6 +3226,7 @@
       "polish": "润色",
       "concise": "精简",
       "expand": "扩展",
+      "explain": "解释",
       "translate": "翻译",
       "translateSubtitle": "翻译为",
       "quoteToChat": "引用到对话",
@@ -3257,6 +3268,26 @@
       },
       "customLanguagePlaceholder": "自定义语言..."
     },
+    "inlineAI": {
+      "generateTitle": "AI 灵感生成",
+      "rewriteTitle": "AI 改写选区",
+      "generatingTitle": "AI 正在生成",
+      "generateDescription": "从当前光标继续写，或按指令生成一段内容",
+      "rewriteDescription": "按你的指令处理选中文本",
+      "generatePlaceholder": "例如：补充下一段、列出三个观点...",
+      "rewritePlaceholder": "例如：翻译成英文、改得更有说服力...",
+      "generate": "生成",
+      "generating": "生成中",
+      "close": "关闭 AI 面板",
+      "continue": "继续往下写",
+      "continueDesc": "读取上文，直接补写后续内容",
+      "polish": "润色改写",
+      "polishDesc": "保留原意，让表达更顺畅",
+      "concise": "更加精炼",
+      "conciseDesc": "压缩冗余，保留重点",
+      "expand": "拓展丰富",
+      "expandDesc": "补充细节，让内容更完整"
+    },
     "emptyLineMenu": {
       "open": "插入或转换块",
       "basic": "基础",
@@ -3284,7 +3315,14 @@
       "accept": "接受",
       "reject": "拒绝",
       "generating": "生成中...",
-      "abort": "终止"
+      "abort": "终止",
+      "explainTitle": "AI 解释",
+      "explaining": "正在解释...",
+      "selectedText": "选中文本",
+      "explainHint": "仅用于理解，不会写入原文",
+      "copy": "复制",
+      "copied": "已复制",
+      "close": "关闭"
     },
     "image": {
       "insert": "插入图片",
@@ -3349,8 +3387,8 @@
         "chart": "图表"
       },
       "items": {
-        "continue": "续写",
-        "continueDesc": "AI 续写内容",
+        "continue": "AI续写",
+        "continueDesc": "从当前光标继续生成内容",
         "heading1": "标题1",
         "heading1Desc": "大标题",
         "heading2": "标题2",
@@ -3369,6 +3407,8 @@
         "tableDesc": "插入表格",
         "blockquote": "引用",
         "blockquoteDesc": "捕获引用内容",
+        "callout": "提示卡片",
+        "calloutDesc": "插入彩色提示框",
         "codeBlock": "代码块",
         "codeBlockDesc": "捕获代码片段",
         "divider": "分割线",

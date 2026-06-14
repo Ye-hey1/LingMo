@@ -3,6 +3,7 @@
 import * as React from "react"
 import {
   OUTPUT_TEMPLATES,
+  INTERNAL_OUTPUT_TEMPLATES,
   OUTPUT_MODES,
   listAllTemplates,
   type OutputTemplate,
@@ -40,7 +41,9 @@ export function useOutputTemplates() {
 
   const selectedTemplate = React.useMemo(() => {
     const list = allTemplates.length > 0 ? allTemplates : OUTPUT_TEMPLATES
-    return list.find((t) => t.id === selectedTemplateId) || list[0]
+    return list.find((t) => t.id === selectedTemplateId) ||
+      INTERNAL_OUTPUT_TEMPLATES.find((t) => t.id === selectedTemplateId) ||
+      list[0]
   }, [allTemplates, selectedTemplateId])
 
   const templateCategories = React.useMemo(() => {

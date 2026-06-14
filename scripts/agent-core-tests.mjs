@@ -158,6 +158,9 @@ try {
     serializeSkillFile,
   } = await importTsModule('src/lib/skills/parser.ts')
   const {
+    classifySkillScriptPath,
+  } = await importTsModule('src/lib/skills/runtime-paths.ts')
+  const {
     validateSkillContent,
     validateSkillYamlMetadata,
   } = await importTsModule('src/lib/skills/validator.ts')
@@ -165,6 +168,26 @@ try {
     resolveSkillRuntimeProfile,
     skillRuntimeNeedsAgentMode,
   } = await importTsModule('src/lib/skills/runtime-profile.ts')
+  const {
+    createAiStreamContentProcessor,
+  } = await importTsModule('src/lib/ai/sanitize.ts')
+  const {
+    normalizeCallToolResult,
+  } = await importTsModule('src/lib/mcp/result.ts')
+  const {
+    buildResearchHistoryIndex,
+    evaluateResearchBenchmark,
+    searchResearchHistory,
+    scoreResearchSession,
+  } = await importTsModule('src/lib/research/history-index.ts')
+  const {
+    buildAgentRuntimeSnapshot,
+    buildSkillRuntimeSnapshot,
+    buildToolExposureSnapshot,
+    createInitialAgentRuntimeSnapshot,
+    createRuntimeWarning,
+    mergeRuntimeWarnings,
+  } = await importTsModule('src/lib/agent/runtime-snapshot.ts')
 
   assert.equal(deriveIntentPolicy('帮我完善当前图表').allowWrite, true)
   assert.equal(deriveIntentPolicy('AI 能进行操作吗？').allowWrite, false)
@@ -173,6 +196,71 @@ try {
   assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowWrite, true)
   assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowExecute, true)
   assert.equal(deriveIntentPolicy('不要执行脚本，只给命令建议').allowExecute, false)
+
+  const runtimeSnapshot = createInitialAgentRuntimeSnapshot('run-1')
+  assert.equal(runtimeSnapshot.runId, 'run-1')
+  assert.deepEqual(runtimeSnapshot.visibleToolNames, [])
+  assert.deepEqual(runtimeSnapshot.skills.skills, [])
+  assert.deepEqual(runtimeSnapshot.mcp.servers, [])
+  assert.deepEqual(runtimeSnapshot.warnings, [])
+  const warning = createRuntimeWarning({
+    source: 'mcp',
+    level: 'warn',
+    message: 'server unavailable',
+  })
+  assert.deepEqual(mergeRuntimeWarnings([warning], [warning]), [warning])
+  const skillRuntimeSnapshot = buildSkillRuntimeSnapshot({
+    selectedSkillIds: ['daily-report'],
+    forcedSkillIds: ['daily-report'],
+    skills: [{
+      metadata: {
+        id: 'daily-report',
+        name: 'daily-report',
+        description: 'Generate daily reports',
+        scope: 'project',
+        allowedTools: ['create_file'],
+        userInvocable: true,
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      instructions: 'Write reports',
+      scripts: [{ name: 'fetch.sh', path: 'scripts/fetch.sh', type: 'bash' }],
+      references: [{ name: 'style.md', path: 'references/style.md' }],
+      assets: [],
+    }],
+  })
+  assert.equal(skillRuntimeSnapshot.skills[0].source, 'project')
+  assert.equal(skillRuntimeSnapshot.skills[0].selected, true)
+  assert.deepEqual(skillRuntimeSnapshot.skills[0].allowedTools, ['create_file'])
+  assert.equal(skillRuntimeSnapshot.skills[0].scriptCount, 1)
+  assert.equal(skillRuntimeSnapshot.skills[0].referenceCount, 1)
+  assert.deepEqual(normalizeCallToolResult(undefined), {
+    content: [{ type: 'text', text: '' }],
+    isError: true,
+  })
+  assert.deepEqual(normalizeCallToolResult({ content: 'bad' }), {
+    content: [],
+    isError: false,
+  })
+  const toolExposure = buildToolExposureSnapshot({
+    tools: [
+      { name: 'safe_read_file', category: 'filesystem', risk: 'low', description: '', parameters: [], requiresConfirmation: false, execute: async () => ({ success: true }) },
+      { name: 'web_fetch', category: 'web', risk: 'low', description: '', parameters: [], requiresConfirmation: false, execute: async () => ({ success: true }) },
+    ],
+    visibleToolNames: ['safe_read_file'],
+    blockedToolNames: [{ name: 'web_fetch', reason: 'web disabled' }],
+    maxVisibleTools: 1,
+  })
+  assert.deepEqual(toolExposure.visible.map(tool => tool.name), ['safe_read_file'])
+  assert.deepEqual(toolExposure.blocked.map(tool => tool.reason), ['web disabled'])
+  const combinedRuntimeSnapshot = buildAgentRuntimeSnapshot({
+    runId: 'run-2',
+    skills: skillRuntimeSnapshot,
+    tools: toolExposure,
+  })
+  assert.deepEqual(combinedRuntimeSnapshot.visibleToolNames, ['safe_read_file'])
+  assert.equal(combinedRuntimeSnapshot.skills.selectedSkillIds[0], 'daily-report')
 
   assert.equal(getToolRiskLevel('read_markdown_file', 'note'), 'low')
   assert.equal(getToolRiskLevel('create_file', 'note'), 'medium')
@@ -385,6 +473,15 @@ try {
   assert.equal(replay.toolCalls.length, 1)
   assert.equal(replay.finalAnswer, 'done')
 
+  const observedEvents = []
+  const observedBus = createAgentEventBus({
+    runId: 'observed-run',
+    onEvent: (event) => observedEvents.push(event),
+  })
+  observedBus.emit('research.progress', { stage: 'searching', cacheStats: { hits: 1, misses: 2 } })
+  assert.equal(observedEvents.length, 1)
+  assert.equal(observedEvents[0].type, 'research.progress')
+
   const supportBus = createAgentEventBus({ runId: 'support-run' })
   supportBus.emit('agent.started', { userInput: 'draw diagram' })
   supportBus.emit('action.parsed', { tool: 'select_skill', params: { skill_ids: ['excalidraw-diagram'] } }, { iteration: 1 })
@@ -499,6 +596,19 @@ contextPolicy:
     references: 'on-demand',
   })
   assert.equal(validateSkillYamlMetadata(parsedRuntimeSkill.metadata).valid, true)
+  const parsedAihotSkill = parseSkillFile(await readFile(join(repoRoot, 'skills/ai-hots/SKILL.md'), 'utf8'))
+  assert.equal(parsedAihotSkill.metadata.name, 'aihot')
+  assert.ok(parsedAihotSkill.metadata.allowedTools.includes('execute_skill_script'))
+  assert.ok(parsedAihotSkill.metadata.allowedTools.includes('web_fetch'))
+  assert.equal(parsedAihotSkill.metadata.runtimeProfile, 'agent')
+  assert.deepEqual(classifySkillScriptPath('skills/aihot/runtime/fetch_aihot.sh'), {
+    kind: 'generated-runtime-script',
+    normalizedArg: 'fetch_aihot.sh',
+  })
+  assert.deepEqual(classifySkillScriptPath('skills/ai-hots/runtime/fetch_aihot.sh'), {
+    kind: 'generated-runtime-script',
+    normalizedArg: 'fetch_aihot.sh',
+  })
   assert.equal(validateSkillYamlMetadata({
     name: 'writing-skills',
     description: 'writing support',
@@ -523,7 +633,6 @@ contextPolicy:
   }).valid, true)
   assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /runtimeProfile: writer/)
   assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /capabilities: generate_text revise_text/)
-  const githubStarToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/github-star-tools.ts'), 'utf8')
   assert.equal(resolveSkillRuntimeProfile({
     metadata: {
       id: 'writing-skills',
@@ -539,6 +648,70 @@ contextPolicy:
     references: [],
     assets: [],
   }).profile, 'writer')
+
+  const streamProcessor = createAiStreamContentProcessor()
+  const splitStart = streamProcessor.push('<think>先判断文章结构</think>正文')
+  const splitEnd = streamProcessor.flush()
+  assert.equal(`${splitStart.thinking}${splitEnd.thinking}`, '先判断文章结构')
+  assert.equal(`${splitStart.content}${splitEnd.content}`, '正文')
+
+  const splitChunkProcessor = createAiStreamContentProcessor()
+  const chunked = [
+    splitChunkProcessor.push('<thi'),
+    splitChunkProcessor.push('nk>内部思考</think>'),
+    splitChunkProcessor.push('可见正文'),
+    splitChunkProcessor.flush(),
+  ]
+  assert.equal(chunked.map(part => part.thinking).join(''), '内部思考')
+  assert.equal(chunked.map(part => part.content).join(''), '可见正文')
+
+  const researchSessionFixture = {
+    id: 'research-history-fixture',
+    query: 'AI Agent memory tool workflow cache evaluation',
+    strategy: 'technical',
+    startedAt: '2026-06-01T00:00:00.000Z',
+    completedAt: '2026-06-02T00:00:00.000Z',
+    searchProviders: ['tavily', 'duckduckgo'],
+    sources: [
+      { id: 'S1', title: 'LangGraph memory guide', url: 'https://langchain-ai.github.io/langgraph/concepts/memory/', engine: 'tavily', retrievedAt: '', publishedAt: '2026-06-01T00:00:00.000Z', credibilityScore: 0.9 },
+      { id: 'S2', title: 'OpenAI tool guide', url: 'https://platform.openai.com/docs/guides/tools', engine: 'tavily', retrievedAt: '', publishedAt: '2026-06-01T00:00:00.000Z', credibilityScore: 0.88 },
+      { id: 'S3', title: 'Agent evaluation notes', url: 'https://example.com/agent-eval', engine: 'duckduckgo', retrievedAt: '', publishedAt: '2026-05-20T00:00:00.000Z', credibilityScore: 0.7 },
+    ],
+    evidences: [
+      { id: 'E1', sourceId: 'S1', sourceUrl: 'https://langchain-ai.github.io/langgraph/concepts/memory/', claim: 'Agent memory separates thread state from durable knowledge.', relevanceScore: 0.9, confidence: 'high' },
+      { id: 'E2', sourceId: 'S2', sourceUrl: 'https://platform.openai.com/docs/guides/tools', claim: 'Tool execution should use structured schemas and explicit observation handling.', relevanceScore: 0.86, confidence: 'high' },
+      { id: 'E3', sourceId: 'S3', sourceUrl: 'https://example.com/agent-eval', claim: 'Evaluation loops should measure cache hit rate, source quality, recency, and accuracy.', relevanceScore: 0.8, confidence: 'medium' },
+      { id: 'E4', sourceId: 'S1', sourceUrl: 'https://langchain-ai.github.io/langgraph/concepts/memory/', claim: 'Research history can become reusable retrieval context.', relevanceScore: 0.78, confidence: 'medium' },
+    ],
+    learnings: [
+      'Research history index makes prior reports searchable for future Agent work.',
+      'Cache hit rate and provider health help diagnose unstable deep research runs.',
+    ],
+    visitedUrls: [],
+    cacheStats: { hits: 2, misses: 3, writes: 3, bypasses: 0 },
+    providerHealth: [
+      { name: 'tavily', failureCount: 0, lastFailureTime: 0, isBroken: false, responseTime: 300 },
+    ],
+  }
+  const researchMetrics = scoreResearchSession(researchSessionFixture, new Date('2026-06-09T00:00:00.000Z').getTime())
+  assert.ok(researchMetrics.sourceQualityScore >= 50)
+  assert.equal(researchMetrics.cacheHitRate, 0.4)
+  const researchIndex = buildResearchHistoryIndex([researchSessionFixture], { now: new Date('2026-06-09T00:00:00.000Z').getTime() })
+  const researchHits = searchResearchHistory(researchIndex, 'agent memory cache evaluation', { limit: 1 })
+  assert.equal(researchHits[0].document.sessionId, 'research-history-fixture')
+  const benchmark = evaluateResearchBenchmark(researchIndex, [{
+    id: 'agent-memory-cache',
+    question: 'How should AI Agent memory, tool workflow, and cache evaluation work?',
+    expectedKeywords: ['agent', 'memory', 'tool', 'cache', 'evaluation'],
+    requiredDomains: ['langchain-ai.github.io', 'platform.openai.com'],
+    freshnessDays: 30,
+    minSources: 3,
+    minEvidence: 4,
+    minKeywordCoverage: 0.6,
+    minSourceQuality: 50,
+  }])
+  assert.equal(benchmark.passCount, 1)
+  assert.ok(benchmark.averageAccuracyProxy >= 60)
 
   const slashBridgeSource = await readFile(join(repoRoot, 'src/lib/ai-doc-commands/slash-bridge.ts'), 'utf8')
   assert.match(slashBridgeSource, /resolveSkillRuntimeProfile/)
@@ -557,6 +730,30 @@ contextPolicy:
   assert.match(harnessTypesSource, /export interface ContextPack/)
   assert.match(harnessTypesSource, /export interface ToolObservation/)
   assert.match(harnessTypesSource, /export interface ApprovalRequest/)
+  assert.match(harnessTypesSource, /export interface AgentHarnessMiddleware/)
+  assert.match(harnessTypesSource, /beforeRun/)
+  assert.match(harnessTypesSource, /beforeModel/)
+  assert.match(harnessTypesSource, /beforeTool/)
+  assert.match(harnessTypesSource, /afterTool/)
+  assert.match(harnessTypesSource, /afterRun/)
+  assert.match(harnessTypesSource, /export interface AgentRunControl/)
+  assert.match(harnessTypesSource, /getMiddlewareState/)
+  assert.match(harnessTypesSource, /prepareModel/)
+  assert.match(harnessTypesSource, /authorizeTool/)
+  assert.match(harnessTypesSource, /setContextPack/)
+  assert.match(harnessTypesSource, /writeDraft/)
+  const middlewareSource = await readFile(join(repoRoot, 'src/lib/agent-harness/middleware.ts'), 'utf8')
+  assert.match(middlewareSource, /export class AgentMiddlewareRuntime/)
+  assert.match(middlewareSource, /createSkillMcpMiddleware/)
+  assert.match(middlewareSource, /beforeRun/)
+  assert.match(middlewareSource, /beforeModel/)
+  assert.match(middlewareSource, /beforeTool/)
+  assert.match(middlewareSource, /afterTool/)
+  assert.match(middlewareSource, /afterRun/)
+  assert.match(middlewareSource, /reloadMcpTools/)
+  assert.match(middlewareSource, /matchRelevantSkillScores/)
+  assert.match(middlewareSource, /Visible tools/)
+  assert.match(middlewareSource, /Harness Skill Scope/)
   const runIdSource = await readFile(join(repoRoot, 'src/lib/agent-harness/run-id.ts'), 'utf8')
   assert.match(runIdSource, /export function createAgentRunId/)
   const vfsSource = await readFile(join(repoRoot, 'src/lib/agent-harness/vfs.ts'), 'utf8')
@@ -566,14 +763,16 @@ contextPolicy:
   const toolRuntimeSource = await readFile(join(repoRoot, 'src/lib/agent-harness/tool-runtime.ts'), 'utf8')
   assert.match(toolRuntimeSource, /export async function executeHarnessTool/)
   assert.match(toolRuntimeSource, /ToolObservation/)
+  assert.match(toolRuntimeSource, /HarnessToolExecutionResult/)
+  assert.match(toolRuntimeSource, /executeWithTimeout/)
+  assert.match(toolRuntimeSource, /compressToolResult/)
   assert.match(toolRuntimeSource, /retryable/)
   assert.match(toolRuntimeSource, /MAX_INLINE_OBSERVATION_CHARS/)
   assert.match(toolRuntimeSource, /writeAgentVfsText/)
   assert.match(toolRuntimeSource, /dataRef/)
-  const approvalSource = await readFile(join(repoRoot, 'src/lib/agent-harness/approval-gate.ts'), 'utf8')
-  assert.match(approvalSource, /export function shouldInterruptForTool/)
-  assert.match(approvalSource, /approvalScope/)
-  assert.match(approvalSource, /diffPreview/)
+  assert.match(toolRuntimeSource, /sleepWithAbort/)
+  assert.match(toolRuntimeSource, /assertNotAborted\(context\.abortSignal\)/)
+  assert.equal(existsSync(join(repoRoot, 'src/lib/agent-harness/approval-gate.ts')), false)
   const contextEngineSource = await readFile(join(repoRoot, 'src/lib/agent-harness/context-engine.ts'), 'utf8')
   assert.match(contextEngineSource, /export function buildContextPack/)
   assert.match(contextEngineSource, /priority/)
@@ -585,24 +784,244 @@ contextPolicy:
   const orchestratorSource = await readFile(join(repoRoot, 'src/lib/agent-harness/orchestrator.ts'), 'utf8')
   assert.match(orchestratorSource, /export class AgentOrchestrator/)
   assert.match(orchestratorSource, /route/)
-  assert.match(orchestratorSource, /legacyAgentExecutor/)
+  assert.match(orchestratorSource, /agentExecutor/)
+  assert.doesNotMatch(orchestratorSource, /legacyAgentExecutor/)
+  assert.match(orchestratorSource, /AgentMiddlewareRuntime/)
+  assert.match(orchestratorSource, /createSkillMcpMiddleware/)
+  assert.match(orchestratorSource, /middlewareRuntime\.beforeRun/)
+  assert.match(orchestratorSource, /prepareModel:\s*async/)
+  assert.match(orchestratorSource, /authorizeTool:\s*async/)
+  assert.match(orchestratorSource, /middlewareRuntime\.afterRun/)
+  assert.match(orchestratorSource, /executeTool:\s*async/)
+  assert.match(orchestratorSource, /executeHarnessTool/)
+  assert.match(orchestratorSource, /saveRunSnapshot/)
+  assert.match(orchestratorSource, /context-pack\.json/)
+  assert.match(orchestratorSource, /todos\.json/)
+  assert.match(orchestratorSource, /observationRefs/)
+  assert.match(orchestratorSource, /eventWriteQueue/)
+  assert.match(orchestratorSource, /runAfterRunMiddleware/)
+  assert.match(orchestratorSource, /afterRun middleware failed/)
+
+  const harnessRunnerSource = await readFile(join(repoRoot, 'src/lib/agent-harness/harness-agent-runner.ts'), 'utf8')
+  assert.match(harnessRunnerSource, /export class HarnessAgentRunner/)
+  assert.match(harnessRunnerSource, /tools:\s*input\.tools\.map\(toolToOpenAiTool\)/)
+  assert.match(harnessRunnerSource, /tool_choice\s*=\s*'auto'/)
+  assert.match(harnessRunnerSource, /prepareHarnessModelStep/)
+  assert.match(harnessRunnerSource, /runControl\.prepareModel/)
+  assert.match(harnessRunnerSource, /executeGovernedHarnessTool/)
+  assert.match(harnessRunnerSource, /readOnlyBatch/)
+  assert.match(harnessRunnerSource, /writeAgentVfsText/)
+  assert.match(harnessRunnerSource, /buildContextPack/)
+  assert.match(harnessRunnerSource, /getGlobalToolCache|cached/)
+  assert.match(harnessRunnerSource, /buildSkippedToolResultMessage/)
+  assert.match(harnessRunnerSource, /callsToSkip/)
+  assert.match(harnessRunnerSource, /onAnswerDelta\?:/)
+  assert.match(harnessRunnerSource, /this\.config\.onAnswerDelta\?\.\(content\)/)
+  assert.doesNotMatch(harnessRunnerSource, /this\.config\.onThought\?\(content\)/)
+  assert.doesNotMatch(harnessRunnerSource, /emitEvent\('thought\.updated', \{ content, streaming: true \}\)/)
+  assert.doesNotMatch(harnessRunnerSource, /parseStructuredActionJson/)
+  assert.doesNotMatch(harnessRunnerSource, /ReActAgent/)
+  assert.equal(existsSync(join(repoRoot, 'src/lib/agent/react.ts')), false)
+  assert.equal(existsSync(join(repoRoot, 'src/lib/agent/base-agent.ts')), false)
+
+  const toolGovernanceSource = await readFile(join(repoRoot, 'src/lib/agent-harness/tool-governance.ts'), 'utf8')
+  assert.match(toolGovernanceSource, /export async function executeGovernedHarnessTool/)
+  assert.match(toolGovernanceSource, /validateToolInput/)
+  assert.match(toolGovernanceSource, /evaluateIntentAwareToolPolicy/)
+  assert.match(toolGovernanceSource, /getGlobalToolCache/)
+  assert.match(toolGovernanceSource, /runControl\.authorizeTool/)
+  assert.match(toolGovernanceSource, /requestConfirmation/)
+  assert.match(toolGovernanceSource, /formatToolObservation/)
+  assert.match(toolGovernanceSource, /normalizeHarnessToolParams/)
+  assert.match(toolGovernanceSource, /WEB_ACCESS_DISABLED/)
+  assert.ok(
+    toolGovernanceSource.indexOf('WEB_ACCESS_DISABLED') < toolGovernanceSource.indexOf('const cache = getGlobalToolCache()'),
+    'web access must be checked before cache lookup'
+  )
+
+  const xiaomoPromptSource = await readFile(join(repoRoot, 'src/lib/ai/xiaomo-prompt.ts'), 'utf8')
+  assert.match(xiaomoPromptSource, /Role name: 小墨/)
+  assert.match(xiaomoPromptSource, /first principles/)
+  assert.match(xiaomoPromptSource, /Feynman technique/)
+  assert.match(xiaomoPromptSource, /clickable Markdown link/)
+  assert.match(xiaomoPromptSource, /human briefing/)
+
+  const aiUtilsSource = await readFile(join(repoRoot, 'src/lib/ai/utils.ts'), 'utf8')
+  assert.match(aiUtilsSource, /buildXiaoMoChatSystemPrompt/)
+  assert.match(aiUtilsSource, /\[promptContent,\s*existingContent\]/)
+
+  const deepResearchSource = await readFile(join(repoRoot, 'src/lib/research/deep-research.ts'), 'utf8')
+  assert.match(deepResearchSource, /buildXiaoMoDeepResearchSystemPrompt/)
+  assert.match(deepResearchSource, /Your visible role is 小墨/)
+  assert.match(deepResearchSource, /clickable Markdown link/)
+  assert.match(deepResearchSource, /SEARCH_CACHE_TTL_MS/)
+  assert.match(deepResearchSource, /researchSearchInflight/)
+  assert.match(deepResearchSource, /searchProviderWithCache/)
+  assert.match(deepResearchSource, /cacheStats:\s*snapshotSearchCacheStats/)
+  assert.match(deepResearchSource, /researchStrategyRegistry/)
+  assert.match(deepResearchSource, /registerResearchStrategy/)
+  assert.match(deepResearchSource, /providerHealth/)
+
+  const researchHistoryIndexSource = await readFile(join(repoRoot, 'src/lib/research/history-index.ts'), 'utf8')
+  assert.match(researchHistoryIndexSource, /RESEARCH_HISTORY_INDEX_VERSION/)
+  assert.match(researchHistoryIndexSource, /searchResearchHistory/)
+  assert.match(researchHistoryIndexSource, /evaluateResearchBenchmark/)
+  assert.match(researchHistoryIndexSource, /cacheHitRate/)
+
+  const researchHistoryStoreSource = await readFile(join(repoRoot, 'src/lib/research/history-index-store.ts'), 'utf8')
+  assert.match(researchHistoryStoreSource, /RESEARCH_HISTORY_INDEX_PATH/)
+  assert.match(researchHistoryStoreSource, /upsertResearchHistorySession/)
+  assert.match(researchHistoryStoreSource, /rebuildResearchHistoryIndexFromReports/)
+
+  const promptAssemblerSource = await readFile(join(repoRoot, 'src/lib/agent/prompt-assembler.ts'), 'utf8')
+  assert.match(promptAssemblerSource, /Harness Output Format/)
+  assert.match(promptAssemblerSource, /buildXiaoMoIdentityPrompt/)
+  assert.match(promptAssemblerSource, /clickable Markdown link/)
+  assert.match(promptAssemblerSource, /sharp human briefing/)
+  assert.match(promptAssemblerSource, /Do not emit ReAct JSON/)
+  assert.doesNotMatch(promptAssemblerSource, /ReAct Output Format/)
+
+  const agentHandlerSource = await readFile(join(repoRoot, 'src/lib/agent/agent-handler.ts'), 'utf8')
+  assert.match(agentHandlerSource, /runControl\?: AgentRunControl/)
+  assert.match(agentHandlerSource, /agentRunId:\s*runControl\?\.runId/)
+  assert.match(agentHandlerSource, /getMiddlewareState/)
+  assert.match(agentHandlerSource, /loadLegacyRuntimeState/)
+  assert.match(agentHandlerSource, /HarnessAgentRunner/)
+  assert.match(agentHandlerSource, /new HarnessAgentRunner/)
+  assert.match(agentHandlerSource, /onAnswerDelta/)
+  assert.match(agentHandlerSource, /currentAction:\s*undefined/)
+  assert.match(agentHandlerSource, /currentObservation:\s*undefined/)
+  assert.doesNotMatch(agentHandlerSource, /onThought\?\(finalAnswerContent \|\| visibleThought\)/)
+  assert.doesNotMatch(agentHandlerSource, /new ReActAgent/)
+  assert.doesNotMatch(agentHandlerSource, /ReActConfig/)
+  assert.doesNotMatch(agentHandlerSource, /runControl\?\.recordEvent\(event\)/)
+  assert.equal(existsSync(join(repoRoot, 'src/app/core/main/chat/agent-history.tsx')), false)
 
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
-  assert.match(chatInputSource, /buildWriterSkillInstruction/)
   assert.match(chatInputSource, /routeOverride:\s*slashCommand\.runtimeProfile/)
   assert.match(chatInputSource, /\[SlashSkill\] route/)
   assert.match(chatInputSource, /runtimeProfile:\s*slashCommand\.runtimeProfile/)
+  assert.match(chatInputSource, /ResearchDepthControl/)
+  assert.match(chatInputSource, /getResearchDepthConfig/)
+  assert.match(chatInputSource, /researchBreadth:\s*depthConfig\.breadth/)
+  assert.match(chatInputSource, /researchDepth:\s*depthConfig\.depth/)
+  assert.match(chatInputSource, /const isAgentSkill = slashCommand\.executionMode === 'agent'/)
+  assert.match(chatInputSource, /forcedSkillIds:\s*\[slashCommand\.skillContent\.metadata\.id\]/)
+  assert.match(chatInputSource, /modeOverride:\s*isAgentSkill \? 'agent' : 'chat'/)
+
+  const writerChatSendSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-send.tsx'), 'utf8')
+  assert.match(writerChatSendSource, /buildWriterSkillInstruction/)
+  assert.match(writerChatSendSource, /async function handleWriterMode/)
+  assert.match(writerChatSendSource, /writerExecutor:\s*async \(\) => handleWriterMode/)
+
+  const researchDepthControlSource = await readFile(join(repoRoot, 'src/app/core/main/chat/research-depth-control.tsx'), 'utf8')
+  assert.match(researchDepthControlSource, /export type ResearchDepthPreset = "auto" \| "quick" \| "deep"/)
+  assert.match(researchDepthControlSource, /breadth:\s*6/)
+  assert.match(researchDepthControlSource, /depth:\s*4/)
+  assert.match(researchDepthControlSource, /SlidersHorizontal/)
 
   const popoverSource = await readFile(join(repoRoot, 'src/app/core/main/chat/ai-doc-command-popover.tsx'), 'utf8')
   assert.match(popoverSource, /runtimeProfile/)
   assert.doesNotMatch(popoverSource, /agent\s*之类|Agent badge placeholder/)
-  assert.match(chatInputSource, /const isAgentSkill = slashCommand\.executionMode === 'agent'/)
 
   const chatSendSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-send.tsx'), 'utf8')
   assert.match(chatSendSource, /routeOverride\?: 'writer' \| 'advisor' \| 'agent' \| 'workflow' \| 'chat' \| 'research'/)
+  assert.match(chatSendSource, /researchBreadth\?: number/)
+  assert.match(chatSendSource, /researchDepth\?: number/)
   assert.match(chatSendSource, /handleWriterMode/)
   assert.match(chatSendSource, /const effectiveRoute = options\?\.routeOverride \|\| effectiveMode/)
   assert.match(chatSendSource, /const effectiveMode = options\?\.modeOverride \|\| chatMode/)
+  assert.match(chatSendSource, /breadth:\s*options\.researchBreadth/)
+  assert.match(chatSendSource, /depth:\s*options\.researchDepth/)
+  assert.match(chatSendSource, /handleClarifiedResearchMode\(effectiveInstruction, options\)/)
+  assert.match(chatSendSource, /buildHarnessContextItems/)
+  assert.match(chatSendSource, /agentExecutor:\s*async \(runControl\)/)
+  assert.doesNotMatch(chatSendSource, /legacyAgentExecutor:\s*async \(runControl\)/)
+  assert.match(chatSendSource, /runControl\.setContextPack/)
+  assert.match(chatSendSource, /runControl\.writeDraft\('final-answer\.md'/)
+  assert.match(chatSendSource, /harnessSnapshot:\s*runControl\.getSnapshot\(\)/)
+  assert.match(chatSendSource, /可点击 Markdown 链接/)
+  assert.match(chatSendSource, /少用官方腔和学术腔/)
+  assert.match(chatSendSource, /function formatEmptyAiResponseMessage/)
+  assert.match(chatSendSource, /没有返回可展示正文/)
+  assert.match(chatSendSource, /createAgentEventBus/)
+  assert.match(chatSendSource, /startResearchRun/)
+  assert.match(chatSendSource, /updateResearchProgressView/)
+  assert.match(chatSendSource, /finishResearchRun/)
+  assert.match(chatSendSource, /search_cache_hit_rate/)
+  assert.match(chatSendSource, /search_provider_health/)
+  assert.match(chatSendSource, /upsertResearchHistorySession/)
+
+  const packageSource = await readFile(join(repoRoot, 'package.json'), 'utf8')
+  assert.match(packageSource, /research:index/)
+  assert.match(packageSource, /research:benchmark/)
+
+  const researchEvalSource = await readFile(join(repoRoot, 'scripts/research-eval.mjs'), 'utf8')
+  assert.match(researchEvalSource, /buildResearchHistoryIndex/)
+  assert.match(researchEvalSource, /evaluateResearchBenchmark/)
+  assert.match(researchEvalSource, /--fixture/)
+
+  const chatContentSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-content.tsx'), 'utf8')
+  assert.match(chatContentSource, /import \{ AgentThinkingSummary \}/)
+  assert.match(chatContentSource, /storedThinkingSummary/)
+  assert.match(chatContentSource, /<AgentThinkingSummary/)
+  assert.match(chatContentSource, /researchRun\.progressView/)
+  assert.match(chatContentSource, /visibleResearchProgress/)
+  assert.doesNotMatch(chatContentSource, /<AgentRunView/)
+
+  const chatStoreSource = await readFile(join(repoRoot, 'src/stores/chat.ts'), 'utf8')
+  assert.match(chatStoreSource, /ResearchRuntimeState/)
+  assert.match(chatStoreSource, /recordResearchEvent/)
+  assert.match(chatStoreSource, /updateResearchProgressView/)
+
+  const taskPlanProgressSource = await readFile(join(repoRoot, 'src/app/core/main/chat/task-plan-progress.tsx'), 'utf8')
+  assert.match(taskPlanProgressSource, /view\?: ResearchProgressView/)
+  assert.match(taskPlanProgressSource, /cacheHits/)
+
+  const agentLiveStreamSource = await readFile(join(repoRoot, 'src/app/core/main/chat/agent-live-stream.tsx'), 'utf8')
+  assert.match(agentLiveStreamSource, /已思考/)
+  assert.match(agentLiveStreamSource, /activity\?\.phase === "answering"/)
+  assert.match(agentLiveStreamSource, /tone:\s*"done" as const/)
+  assert.doesNotMatch(agentLiveStreamSource, /正在输出回答/)
+  assert.match(agentLiveStreamSource, /收起思考详情/)
+  assert.doesNotMatch(agentLiveStreamSource, /Agent 正在执行|执行时间线|任务清单/)
+
+  const agentThinkingSummarySource = await readFile(join(repoRoot, 'src/app/core/main/chat/agent-thinking-summary.tsx'), 'utf8')
+  assert.match(agentThinkingSummarySource, /export function AgentThinkingSummary/)
+  assert.match(agentThinkingSummarySource, /已思考/)
+  assert.match(agentThinkingSummarySource, /CompactToolCalls/)
+
+  const compactToolCallsSource = await readFile(join(repoRoot, 'src/app/core/main/chat/compact-tool-calls.tsx'), 'utf8')
+  assert.match(compactToolCallsSource, /getHarnessResultMeta/)
+  assert.match(compactToolCallsSource, /dataRef/)
+  assert.match(compactToolCallsSource, /retryable/)
+  assert.match(compactToolCallsSource, /errorKind/)
+
+  const chatSource = await readFile(join(repoRoot, 'src/lib/ai/chat.ts'), 'utf8')
+  assert.match(chatSource, /createAiStreamContentProcessor/)
+  assert.match(chatSource, /streamProcessor\.flush\(\)/)
+
+  const safeToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/safe-tools.ts'), 'utf8')
+  assert.match(safeToolsSource, /name:\s*['"]web_search['"]/)
+  assert.match(safeToolsSource, /name:\s*['"]timeRange['"]/)
+  assert.match(safeToolsSource, /name:\s*['"]days['"]/)
+  assert.match(safeToolsSource, /name:\s*['"]startDate['"]/)
+  assert.match(safeToolsSource, /name:\s*['"]endDate['"]/)
+  assert.match(safeToolsSource, /getLocalDateString\(addLocalDays\(new Date\(\), -days\)\)/)
+  assert.match(safeToolsSource, /outsideWindowCount/)
+  assert.match(safeToolsSource, /withinDateWindow/)
+  assert.match(safeToolsSource, /date-unverified/)
+  assert.match(safeToolsSource, /sourceLink/)
+  assert.match(safeToolsSource, /\$\{index \+ 1\}\. \$\{sourceLink\}/)
+
+  const tavilySource = await readFile(join(repoRoot, 'src/lib/tavily.ts'), 'utf8')
+  assert.match(tavilySource, /body\.time_range = timeRange/)
+  assert.doesNotMatch(tavilySource, /body\.days = days/)
+  assert.match(tavilySource, /body\.start_date = startDate/)
+  assert.match(tavilySource, /body\.end_date = endDate/)
+  assert.match(tavilySource, /body\.topic = topic/)
+
+  const githubStarToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/github-star-tools.ts'), 'utf8')
   for (const toolName of [
     'github_sync_starred',
     'github_list_starred',
@@ -623,6 +1042,10 @@ contextPolicy:
   assert.match(githubStarToolsSource, /refresh:\s*params\.refresh !== false/)
   assert.match(githubStarToolsSource, /maxSyncPages:\s*numberParam\(params\.max_sync_pages,\s*2,\s*1,\s*1000\)/)
   assert.match(githubStarToolsSource, /已先同步 GitHub Star/)
+  assert.match(githubStarToolsSource, /不代表 GitHub 全站趋势/)
+  assert.match(githubStarToolsSource, /user\\'s own collection and attention pattern only/)
+  assert.doesNotMatch(githubStarToolsSource, /### 高频主题/)
+  assert.doesNotMatch(githubStarToolsSource, /### 值得关注/)
 
   const toolIndexSource = await readFile(join(repoRoot, 'src/lib/agent/tools/index.ts'), 'utf8')
   assert.match(toolIndexSource, /import \{ githubStarTools \} from '\.\/github-star-tools'/)

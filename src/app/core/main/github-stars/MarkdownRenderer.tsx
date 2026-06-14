@@ -793,6 +793,26 @@ function isImageLikeReactChild(child: React.ReactNode): boolean {
   ));
 }
 
+function containsImageLikeMarkdownNode(node: MarkdownAstNode): boolean {
+  if (node.type === 'element' && node.tagName === 'img') return true;
+  return Boolean(node.children?.some(containsImageLikeMarkdownNode));
+}
+
+function containsImageLikeReactChild(child: React.ReactNode): boolean {
+  if (!React.isValidElement(child)) return false;
+
+  const props = child.props as {
+    src?: unknown;
+    children?: React.ReactNode;
+  };
+
+  if (child.type === MarkdownImage || child.type === 'img' || typeof props.src === 'string') {
+    return true;
+  }
+
+  return React.Children.toArray(props.children).some(containsImageLikeReactChild);
+}
+
 function isImageOnlyParagraph(node: MarkdownAstNode | undefined, children: React.ReactNode) {
   const nodeChildren = node?.children;
   if (Array.isArray(nodeChildren) && nodeChildren.length > 0) {
@@ -805,6 +825,15 @@ function isImageOnlyParagraph(node: MarkdownAstNode | undefined, children: React
   return childArray.length > 0 && childArray.every(child => (
     isWhitespaceReactChild(child) || isImageLikeReactChild(child)
   ));
+}
+
+function paragraphContainsImage(node: MarkdownAstNode | undefined, children: React.ReactNode) {
+  const nodeChildren = node?.children;
+  if (Array.isArray(nodeChildren) && nodeChildren.length > 0) {
+    return nodeChildren.some(containsImageLikeMarkdownNode);
+  }
+
+  return React.Children.toArray(children).some(containsImageLikeReactChild);
 }
 
 const extractTextFromChildren = (children: React.ReactNode): string => {
@@ -892,13 +921,14 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
     },
     p: ({ children, node }: any) => {
       const hasImagesOnly = isImageOnlyParagraph(node, children);
+      const hasImages = hasImagesOnly || paragraphContainsImage(node, children);
       const className = `text-foreground mb-2 leading-relaxed ${
         hasImagesOnly
           ? 'flex flex-wrap items-center justify-center gap-3'
           : ''
       }`;
 
-      if (hasImagesOnly) {
+      if (hasImages) {
         return <div className={className}>{children}</div>;
       }
 

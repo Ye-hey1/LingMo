@@ -63,7 +63,7 @@ export class MCPIntegration {
     try {
       const result = await callTool(targetServerId, toolName, args)
       return {
-        success: !result.isError,
+        success: !Boolean(result?.isError),
         result,
       }
     } catch (error) {

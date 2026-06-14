@@ -11,7 +11,6 @@ import { useSidebarStore } from "@/stores/sidebar";
 import { appendRecordsToNote, createGitHubProjectsComparisonNote, createNoteFromRecords } from "@/lib/record-to-note";
 import { toast } from "@/hooks/use-toast";
 import { isGitHubProjectMark } from "@/lib/github-project";
-import { MarkHealthButton } from "./mark-health-button";
 
 export function MarkToolbar() {
   const {
@@ -173,7 +172,7 @@ export function MarkToolbar() {
   }
 
   return (
-    <div className="flex h-6 items-center justify-between overflow-hidden border-t border-border bg-background px-2 text-xs text-muted-foreground">
+    <div className="flex h-7 items-center justify-between overflow-hidden border-t border-border bg-background px-2 text-xs text-muted-foreground">
       <div className="min-w-0">
         {isMultiSelectMode ? (
           <span className="text-xs text-muted-foreground">

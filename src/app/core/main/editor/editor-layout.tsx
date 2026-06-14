@@ -48,11 +48,6 @@ import {
   isGithubStarsTabPath,
 } from '../github-stars/github-stars-constants'
 import {
-  AI_HOTSPOTS_TAB_ID,
-  AI_HOTSPOTS_TAB_NAME,
-  isAiHotspotsTabPath,
-} from '../ai-hotspots/ai-hotspots-constants'
-import {
   MEMORY_TAB_ID,
   MEMORY_TAB_NAME,
   isMemoryTabPath,
@@ -63,6 +58,7 @@ import { toast } from '@/hooks/use-toast'
 import { getImageAltText } from '@/lib/image-editor-actions'
 import { toMarkdownImagePath } from '@/lib/markdown-image-path'
 import { MdEditor } from './markdown/md-editor-wrapper'
+import { KnowledgeGraphECharts } from '../knowledge/knowledge-graph-echarts'
 
 // BacklinksPanel and RelatedNotesPanel are now integrated into the footer bar as popovers
 const ImageEditor = dynamic(() => import('./image/image-editor').then(m => m.ImageEditor), { ssr: false })
@@ -70,12 +66,10 @@ const PdfViewer = dynamic(() => import('./pdf/pdf-viewer').then(m => m.PdfViewer
 const DiagramEditor = dynamic(() => import('./diagram/diagram-editor').then(m => m.DiagramEditor), { ssr: false })
 const MermaidEditor = dynamic(() => import('./mermaid/mermaid-editor').then(m => m.MermaidEditor), { ssr: false })
 const HtmlEditor = dynamic(() => import('./html/html-editor').then(m => m.HtmlEditor), { ssr: false })
-const KnowledgeGraph = dynamic(() => import('../knowledge/knowledge-graph').then(m => m.KnowledgeGraph), { ssr: false })
 const ArtifactStudio = dynamic(() => import('../artifacts/artifact-studio').then(m => m.ArtifactStudio), { ssr: false })
 const FlashcardWorkspace = dynamic(() => import('../flashcard/flashcard-workspace').then(m => m.FlashcardWorkspace), { ssr: false })
 const MemoryWorkspace = dynamic(() => import('../memory/memory-workspace').then(m => m.MemoryWorkspace), { ssr: false })
 const GithubStarsWorkspace = dynamic(() => import('../github-stars/github-stars-workspace').then(m => m.GithubStarsWorkspace), { ssr: false })
-const AiHotspotsWorkspace = dynamic(() => import('../ai-hotspots/ai-hotspots-workspace').then(m => m.AiHotspotsWorkspace), { ssr: false })
 import {
   createDefaultOnboardingProgress,
   getCompletionFeedbackMode,
@@ -354,14 +348,13 @@ export function EditorLayout() {
   }, [])
 
   // Get item type based on path
-  const getItemType = useCallback((path: string): 'knowledgeGraph' | 'artifactStudio' | 'flashcards' | 'memory' | 'githubStars' | 'aiHotspots' | 'html' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'mermaid' | 'folder' | 'unknown' => {
+  const getItemType = useCallback((path: string): 'knowledgeGraph' | 'artifactStudio' | 'flashcards' | 'memory' | 'githubStars' | 'html' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'mermaid' | 'folder' | 'unknown' => {
     if (!path) return 'unknown'
     if (isKnowledgeGraphTabPath(path)) return 'knowledgeGraph'
     if (isArtifactStudioTabPath(path)) return 'artifactStudio'
     if (isFlashcardTabPath(path)) return 'flashcards'
     if (isMemoryTabPath(path)) return 'memory'
     if (isGithubStarsTabPath(path)) return 'githubStars'
-    if (isAiHotspotsTabPath(path)) return 'aiHotspots'
 
     // First check if it's a folder
     const folder = findFolderInTree(path, fileTree)
@@ -396,7 +389,7 @@ export function EditorLayout() {
 
   const shouldKeepTabMounted = useCallback((tab: TabInfo): boolean => {
     const itemType = getItemType(tab.path)
-    return itemType === 'pdf' || itemType === 'diagram' || itemType === 'mermaid' || itemType === 'knowledgeGraph' || itemType === 'artifactStudio' || itemType === 'flashcards' || itemType === 'memory' || itemType === 'githubStars' || itemType === 'aiHotspots'
+    return itemType === 'pdf' || itemType === 'diagram' || itemType === 'mermaid' || itemType === 'knowledgeGraph' || itemType === 'artifactStudio' || itemType === 'flashcards' || itemType === 'memory' || itemType === 'githubStars'
   }, [getItemType])
 
   useEffect(() => {
@@ -487,7 +480,7 @@ export function EditorLayout() {
       let hasInvalid = false
 
       for (const tab of tabs) {
-        if (isKnowledgeGraphTabPath(tab.path) || isArtifactStudioTabPath(tab.path) || isFlashcardTabPath(tab.path) || isMemoryTabPath(tab.path) || isGithubStarsTabPath(tab.path) || isAiHotspotsTabPath(tab.path)) {
+        if (isKnowledgeGraphTabPath(tab.path) || isArtifactStudioTabPath(tab.path) || isFlashcardTabPath(tab.path) || isMemoryTabPath(tab.path) || isGithubStarsTabPath(tab.path)) {
           validTabs.push(tab)
           continue
         }
@@ -529,8 +522,7 @@ export function EditorLayout() {
     const isFlashcardsTab = isFlashcardTabPath(activeFilePath)
     const isMemoryTab = isMemoryTabPath(activeFilePath)
     const isGithubStarsTab = isGithubStarsTabPath(activeFilePath)
-    const isAiHotspotsTab = isAiHotspotsTabPath(activeFilePath)
-    const isVirtualTab = isGraphTab || isArtifactStudioTab || isFlashcardsTab || isMemoryTab || isGithubStarsTab || isAiHotspotsTab
+    const isVirtualTab = isGraphTab || isArtifactStudioTab || isFlashcardsTab || isMemoryTab || isGithubStarsTab
     const isFolder = isVirtualTab ? false : isFolderPath(activeFilePath)
 
     // Check if tab already exists
@@ -554,9 +546,7 @@ export function EditorLayout() {
                 ? MEMORY_TAB_ID
                 : isGithubStarsTab
                   ? GITHUB_STARS_TAB_ID
-                  : isAiHotspotsTab
-                    ? AI_HOTSPOTS_TAB_ID
-                    : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+                  : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
         path: activeFilePath,
         name: isGraphTab
           ? KNOWLEDGE_GRAPH_TAB_NAME
@@ -568,9 +558,7 @@ export function EditorLayout() {
                 ? MEMORY_TAB_NAME
                 : isGithubStarsTab
                   ? GITHUB_STARS_TAB_NAME
-                  : isAiHotspotsTab
-                    ? AI_HOTSPOTS_TAB_NAME
-                    : name,
+                  : name,
         isFolder: isFolder
       }
       addTab(newTab)
@@ -830,7 +818,9 @@ export function EditorLayout() {
         )}
         {itemType === 'knowledgeGraph' && (
           <Suspense fallback={<div className="flex-1" />}>
-            <KnowledgeGraph focusPath={lastDocumentPathRef.current} />
+            <div className="flex flex-col flex-1 min-h-0">
+              <KnowledgeGraphECharts />
+            </div>
           </Suspense>
         )}
         {itemType === 'artifactStudio' && (
@@ -854,13 +844,6 @@ export function EditorLayout() {
           <Suspense fallback={<div className="flex-1" />}>
             <div className="flex min-h-0 flex-1 overflow-hidden">
               <GithubStarsWorkspace />
-            </div>
-          </Suspense>
-        )}
-        {itemType === 'aiHotspots' && (
-          <Suspense fallback={<div className="flex-1" />}>
-            <div className="flex min-h-0 flex-1 overflow-hidden">
-              <AiHotspotsWorkspace />
             </div>
           </Suspense>
         )}

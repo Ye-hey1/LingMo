@@ -38,7 +38,7 @@ export function buildArtifactGenerationPrompt(options: BuildArtifactPromptOption
 
 请调用 create_visual_report，建议参数：
 - title: "${options.title}"
-- subtitle: "由 LingMo 根据输入材料生成的可交付 HTML"
+- subtitle: "${options.title} 的内容摘要或导语"
 - reportType: "${template.scenario === 'deck' ? 'plan' : template.scenario === 'data' ? 'research' : 'note'}"
 - templateId: "${template.id}"
 - sourceFormat: "${summary.format}"

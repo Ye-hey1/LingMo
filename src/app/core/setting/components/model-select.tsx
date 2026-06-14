@@ -33,7 +33,15 @@ interface GroupedModel {
   model: ModelConfig
 }
 
-export function ModelSelect({modelKey}: {modelKey: string}) {
+interface ModelSelectProps {
+  modelKey: string
+  className?: string
+  triggerClassName?: string
+  popoverClassName?: string
+  hideClear?: boolean
+}
+
+export function ModelSelect({ modelKey, className, triggerClassName, popoverClassName, hideClear }: ModelSelectProps) {
   const [groupedModels, setGroupedModels] = useState<GroupedModel[]>([])
   const {
     aiModelList,
@@ -193,31 +201,35 @@ export function ModelSelect({modelKey}: {modelKey: string}) {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <div className="flex gap-2">
+      <div className={cn("flex gap-2", className)}>
         <PopoverTrigger asChild>
           <div className="flex-1 overflow-hidden">
             <Button
               variant="outline"
               role="combobox"
               aria-expanded={open}
-              className="w-[280px] justify-between"
+              className={cn("w-full justify-between", triggerClassName)}
             >
-              {model
-                ? findSelectedModelDisplay() || t('tooltip')
-                : modelKey === 'primaryModel' ? t('noModel') : t('tooltip')}
-              <ChevronsUpDown className="opacity-50" />
+              <span className="min-w-0 truncate">
+                {model
+                  ? findSelectedModelDisplay() || t('tooltip')
+                  : modelKey === 'primaryModel' ? t('noModel') : t('tooltip')}
+              </span>
+              <ChevronsUpDown className="shrink-0 opacity-50" />
             </Button>
           </div>
         </PopoverTrigger>
-        <TooltipButton
-          disabled={!model}
-          icon={<X className="h-4 w-4" />}
-          onClick={resetDefaultModel}
-          variant="default"
-          tooltipText={t('tooltip')}
-        />
+        {!hideClear && (
+          <TooltipButton
+            disabled={!model}
+            icon={<X className="h-4 w-4" />}
+            onClick={resetDefaultModel}
+            variant="default"
+            tooltipText={t('tooltip')}
+          />
+        )}
       </div>
-      <PopoverContent align="end" className="p-0">
+      <PopoverContent align="end" className={cn("p-0", popoverClassName)}>
         <Command>
           <CommandInput placeholder={t('placeholder')} className="h-9" />
           <CommandList>

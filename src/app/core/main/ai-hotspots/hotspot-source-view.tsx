@@ -1,171 +1,350 @@
 'use client'
 
-import { AlertCircle, Loader2, RefreshCcw, Rss, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import {
+  Check,
+  Edit3,
+  Loader2,
+  Plus,
+  RefreshCcw,
+  Rss,
+  Search,
+  Trash2,
+  X,
+  Shield,
+  ToggleLeft,
+  ToggleRight,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
+import { Input } from '@/components/ui/input'
 import { toast } from '@/hooks/use-toast'
 import type { AiHotspotSourceStatus, AiHotspotUserFeed } from '@/lib/ai-hotspots'
 import { cn } from '@/lib/utils'
-
-function formatStatusTime(value: string | null) {
-  if (!value) return '暂无'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '未知'
-  return date.toLocaleString()
-}
-
-function Metric({
-  label,
-  value,
-}: {
-  label: string
-  value: number | string
-}) {
-  return (
-    <div className="rounded-md border bg-background px-3 py-2">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
-    </div>
-  )
-}
 
 interface HotspotSourceViewProps {
   sources: AiHotspotSourceStatus[]
   userFeeds: AiHotspotUserFeed[]
   isRefreshing: boolean
   onRefresh: () => void
+  onAddUserFeed: (input: { title: string; feedUrl: string; groupName?: string | null; enabled?: boolean }) => Promise<void>
+  onUpdateUserFeed: (id: string, patch: Partial<Pick<AiHotspotUserFeed, 'title' | 'feedUrl' | 'groupName' | 'enabled'>>) => Promise<void>
   onToggleUserFeed: (id: string, enabled: boolean) => Promise<void>
   onDeleteUserFeed: (id: string) => Promise<void>
 }
 
+/** 判断是否为内置源（不可删除） */
+function isBuiltinFeed(feed: AiHotspotUserFeed): boolean {
+  return (feed.groupName || '').startsWith('builtin:')
+}
+
+/** 获取源的分类标签 */
+function getSourceCategory(feed: AiHotspotUserFeed): string {
+  const group = feed.groupName || ''
+  if (!group.startsWith('builtin:')) return '自定义'
+  const type = group.replace('builtin:', '')
+  const typeMap: Record<string, string> = {
+    'rss': 'RSS',
+    'wechat-rss': '公众号',
+    'newsnow': '聚合',
+    'buzzing': '聚合',
+    'zeli': '聚合',
+    'techurls': '聚合',
+  }
+  return typeMap[type] || type
+}
+
 export function HotspotSourceView({
-  sources,
+  sources: _sources,
   userFeeds,
   isRefreshing,
   onRefresh,
+  onAddUserFeed,
+  onUpdateUserFeed,
   onToggleUserFeed,
   onDeleteUserFeed,
 }: HotspotSourceViewProps) {
-  const okCount = sources.filter(source => source.ok).length
-  const failedCount = sources.length - okCount
+  const [searchQuery, setSearchQuery] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editUrl, setEditUrl] = useState('')
+  const [isAdding, setIsAdding] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+  const [newUrl, setNewUrl] = useState('')
+
+  // 按分类分组
+  const grouped = new Map<string, AiHotspotUserFeed[]>()
+  for (const feed of userFeeds) {
+    const cat = getSourceCategory(feed)
+    if (!grouped.has(cat)) grouped.set(cat, [])
+    grouped.get(cat)!.push(feed)
+  }
+
+  // 搜索过滤
+  const filteredGroups = new Map<string, AiHotspotUserFeed[]>()
+  for (const [cat, feeds] of grouped) {
+    const filtered = searchQuery
+      ? feeds.filter(f =>
+          f.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          f.feedUrl.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+      : feeds
+    if (filtered.length > 0) filteredGroups.set(cat, filtered)
+  }
+
+  const enabledCount = userFeeds.filter(f => f.enabled).length
+  const totalCount = userFeeds.length
+
+  const startEditing = (feed: AiHotspotUserFeed) => {
+    setEditingId(feed.id)
+    setEditTitle(feed.title)
+    setEditUrl(feed.feedUrl)
+  }
+
+  const cancelEditing = () => {
+    setEditingId(null)
+    setEditTitle('')
+    setEditUrl('')
+  }
+
+  const handleSaveEdit = async (id: string) => {
+    const title = editTitle.trim()
+    const feedUrl = editUrl.trim()
+    if (!title || !feedUrl) {
+      toast({ title: '请填写名称和地址', variant: 'destructive' })
+      return
+    }
+    try {
+      await onUpdateUserFeed(id, { title, feedUrl })
+      cancelEditing()
+      toast({ title: '已更新' })
+    } catch (err) {
+      toast({ title: '更新失败', description: String(err), variant: 'destructive' })
+    }
+  }
+
+  const handleAdd = async () => {
+    const title = newTitle.trim()
+    const feedUrl = newUrl.trim()
+    if (!title || !feedUrl) {
+      toast({ title: '请填写名称和地址', variant: 'destructive' })
+      return
+    }
+    try {
+      await onAddUserFeed({ title, feedUrl, groupName: 'custom', enabled: true })
+      setNewTitle('')
+      setNewUrl('')
+      setIsAdding(false)
+      toast({ title: '已添加' })
+    } catch (err) {
+      toast({ title: '添加失败', description: String(err), variant: 'destructive' })
+    }
+  }
+
+  const handleDelete = async (feed: AiHotspotUserFeed) => {
+    if (isBuiltinFeed(feed)) {
+      toast({ title: '内置源不可删除', description: '可以关闭开关来禁用' })
+      return
+    }
+    try {
+      await onDeleteUserFeed(feed.id)
+      toast({ title: '已删除' })
+    } catch (err) {
+      toast({ title: '删除失败', description: String(err), variant: 'destructive' })
+    }
+  }
 
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-        <Metric label="来源" value={sources.length} />
-        <Metric label="可用" value={okCount} />
-        <Metric label="失败" value={failedCount} />
-        <Metric label="用户 RSS" value={userFeeds.length} />
+    <div className="flex h-full flex-col">
+      {/* 顶部操作栏 */}
+      <div className="flex items-center gap-3 border-b px-4 py-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={searchQuery}
+            placeholder="搜索源名称或地址..."
+            className="h-9 pl-9 text-sm"
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>{enabledCount}/{totalCount} 已启用</span>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 gap-1.5 text-xs"
+          disabled={isRefreshing}
+          onClick={onRefresh}
+        >
+          {isRefreshing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCcw className="size-3.5" />}
+          刷新全部
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 gap-1.5 text-xs"
+          onClick={() => setIsAdding(!isAdding)}
+        >
+          {isAdding ? <X className="size-3.5" /> : <Plus className="size-3.5" />}
+          {isAdding ? '取消' : '添加源'}
+        </Button>
       </div>
 
-      <section className="rounded-md border bg-background">
-        <div className="flex h-10 items-center gap-2 border-b px-3">
-          <Rss className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium">来源状态</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto h-7 px-2 text-xs"
-            disabled={isRefreshing}
-            onClick={onRefresh}
-          >
-            {isRefreshing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCcw className="size-3.5" />}
-            刷新
-          </Button>
-        </div>
-
-        {sources.length === 0 ? (
-          <div className="flex h-[220px] flex-col items-center justify-center text-center">
-            <Rss className="mb-3 size-9 text-muted-foreground" />
-            <div className="text-sm font-medium">暂无来源状态</div>
-            <div className="mt-1 text-sm text-muted-foreground">刷新后会显示每个来源的成功状态和错误信息。</div>
+      {/* 添加新源表单 */}
+      {isAdding && (
+        <div className="border-b bg-muted/30 px-4 py-3">
+          <div className="text-sm font-medium mb-2">添加自定义 RSS 源</div>
+          <div className="flex gap-2">
+            <Input
+              value={newTitle}
+              placeholder="源名称"
+              className="h-8 text-xs flex-1"
+              onChange={e => setNewTitle(e.target.value)}
+            />
+            <Input
+              value={newUrl}
+              placeholder="https://example.com/feed.xml"
+              className="h-8 text-xs flex-[2]"
+              onChange={e => setNewUrl(e.target.value)}
+            />
+            <Button size="sm" className="h-8 text-xs" onClick={handleAdd}>
+              添加
+            </Button>
           </div>
-        ) : (
-          sources.map(source => (
-            <div key={source.sourceId} className="border-b px-3 py-2 last:border-b-0">
-              <div className="flex min-w-0 items-start gap-2">
-                <span
+        </div>
+      )}
+
+      {/* 源列表 */}
+      <div className="flex-1 overflow-y-auto">
+        {Array.from(filteredGroups.entries()).map(([category, feeds]) => (
+          <div key={category}>
+            <div className="sticky top-0 z-10 border-b bg-muted/50 px-4 py-2">
+              <span className="text-xs font-medium text-foreground">{category}</span>
+              <span className="ml-2 text-xs text-muted-foreground">{feeds.length}</span>
+            </div>
+            {feeds.map(feed => {
+              const builtin = isBuiltinFeed(feed)
+              const isEditing = editingId === feed.id
+
+              return (
+                <div
+                  key={feed.id}
                   className={cn(
-                    'mt-1 size-2 shrink-0 rounded-full',
-                    source.ok ? 'bg-emerald-500' : 'bg-destructive',
+                    'flex items-center gap-3 border-b px-4 py-2.5 hover:bg-muted/30 transition-colors',
+                    !feed.enabled && 'opacity-50'
                   )}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-sm font-medium">{source.sourceName}</span>
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                      {source.kind}
-                    </span>
-                    <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
-                      {source.itemCount} 条
-                    </span>
+                >
+                  {/* 开关 */}
+                  <button
+                    type="button"
+                    className="shrink-0"
+                    onClick={() => onToggleUserFeed(feed.id, !feed.enabled)}
+                    title={feed.enabled ? '点击关闭' : '点击开启'}
+                  >
+                    {feed.enabled ? (
+                      <ToggleRight className="size-5 text-emerald-500" />
+                    ) : (
+                      <ToggleLeft className="size-5 text-muted-foreground" />
+                    )}
+                  </button>
+
+                  {/* 内容 */}
+                  <div className="min-w-0 flex-1">
+                    {isEditing ? (
+                      <div className="flex gap-2">
+                        <Input
+                          value={editTitle}
+                          className="h-7 text-xs flex-1"
+                          onChange={e => setEditTitle(e.target.value)}
+                        />
+                        <Input
+                          value={editUrl}
+                          className="h-7 text-xs flex-[2]"
+                          onChange={e => setEditUrl(e.target.value)}
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">{feed.title}</span>
+                          {builtin && (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-600">
+                              <Shield className="size-2.5" />
+                              内置
+                            </span>
+                          )}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">{feed.feedUrl}</div>
+                      </div>
+                    )}
                   </div>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                    <span>{source.ok ? '正常' : '失败'}</span>
-                    <span>{Math.round(source.durationMs)}ms</span>
-                    <span>最近成功 {formatStatusTime(source.lastOkAt)}</span>
-                    <span>更新 {formatStatusTime(source.updatedAt)}</span>
+
+                  {/* 操作按钮 */}
+                  <div className="flex shrink-0 items-center gap-1">
+                    {isEditing ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          onClick={() => handleSaveEdit(feed.id)}
+                          title="保存"
+                        >
+                          <Check className="size-3.5 text-emerald-600" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          onClick={cancelEditing}
+                          title="取消"
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          onClick={() => startEditing(feed)}
+                          title="编辑"
+                        >
+                          <Edit3 className="size-3.5" />
+                        </Button>
+                        {!builtin && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 text-destructive"
+                            onClick={() => handleDelete(feed)}
+                            title="删除"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        )}
+                      </>
+                    )}
                   </div>
-                  {!source.ok && source.lastError ? (
-                    <div className="mt-1 flex items-start gap-1.5 text-xs text-destructive">
-                      <AlertCircle className="mt-0.5 size-3 shrink-0" />
-                      <span className="line-clamp-2">{source.lastError}</span>
-                    </div>
-                  ) : null}
                 </div>
-              </div>
-            </div>
-          ))
-        )}
-      </section>
-
-      <section className="rounded-md border bg-background">
-        <div className="flex h-10 items-center gap-2 border-b px-3">
-          <Rss className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium">用户 RSS</span>
-          <span className="ml-auto text-[11px] text-muted-foreground">{userFeeds.length} 个</span>
-        </div>
-
-        {userFeeds.length === 0 ? (
-          <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-            还没有添加用户 RSS。可以在右上角设置中添加 RSS 或导入 OPML。
+              )
+            })}
           </div>
-        ) : (
-          userFeeds.map(feed => (
-            <div key={feed.id} className="flex min-w-0 items-center gap-3 border-b px-3 py-2 last:border-b-0">
-              <Switch
-                checked={feed.enabled}
-                onCheckedChange={(enabled) => {
-                  void onToggleUserFeed(feed.id, enabled).then(() => {
-                    toast({ title: enabled ? 'RSS 已启用' : 'RSS 已停用' })
-                  })
-                }}
-                aria-label={feed.enabled ? '停用 RSS' : '启用 RSS'}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{feed.title}</div>
-                <div className="mt-0.5 flex min-w-0 gap-2 text-[11px] text-muted-foreground">
-                  {feed.groupName ? <span className="shrink-0">{feed.groupName}</span> : null}
-                  <span className="truncate">{feed.feedUrl}</span>
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
-                title="删除 RSS"
-                onClick={() => {
-                  void onDeleteUserFeed(feed.id).then(() => {
-                    toast({ title: 'RSS 已删除' })
-                  })
-                }}
-              >
-                <Trash2 className="size-4" />
-              </Button>
+        ))}
+
+        {filteredGroups.size === 0 && (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <Rss className="mb-3 size-8 text-muted-foreground" />
+            <div className="text-sm font-medium">
+              {searchQuery ? '没有匹配的源' : '暂无订阅源'}
             </div>
-          ))
+            <div className="mt-1 text-xs text-muted-foreground">
+              {searchQuery ? '换个关键词试试' : '点击"添加源"来添加自定义 RSS'}
+            </div>
+          </div>
         )}
-      </section>
+      </div>
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { isSupportOnlyObservationText, isSupportOnlyToolName } from './support-t
 export interface AgentEventBusOptions {
   runId?: string
   maxEvents?: number
+  onEvent?: (event: AgentEvent) => void
 }
 
 export interface AgentReplayState {
@@ -39,10 +40,12 @@ export class AgentEventBus {
   private sequence = 0
   private maxEvents: number
   private events: AgentEvent[] = []
+  private onEvent?: (event: AgentEvent) => void
 
   constructor(options: AgentEventBusOptions = {}) {
     this.runId = options.runId || createRunId()
     this.maxEvents = options.maxEvents || 500
+    this.onEvent = options.onEvent
   }
 
   reset(runId: string = createRunId()) {
@@ -77,6 +80,7 @@ export class AgentEventBus {
     }
 
     this.events = appendAgentEvent(this.events, event, this.maxEvents)
+    this.onEvent?.(event)
 
     // Tauri 异步广播事件
     try {

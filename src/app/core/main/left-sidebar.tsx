@@ -14,11 +14,11 @@ import useFavoritesStore from '@/stores/favorites'
 import { useSettingsDialogStore } from '@/stores/settings-dialog'
 import { useSidebarStore } from '@/stores/sidebar'
 import useUpdateStore from '@/stores/update'
+import { AiHotspotsModal } from '@/components/ai-hotspots-modal'
 import { OutputWorkshopModal } from '@/components/output-workshop-modal'
 import emitter from '@/lib/emitter'
 
 import { FileActions } from './file/file-actions'
-import { AI_HOTSPOTS_TAB_PATH } from './ai-hotspots/ai-hotspots-constants'
 import { FLASHCARD_TAB_PATH } from './flashcard/flashcard-constants'
 import { GITHUB_STARS_TAB_PATH } from './github-stars/github-stars-constants'
 import { KNOWLEDGE_GRAPH_TAB_PATH } from './knowledge/knowledge-graph-constants'
@@ -88,6 +88,7 @@ export function LeftSidebarRail() {
   const t = useTranslations()
   const tCommon = useTranslations('common')
   const [outputWorkshopOpen, setOutputWorkshopOpen] = useState(false)
+  const [aiHotspotsOpen, setAiHotspotsOpen] = useState(false)
   const [workshopInitialPath, setWorkshopInitialPath] = useState<string | null>(null)
   const [workshopInitialContent, setWorkshopInitialContent] = useState<string | null>(null)
 
@@ -145,13 +146,6 @@ export function LeftSidebarRail() {
     }
   }
 
-  const openAiHotspots = async () => {
-    setActiveFilePath(AI_HOTSPOTS_TAB_PATH)
-    if (!centerPanelVisible) {
-      await toggleCenterPanel()
-    }
-  }
-
   return (
     <TooltipProvider>
       <aside className="left-sidebar-rail">
@@ -197,11 +191,11 @@ export function LeftSidebarRail() {
             }}
           />
           <SidebarRailButton
-            active={activeFilePath === AI_HOTSPOTS_TAB_PATH}
+            active={aiHotspotsOpen}
             icon={<Newspaper className="size-4" />}
             label="AI 热点"
             onClick={() => {
-              void openAiHotspots()
+              setAiHotspotsOpen(true)
             }}
           />
           <SidebarRailButton
@@ -247,6 +241,10 @@ export function LeftSidebarRail() {
         }}
         linkedFilePath={workshopInitialPath || (canLoadActiveFile ? activeFilePath : null)}
         linkedFileContent={workshopInitialContent || (canLoadActiveFile ? currentArticle : null)}
+      />
+      <AiHotspotsModal
+        open={aiHotspotsOpen}
+        onClose={() => setAiHotspotsOpen(false)}
       />
     </TooltipProvider>
   )

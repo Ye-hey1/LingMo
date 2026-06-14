@@ -86,19 +86,19 @@ function GitHubProjectDetailView({ mark }: { mark: Mark }) {
   ].filter(item => item.value)
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6">
+    <div className="mx-auto w-full max-w-4xl space-y-5">
       <div className="rounded-lg border border-border bg-background">
         <div className="border-b border-border px-5 py-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div className="min-w-0 space-y-2">
+            <div className="min-w-0 space-y-1.5">
               <div className="flex min-w-0 items-center gap-2">
                 <LinkIcon className="size-4 shrink-0 text-muted-foreground" />
-                <h2 className="truncate text-xl font-semibold tracking-normal text-foreground">
+                <h2 className="truncate text-lg font-semibold tracking-tight text-foreground">
                   {meta.displayName || 'GitHub 项目'}
                 </h2>
               </div>
               {meta.intro ? (
-                <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+                <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
                   {meta.intro}
                 </p>
               ) : null}
@@ -142,7 +142,7 @@ function GitHubProjectDetailView({ mark }: { mark: Mark }) {
         ) : null}
       </div>
 
-      <div className="rounded-lg border border-border bg-background px-5 py-5">
+      <div className="mx-auto max-w-3xl rounded-lg border border-border bg-background px-5 py-5">
         <ChatPreview
           text={detailContent}
           className="github-project-markdown w-full max-w-none overflow-x-auto"
@@ -191,22 +191,22 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
   const platformLabel = isYoutube ? 'YouTube' : isBilibili ? 'B站' : '视频转写'
 
   const headerCardBgClass = isBilibili
-    ? "rounded-lg border border-sky-100 bg-background px-5 py-5 shadow-sm dark:border-sky-950/30"
+    ? "rounded-lg border border-sky-100 bg-background px-5 py-5 dark:border-sky-950/30"
     : isYoutube
-      ? "rounded-lg border border-rose-100 bg-background px-5 py-5 shadow-sm dark:border-rose-950/30"
-      : "rounded-lg border border-border bg-background px-5 py-5 shadow-sm"
+      ? "rounded-lg border border-rose-100 bg-background px-5 py-5 dark:border-rose-950/30"
+      : "rounded-lg border border-border bg-background px-5 py-5"
 
   const platformBadgeClass = isBilibili
-    ? "rounded bg-sky-500 px-2.5 py-0.5 text-xs font-bold text-white shadow-sm shadow-sky-200/50"
+    ? "rounded bg-sky-500 px-2.5 py-0.5 text-xs font-bold text-white"
     : isYoutube
-      ? "rounded bg-rose-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-sm shadow-rose-200/50"
-      : "rounded bg-indigo-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-sm shadow-indigo-200/50"
+      ? "rounded bg-rose-600 px-2.5 py-0.5 text-xs font-bold text-white"
+      : "rounded bg-indigo-600 px-2.5 py-0.5 text-xs font-bold text-white"
 
   const generateBtnClass = isBilibili
-    ? "inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-sky-500 disabled:cursor-not-allowed"
+    ? "inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed"
     : isYoutube
-      ? "inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-rose-500 disabled:cursor-not-allowed"
-      : "inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-colors hover:opacity-90 disabled:cursor-not-allowed"
+      ? "inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-rose-500 disabled:cursor-not-allowed"
+      : "inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-not-allowed"
 
   const originVideoBtnClass = isBilibili
     ? "inline-flex items-center gap-1.5 rounded-md border border-sky-200/60 bg-background px-3.5 py-2 text-xs font-semibold text-sky-600 transition-colors hover:bg-sky-50/60 dark:border-sky-900/60 dark:text-sky-400 dark:hover:bg-sky-950/20"
@@ -215,10 +215,10 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
       : "inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent"
 
   const activeTabClass = isBilibili
-    ? "bg-sky-50 text-sky-700 shadow-sm dark:bg-sky-950/20 dark:text-sky-400"
+    ? "bg-sky-50 text-sky-700 dark:bg-sky-950/20 dark:text-sky-400"
     : isYoutube
-      ? "bg-rose-50 text-rose-700 shadow-sm dark:bg-rose-950/20 dark:text-rose-400"
-      : "bg-muted text-foreground shadow-sm"
+      ? "bg-rose-50 text-rose-700 dark:bg-rose-950/20 dark:text-rose-400"
+      : "bg-muted text-foreground"
 
   const handleGenerateSummary = useCallback(async () => {
     if (isSummarizing) return
@@ -308,11 +308,11 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
               <span className={platformBadgeClass}>
                 {platformLabel}
               </span>
-              <span className="rounded bg-zinc-100 dark:bg-zinc-800 border border-zinc-200/50 px-2.5 py-0.5 text-xs font-semibold text-zinc-600 dark:text-zinc-400">
+              <span className="rounded bg-muted/60 border border-border/50 px-2.5 py-0.5 text-xs font-semibold text-muted-foreground">
                 {video.meta.transcriptSource || '语音识别'}
               </span>
             </div>
-            <h2 className="max-w-3xl text-2xl font-semibold leading-snug text-foreground">
+            <h2 className="max-w-3xl text-xl font-semibold leading-snug text-foreground tracking-tight">
               {video.title}
             </h2>
             {video.description ? (
@@ -347,13 +347,13 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
         </div>
       </div>
 
-      <div className="flex w-fit rounded-md border border-border bg-background p-1 shadow-sm">
+      <div className="flex w-fit rounded-md border border-border bg-background p-0.5">
         {views.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             type="button"
             onClick={() => setActiveView(key)}
-            className={`inline-flex items-center gap-1.5 rounded px-4 py-2 text-sm font-semibold transition-colors ${activeView === key ? activeTabClass : 'text-muted-foreground hover:text-foreground'}`}
+            className={`inline-flex items-center gap-1.5 rounded-sm px-3.5 py-1.5 text-xs font-semibold transition-colors ${activeView === key ? activeTabClass : 'text-muted-foreground hover:text-foreground'}`}
           >
             <Icon className="size-3.5" />
             {label}
@@ -361,13 +361,13 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
         ))}
       </div>
 
-      <div className="min-h-[300px] rounded-lg border border-border bg-background px-6 py-6 shadow-sm">
+      <div className="min-h-[300px] rounded-lg border border-border bg-background px-5 py-5 md:px-8 md:py-6">
         {activeView === 'summary' && !hasSummary ? (
-          <div className="flex min-h-56 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 py-10 text-center">
-            <Sparkles className="mb-3 size-8 text-muted-foreground" />
-            <h3 className="text-base font-semibold text-foreground">一键生成视频总结</h3>
-            <p className="mt-2 max-w-sm text-xs leading-5 text-muted-foreground">
-              点击上方“生成 AI 总结”按钮，系统将基于视频时间线和结构化正文，梳理精要大纲、关键立场、思考启发和知识卡片。
+          <div className="flex min-h-56 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/15 px-6 py-10 text-center">
+            <Sparkles className="mb-2 size-6 text-muted-foreground/60" />
+            <h3 className="text-sm font-semibold text-foreground">生成 AI 视频总结</h3>
+            <p className="mt-1.5 max-w-xs text-xs leading-5 text-muted-foreground">
+              基于时间线和正文，梳理大纲、要点、术语和复盘问题。
             </p>
             <button
               type="button"
@@ -380,11 +380,11 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
             </button>
           </div>
         ) : activeView === 'timeline' ? (
-          <div className="max-w-2xl mx-auto py-2">
+          <div className="mx-auto max-w-2xl py-1">
             {formattedTimeline}
           </div>
         ) : (
-          <div className={activeView === 'body' ? "max-w-2xl mx-auto py-2" : "w-full"}>
+          <div className={activeView === 'body' ? "mx-auto max-w-2xl py-1" : "w-full"}>
             <ChatPreview text={text || '暂无内容'} className="video-transcript-markdown w-full max-w-none" />
           </div>
         )}
@@ -459,7 +459,7 @@ const DetailViewer = React.memo(({
             <TooltipTrigger asChild>
               {trigger}
             </TooltipTrigger>
-            <TooltipContent side="top" align="start" className="max-w-[260px] bg-popover px-3 py-2 text-popover-foreground shadow-md">
+            <TooltipContent side="top" align="start" className="max-w-[260px] bg-popover px-3 py-2 text-popover-foreground ">
               <div className="space-y-1">
                 <div className="text-[11px] font-medium text-muted-foreground">项目简介</div>
                 <p className="line-clamp-4 text-xs leading-5">{compactTooltip}</p>
@@ -476,9 +476,9 @@ const DetailViewer = React.memo(({
           }
         }}
       >
-        <DialogHeader className="p-4 border-b shrink-0">
+        <DialogHeader className="shrink-0 border-b px-5 py-3.5">
           <div className="flex items-center gap-3 pr-8">
-            <DialogTitle>{t(mark.type)}</DialogTitle>
+            <DialogTitle className="text-sm font-semibold">{t(mark.type)}</DialogTitle>
             {!isTextType && (
               isEditing ? (
                 <button
@@ -499,14 +499,14 @@ const DetailViewer = React.memo(({
               )
             )}
           </div>
-          <div className="flex items-center gap-2 mt-1">
-            <span className={`text-${recordTextSize} text-zinc-500`}>{markT('createdAt')}：{dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}</span>
-            <span className={`text-${recordTextSize} text-zinc-500`}>
-              {getWordCount(value)} {messageControlT('words')}
-            </span>
+          <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+            <span>{dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm')}</span>
+            <span className="size-0.5 rounded-full bg-border" aria-hidden="true" />
+            <span>{getWordCount(value)} {messageControlT('words')}</span>
           </div>
         </DialogHeader>
-        <div className={(isGitHubProject || isVideoTranscript) && !showEditor ? "flex-1 overflow-y-auto bg-muted/20 p-4 md:p-6" : "flex-1 overflow-y-auto md:p-8 p-2"}>
+        <div className={(isGitHubProject || isVideoTranscript) && !showEditor ? "flex-1 overflow-y-auto bg-muted/20 p-4 md:p-6" : "flex-1 overflow-y-auto md:p-6 p-3"}>
+          <div className={(isGitHubProject || isVideoTranscript) ? '' : 'mx-auto max-w-[680px]'}>
           {
             mark.url && (mark.type === 'image' || mark.type === 'scan') ?
             <div className="mb-5 flex justify-center">
@@ -521,12 +521,12 @@ const DetailViewer = React.memo(({
           {
             isGitHubProject || isVideoTranscript || mark.type === 'text' || mark.desc === mark.content ? null :
             <>
-              <span className="block my-4 text-md text-zinc-900 font-bold">{markT('desc')}</span>
+              <span className="mb-2 block text-[11px] font-medium tracking-wide text-muted-foreground">{markT('desc')}</span>
               <Textarea placeholder="在此输入文本记录内容..." rows={3} value={descValue} onChange={textDescChangeHandler} />
             </>
           }
           {(isGitHubProject || isVideoTranscript) && !showEditor ? null : (
-            <span className="block my-4 text-md text-zinc-900 font-bold">{markT('content')}</span>
+            <span className="mb-2 block text-[11px] font-medium tracking-wide text-muted-foreground">{markT('content')}</span>
           )}
           {showEditor ? (
             <Textarea placeholder="在此输入文本记录内容..." rows={14} value={value} onChange={textMarkChangeHandler} />
@@ -537,6 +537,7 @@ const DetailViewer = React.memo(({
           ) : (
             <ChatPreview text={mark.content || ''} />
           )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -794,7 +795,7 @@ export const MarkWrapper = React.memo(({
             </button>
           </div>
         ) : (
-          <span className="shrink-0 text-xs text-zinc-500">{dayjs(mark.createdAt).format('HH:mm')}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">{dayjs(mark.createdAt).format('HH:mm')}</span>
         )}
       </div>
     )
@@ -808,7 +809,7 @@ export const MarkWrapper = React.memo(({
         className="space-y-2.5"
         title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
       >
-        <div className="flex items-center gap-2 text-zinc-500">
+        <div className="flex items-center gap-2 text-muted-foreground">
           <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
           <MarkProcessedChip processed={isProcessed} />
           {mark.type === 'todo' && itemContent.todo ? (
@@ -838,7 +839,7 @@ export const MarkWrapper = React.memo(({
           )}
         </div>
         {isImageCard && mark.url ? (
-          <div className="overflow-hidden rounded-md bg-zinc-100">
+          <div className="overflow-hidden rounded-md bg-muted">
             <ImageViewer
               url={mark.url}
               path={mark.type === 'scan' ? 'screenshot' : 'image'}
@@ -876,9 +877,9 @@ export const MarkWrapper = React.memo(({
             </a>
           ) : null}
           {!isImageCard && mark.type === 'todo' && itemContent.todo ? (
-            <div className="flex items-center gap-2 text-xs text-zinc-500">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <div className="flex items-center gap-2">
-                {itemContent.todo.completed ? <CheckSquare className="size-3.5 text-green-600" /> : <Square className="size-3.5 text-zinc-400" />}
+                {itemContent.todo.completed ? <CheckSquare className="size-3.5 text-green-600" /> : <Square className="size-3.5 text-muted-foreground" />}
                 <span>{itemContent.todo.completed ? todoT('completed') : todoT('uncompleted')}</span>
               </div>
             </div>
@@ -927,7 +928,7 @@ export const MarkWrapper = React.memo(({
           className={`flex-1 overflow-hidden text-${recordTextSize} ${lineHeight} pr-10 md:pr-2`}
           title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
         >
-          <div className="flex w-full items-center gap-2 text-zinc-500">
+          <div className="flex w-full items-center gap-2 text-muted-foreground">
             <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
             {renderTimeOrTrashActions()}
@@ -941,10 +942,10 @@ export const MarkWrapper = React.memo(({
           className={`flex-1 overflow-hidden text-${recordTextSize} ${lineHeight} pr-10 md:pr-2`}
           title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
         >
-          <div className="flex w-full items-center gap-2 text-zinc-500">
+          <div className="flex w-full items-center gap-2 text-muted-foreground">
             <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
-            {mark.url.includes('http') ? <ImageUp className="size-3 text-zinc-400" /> : null}
+            {mark.url.includes('http') ? <ImageUp className="size-3 text-muted-foreground" /> : null}
             {renderTimeOrTrashActions()}
           </div>
           <DetailViewer mark={mark} content={mark.desc || ''} path="image" />
@@ -956,7 +957,7 @@ export const MarkWrapper = React.memo(({
           className="flex-1 pr-10 md:pr-0"
           title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
         >
-          <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
+          <div className={`flex w-full items-center gap-2 text-muted-foreground text-${recordTextSize} ${lineHeight}`}>
             <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
             {renderTimeOrTrashActions()}
@@ -980,7 +981,7 @@ export const MarkWrapper = React.memo(({
             className="flex-1 pr-10 md:pr-0"
             title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
           >
-            <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
+            <div className={`flex w-full items-center gap-2 text-muted-foreground text-${recordTextSize} ${lineHeight}`}>
               <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
               <MarkProcessedChip processed={isProcessed} />
               {renderTimeOrTrashActions()}
@@ -994,13 +995,13 @@ export const MarkWrapper = React.memo(({
             className="flex-1 pr-10 md:pr-0"
             title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
           >
-            <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
+            <div className={`flex w-full items-center gap-2 text-muted-foreground text-${recordTextSize} ${lineHeight}`}>
               <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
               <MarkProcessedChip processed={isProcessed} />
               {shouldShowRecordingAction && (
                 <button
                   type="button"
-                  className="shrink-0 text-zinc-500 transition-colors hover:text-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={handleRecordingAction}
                   disabled={isRetryingTranscription}
                   title={sttModel
@@ -1018,7 +1019,7 @@ export const MarkWrapper = React.memo(({
             </div>
             {/* 新增：如果存在音频文件名，则在转译文本前进行展示 */}
             {mark.desc && (
-              <div className="mt-1.5 mb-1 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+              <div className="mt-1.5 mb-1 text-sm font-medium text-foreground">
                 {mark.desc}
               </div>
             )}
@@ -1036,7 +1037,7 @@ export const MarkWrapper = React.memo(({
             className="flex-1 pr-10 md:pr-0"
             title={trashState ? `创建时间: ${dayjs(mark.createdAt).format('YYYY-MM-DD HH:mm:ss')}${mark.deletedAt ? `\n删除时间: ${dayjs(mark.deletedAt).format('YYYY-MM-DD HH:mm:ss')}` : ''}` : undefined}
           >
-            <div className={`flex w-full items-center gap-2 text-zinc-500 text-${recordTextSize} ${lineHeight}`}>
+            <div className={`flex w-full items-center gap-2 text-muted-foreground text-${recordTextSize} ${lineHeight}`}>
               <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
               <MarkProcessedChip processed={isProcessed} />
               {renderTimeOrTrashActions()}
@@ -1079,7 +1080,7 @@ export const MarkWrapper = React.memo(({
         {renderContent()}
       </div>
       {(mark.type === 'scan' || mark.type === 'image') && (
-        <div className="bg-zinc-900 flex items-center justify-center ml-2">
+        <div className="bg-foreground/10 flex items-center justify-center ml-2">
           <ImageViewer url={mark.url} path={mark.type === 'scan' ? 'screenshot' : 'image'} />
         </div>
       )}

@@ -67,9 +67,9 @@ export function ClipboardDropzone({ onImageDrop, onTextDrop, className, compact 
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       className={cn(
-        "relative overflow-hidden rounded-xl border-2 border-dashed transition-all duration-300",
-        isDragging 
-          ? "border-primary bg-primary/5 scale-[1.02]" 
+        "relative overflow-hidden rounded-lg border border-dashed transition-colors duration-200",
+        isDragging
+          ? "border-primary bg-primary/5"
           : "border-muted-foreground/25 hover:border-muted-foreground/50",
         className
       )}
@@ -89,8 +89,8 @@ export function ClipboardDropzone({ onImageDrop, onTextDrop, className, compact 
                 exit={{ scale: 0.8, opacity: 0 }}
                 className="flex flex-col items-center gap-3"
               >
-                <div className="p-4 rounded-full bg-primary/10 border border-primary/20">
-                  <Upload className="size-8 text-primary animate-bounce" />
+                <div className="rounded-md border border-primary/20 bg-primary/10 p-4">
+                  <Upload className="size-8 text-primary" />
                 </div>
                 <div className="text-center">
                   <p className="text-sm font-medium text-primary">
@@ -108,7 +108,7 @@ export function ClipboardDropzone({ onImageDrop, onTextDrop, className, compact 
 
       <div className={cn("text-center", compact ? "p-4" : "p-8")}>
         <div className={cn("flex flex-col items-center", compact ? "gap-2.5" : "gap-4")}>
-          <div className={cn("rounded-full bg-muted/50", compact ? "p-2" : "p-3")}>
+          <div className={cn("rounded-md bg-muted/50", compact ? "p-2" : "p-3")}>
             <Upload className={cn("text-muted-foreground", compact ? "size-4" : "size-6")} />
           </div>
           <div>

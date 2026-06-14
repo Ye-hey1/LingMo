@@ -2954,6 +2954,7 @@
       "polish": "潤色",
       "concise": "精簡",
       "expand": "擴展",
+      "explain": "解釋",
       "translate": "翻譯",
       "translateSubtitle": "翻譯為",
       "quoteToChat": "引用到對話",
@@ -2995,6 +2996,26 @@
       },
       "customLanguagePlaceholder": "自定義語言..."
     },
+    "inlineAI": {
+      "generateTitle": "AI 靈感生成",
+      "rewriteTitle": "AI 改寫選區",
+      "generatingTitle": "AI 正在生成",
+      "generateDescription": "從當前游標繼續寫，或按指令生成一段內容",
+      "rewriteDescription": "按你的指令處理選中文本",
+      "generatePlaceholder": "例如：補充下一段、列出三個觀點...",
+      "rewritePlaceholder": "例如：翻譯成英文、改得更有說服力...",
+      "generate": "生成",
+      "generating": "生成中",
+      "close": "關閉 AI 面板",
+      "continue": "繼續往下寫",
+      "continueDesc": "讀取上文，直接補寫後續內容",
+      "polish": "潤色改寫",
+      "polishDesc": "保留原意，讓表達更順暢",
+      "concise": "更加精煉",
+      "conciseDesc": "壓縮冗餘，保留重點",
+      "expand": "拓展豐富",
+      "expandDesc": "補充細節，讓內容更完整"
+    },
     "emptyLineMenu": {
       "open": "插入或轉換區塊",
       "basic": "基礎",
@@ -3022,7 +3043,14 @@
       "accept": "接受",
       "reject": "拒絕",
       "generating": "生成中...",
-      "abort": "終止"
+      "abort": "終止",
+      "explainTitle": "AI 解釋",
+      "explaining": "正在解釋...",
+      "selectedText": "選中文本",
+      "explainHint": "僅用於理解，不會寫入原文",
+      "copy": "複製",
+      "copied": "已複製",
+      "close": "關閉"
     },
     "image": {
       "insert": "插入圖片",
@@ -3083,8 +3111,8 @@
         "chart": "圖表"
       },
       "items": {
-        "continue": "續寫",
-        "continueDesc": "AI 續寫內容",
+        "continue": "AI 繼續寫",
+        "continueDesc": "從當前游標繼續生成內容",
         "heading1": "標題1",
         "heading1Desc": "大標題",
         "heading2": "標題2",
@@ -3103,6 +3131,8 @@
         "tableDesc": "插入表格",
         "blockquote": "引用",
         "blockquoteDesc": "擷取引用內容",
+        "callout": "提示卡片",
+        "calloutDesc": "插入彩色提示框",
         "codeBlock": "程式碼區塊",
         "codeBlockDesc": "擷取程式碼片段",
         "divider": "分隔線",

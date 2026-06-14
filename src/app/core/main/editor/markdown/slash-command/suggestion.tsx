@@ -157,8 +157,8 @@ export const suggestionItems = (t?: SlashCommandTranslations): SlashCommandItem[
       chart: '图表',
     },
     items: {
-      continue: '续写',
-      continueDesc: 'AI 续写内容',
+      continue: 'AI续写',
+      continueDesc: '从当前光标继续生成内容',
       heading1: '标题1',
       heading1Desc: '大标题',
       heading2: '标题2',

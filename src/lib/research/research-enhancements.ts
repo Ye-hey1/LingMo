@@ -13,7 +13,6 @@ import type {
   ResearchSource,
   ResearchEvidence,
   DeepResearchResult,
-  ResearchStrategyId,
 } from './deep-research'
 
 // ---------------------------------------------------------------------------
@@ -210,11 +209,16 @@ export function assessResearchQuality(result: DeepResearchResult): ResearchQuali
   // 来源多样性：独立域名数
   const uniqueHosts = new Set(
     sources.map(s => {
-      try { return new URL(s.url).hostname } catch { return s.url }
-    })
+      try {
+        const parsed = new URL(s.url)
+        return parsed.hostname.replace(/^www\./, '') || parsed.protocol.replace(':', '') || s.url
+      } catch {
+        return s.url
+      }
+    }).filter(Boolean)
   )
   const sourceDiversity = Math.min(100, Math.round(
-    (uniqueHosts.size / Math.max(sources.length, 1)) * 70 + Math.min(sources.length * 3, 30)
+    Math.min(uniqueHosts.size / 4, 1) * 70 + Math.min(sources.length / 8, 1) * 30
   ))
 
   // 证据强度：高置信度证据比例

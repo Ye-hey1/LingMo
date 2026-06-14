@@ -1,15 +1,18 @@
 import {
   getAiHotspotItems,
+  getAiHotspotSourceStatuses,
   getAiHotspotUserFeeds,
   initAiHotspotsDb,
   insertAiHotspotSnapshot,
+  cleanupAiHotspotTrash,
   pruneAiHotspotItems,
   upsertAiHotspotItems,
   upsertAiHotspotSourceStatuses,
   type AiHotspotSnapshot,
 } from '@/db/ai-hotspots'
 import { AI_HOTSPOT_CONFIG } from './config'
-import { createDefaultAiHotspotFetchers, runAiHotspotFetcher, UserRssFetcher } from './fetchers'
+import { createDefaultAiHotspotFetchers, DefaultRssFetcher, runAiHotspotFetcher, UserRssFetcher } from './fetchers'
+import type { AiHotspotFetcherOptions } from './fetchers/base'
 import { createHotspotId, normalizeHotspotTitle, normalizeHotspotUrl, toIsoString } from './normalize'
 export { shouldAutoRefreshAiHotspots } from './refresh-policy'
 import {
@@ -29,6 +32,20 @@ export interface AiHotspotRefreshResult {
 export interface AiHotspotRefreshOptions {
   includeUserFeeds?: boolean
   signal?: AbortSignal
+  /** 当 true 时跳过 If-Modified-Since 增量逻辑，强制全量拉取 */
+  force?: boolean
+}
+
+export interface AiHotspotDailyRefreshOptions {
+  signal?: AbortSignal
+  /** 手动/每日首次进入时默认强制读取最新日报，但仍只请求 daily feed 的第一期 */
+  force?: boolean
+}
+
+export interface AiHotspotFeaturedRefreshOptions {
+  signal?: AbortSignal
+  /** 手动刷新精选时默认强制读取官方 feed.xml，但不会触发其它来源 */
+  force?: boolean
 }
 
 function createRefreshId() {
@@ -38,8 +55,9 @@ function createRefreshId() {
   return `refresh-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
+/** 优先使用 lastSeenAt（抓取时间） */
 function getItemTime(item: AiHotspotItem) {
-  const value = item.publishedAt ?? item.lastSeenAt ?? item.firstSeenAt
+  const value = item.lastSeenAt ?? item.publishedAt ?? item.firstSeenAt
   const time = value ? Date.parse(value) : 0
   return Number.isFinite(time) ? time : 0
 }
@@ -120,6 +138,19 @@ export function rawItemToHotspotItem(
     isFavorite: existing?.isFavorite ?? false,
     isRead: existing?.isRead ?? false,
     savedNotePath: existing?.savedNotePath || null,
+    signalSummary: existing?.signalSummary || null,
+    signalEssence: existing?.signalEssence || null,
+    impactAudience: existing?.impactAudience || [],
+    suggestedAction: existing?.suggestedAction || null,
+    relatedSignalIds: existing?.relatedSignalIds || [],
+    isIgnored: existing?.isIgnored ?? false,
+    deletedAt: existing?.deletedAt || null,
+    digestStatus: existing?.digestStatus || 'none',
+    snapshotId: existing?.snapshotId || null,
+    meta: {
+      ...(existing?.meta || {}),
+      ...raw.meta,
+    },
   }
 
   item.score = scoreHotspotItem(item)
@@ -180,11 +211,39 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
+/**
+ * 构建 sourceId → lastFetchAt 的映射。
+ * 从 ai_hotspot_sources 表中读取每个源上次成功拉取的时间。
+ */
+function buildLastFetchAtMap(statuses: AiHotspotSourceStatus[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const status of statuses) {
+    if (status.ok && status.lastOkAt) {
+      map.set(status.sourceId, status.lastOkAt)
+    }
+  }
+  return map
+}
+
+/**
+ * 增量刷新核心逻辑：
+ * 1. 读取每个源的上次成功拉取时间 lastFetchAt
+ * 2. 将 lastFetchAt 传递给 fetcher，实现 HTTP 层 If-Modified-Since + 条目级时间过滤
+ * 3. 只对新增/变更的条目做 merge 和 upsert，避免重复处理已存在的条目
+ * 4. 仍然返回全量数据供 UI 使用
+ */
 export async function refreshAiHotspots(options: AiHotspotRefreshOptions = {}): Promise<AiHotspotRefreshResult> {
   const startedAt = new Date()
   throwIfAborted(options.signal)
 
   await initAiHotspotsDb()
+
+  // 读取已有的源状态，获取每个源的 lastFetchAt
+  const existingStatuses = await getAiHotspotSourceStatuses()
+  const lastFetchAtMap = buildLastFetchAtMap(existingStatuses)
+
+  // 判断是否为首次刷新（没有任何源成功过）
+  const isFirstRefresh = lastFetchAtMap.size === 0
 
   const existingItems = await getAiHotspotItems()
   const userFeeds = await getAiHotspotUserFeeds()
@@ -198,16 +257,32 @@ export async function refreshAiHotspots(options: AiHotspotRefreshOptions = {}): 
 
   throwIfAborted(options.signal)
 
-  const fetchResults = await mapWithConcurrency(fetchers, 3, async (fetcher) => {
+  const fetchResults = await mapWithConcurrency(fetchers, 5, async (fetcher) => {
     throwIfAborted(options.signal)
-    return await runAiHotspotFetcher(fetcher, startedAt)
+
+    // 增量模式：传递 lastFetchAt 给 fetcher；force 时跳过增量
+    const fetchOptions: AiHotspotFetcherOptions = {
+      force: options.force ?? false,
+      signal: options.signal,
+      lastFetchAt: options.force ? null : (lastFetchAtMap.get(fetcher.sourceId) || null),
+    }
+
+    return await runAiHotspotFetcher(fetcher, startedAt, fetchOptions)
   })
 
   throwIfAborted(options.signal)
 
   const rawItems = fetchResults.flatMap(result => result.items)
   const statuses = fetchResults.map(result => result.status)
-  const items = mergeHotspotItems(existingItems, rawItems, startedAt)
+
+  // 合并新旧数据：始终传入 existingItems 以保留用户状态（收藏/已读等）
+  // force=true 时 rawItems 是全量数据（无 If-Modified-Since），会正确覆盖旧条目
+  const items = mergeHotspotItems(
+    isFirstRefresh ? [] : existingItems,
+    rawItems,
+    startedAt,
+  )
+
   const completedAt = new Date()
   const failedCount = statuses.filter(status => !status.ok).length
   const snapshot: AiHotspotSnapshot = {
@@ -221,23 +296,159 @@ export async function refreshAiHotspots(options: AiHotspotRefreshOptions = {}): 
       includeUserFeeds,
       sourceCount: statuses.length,
       failedSources: statuses.filter(status => !status.ok).map(status => status.sourceId),
+      incremental: !isFirstRefresh,
+      newItems: items.length,
     },
   }
 
-  await upsertAiHotspotItems(items)
+  // 只 upsert 新增/变更的条目
+  if (items.length > 0) {
+    await upsertAiHotspotItems(items)
+  }
   await upsertAiHotspotSourceStatuses(statuses)
   await insertAiHotspotSnapshot(snapshot)
 
   const keepAfter = new Date(
     completedAt.getTime() - AI_HOTSPOT_CONFIG.refresh.archiveDays * 24 * 60 * 60 * 1000,
   ).toISOString()
-  await pruneAiHotspotItems(keepAfter)
+  const dailyKeepAfter = new Date(
+    completedAt.getTime() - AI_HOTSPOT_CONFIG.refresh.dailyArchiveDays * 24 * 60 * 60 * 1000,
+  ).toISOString()
+  await pruneAiHotspotItems(keepAfter, dailyKeepAfter)
 
+  const trashDeleteBefore = new Date(
+    completedAt.getTime() - AI_HOTSPOT_CONFIG.refresh.trashRetentionDays * 24 * 60 * 60 * 1000,
+  ).toISOString()
+  await cleanupAiHotspotTrash(trashDeleteBefore)
+
+  // 返回全量数据供 UI 使用
   const persistedItems = await getAiHotspotItems()
 
   return {
     items: persistedItems,
     statuses,
+    snapshot,
+  }
+}
+
+export async function refreshAiHotspotDailyLatest(options: AiHotspotDailyRefreshOptions = {}): Promise<AiHotspotRefreshResult> {
+  const startedAt = new Date()
+  throwIfAborted(options.signal)
+
+  await initAiHotspotsDb()
+
+  const existingStatuses = await getAiHotspotSourceStatuses()
+  const lastFetchAtMap = buildLastFetchAtMap(existingStatuses)
+  const existingItems = await getAiHotspotItems()
+  const force = options.force ?? true
+  const fetcher = new DefaultRssFetcher('latest-daily')
+
+  throwIfAborted(options.signal)
+
+  const fetchOptions: AiHotspotFetcherOptions = {
+    force,
+    signal: options.signal,
+    lastFetchAt: force ? null : (lastFetchAtMap.get(fetcher.sourceId) || null),
+  }
+  const fetchResult = await runAiHotspotFetcher(fetcher, startedAt, fetchOptions)
+
+  throwIfAborted(options.signal)
+
+  const rawItems = fetchResult.items
+  const statuses = [fetchResult.status]
+  const items = mergeHotspotItems(existingItems, rawItems, startedAt)
+  const completedAt = new Date()
+  const failedCount = statuses.filter(status => !status.ok).length
+  const snapshot: AiHotspotSnapshot = {
+    id: createRefreshId(),
+    startedAt: startedAt.toISOString(),
+    completedAt: completedAt.toISOString(),
+    rawCount: rawItems.length,
+    keptCount: items.length,
+    failedCount,
+    status: {
+      includeUserFeeds: false,
+      sourceCount: 1,
+      failedSources: statuses.filter(status => !status.ok).map(status => status.sourceId),
+      incremental: !force,
+      latestDailyOnly: true,
+      newItems: items.length,
+    },
+  }
+
+  if (items.length > 0) {
+    await upsertAiHotspotItems(items)
+  }
+  await upsertAiHotspotSourceStatuses(statuses)
+  await insertAiHotspotSnapshot(snapshot)
+
+  const persistedItems = await getAiHotspotItems()
+  const persistedStatuses = await getAiHotspotSourceStatuses()
+
+  return {
+    items: persistedItems,
+    statuses: persistedStatuses,
+    snapshot,
+  }
+}
+
+export async function refreshAiHotspotFeatured(options: AiHotspotFeaturedRefreshOptions = {}): Promise<AiHotspotRefreshResult> {
+  const startedAt = new Date()
+  throwIfAborted(options.signal)
+
+  await initAiHotspotsDb()
+
+  const existingStatuses = await getAiHotspotSourceStatuses()
+  const lastFetchAtMap = buildLastFetchAtMap(existingStatuses)
+  const existingItems = await getAiHotspotItems()
+  const force = options.force ?? true
+  const fetcher = new DefaultRssFetcher('featured')
+
+  throwIfAborted(options.signal)
+
+  const fetchOptions: AiHotspotFetcherOptions = {
+    force,
+    signal: options.signal,
+    lastFetchAt: force ? null : (lastFetchAtMap.get(fetcher.sourceId) || null),
+  }
+  const fetchResult = await runAiHotspotFetcher(fetcher, startedAt, fetchOptions)
+
+  throwIfAborted(options.signal)
+
+  const rawItems = fetchResult.items
+  const statuses = [fetchResult.status]
+  const items = mergeHotspotItems(existingItems, rawItems, startedAt)
+  const completedAt = new Date()
+  const failedCount = statuses.filter(status => !status.ok).length
+  const snapshot: AiHotspotSnapshot = {
+    id: createRefreshId(),
+    startedAt: startedAt.toISOString(),
+    completedAt: completedAt.toISOString(),
+    rawCount: rawItems.length,
+    keptCount: items.length,
+    failedCount,
+    status: {
+      includeUserFeeds: false,
+      sourceCount: 1,
+      failedSources: statuses.filter(status => !status.ok).map(status => status.sourceId),
+      featuredOnly: true,
+      incremental: !force,
+      newItems: items.length,
+    },
+  }
+
+  if (items.length > 0) {
+    await upsertAiHotspotItems(items)
+  }
+  await upsertAiHotspotSourceStatuses(statuses)
+  await insertAiHotspotSnapshot(snapshot)
+
+  const persistedItems = await getAiHotspotItems()
+  const persistedStatuses = await getAiHotspotSourceStatuses()
+
+  return {
+    items: persistedItems,
+    statuses: persistedStatuses,
     snapshot,
   }
 }

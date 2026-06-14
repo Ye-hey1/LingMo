@@ -4,6 +4,7 @@ import type { AiConfig } from '@/app/core/setting/config'
 import { estimateTokens } from './token-counter'
 import { getModelCapabilityProfile } from './model-capabilities'
 import { prepareMessagesWithImages } from './vision-bridge'
+import { createAiStreamContentProcessor } from './sanitize'
 
 export interface AiStreamFinishMetadata {
   finishReason?: string | null
@@ -227,23 +228,29 @@ export async function fetchAiStream(
   messages?: OpenAI.Chat.ChatCompletionMessageParam[],
   maxTokens?: number,
   onStreamFinish?: (metadata: AiStreamFinishMetadata) => void,
+  modelStoreKey?: string,
 ): Promise<string> {
   const startedAt = Date.now()
   let aiConfig: AiConfig | undefined
   let preparedMessages: OpenAI.Chat.ChatCompletionMessageParam[] = []
   let totalToolCallCount = 0
+  let usageStoreKey = modelStoreKey?.trim() || 'primaryModel'
   try {
 
 
     // 获取AI设置
-    aiConfig = await getAISettings()
+    aiConfig = modelStoreKey?.trim() ? await getAISettings(modelStoreKey.trim()) : undefined
+    if (!aiConfig) {
+      aiConfig = await getAISettings()
+      usageStoreKey = 'primaryModel'
+    }
 
     // 验证AI服务
     const validatedBaseURL = await validateAIService(aiConfig?.baseURL)
     if (validatedBaseURL === null) {
       await recordAiUsage({
         aiConfig,
-        storeKey: 'primaryModel',
+        storeKey: usageStoreKey,
         messages: preparedMessages,
         conversationId: chatId,
         success: false,
@@ -295,6 +302,7 @@ export async function fetchAiStream(
 
     let thinking = ''
     let fullContent = ''
+    const streamProcessor = createAiStreamContentProcessor()
     const toolCalls: any[] = []
     let hasToolCalls = false
     let finishReason: string | null | undefined
@@ -364,11 +372,32 @@ export async function fetchAiStream(
         }
       }
       
-      // 处理普通内容
+      // 处理普通内容，同时拆分部分模型直接输出的 <think>...</think>
       if (content) {
-        fullContent += content
+        const processed = streamProcessor.push(content)
+        if (processed.thinking) {
+          thinking += processed.thinking
+          if (onThinkingUpdate) {
+            onThinkingUpdate(thinking)
+          }
+        }
+        if (processed.content) {
+          fullContent += processed.content
+        }
       }
 
+      onUpdate(fullContent)
+    }
+
+    const remaining = streamProcessor.flush()
+    if (remaining.thinking) {
+      thinking += remaining.thinking
+      if (onThinkingUpdate) {
+        onThinkingUpdate(thinking)
+      }
+    }
+    if (remaining.content) {
+      fullContent += remaining.content
       onUpdate(fullContent)
     }
 
@@ -514,6 +543,7 @@ export async function fetchAiStream(
         currentToolCalls = []
         thinking = ''
         fullContent = ''
+        const nextStreamProcessor = createAiStreamContentProcessor()
         
         // 处理响应
         for await (const chunk of nextStream) {
@@ -572,8 +602,29 @@ export async function fetchAiStream(
             }
           }
           if (content) {
-            fullContent += content
+            const processed = nextStreamProcessor.push(content)
+            if (processed.thinking) {
+              thinking += processed.thinking
+              if (onThinkingUpdate) {
+                onThinkingUpdate(thinking)
+              }
+            }
+            if (processed.content) {
+              fullContent += processed.content
+            }
           }
+          onUpdate(fullContent)
+        }
+
+        const remaining = nextStreamProcessor.flush()
+        if (remaining.thinking) {
+          thinking += remaining.thinking
+          if (onThinkingUpdate) {
+            onThinkingUpdate(thinking)
+          }
+        }
+        if (remaining.content) {
+          fullContent += remaining.content
           onUpdate(fullContent)
         }
         
@@ -603,7 +654,7 @@ export async function fetchAiStream(
     
     await recordAiUsage({
       aiConfig,
-      storeKey: 'primaryModel',
+      storeKey: usageStoreKey,
       messages: preparedMessages,
       conversationId: chatId,
       toolCallCount: totalToolCallCount,
@@ -619,7 +670,7 @@ export async function fetchAiStream(
     }
     await recordAiUsage({
       aiConfig,
-      storeKey: 'primaryModel',
+      storeKey: usageStoreKey,
       messages: preparedMessages,
       conversationId: chatId,
       toolCallCount: totalToolCallCount,

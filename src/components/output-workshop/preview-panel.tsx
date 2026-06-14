@@ -36,7 +36,13 @@ import type {
 } from "./types"
 import type { DeckParsed } from "@/lib/output-workshop/export"
 import { getStatusText } from "./utils"
-import { BUILD_STAGES, getMermaidRenderModeLabel, getPresetById, PREVIEW_SIZE_PRESETS } from "./workshop-controls"
+import {
+  BUILD_STAGES,
+  DEFAULT_TEMPLATE_OVERRIDES,
+  getMermaidRenderModeLabel,
+  getPresetById,
+  PREVIEW_SIZE_PRESETS,
+} from "./workshop-controls"
 
 // 流式脉冲边框关键帧（CSS-in-JS 注入一次）
 const STREAMING_STYLE_ID = "ow-streaming-keyframes"
@@ -47,8 +53,8 @@ function ensureStreamingStyle() {
   style.id = STREAMING_STYLE_ID
   style.textContent = `
     @keyframes ow-pulse-border {
-      0%, 100% { border-color: hsl(var(--primary) / 0.25); box-shadow: 0 0 0 0 hsl(var(--primary) / 0); }
-      50% { border-color: hsl(var(--primary) / 0.6); box-shadow: 0 0 12px 2px hsl(var(--primary) / 0.12); }
+      0%, 100% { border-color: hsl(var(--primary) / 0.25); }
+      50% { border-color: hsl(var(--primary) / 0.65); }
     }
     @keyframes ow-shimmer {
       0% { transform: translateX(-100%); }
@@ -92,6 +98,148 @@ function injectScrollbarStyles(html: string): string {
   return html + scrollbarCss
 }
 
+const PREVIEW_OVERRIDE_STYLE_ID = "lingmo-output-preview-overrides"
+
+function clampNumber(value: number, min: number, max: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback
+}
+
+function sanitizeHexColor(value: string): string {
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : DEFAULT_TEMPLATE_OVERRIDES.themeColor
+}
+
+function sanitizeFontFamily(value: string): string {
+  const trimmed = value.trim().slice(0, 240)
+  if (!trimmed || /[;{}<>]/.test(trimmed)) {
+    return `"Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
+  }
+  return trimmed
+}
+
+function buildTemplateOverrideCss(overrides: TemplateOverrides): string {
+  const fontFamily = sanitizeFontFamily(overrides.fontFamily)
+  const fontSize = clampNumber(overrides.fontSize, 18, 36, DEFAULT_TEMPLATE_OVERRIDES.fontSize)
+  const lineHeight = clampNumber(overrides.lineHeight, 1.2, 1.9, DEFAULT_TEMPLATE_OVERRIDES.lineHeight)
+  const themeColor = sanitizeHexColor(overrides.themeColor)
+  const hasTypographyOverride =
+    fontFamily !== sanitizeFontFamily(DEFAULT_TEMPLATE_OVERRIDES.fontFamily) ||
+    fontSize !== DEFAULT_TEMPLATE_OVERRIDES.fontSize ||
+    Math.abs(lineHeight - DEFAULT_TEMPLATE_OVERRIDES.lineHeight) > 0.001
+  const hasThemeOverride = themeColor.toLowerCase() !== DEFAULT_TEMPLATE_OVERRIDES.themeColor.toLowerCase()
+
+  const tokens = `
+    :root, body {
+      --ow-preview-font-family: ${fontFamily};
+      --ow-preview-font-size: ${fontSize}px;
+      --ow-preview-body-size: clamp(12px, calc(var(--ow-preview-font-size) * 0.58), 22px);
+      --ow-preview-caption-size: clamp(10px, calc(var(--ow-preview-font-size) * 0.45), 15px);
+      --ow-preview-h3-size: clamp(13px, calc(var(--ow-preview-font-size) * 0.67), 28px);
+      --ow-preview-h2-size: clamp(18px, calc(var(--ow-preview-font-size) * 1.02), 42px);
+      --ow-preview-h1-size: clamp(20px, calc(var(--ow-preview-font-size) * 1.25), 52px);
+      --ow-preview-line-height: ${lineHeight};
+      --ow-preview-theme-color: ${themeColor};
+    }
+  `
+
+  const typographyCss = hasTypographyOverride
+    ? `
+      body,
+      :is(h1, h2, h3, h4, h5, h6, p, li, blockquote, figcaption, span, a, strong, em, small, button, td, th, label, summary, [data-moka-edit-path], [class*="title"], [class*="heading"], [class*="lead"], [class*="caption"], [class*="label"], [class*="body"], [class*="text"], [class*="copy"], [class*="description"]):not(pre):not(code):not(kbd):not(samp) {
+        font-family: var(--ow-preview-font-family) !important;
+      }
+
+      body {
+        font-size: var(--ow-preview-body-size) !important;
+        line-height: var(--ow-preview-line-height) !important;
+      }
+
+      :is(p, li, blockquote, figcaption, td, th, .moka-lead, .moka-section p, .moka-slide-body p, .moka-ai-section p, .moka-cover-center p, .moka-end-center p, [class*="body"], [class*="text"], [class*="copy"], [class*="description"]) {
+        font-size: var(--ow-preview-body-size) !important;
+        line-height: var(--ow-preview-line-height) !important;
+      }
+
+      :is(h1, .moka-card h1, [class*="hero-title"], [class*="main-title"], [class*="cover-title"], [class*="card-title"]) {
+        font-size: var(--ow-preview-h1-size) !important;
+        line-height: 1.18 !important;
+      }
+
+      :is(h2, .moka-card h2, [class*="section-title"], [class*="slide-title"], [class*="heading"]) {
+        font-size: var(--ow-preview-h2-size) !important;
+        line-height: 1.22 !important;
+      }
+
+      :is(h3, h4, .moka-card h3) {
+        font-size: var(--ow-preview-h3-size) !important;
+        line-height: 1.3 !important;
+      }
+
+      :is(small, figcaption, .moka-category, .moka-cover-mark, .moka-slide-top, .moka-tags span, [class*="caption"], [class*="label"], [class*="tag"], [class*="badge"]) {
+        font-size: var(--ow-preview-caption-size) !important;
+      }
+
+      pre, code, kbd, samp {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+      }
+    `
+    : ""
+
+  const themeCss = hasThemeOverride
+    ? `
+      :root, body {
+        --accent: var(--ow-preview-theme-color) !important;
+        --primary: var(--ow-preview-theme-color) !important;
+        --theme-color: var(--ow-preview-theme-color) !important;
+        --brand: var(--ow-preview-theme-color) !important;
+        --moka-accent: var(--ow-preview-theme-color) !important;
+      }
+
+      :is(a, mark, .moka-category, .moka-cover-mark, .moka-slide-top, .moka-tip b, .moka-tags span, [class*="accent"], [class*="highlight"], [class*="kicker"]) {
+        color: var(--ow-preview-theme-color) !important;
+      }
+
+      :is(.moka-section-index, .moka-page-dots span.active, .moka-pop-block, [class*="accent-bg"], [class*="number-badge"]) {
+        background-color: var(--ow-preview-theme-color) !important;
+      }
+
+      :is(.moka-section, .moka-tip, .moka-slide-body blockquote, .moka-ai-section, blockquote, [class*="accent"], [class*="highlight"], [class*="badge"], [class*="tag"]) {
+        border-color: var(--ow-preview-theme-color) !important;
+      }
+
+      :is(.moka-tags span, [class*="tag"], [class*="badge"], [class*="chip"]) {
+        background-color: color-mix(in srgb, var(--ow-preview-theme-color) 12%, transparent) !important;
+      }
+    `
+    : ""
+
+  return [tokens, typographyCss, themeCss].filter(Boolean).join("\n")
+}
+
+function injectTemplateOverrideStyles(html: string, overrides: TemplateOverrides): string {
+  if (!html) return html
+
+  const style = `<style id="${PREVIEW_OVERRIDE_STYLE_ID}">${buildTemplateOverrideCss(overrides)}</style>`
+  const existingStyleRegex = new RegExp(
+    `<style\\b(?=[^>]*\\bid=["']${PREVIEW_OVERRIDE_STYLE_ID}["'])[^>]*>[\\s\\S]*?<\\/style>`,
+    "i"
+  )
+  if (existingStyleRegex.test(html)) {
+    return html.replace(existingStyleRegex, style)
+  }
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, `${style}</head>`)
+  }
+  if (/<body\b/i.test(html)) {
+    return html.replace(/<body\b([^>]*)>/i, `<body$1>${style}`)
+  }
+  return `${style}${html}`
+}
+
+function buildPreviewSrcDoc(html: string, overrides: TemplateOverrides): string {
+  if (!html) return ""
+  const normalized = normalizeOutputWorkshopHtml(html)
+  return injectTemplateOverrideStyles(injectScrollbarStyles(normalized), overrides)
+}
+
 function LogRow({
   label,
   value,
@@ -113,8 +261,8 @@ function LogRow({
       : "border-border bg-background text-muted-foreground"
 
   return (
-    <div className={cn("flex items-start gap-3 rounded-lg border px-3", compact ? "py-1.5" : "py-2", toneClass)}>
-      <span className="w-20 shrink-0 text-[10px] font-bold uppercase tracking-wider">{label}</span>
+    <div className={cn("flex items-start gap-3 rounded-md border px-3", compact ? "py-1.5" : "py-2", toneClass)}>
+      <span className="w-20 shrink-0 text-[10px] font-semibold">{label}</span>
       <span className="min-w-0 flex-1 break-all text-[11px] leading-relaxed text-foreground">{value}</span>
     </div>
   )
@@ -177,6 +325,12 @@ interface PreviewPanelProps {
   handleStop: () => void
   handleGenerate: () => void
 
+  // Moka generated-card editing
+  mokaEditingEnabled?: boolean
+  onMokaTextEdit?: (path: string, value: string) => void
+  onMokaStyleEdit?: (path: string, style: Record<string, string>) => void
+  onMokaReorder?: (from: number, to: number) => void
+
   // Fold
   sourcePanelCollapsed: boolean
   toggleSourcePanel: () => void
@@ -218,6 +372,10 @@ export function PreviewPanel({
   toggleSourcePanel,
   handleStop: _handleStop,
   handleGenerate,
+  mokaEditingEnabled = false,
+  onMokaTextEdit,
+  onMokaStyleEdit,
+  onMokaReorder,
 }: PreviewPanelProps) {
   const activeSizePreset = getPresetById(templateOverrides.sizePresetId)
   const [mermaidStatus, setMermaidStatus] = React.useState<{ ok: boolean; text: string }>({
@@ -227,8 +385,41 @@ export function PreviewPanel({
 
   const previewHtml = React.useMemo(() => {
     const html = streamingHtml || generatedHtml
-    return html ? injectScrollbarStyles(normalizeOutputWorkshopHtml(html)) : ""
-  }, [generatedHtml, streamingHtml])
+    return buildPreviewSrcDoc(html, templateOverrides)
+  }, [generatedHtml, streamingHtml, templateOverrides])
+
+  const templateExamplePreviewHtml = React.useMemo(() => {
+    return buildPreviewSrcDoc(selectedTemplatePreviewHtml, templateOverrides)
+  }, [selectedTemplatePreviewHtml, templateOverrides])
+
+  React.useEffect(() => {
+    if (!mokaEditingEnabled) return
+
+    const handleMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow) return
+      const data = event.data
+      if (!data || typeof data !== "object" || data.source !== "lingmo-moka-editor") return
+
+      if (data.type === "text" && typeof data.path === "string" && typeof data.value === "string") {
+        onMokaTextEdit?.(data.path, data.value)
+        return
+      }
+      if (data.type === "style" && typeof data.path === "string" && data.style && typeof data.style === "object") {
+        const style = Object.fromEntries(
+          Object.entries(data.style as Record<string, unknown>)
+            .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+        )
+        onMokaStyleEdit?.(data.path, style)
+        return
+      }
+      if (data.type === "reorder" && Number.isInteger(data.from) && Number.isInteger(data.to)) {
+        onMokaReorder?.(data.from, data.to)
+      }
+    }
+
+    window.addEventListener("message", handleMessage)
+    return () => window.removeEventListener("message", handleMessage)
+  }, [iframeRef, mokaEditingEnabled, onMokaReorder, onMokaStyleEdit, onMokaTextEdit])
 
   // 2. 对 Mermaid 图表校验执行防抖优化，流式高频期间延缓 500ms 校验以释压主线程
   React.useEffect(() => {
@@ -303,36 +494,31 @@ export function PreviewPanel({
     { id: "code", label: "代码", icon: Code2 },
     { id: "log", label: "日志", icon: Terminal },
   ] as const
-  const activePreviewTab = previewTabs.find((tab) => tab.id === previewTab) ?? previewTabs[0]
-  const ActivePreviewIcon = activePreviewTab.icon
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-muted/20">
-      <div className="flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-background px-2.5 py-1">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-[11px] shadow-none">
-              <ActivePreviewIcon className="size-3.5" />
-              {activePreviewTab.label}
-              <ChevronDown className="size-3 text-muted-foreground" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-28 p-1">
-            {previewTabs.map((tab) => {
-              const Icon = tab.icon
-              return (
-                <DropdownMenuItem
-                  key={tab.id}
-                  className={cn("h-8 cursor-pointer text-xs", previewTab === tab.id && "bg-muted font-semibold")}
-                  onClick={() => setPreviewTab(tab.id)}
-                >
-                  <Icon className="size-3.5" />
-                  {tab.label}
-                </DropdownMenuItem>
-              )
-            })}
-          </DropdownMenuContent>
-        </DropdownMenu>
+      <div className="flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-background px-2.5 py-1.5">
+        <div className="grid grid-cols-3 gap-1 rounded-md border bg-muted/30 p-1">
+          {previewTabs.map((tab) => {
+            const Icon = tab.icon
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setPreviewTab(tab.id)}
+                className={cn(
+                  "flex h-7 min-w-16 items-center justify-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors",
+                  previewTab === tab.id
+                    ? "bg-background text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Icon className="size-3.5" />
+                {tab.label}
+              </button>
+            )
+          })}
+        </div>
 
         <div className="hidden min-w-0 flex-1 md:block" />
 
@@ -412,17 +598,11 @@ export function PreviewPanel({
           if (isStreamingActive) ensureStreamingStyle()
 
           return (
-            <div
-              className="flex h-full min-h-0 flex-col items-center justify-center overflow-auto p-4 select-text"
-              style={{
-                backgroundImage: "radial-gradient(var(--border) 1px, transparent 1px)",
-                backgroundSize: "16px 16px",
-              }}
-            >
+            <div className="flex h-full min-h-0 flex-col items-center overflow-y-auto overflow-x-hidden bg-muted/20 p-4 select-text [scrollbar-width:thin]">
               {/* 阶段一：等待 AI 首字节时的 spinner */}
               {showSpinner && (
-                <div className="z-20 flex w-[320px] max-w-[calc(100vw-48px)] flex-col items-center justify-center rounded-2xl border bg-background p-8 text-center shadow-xl animate-in zoom-in-95 duration-200">
-                  <Loader2 className="mb-3 size-7 animate-spin text-primary" />
+                <div className="z-20 flex w-[320px] max-w-[calc(100vw-48px)] flex-col items-center justify-center rounded-lg border bg-background p-6 text-center animate-in fade-in duration-150">
+                  <Loader2 className="mb-3 size-6 animate-spin text-primary" />
                   <p className="text-sm font-semibold text-foreground">{progressText || "AI 正在分析..."}</p>
                   <p className="mt-1.5 font-mono text-[10px] text-muted-foreground">
                     {(elapsed / 1000).toFixed(1)}s
@@ -432,21 +612,21 @@ export function PreviewPanel({
 
               {/* 错误状态 */}
               {status === "error" && (
-                <div className="z-20 flex max-w-sm flex-col items-center justify-center rounded-2xl border border-destructive/20 bg-background p-8 text-center shadow-xl animate-in zoom-in-95 duration-200">
-                  <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-destructive/10 text-destructive">
-                    <AlertTriangle className="size-6" />
+                <div className="z-20 flex max-w-sm flex-col items-center justify-center rounded-lg border border-destructive/25 bg-background p-6 text-center animate-in fade-in duration-150">
+                  <div className="mb-4 flex size-10 items-center justify-center rounded-md bg-destructive/10 text-destructive">
+                    <AlertTriangle className="size-5" />
                   </div>
                   <p className="text-sm font-semibold text-foreground">网页生成失败</p>
                   <p className="mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground/80">{errorMessage}</p>
                   <div className="mt-4 flex items-center gap-2">
-                    <Button className="h-8 px-4 text-xs" size="sm" onClick={handleGenerate}>
+                    <Button className="h-8 px-4 text-xs shadow-none" size="sm" onClick={handleGenerate}>
                       重新生成
                     </Button>
                     <Button
-                      className="h-8 px-4 text-xs"
+                      className="h-8 px-4 text-xs shadow-none"
                       size="sm"
                       variant="outline"
-                      onClick={() => void navigator.clipboard?.writeText(errorMessage || "输出工坊生成失败")}
+                      onClick={() => void navigator.clipboard?.writeText(errorMessage || "智能排版生成失败")}
                     >
                       复制错误
                     </Button>
@@ -457,10 +637,10 @@ export function PreviewPanel({
               {/* 空闲时的模板示例预览 */}
               {status === "idle" && !hasGeneratedOutput && (
                 <div className="z-10 flex h-full w-full max-w-[1280px] select-none flex-col">
-                  <div className="min-h-[420px] flex-1 overflow-hidden rounded-lg border border-border/70 bg-background shadow-sm">
+                  <div className="min-h-[420px] flex-1 overflow-hidden rounded-md border border-border/70 bg-background">
                     <iframe
                       title="当前模板示例预览"
-                      srcDoc={selectedTemplatePreviewHtml}
+                      srcDoc={templateExamplePreviewHtml}
                       className="h-full w-full border-0 bg-background"
                       sandbox="allow-scripts allow-same-origin"
                     />
@@ -477,10 +657,10 @@ export function PreviewPanel({
                     isStreamingActive && "animate-[ow-pulse-border_2s_ease-in-out_infinite]",
                     // 基础视口样式
                   viewMode === "mobile"
-                      ? "h-[600px] w-[340px] overflow-hidden rounded-[36px] border-[6px] border-slate-900 bg-background shadow-lg"
+                      ? "h-[600px] w-[340px] overflow-hidden rounded-lg border bg-background"
                       : viewMode === "locked" && activeSizePreset.id !== "auto"
-                      ? "overflow-hidden rounded-xl border bg-background shadow-lg"
-                      : "h-full w-full max-w-none overflow-hidden bg-background"
+                      ? "overflow-hidden rounded-md border bg-background"
+                      : "min-h-full w-full max-w-none overflow-hidden bg-background"
                   )}
                   style={viewMode === "locked" && activeSizePreset.id !== "auto" ? {
                     width: `min(${activeSizePreset.width / 2}px, calc(100vw - 96px))`,
@@ -499,7 +679,7 @@ export function PreviewPanel({
 
                   {/* 流式右下角状态气泡 */}
                   {isStreamingActive && (
-                    <div className="absolute bottom-3 right-3 z-50 flex items-center gap-1.5 rounded-full bg-background/90 border border-primary/20 px-2.5 py-1 shadow-sm backdrop-blur-sm animate-in fade-in duration-300">
+                    <div className="absolute bottom-3 right-3 z-50 flex items-center gap-1.5 rounded-md border border-primary/20 bg-background px-2.5 py-1 animate-in fade-in duration-150">
                       <Loader2 className="size-3 animate-spin text-primary" />
                       <span className="text-[10px] font-medium text-primary">{progressText}</span>
                       <span className="text-[9px] text-muted-foreground">{(elapsed / 1000).toFixed(0)}s</span>
@@ -507,7 +687,7 @@ export function PreviewPanel({
                   )}
 
                   {viewMode === "mobile" && (
-                    <div className="absolute left-1/2 top-2 z-20 h-4 w-24 -translate-x-1/2 rounded-full bg-slate-900 select-none" />
+                    <div className="absolute left-1/2 top-2 z-20 h-1 w-16 -translate-x-1/2 rounded-full bg-muted-foreground/35 select-none" />
                   )}
 
                   <iframe
@@ -520,11 +700,8 @@ export function PreviewPanel({
                           : "interactive-iframe"
                     }
                     srcDoc={previewHtml}
-                    className={cn(
-                      "w-full flex-1 border-0 bg-background",
-                      freezePreviewInteraction && "pointer-events-none"
-                    )}
-                    title="输出工坊预览视口"
+                    className="w-full flex-1 border-0 bg-background"
+                    title="智能排版预览视口"
                     sandbox={
                       status === "generating" || status === "streaming" || freezePreviewInteraction
                         ? "allow-same-origin"
@@ -533,12 +710,12 @@ export function PreviewPanel({
                   />
 
                   {viewMode === "mobile" && (
-                    <div className="absolute bottom-1.5 left-1/2 z-20 h-1 w-28 -translate-x-1/2 rounded-full bg-slate-900/30 select-none" />
+                    <div className="absolute bottom-1.5 left-1/2 z-20 h-1 w-20 -translate-x-1/2 rounded-full bg-muted-foreground/20 select-none" />
                   )}
                 </div>
             )}
               {parsedDeckData.isDeck && (
-                <div className="absolute bottom-4 left-1/2 z-30 flex max-w-[min(720px,calc(100%-2rem))] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-full border bg-background/90 p-1 shadow-sm backdrop-blur">
+                <div className="absolute bottom-4 left-1/2 z-30 flex max-w-[min(720px,calc(100%-2rem))] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-md border bg-background p-1">
                   {parsedDeckData.slides.map((slide, idx) => (
                     <button
                       key={slide.id || idx}
@@ -579,12 +756,12 @@ export function PreviewPanel({
           <ScrollArea className="h-full bg-background">
             <div className="space-y-2 p-3 font-mono text-[11px]">
               <div className="grid gap-2 lg:grid-cols-3">
-                <LogRow label="STATUS" value={getStatusText(status)} tone={status === "error" ? "destructive" : "default"} compact />
-                <LogRow label="ELAPSED" value={`${(elapsed / 1000).toFixed(1)}s`} tone={status === "generating" || status === "streaming" ? "primary" : "default"} compact />
-                <LogRow label="OUTPUT" value={`${generatedHtml.length.toLocaleString()} chars`} compact />
+                <LogRow label="状态" value={getStatusText(status)} tone={status === "error" ? "destructive" : "default"} compact />
+                <LogRow label="耗时" value={`${(elapsed / 1000).toFixed(1)}s`} tone={status === "generating" || status === "streaming" ? "primary" : "default"} compact />
+                <LogRow label="输出" value={`${generatedHtml.length.toLocaleString()} chars`} compact />
               </div>
-              <div className="rounded-lg border bg-muted/15 p-2">
-                <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">RENDER STEPS</div>
+              <div className="rounded-md border bg-muted/15 p-2">
+                <div className="mb-2 text-[10px] font-semibold text-muted-foreground">渲染步骤</div>
                 <div className="grid gap-1 sm:grid-cols-4">
                   {BUILD_STAGES.map((stage) => {
                     const activeIndex = BUILD_STAGES.findIndex((item) => item.id === buildStageId)
@@ -610,33 +787,33 @@ export function PreviewPanel({
                 </div>
               </div>
               {status === "error" && (
-                <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
-                  <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-destructive">ERROR</div>
+                <div className="rounded-md border border-destructive/20 bg-destructive/5 p-3">
+                  <div className="mb-1 text-[10px] font-semibold text-destructive">错误信息</div>
                   <pre className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground">{errorMessage}</pre>
                 </div>
               )}
-              <LogRow label="STAGE" value={buildStageId ? BUILD_STAGES.find((stage) => stage.id === buildStageId)?.label || buildStageId : "等待构建"} tone={status === "generating" || status === "streaming" ? "primary" : "default"} compact />
-              <LogRow label="SIZE" value={`${activeSizePreset.label} ${activeSizePreset.id === "auto" ? "自适应" : `${activeSizePreset.width}x${activeSizePreset.height}`} · 安全区 ${templateOverrides.safeAreaEnabled ? "开启" : "关闭"}`} compact />
-              <LogRow label="TEMPLATE" value={`字体 ${templateOverrides.fontFamily} · ${templateOverrides.fontSize}px / ${templateOverrides.lineHeight} · 间距 ${templateOverrides.cardGap}px · 贴纸 ${templateOverrides.stickersEnabled ? "开" : "关"}`} compact />
+              <LogRow label="阶段" value={buildStageId ? BUILD_STAGES.find((stage) => stage.id === buildStageId)?.label || buildStageId : "等待构建"} tone={status === "generating" || status === "streaming" ? "primary" : "default"} compact />
+              <LogRow label="画幅" value={`${activeSizePreset.label} ${activeSizePreset.id === "auto" ? "自适应" : `${activeSizePreset.width}x${activeSizePreset.height}`} · 安全区 ${templateOverrides.safeAreaEnabled ? "开启" : "关闭"}`} compact />
+              <LogRow label="模板参数" value={`字体 ${templateOverrides.fontFamily} · ${templateOverrides.fontSize}px / ${templateOverrides.lineHeight} · 间距 ${templateOverrides.cardGap}px · 贴纸 ${templateOverrides.stickersEnabled ? "开" : "关"}`} compact />
               <div className={cn(
-                "flex items-start gap-3 rounded-lg border px-3 py-1.5",
+                "flex items-start gap-3 rounded-md border px-3 py-1.5",
                 mermaidStatus.ok ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-700" : "border-destructive/20 bg-destructive/5 text-destructive"
               )}>
-                <span className="w-20 shrink-0 text-[10px] font-bold uppercase tracking-wider">MERMAID</span>
+                <span className="w-20 shrink-0 text-[10px] font-semibold">Mermaid</span>
                 <span className="flex min-w-0 flex-1 items-center gap-1.5 break-all text-[11px] leading-relaxed text-foreground">
                   {mermaidStatus.ok ? <CheckCircle2 className="size-3.5 text-emerald-600" /> : <AlertTriangle className="size-3.5 text-destructive" />}
                   {mermaidStatus.text}
                 </span>
               </div>
-              <LogRow label="SOURCE" value={sourceLabel || "手动输入"} compact />
-              <LogRow label="CONTENT" value={`${sourceContent.trim().length.toLocaleString()} chars`} compact />
+              <LogRow label="来源" value={sourceLabel || "手动输入"} compact />
+              <LogRow label="素材" value={`${sourceContent.trim().length.toLocaleString()} chars`} compact />
               {(status === "generating" || status === "streaming") && (
-                <LogRow label="PROGRESS" value={`${progressText} · ${(elapsed / 1000).toFixed(1)}s`} tone="primary" compact />
+                <LogRow label="进度" value={`${progressText} · ${(elapsed / 1000).toFixed(1)}s`} tone="primary" compact />
               )}
-              {exportBusy && <LogRow label="EXPORT" value={exportProgressText} tone="primary" compact />}
+              {exportBusy && <LogRow label="导出" value={exportProgressText} tone="primary" compact />}
               {lastExportRecord && (
-                <div className="flex items-start gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-emerald-700">
-                  <span className="w-20 shrink-0 text-[10px] font-bold uppercase tracking-wider">FILE</span>
+                <div className="flex items-start gap-3 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-emerald-700">
+                  <span className="w-20 shrink-0 text-[10px] font-semibold">文件</span>
                   <span className="min-w-0 flex-1 break-all text-xs text-foreground">
                     {lastExportRecord.label}: {lastExportRecord.filePath || lastExportRecord.fileName || "已交给浏览器下载"}
                   </span>
@@ -651,9 +828,8 @@ export function PreviewPanel({
                   )}
                 </div>
               )}
-              {showDeployModal && <LogRow label="DEPLOY" value={deployProgress || "等待部署配置"} tone="primary" />}
+              {showDeployModal && <LogRow label="部署" value={deployProgress || "等待部署配置"} tone="primary" />}
               {deployedUrl && <LogRow label="URL" value={deployedUrl} tone="success" />}
-              {status === "error" && <LogRow label="ERROR" value={errorMessage} tone="destructive" />}
             </div>
           </ScrollArea>
         )}

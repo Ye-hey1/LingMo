@@ -149,12 +149,34 @@ function getStatus(input: {
   const visibleActionTool = isSupportOnlyToolName(actionToolName) ? "" : actionToolName
   const observation = compactText(input.currentObservation)
 
-  if (latestTool?.status === "error" || input.activity?.phase === "error") {
+  if (input.activity?.phase === "answering") {
+    return {
+      tone: "done" as const,
+      label: "已思考",
+      detail: "",
+    }
+  }
+
+  if (input.activity?.phase === "error") {
     return {
       tone: "error" as const,
       label: "工具调用失败",
       detail: compactText(latestTool?.result?.error || latestTool?.result?.message) || observation,
     }
+  }
+
+  if (latestTool?.status === "error") {
+    return input.isRunning
+      ? {
+          tone: "running" as const,
+          label: "工具步骤失败，正在恢复",
+          detail: compactText(latestTool?.result?.error || latestTool?.result?.message) || observation,
+        }
+      : {
+          tone: "error" as const,
+          label: "工具调用失败",
+          detail: compactText(latestTool?.result?.error || latestTool?.result?.message) || observation,
+        }
   }
 
   if (latestEvent?.type === "confirmation.waiting") {
@@ -199,7 +221,7 @@ function getStatus(input: {
 
   return {
     tone: "done" as const,
-    label: "已完成",
+    label: "已思考",
     detail: "",
   }
 }
@@ -255,15 +277,19 @@ export function AgentLiveStream({
   const thoughtPreview = compactText(currentThought, 180)
   const fullThought = cleanLiveText(currentThought)
   const elapsedMs = useLiveElapsed({ isRunning, telemetry, currentStepStartTime, activity })
-  const shouldShowTools = isRunning && recentToolCalls.length > 0
-  const hasDetails = Boolean(fullThought || status.detail)
+  const hasDetails = Boolean(fullThought || status.detail || recentToolCalls.length > 0)
 
-  if (!isRunning && visibleToolCalls.length === 0 && status.tone !== "error") {
+  if (!isRunning && visibleToolCalls.length === 0 && !fullThought && status.tone !== "error") {
     return null
   }
 
   return (
-    <div className="w-full rounded-md border border-border/25 bg-background/60 px-3 py-2">
+    <div className={cn(
+      "w-full rounded-md px-3 py-2 transition-colors",
+      isRunning
+        ? "border border-border/20 bg-background/45"
+        : "border border-transparent bg-transparent px-0 py-0",
+    )}>
       <div className="flex min-w-0 items-center gap-2">
         <StatusIcon tone={status.tone} />
         <span className={cn(
@@ -273,13 +299,29 @@ export function AgentLiveStream({
           {status.label}
         </span>
         {elapsedMs > 0 && (
-          <span className="shrink-0 rounded-sm bg-muted/25 px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground/55">
+          <span className={cn(
+            "shrink-0 text-[11px] tabular-nums text-muted-foreground/55",
+            status.tone === "running" && "rounded-sm bg-muted/25 px-1.5 py-0.5 text-[10px]",
+          )}>
             {formatElapsed(elapsedMs)}
           </span>
         )}
+        {hasDetails && (
+          <button
+            type="button"
+            className="shrink-0 rounded p-0.5 text-muted-foreground/45 transition-colors hover:bg-muted/15"
+            onClick={() => setDetailsExpanded(value => !value)}
+            aria-label={detailsExpanded ? "收起思考详情" : "展开思考详情"}
+          >
+            <ChevronDown className={cn(
+              "size-3.5 transition-transform",
+              detailsExpanded && "rotate-180",
+            )} />
+          </button>
+        )}
       </div>
 
-      {(thoughtPreview || status.detail) && (
+      {isRunning && (thoughtPreview || status.detail) && (
         <button
           type="button"
           className="mt-1 flex w-full min-w-0 items-center gap-1.5 rounded-sm pl-5 pr-1 text-left text-[11px] leading-relaxed text-muted-foreground/55 hover:bg-muted/15"
@@ -299,19 +341,25 @@ export function AgentLiveStream({
       )}
 
       {detailsExpanded && hasDetails && (
-        <div className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/15 bg-muted/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-muted-foreground/60">
-          {fullThought || status.detail}
-        </div>
-      )}
-
-      {shouldShowTools && (
-        <div className="mt-2 pl-5">
-          <CompactToolCalls
-            toolCalls={recentToolCalls}
-            isStreaming={isRunning}
-            grouped={false}
-            defaultExpanded={false}
-          />
+        <div className={cn(
+          "mt-2 max-h-48 overflow-auto rounded-md border border-border/15 bg-muted/8 px-2.5 py-1.5",
+          "text-[11px] leading-relaxed text-muted-foreground/60",
+        )}>
+          {(fullThought || status.detail) && (
+            <div className="whitespace-pre-wrap break-words">
+              {fullThought || status.detail}
+            </div>
+          )}
+          {recentToolCalls.length > 0 && (
+            <div className={(fullThought || status.detail) ? "mt-2" : undefined}>
+              <CompactToolCalls
+                toolCalls={recentToolCalls}
+                isStreaming={isRunning}
+                grouped={false}
+                defaultExpanded={false}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

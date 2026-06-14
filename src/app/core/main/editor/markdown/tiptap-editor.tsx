@@ -51,8 +51,9 @@ import { FooterBar } from './footer-bar/index'
 import { Outline } from './outline'
 import { SlashCommand, suggestionOptions } from './slash-command'
 import { SlashCommandPortal } from './slash-command/slash-command-portal'
-import { fetchCompletionStream } from '@/lib/ai/completion'
-import { fetchAiPolishStream, fetchAiConciseStream, fetchAiExpandStream } from '@/lib/ai/rewrite'
+import { fetchWritingContinuationStream } from '@/lib/ai/completion'
+import { buildCompletionContext } from '@/lib/ai/completion-context'
+import { fetchAiPolishStream, fetchAiConciseStream, fetchAiExpandStream, fetchAiExplainStream, type AiExplainContext } from '@/lib/ai/rewrite'
 import { fetchAiTranslateStream } from '@/lib/ai/translate'
 import { AISuggestion } from './ai-suggestion'
 import { AISuggestionFloating } from './ai-suggestion-floating'
@@ -593,9 +594,58 @@ type MobileSelectionContext =
   | null
 
 type MobileSheetMode = 'ai' | 'image-src' | 'image-alt' | 'table-align' | 'table-more' | null
+type SelectionAiAction = 'polish' | 'concise' | 'expand' | 'translate' | 'explain'
 
 function clampSelectionPosition(value: number, docSize: number): number {
   return Math.max(0, Math.min(value, docSize))
+}
+
+function limitExplanationLength(value: string, maxChars = 240): string {
+  if (value.length <= maxChars) {
+    return value
+  }
+
+  const punctuation = ['。', '！', '？', '.', '!', '?', '；', ';']
+  const cutIndex = punctuation
+    .map(mark => value.lastIndexOf(mark, maxChars))
+    .filter(index => index > 120)
+    .sort((a, b) => b - a)[0]
+
+  if (cutIndex) {
+    return value.slice(0, cutIndex + 1)
+  }
+
+  return `${value.slice(0, maxChars).trim()}...`
+}
+
+function cleanAiExplanation(content: string): string {
+  const normalized = content
+    .replace(/\r\n/g, '\n')
+    .replace(/<\/?think\b[^>]*>/gi, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/(^|\n)\s*[*_`#>\-\s]*(解释|含义|意思|在本文语境中|快速掌握|一句话理解|简单说)\s*[:：]\s*[*_`\-\s]*/gi, '$1')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+[.)、]\s+/gm, '')
+
+  const compact = normalized
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+
+  return limitExplanationLength(compact)
+}
+
+function formatAiSuggestionForInsertion(type: SelectionAiAction, content: string): string {
+  if (type !== 'explain') {
+    return content
+  }
+
+  return cleanAiExplanation(content)
 }
 
 export function TipTapEditor({
@@ -657,6 +707,7 @@ export function TipTapEditor({
     polish: async () => {},
     concise: async () => {},
     expand: async () => {},
+    explain: async () => {},
     translate: async (targetLanguage: string) => {
       void targetLanguage
     },
@@ -1393,6 +1444,12 @@ export function TipTapEditor({
           void aiActionHandlersRef.current.expand()
         }
         return
+      case 'ai-explain':
+        if (restoreMobileContextSelection()) {
+          setMobileSheetMode(null)
+          void aiActionHandlersRef.current.explain()
+        }
+        return
       case 'ai-flashcard':
         if (restoreMobileContextSelection()) {
           setMobileSheetMode(null)
@@ -1966,12 +2023,13 @@ export function TipTapEditor({
   }, [editor])
 
   const runSelectionAiRewrite = useCallback(async (
-    type: 'polish' | 'concise' | 'expand' | 'translate',
+    type: SelectionAiAction,
     stream: (
       text: string,
       onChunk: (chunk: string, isFirst: boolean) => void,
       signal: AbortSignal,
       onThinkingUpdate?: (thinking: string) => void,
+      context?: AiExplainContext,
     ) => Promise<void>,
   ) => {
     if (!editor) return
@@ -1984,45 +2042,36 @@ export function TipTapEditor({
     }
 
     const controller = new AbortController()
+    const docSize = editor.state.doc.content.size
+    const targetRange = type === 'explain' ? undefined : { from, to }
+    const explainContext = type === 'explain'
+      ? {
+          before: editor.state.doc.textBetween(Math.max(0, from - 1600), from, '\n', '\n'),
+          after: editor.state.doc.textBetween(to, Math.min(docSize, to + 1600), '\n', '\n'),
+        }
+      : undefined
+    const initialCoords = editor.view.coordsAtPos(to)
 
-    editor.chain()
-      .focus()
-      .deleteSelection()
-      .run()
-
-    const initialCoords = editor.view.coordsAtPos(editor.state.selection.from)
     emitter.emit('start-ai-streaming', {
       originalText: selectedText,
       type,
       position: initialCoords,
       controller,
+      targetRange,
     })
 
     let accumulatedResult = ''
-    const startPosition = editor.state.selection.from
-
-    const restoreOriginalText = () => {
-      editor.chain()
-        .focus()
-        .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
-        .insertContent(selectedText)
-        .run()
-    }
 
     try {
       await stream(
         selectedText,
         (chunk) => {
-          editor.chain()
-            .insertContentAt(startPosition + accumulatedResult.length, chunk)
-            .run()
-
           accumulatedResult += chunk
+          const suggestedText = formatAiSuggestionForInsertion(type, accumulatedResult)
 
-          const coords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
           emitter.emit('update-ai-streaming-content', {
-            suggestedText: accumulatedResult,
-            position: coords,
+            suggestedText,
+            position: initialCoords,
           })
         },
         controller.signal,
@@ -2032,30 +2081,24 @@ export function TipTapEditor({
             position: initialCoords,
           })
         },
+        explainContext,
       )
 
       if (!accumulatedResult) {
-        restoreOriginalText()
         emitter.emit('ai-streaming-complete')
         return
       }
 
-      editor.chain()
-        .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
-        .insertContent(accumulatedResult, { contentType: 'markdown' })
-        .run()
-
-      const finalCoords = editor.view.coordsAtPos(startPosition + accumulatedResult.length)
+      const suggestedText = formatAiSuggestionForInsertion(type, accumulatedResult)
       emitter.emit('ai-streaming-complete', {
         originalText: selectedText,
-        suggestedText: accumulatedResult,
+        suggestedText,
         type,
-        position: finalCoords,
-        generatedRange: { from: startPosition, to: startPosition + accumulatedResult.length },
+        position: initialCoords,
+        targetRange,
       })
       emitter.emit('onboarding-step-complete', { step: 'ai-polish' })
     } catch (error) {
-      restoreOriginalText()
       emitter.emit('ai-streaming-complete')
       if (error instanceof Error && error.name === 'AbortError') return
       toast({
@@ -2081,6 +2124,14 @@ export function TipTapEditor({
     await runSelectionAiRewrite('expand', fetchAiExpandStream)
   }, [runSelectionAiRewrite])
 
+  const handleAIExplain = useCallback(async () => {
+    await runSelectionAiRewrite(
+      'explain',
+      (text, onChunk, signal, onThinkingUpdate, context) =>
+        fetchAiExplainStream(text, context || { before: '', after: '' }, onChunk, signal, onThinkingUpdate),
+    )
+  }, [runSelectionAiRewrite])
+
   const handleAITranslate = useCallback(async (targetLanguage: string) => {
     await runSelectionAiRewrite(
       'translate',
@@ -2094,9 +2145,10 @@ export function TipTapEditor({
       polish: handleAIPolish,
       concise: handleAIConcise,
       expand: handleAIExpand,
+      explain: handleAIExplain,
       translate: handleAITranslate,
     }
-  }, [handleAIPolish, handleAIConcise, handleAIExpand, handleAITranslate])
+  }, [handleAIPolish, handleAIConcise, handleAIExpand, handleAIExplain, handleAITranslate])
 
   // Initialize content only once - preserves undo/redo history when switching tabs
   // Bug fix: Only initialize if the editor is for the current file path
@@ -2433,12 +2485,12 @@ export function TipTapEditor({
     const handleAIContinue = async () => {
       if (!editor) return
 
-      // Get content before cursor as context
       const { from } = editor.state.selection
-      const textBefore = editor.state.doc.textBetween(0, from, '\n')
-
-      // Get last 500 characters as context
-      const context = textBefore.slice(-500)
+      const richContext = buildCompletionContext(editor.state.doc, from, {
+        beforeChars: 1800,
+        afterChars: 600,
+      })
+      const context = richContext.textBefore
 
       if (!context.trim()) {
         toast({
@@ -2468,7 +2520,7 @@ export function TipTapEditor({
       }
 
       try {
-        await fetchCompletionStream(
+        await fetchWritingContinuationStream(
           context,
           (chunk, isFirst) => {
             if (isFirst) {
@@ -2477,7 +2529,8 @@ export function TipTapEditor({
             editor.chain().focus().insertContent(chunk).run()
             accumulatedResult += chunk
           },
-          abortController.signal
+          abortController.signal,
+          richContext
         )
 
         if (!accumulatedResult) {
@@ -3201,6 +3254,7 @@ export function TipTapEditor({
               onAIPolish={handleAIPolish}
               onAIConcise={handleAIConcise}
               onAIExpand={handleAIExpand}
+              onAIExplain={handleAIExplain}
               onAITranslate={handleAITranslate}
               onQuoteToChat={onQuoteToChat}
               onCreateFlashcard={openFlashcardDialogFromSelection}

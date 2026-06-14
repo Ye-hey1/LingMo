@@ -5,7 +5,6 @@ import { v4 } from "uuid"
 import { Store } from "@tauri-apps/plugin-store"
 import { Plus, Settings } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import useSettingStore from "@/stores/setting"

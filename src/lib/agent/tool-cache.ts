@@ -6,6 +6,7 @@ import { READ_ONLY_TOOLS } from './tool-policy'
 
 const MAX_CACHE_SIZE = 100
 const DEFAULT_TTL = 5 * 60 * 1000 // 5 minutes
+const WEB_SEARCH_TTL = 60 * 1000 // 1 minute for fast-moving external facts
 
 // ---------------------------------------------------------------------------
 // Types
@@ -232,6 +233,10 @@ export class ToolResultCache {
   // Get
   // ---------------------------------------------------------------------------
 
+  private getTtl(toolName: string): number {
+    return toolName === 'web_search' ? WEB_SEARCH_TTL : this.ttl
+  }
+
   get(toolName: string, params: Record<string, any>): string | null {
     if (!this.isCacheable(toolName)) {
       this.missCount++
@@ -247,7 +252,7 @@ export class ToolResultCache {
     }
 
     // 检查是否过期
-    if (Date.now() - entry.timestamp > this.ttl) {
+    if (Date.now() - entry.timestamp > this.getTtl(toolName)) {
       this.cache.delete(key)
       this.missCount++
       return null

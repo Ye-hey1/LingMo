@@ -31,8 +31,8 @@ export function DeployPanel({
   if (!showDeployModal) return null
 
   return (
-    <div className="shrink-0 border-t bg-muted/20 px-5 py-3">
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-background p-3 shadow-sm">
+    <div className="shrink-0 border-t bg-muted/20 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-3 rounded-md border bg-background p-2.5">
         <div className="flex min-w-[220px] flex-1 items-center gap-2">
           {isDeploying ? <Loader2 className="size-4 animate-spin text-primary" /> : <Globe className="size-4 text-primary" />}
           <div className="min-w-0">
@@ -52,13 +52,13 @@ export function DeployPanel({
               localStorage.setItem("lingmo_vercel_token", e.target.value)
             }}
             placeholder="Vercel API Token"
-            className="h-9 min-w-[260px] flex-1 text-xs"
+            className="h-8 min-w-[260px] flex-1 text-xs shadow-none"
             disabled={isDeploying}
           />
         )}
 
         {deployedUrl && (
-          <Input readOnly value={deployedUrl} className="h-9 min-w-[260px] flex-1 select-all font-mono text-xs" />
+          <Input readOnly value={deployedUrl} className="h-8 min-w-[260px] flex-1 select-all font-mono text-xs shadow-none" />
         )}
 
         <div className="flex items-center gap-2">
@@ -67,7 +67,7 @@ export function DeployPanel({
               <Button
                 size="sm"
                 variant="outline"
-                className="h-9 text-xs"
+                className="h-8 text-xs shadow-none"
                 onClick={async () => {
                   try {
                     const { writeText } = await import("@tauri-apps/plugin-clipboard-manager")
@@ -82,7 +82,7 @@ export function DeployPanel({
               </Button>
               <Button
                 size="sm"
-                className="h-9 text-xs"
+                className="h-8 text-xs shadow-none"
                 onClick={async () => {
                   try {
                     await openUrl(deployedUrl)
@@ -95,12 +95,12 @@ export function DeployPanel({
               </Button>
             </>
           ) : (
-            <Button size="sm" className="h-9 gap-1 text-xs" onClick={onDeploy} disabled={!vercelToken.trim() || isDeploying}>
+            <Button size="sm" className="h-8 gap-1 text-xs shadow-none" onClick={onDeploy} disabled={!vercelToken.trim() || isDeploying}>
               {isDeploying ? <Loader2 className="size-3.5 animate-spin" /> : <Globe className="size-3.5" />}
               开始部署
             </Button>
           )}
-          <Button size="sm" variant="ghost" className="size-9 p-0" onClick={onClose} disabled={isDeploying}>
+          <Button size="sm" variant="ghost" className="size-8 p-0" onClick={onClose} disabled={isDeploying}>
             <X className="size-4" />
           </Button>
         </div>

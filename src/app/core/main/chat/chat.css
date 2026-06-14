@@ -25,6 +25,16 @@
   }
 }
 
+/* Shimmer slide for progress bar */
+@keyframes shimmer-slide {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
 .animate-shimmer {
   animation: shimmer-opacity 3s ease-in-out infinite;
   color: hsl(var(--foreground));
@@ -50,6 +60,28 @@
   [style*="transform: translate"] {
     transform: none !important;
     opacity: 1 !important;
+  }
+}
+
+/* Streaming cursor blink — appended to the last block during streaming */
+@keyframes streaming-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.streaming-cursor::after {
+  content: "▍";
+  display: inline;
+  color: hsl(var(--primary) / 0.5);
+  animation: streaming-cursor-blink 1s step-end infinite;
+  margin-left: 1px;
+  font-weight: 400;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-cursor::after {
+    animation: none;
+    opacity: 0.6;
   }
 }
 

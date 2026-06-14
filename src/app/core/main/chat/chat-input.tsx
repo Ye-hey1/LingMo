@@ -52,7 +52,6 @@ import { AiDocCommandPopover } from './ai-doc-command-popover'
 import { filterSlashCommands, findSlashCommand, getAllSlashCommands, type SlashCommandItem } from '@/lib/ai-doc-commands/slash-bridge'
 import { findAiDocCommand, type AiDocCommandId } from '@/lib/ai-doc-commands'
 import { skillExecutor } from '@/lib/skills'
-import { buildWriterSkillInstruction } from '@/lib/agent/writer-executor'
 import { loadActivityCalendarData, loadCachedActivityCalendarData } from '@/lib/activity'
 import { createActivityReviewNote } from '@/lib/activity/review-note'
 
@@ -413,13 +412,9 @@ export const ChatInput = React.memo(function ChatInput() {
         ? `/${slashCommand.title} ${userRequest.trim()}`
         : `/${slashCommand.title}`
       const routeOverride = slashCommand.runtimeProfile
-      const isWriterRoute = routeOverride === 'writer' || routeOverride === 'advisor'
-      const skillInstruction = isWriterRoute
-        ? buildWriterSkillInstruction(slashCommand.skillContent, actualRequest)
-        : skillExecutor.formatSkillForExecution(
-            slashCommand.skillContent,
-            actualRequest,
-          )
+      const skillInstruction = routeOverride === 'writer' || routeOverride === 'advisor'
+        ? actualRequest
+        : skillExecutor.formatSkillForExecution(slashCommand.skillContent, actualRequest)
 
       try {
         const isAgentSkill = slashCommand.executionMode === 'agent'
@@ -431,7 +426,7 @@ export const ChatInput = React.memo(function ChatInput() {
           })
         }
         chatSendRef.current?.sendChat(skillInstruction, {
-          forcedSkillIds: isAgentSkill ? [slashCommand.skillContent.metadata.id] : undefined,
+          forcedSkillIds: [slashCommand.skillContent.metadata.id],
           displayText,
           routeOverride: slashCommand.runtimeProfile,
           modeOverride: isAgentSkill ? 'agent' : 'chat',

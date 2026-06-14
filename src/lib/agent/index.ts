@@ -6,8 +6,6 @@
  *
  * 目录结构：
  *   agent-handler.ts    — Agent 入口调度器
- *   base-agent.ts       — Agent 基类（事件、步骤、工具执行、确认）
- *   react.ts            — ReAct 引擎（Thought-Action-Observation 循环）
  *   types.ts            — 统一类型定义
  *   prompt-assembler.ts — 系统提示词构建
  *   task-planner.ts     — 任务规划
@@ -16,7 +14,7 @@
  *   event-bus.ts        — 事件总线
  *   working-memory.ts   — 工作记忆
  *   context-compression.ts — 上下文压缩
- *   message-trimmer.ts  — ReAct 上下文裁剪
+ *   message-trimmer.ts  — 上下文裁剪
  *   token-budget.ts     — Token 预算管理
  *   tool-utils.ts       — 工具执行超时 + 结果压缩
  *   tool-cache.ts       — 工具结果缓存
@@ -88,6 +86,28 @@ export type { AgentEventBus, AgentReplayState } from './event-bus'
 
 // ---- 工作记忆 ----
 export { loadWorkingMemory, formatWorkingMemoryForPrompt } from './working-memory'
+
+// ---- 运行时快照 ----
+export {
+  buildAgentRuntimeSnapshot,
+  buildSkillRuntimeSnapshot,
+  buildToolExposureSnapshot,
+  createInitialAgentRuntimeSnapshot,
+  createRuntimeWarning,
+  mergeRuntimeWarnings,
+} from './runtime-snapshot'
+export type {
+  AgentRuntimeSnapshot,
+  McpRuntimeServerSnapshot,
+  McpRuntimeSnapshot,
+  McpRuntimeStatus,
+  RuntimePermissionSnapshot,
+  RuntimeWarning,
+  SkillRuntimeEntry,
+  SkillRuntimeSnapshot,
+  ToolExposureEntry,
+  ToolExposureSnapshot,
+} from './runtime-snapshot'
 
 // ---- React Diff Helpers ----
 export { replaceLinesInRange } from './tools/react-diff-helpers'

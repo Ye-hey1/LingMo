@@ -19,17 +19,25 @@ import {
   Search,
   Send,
   Sparkles,
-  Palette,
+  Settings2,
   Trash2,
   X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { toast } from "@/hooks/use-toast"
 import { Popover, PopoverContent, PopoverAnchor } from "@/components/ui/popover"
+import { ModelSelect } from "@/app/core/setting/components/model-select"
 import type { MarkdownFile } from "@/lib/files"
 import type {
   SourceWorkspaceTab,
@@ -39,14 +47,73 @@ import type {
   TemplateOverrides,
 } from "./types"
 import type { OutputTemplate } from "@/lib/output-workshop/templates"
-import { getMermaidRenderModeLabel, PREVIEW_SIZE_PRESETS } from "./workshop-controls"
+import { isMokaTemplateId } from "@/lib/output-workshop/moka"
+import { getMermaidRenderModeLabel } from "./workshop-controls"
+import { MokaDesignPanel, type MokaPanelMode, type MokaPanelPlatform } from "./moka-design-panel"
 
-const QUICK_INSTRUCTION_CHIPS = [
-  "更像小红书长图，标题更抓人，分段更短",
-  "转成演示简报，每页只保留一个核心观点",
-  "突出行动清单、风险和下一步",
-  "适合移动端阅读，字号更大，留白更足",
-]
+const FONT_PRESETS = [
+  {
+    label: "Noto Sans SC",
+    value: "Noto Sans SC",
+  },
+  {
+    label: "系统默认",
+    value: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  },
+  {
+    label: "思源黑体",
+    value: "Source Han Sans SC, Noto Sans SC, sans-serif",
+  },
+  {
+    label: "苹方 / 微软雅黑",
+    value: "PingFang SC, Microsoft YaHei, sans-serif",
+  },
+  {
+    label: "HarmonyOS Sans",
+    value: "HarmonyOS Sans SC, HarmonyOS Sans, Noto Sans SC, sans-serif",
+  },
+  {
+    label: "MiSans",
+    value: "MiSans, Noto Sans SC, sans-serif",
+  },
+  {
+    label: "阿里巴巴普惠体",
+    value: "Alibaba PuHuiTi, Alibaba PuHuiTi 2.0, Noto Sans SC, sans-serif",
+  },
+  {
+    label: "OPPO Sans",
+    value: "OPPO Sans, Noto Sans SC, sans-serif",
+  },
+  {
+    label: "霞鹜文楷",
+    value: "LXGW WenKai, KaiTi, STKaiti, serif",
+  },
+  {
+    label: "筑紫明朝",
+    value: "Tsukushi A Round Gothic, Tsukushi Mincho, Noto Serif SC, serif",
+  },
+  {
+    label: "宋体衬线",
+    value: "Noto Serif SC, Source Han Serif SC, SimSun, serif",
+  },
+] as const
+
+function getFontPreset(value: string) {
+  return FONT_PRESETS.find((preset) => preset.value === value)
+}
+
+function getFontPresetLabel(value: string) {
+  return getFontPreset(value)?.label || "自定义字体"
+}
+
+function getOutlineLevel(section: ExtractedSection): number {
+  if (!section.level || !Number.isFinite(section.level)) return 1
+  return Math.min(6, Math.max(1, section.level))
+}
+
+function getOutlineTitleIndent(level: number): number {
+  return Math.min(3, Math.max(0, level - 1)) * 14
+}
 
 interface SourcePanelProps {
   sourceContent: string
@@ -70,6 +137,18 @@ interface SourcePanelProps {
   templateOverrides: TemplateOverrides
   setTemplateOverrides: (next: TemplateOverrides) => void
   onSelectTemplate: (templateId: string) => void
+  mokaMode: MokaPanelMode
+  setMokaMode: (mode: MokaPanelMode) => void
+  mokaPlatform: MokaPanelPlatform
+  setMokaPlatform: (platform: MokaPanelPlatform) => void
+  mokaStyleId: string
+  setMokaStyleId: (styleId: string) => void
+  mokaPaletteId: string
+  setMokaPaletteId: (paletteId: string) => void
+  mokaReferenceImageDataUrl: string
+  mokaReferenceImageName: string
+  onMokaReferenceImageChange: (dataUrl: string, name: string) => void
+  onClearMokaReferenceImage: () => void
   onGenerate: () => void
   onStop: () => void
   // File picker
@@ -132,11 +211,24 @@ export function SourcePanel({
   toggleSourcePanel,
   isBuilding,
   exportBusy,
+  status,
   isCsvDetected,
   selectedTemplateId,
   templateOverrides,
   setTemplateOverrides,
   onSelectTemplate,
+  mokaMode,
+  setMokaMode,
+  mokaPlatform,
+  setMokaPlatform,
+  mokaStyleId,
+  setMokaStyleId,
+  mokaPaletteId,
+  setMokaPaletteId,
+  mokaReferenceImageDataUrl,
+  mokaReferenceImageName,
+  onMokaReferenceImageChange,
+  onClearMokaReferenceImage,
   onGenerate,
   onStop,
   showFilePicker,
@@ -179,6 +271,7 @@ export function SourcePanel({
   deployProgress,
 }: SourcePanelProps) {
   const sourceTextareaRef = React.useRef<HTMLTextAreaElement | null>(null)
+  const isMokaMode = isMokaTemplateId(selectedTemplateId)
 
   React.useEffect(() => {
     if (activeOutlineIndex === null) return
@@ -196,136 +289,142 @@ export function SourcePanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col border-r bg-background">
-      <div className="shrink-0 border-b bg-background px-3 py-2">
-        <div className="flex items-center gap-2">
-          <div className="flex shrink-0 items-center gap-1.5">
+      <div className="shrink-0 border-b bg-background px-3 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
               onClick={toggleSourcePanel}
-              className="grid size-8 shrink-0 place-items-center rounded-lg border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="grid size-8 shrink-0 place-items-center rounded-md border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               title={sourcePanelCollapsed ? "展开输入区" : "折叠输入区"}
             >
               {sourcePanelCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
             </button>
+            <div className="min-w-0">
+              <div className="truncate text-xs font-semibold text-foreground">输入素材</div>
+              <div className="truncate text-[10px] text-muted-foreground">
+                {sourceContent.trim()
+                  ? `${sourceContent.trim().length.toLocaleString()} chars`
+                  : "等待材料"}
+              </div>
+            </div>
           </div>
 
-          <div className="min-w-0 flex-1">
-            <Popover open={showFilePicker} onOpenChange={setShowFilePicker}>
-              <PopoverAnchor asChild>
-                <div className="relative w-full">
-                  <Input
-                    value={sourceLabel}
-                    onChange={(e) => setSourceLabel(e.target.value)}
-                    placeholder="来源笔记"
-                    className="h-8 pr-8 text-xs shadow-none"
-                    onFocus={() => setShowFilePicker(true)}
-                  />
-                  <button
-                    type="button"
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    onClick={() => setShowFilePicker(!showFilePicker)}
-                    title="选择来源笔记"
-                  >
-                    <BookOpen className="size-3.5" />
-                  </button>
-                </div>
-              </PopoverAnchor>
-
-              <PopoverContent
-                align="start"
-                side="bottom"
-                sideOffset={4}
-                className="w-[240px] p-0 border shadow-2xl rounded-xl bg-popover overflow-hidden z-[10020]"
-              >
-                <div className="border-b bg-muted/20 p-2">
-                  <div className="relative">
-                    <Search className="absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-                    <input
-                      type="text"
-                      value={fileSearchQuery}
-                      onChange={(e) => setFileSearchQuery(e.target.value)}
-                      placeholder="搜索笔记"
-                      className="w-full rounded border bg-background py-1.5 pl-8 pr-2 text-[10px] focus:outline-none focus:ring-1 focus:ring-primary"
-                      autoFocus
-                    />
-                  </div>
-                </div>
-                <ScrollArea className="h-44">
-                  {loadingFiles ? (
-                    <div className="flex items-center justify-center py-4">
-                      <Loader2 className="size-4 animate-spin text-muted-foreground" />
-                    </div>
-                  ) : filteredFiles.length === 0 ? (
-                    <div className="py-4 text-center text-xs text-muted-foreground">无匹配笔记</div>
-                  ) : (
-                    <div className="p-1">
-                      {filteredFiles.map((file) => (
-                        <button
-                          key={file.relativePath}
-                          className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-muted"
-                          onClick={() => {
-                            void onSelectFile(file)
-                            setShowFilePicker(false)
-                          }}
-                        >
-                          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-[11px] font-medium">{file.name}</div>
-                            <div className="truncate text-[8px] text-muted-foreground">{file.relativePath}</div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </ScrollArea>
-                <div className="border-t bg-muted/10 p-1">
-                  <button
-                    className="flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted"
-                    onClick={() => {
-                      setShowFilePicker(false)
-                      onLoadLinkedFile()
-                    }}
-                    disabled={!canLoadLinkedFile}
-                  >
-                    <FolderOpen className="size-3.5" />
-                    载入当前文件
-                  </button>
-                </div>
-              </PopoverContent>
-            </Popover>
-          </div>
-
-          <Button
-            size="sm"
-            variant="outline"
-            className="size-8 shrink-0 p-0"
-            onClick={onBrowseLocalFile}
-            title="浏览 Markdown 文件"
-          >
-            <FolderOpen className="size-3.5" />
-          </Button>
-
-          <div className="shrink-0">
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              className="size-8 p-0 shadow-none"
+              onClick={onBrowseLocalFile}
+              title="浏览 Markdown 文件"
+            >
+              <FolderOpen className="size-3.5" />
+            </Button>
             {isBuilding ? (
-              <Button size="sm" variant="destructive" className="h-8 gap-1.5 px-3 text-[10px] font-semibold" onClick={onStop}>
+              <Button size="sm" variant="destructive" className="h-8 gap-1.5 px-3 text-xs font-semibold shadow-none" onClick={onStop}>
                 <Loader2 className="size-3.5 animate-spin" />
                 停止
               </Button>
             ) : (
               <Button
                 size="sm"
-                className="h-8 gap-1.5 px-3 text-[10px] font-semibold"
+                className="h-8 gap-1.5 px-3 text-xs font-semibold shadow-none"
                 onClick={onGenerate}
                 disabled={!sourceContent.trim() || exportBusy}
               >
                 <Send className="size-3.5" />
-                构建
+                {isMokaMode ? "开始设计" : "开始构建"}
               </Button>
             )}
           </div>
         </div>
 
-        <div className="mt-2 grid grid-cols-3 gap-1 rounded-lg bg-muted/50 p-1">
+        <Popover open={showFilePicker} onOpenChange={setShowFilePicker}>
+          <PopoverAnchor asChild>
+            <div className="relative mt-2 w-full">
+              <BookOpen className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={sourceLabel}
+                onChange={(e) => setSourceLabel(e.target.value)}
+                placeholder="来源笔记"
+                className="h-8 pl-8 pr-8 text-xs shadow-none"
+                onFocus={() => setShowFilePicker(true)}
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={() => setShowFilePicker(!showFilePicker)}
+                title="选择来源笔记"
+              >
+                <ChevronDown className="size-3.5" />
+              </button>
+            </div>
+          </PopoverAnchor>
+
+          <PopoverContent
+            align="start"
+            side="bottom"
+            sideOffset={4}
+            className="z-[10020] w-[280px] overflow-hidden rounded-lg border bg-popover p-0 shadow-none"
+          >
+            <div className="border-b bg-muted/20 p-2">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={fileSearchQuery}
+                  onChange={(e) => setFileSearchQuery(e.target.value)}
+                  placeholder="搜索笔记"
+                  className="w-full rounded-md border bg-background py-1.5 pl-8 pr-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <ScrollArea className="h-48">
+              {loadingFiles ? (
+                <div className="flex items-center justify-center py-5">
+                  <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : filteredFiles.length === 0 ? (
+                <div className="py-5 text-center text-xs text-muted-foreground">无匹配笔记</div>
+              ) : (
+                <div className="p-1.5">
+                  {filteredFiles.map((file) => (
+                    <button
+                      key={file.relativePath}
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors hover:bg-muted"
+                      onClick={() => {
+                        void onSelectFile(file)
+                        setShowFilePicker(false)
+                      }}
+                    >
+                      <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[11px] font-medium">{file.name}</div>
+                        <div className="truncate text-[9px] text-muted-foreground">{file.relativePath}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+            <div className="border-t bg-muted/10 p-1.5">
+              <button
+                className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => {
+                  setShowFilePicker(false)
+                  onLoadLinkedFile()
+                }}
+                disabled={!canLoadLinkedFile}
+              >
+                <FolderOpen className="size-3.5" />
+                载入当前文件
+              </button>
+            </div>
+          </PopoverContent>
+        </Popover>
+
+        <div className="mt-2 grid grid-cols-3 gap-1 rounded-md border bg-muted/30 p-1">
           {([
             { id: "edit", label: "内容", icon: FileText },
             { id: "history", label: "快照", icon: History },
@@ -340,7 +439,7 @@ export function SourcePanel({
                 className={cn(
                   "flex h-7 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors",
                   sourceWorkspaceTab === tab.id
-                    ? "bg-background text-foreground shadow-sm"
+                    ? "bg-background text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
@@ -355,29 +454,22 @@ export function SourcePanel({
       <div className="min-h-0 flex-1">
         {sourceWorkspaceTab === "edit" && (
           <div className="flex h-full min-h-0 flex-col gap-3 p-3">
-            <div className="relative flex min-h-0 flex-1 flex-col">
-              {!sourceContent.trim() && (
-                <div className="mb-2 grid grid-cols-3 gap-1.5 rounded-xl border bg-muted/20 p-2 text-center text-[10px]">
-                  {[
-                    ["1", "粘贴材料"],
-                    ["2", "补充要求"],
-                    ["3", "点击构建"],
-                  ].map(([step, label]) => (
-                    <div key={step} className="rounded-lg bg-background px-2 py-1.5 text-muted-foreground shadow-sm">
-                      <span className="mr-1 font-bold text-primary">{step}</span>{label}
-                    </div>
-                  ))}
+            <div className={cn("relative min-h-0 flex-1 flex-col gap-2", showAdvanced ? "hidden" : "flex")}>
+              <div className="flex shrink-0 items-center justify-between gap-2">
+                <div className="min-w-0 text-[11px] font-medium text-foreground">素材正文</div>
+                <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                  {sourceContent.trim().length.toLocaleString()} chars
                 </div>
-              )}
+              </div>
               <Textarea
                 ref={sourceTextareaRef}
                 value={sourceContent}
                 onChange={(e) => setSourceContent(e.target.value)}
-                placeholder="粘贴内容..."
-                className="min-h-0 flex-1 resize-none border-border/70 bg-background text-xs leading-relaxed shadow-sm placeholder:text-muted-foreground/50"
+                placeholder={isMokaMode ? "粘贴要设计成卡片的内容，支持 Markdown、提纲或摘录。" : "粘贴正文、提纲、链接摘录或 Markdown 内容。"}
+                className="min-h-0 flex-1 resize-none border-border/70 bg-background text-xs leading-relaxed shadow-none placeholder:text-muted-foreground/70"
               />
               {isCsvDetected && selectedTemplateId !== "data-dashboard" && (
-                <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-2 rounded-lg border border-primary/20 bg-background/95 px-2.5 py-1.5 shadow-sm backdrop-blur">
+                <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-2 rounded-md border border-primary/20 bg-background px-2.5 py-1.5">
                   <div className="flex min-w-0 items-center gap-1.5 text-[10px] font-medium text-primary">
                     <Sparkles className="size-3 shrink-0 text-primary" />
                     <span className="truncate">建议切换到数据仪表盘</span>
@@ -395,135 +487,175 @@ export function SourcePanel({
               )}
             </div>
 
-            <div className="space-y-2">
+            <div className={cn("space-y-2", showAdvanced ? "flex min-h-0 flex-1 flex-col" : "shrink-0")}>
               <button
                 type="button"
-                className="flex w-full items-center justify-between rounded-lg border bg-background px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                className="flex w-full items-center justify-between gap-2 rounded-md border bg-background px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={() => setShowAdvanced(!showAdvanced)}
+                aria-expanded={showAdvanced}
               >
                 <span className="flex items-center gap-1.5">
                   {showAdvanced ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+                  <Settings2 className="size-3.5" />
                   生成选项
+                </span>
+                <span className="shrink-0 text-[10px] font-normal">
+                  {isMokaMode ? selectedTemplateName : `${getFontPresetLabel(templateOverrides.fontFamily)} · ${templateOverrides.fontSize}px`}
                 </span>
               </button>
               {showAdvanced && (
-                <div className="space-y-2 rounded-lg border bg-muted/15 p-2.5">
-                  <Textarea
-                    value={customInstructions}
-                    onChange={(e) => setCustomInstructions(e.target.value)}
-                    placeholder="补充生成要求..."
-                    className="min-h-[78px] resize-none bg-background text-[11px]"
-                  />
-                  <div className="flex flex-wrap gap-1.5">
-                    {QUICK_INSTRUCTION_CHIPS.map((chip) => (
-                      <button
-                        key={chip}
-                        type="button"
-                        onClick={() => {
-                          const next = customInstructions.trim()
-                            ? `${customInstructions.trim()}\n- ${chip}`
-                            : chip
-                          setCustomInstructions(next)
-                        }}
-                        className="rounded-full border bg-background px-2 py-1 text-[9px] font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
-                      >
-                        {chip}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
-                    <Palette className="size-3" />
-                    模板参数
-                  </div>
-                  <div className="grid grid-cols-3 gap-1">
-                    {PREVIEW_SIZE_PRESETS.slice(0, 5).map((preset) => (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() => setTemplateOverrides({ ...templateOverrides, sizePresetId: preset.id })}
-                        className={cn(
-                          "rounded-md border px-2 py-1.5 text-left text-[9px] transition-colors",
-                          templateOverrides.sizePresetId === preset.id
-                            ? "border-primary/40 bg-primary/10 text-primary"
-                            : "bg-background text-muted-foreground hover:bg-muted"
-                        )}
-                        title={preset.description}
-                      >
-                        <span className="block font-semibold">{preset.label}</span>
-                        <span className="block truncate opacity-75">{preset.description}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="space-y-1 text-[10px] text-muted-foreground">
-                      字号 {templateOverrides.fontSize}px
-                      <input
-                        type="range"
-                        min={18}
-                        max={36}
-                        value={templateOverrides.fontSize}
-                        onChange={(e) => setTemplateOverrides({ ...templateOverrides, fontSize: Number(e.target.value) })}
-                        className="w-full accent-primary"
+                <div
+                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md border bg-muted/15 p-2.5 pr-2 [scrollbar-width:thin]"
+                  onWheel={(event) => event.stopPropagation()}
+                  onPointerDownCapture={(event) => event.stopPropagation()}
+                >
+                  <div className="space-y-3">
+                    <section className="space-y-2 rounded-md border bg-background p-2.5">
+                      <div className="text-[10px] font-semibold text-foreground">生成模型</div>
+                      <ModelSelect
+                        modelKey="outputWorkshop"
+                        className="w-full"
+                        triggerClassName="h-8 w-full min-w-0 text-xs shadow-none"
+                        popoverClassName="z-[10030] w-[min(360px,calc(100vw-2rem))]"
                       />
-                    </label>
-                    <label className="space-y-1 text-[10px] text-muted-foreground">
-                      行高 {templateOverrides.lineHeight.toFixed(2)}
-                      <input
-                        type="range"
-                        min={1.2}
-                        max={1.9}
-                        step={0.05}
-                        value={templateOverrides.lineHeight}
-                        onChange={(e) => setTemplateOverrides({ ...templateOverrides, lineHeight: Number(e.target.value) })}
-                        className="w-full accent-primary"
+                    </section>
+
+                    {isMokaMode && (
+                      <MokaDesignPanel
+                        mode={mokaMode}
+                        setMode={setMokaMode}
+                        platform={mokaPlatform}
+                        setPlatform={setMokaPlatform}
+                        styleId={mokaStyleId}
+                        setStyleId={setMokaStyleId}
+                        paletteId={mokaPaletteId}
+                        setPaletteId={setMokaPaletteId}
+                        referenceImageDataUrl={mokaReferenceImageDataUrl}
+                        referenceImageName={mokaReferenceImageName}
+                        onReferenceImageChange={onMokaReferenceImageChange}
+                        onClearReferenceImage={onClearMokaReferenceImage}
+                        onSelectTemplate={onSelectTemplate}
+                        onThemeColorChange={(color) => setTemplateOverrides({ ...templateOverrides, themeColor: color })}
+                        className="rounded-md border bg-background"
                       />
-                    </label>
+                    )}
+
+                    <section className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[10px] font-semibold text-foreground">补充要求</div>
+                        <div className="text-[9px] text-muted-foreground">{customInstructions.trim().length.toLocaleString()} chars</div>
+                      </div>
+                      <Textarea
+                        value={customInstructions}
+                        onChange={(e) => setCustomInstructions(e.target.value)}
+                        placeholder="补充生成要求，例如压缩结构、强调结论或调整语气。"
+                        className="min-h-[72px] resize-none bg-background text-[11px] leading-relaxed shadow-none placeholder:text-muted-foreground/70"
+                      />
+                    </section>
+
+                    <section className="space-y-2 border-t pt-3">
+                      <div className="text-[10px] font-semibold text-foreground">排版</div>
+                      <div className="space-y-2.5">
+                        <label className="block space-y-1.5 text-[10px] text-muted-foreground">
+                          <span className="flex items-center justify-between gap-2">
+                            <span>字号</span>
+                            <span className="font-mono text-foreground">{templateOverrides.fontSize}px</span>
+                          </span>
+                          <input
+                            type="range"
+                            min={18}
+                            max={36}
+                            value={templateOverrides.fontSize}
+                            onChange={(e) => setTemplateOverrides({ ...templateOverrides, fontSize: Number(e.target.value) })}
+                            className="w-full accent-primary"
+                          />
+                        </label>
+                        <label className="block space-y-1.5 text-[10px] text-muted-foreground">
+                          <span className="flex items-center justify-between gap-2">
+                            <span>行高</span>
+                            <span className="font-mono text-foreground">{templateOverrides.lineHeight.toFixed(2)}</span>
+                          </span>
+                          <input
+                            type="range"
+                            min={1.2}
+                            max={1.9}
+                            step={0.05}
+                            value={templateOverrides.lineHeight}
+                            onChange={(e) => setTemplateOverrides({ ...templateOverrides, lineHeight: Number(e.target.value) })}
+                            className="w-full accent-primary"
+                          />
+                        </label>
+                      </div>
+                      <div className="grid grid-cols-[minmax(0,1fr)_36px] items-end gap-2">
+                        <div className="space-y-1.5">
+                          <label className="block text-[10px] font-medium text-muted-foreground">
+                            字体预设
+                          </label>
+                          <Select
+                            value={templateOverrides.fontFamily}
+                            onValueChange={(value) => setTemplateOverrides({ ...templateOverrides, fontFamily: value })}
+                          >
+                            <SelectTrigger className="h-8 bg-background text-xs shadow-none">
+                              <SelectValue placeholder="选择字体" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {FONT_PRESETS.map((preset) => (
+                                <SelectItem key={preset.value} value={preset.value} className="text-xs">
+                                  {preset.label}
+                                </SelectItem>
+                              ))}
+                              {!getFontPreset(templateOverrides.fontFamily) && (
+                                <SelectItem value={templateOverrides.fontFamily} className="text-xs">
+                                  自定义字体
+                                </SelectItem>
+                              )}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="grid h-8 place-items-center rounded-md border bg-background p-1">
+                          <input
+                            id="output-theme-color"
+                            type="color"
+                            value={templateOverrides.themeColor}
+                            onChange={(e) => setTemplateOverrides({ ...templateOverrides, themeColor: e.target.value })}
+                            className="h-full w-full cursor-pointer rounded border-0 bg-transparent p-0"
+                            title="主题色"
+                            aria-label="主题色"
+                          />
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="space-y-1.5 border-t pt-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[10px] font-semibold text-foreground">Mermaid</div>
+                        <div className="text-[9px] text-muted-foreground">
+                          {getMermaidRenderModeLabel(templateOverrides.mermaidRenderMode)}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 rounded-md border bg-background p-1">
+                        {([
+                          ["card", "图表转卡片"],
+                          ["image", "图片嵌入"],
+                        ] as const).map(([mode, label]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setTemplateOverrides({ ...templateOverrides, mermaidRenderMode: mode })}
+                            className={cn(
+                              "h-7 rounded text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                              templateOverrides.mermaidRenderMode === mode
+                                ? "bg-primary text-primary-foreground"
+                                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                            )}
+                            aria-pressed={templateOverrides.mermaidRenderMode === mode}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
                   </div>
-                  <div className="grid grid-cols-[1fr_44px] gap-2">
-                    <Input
-                      value={templateOverrides.fontFamily}
-                      onChange={(e) => setTemplateOverrides({ ...templateOverrides, fontFamily: e.target.value })}
-                      className="h-7 bg-background text-[10px]"
-                      placeholder="字体"
-                    />
-                    <input
-                      type="color"
-                      value={templateOverrides.themeColor}
-                      onChange={(e) => setTemplateOverrides({ ...templateOverrides, themeColor: e.target.value })}
-                      className="h-7 w-full rounded-md border bg-background p-1"
-                      title="主题色"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-1">
-                    {([
-                      ["stickersEnabled", "贴纸元素"],
-                      ["safeAreaEnabled", "安全区提示"],
-                    ] as const).map(([key, label]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => setTemplateOverrides({ ...templateOverrides, [key]: !templateOverrides[key] })}
-                        className={cn(
-                          "rounded-md border px-2 py-1.5 text-[10px] transition-colors",
-                          templateOverrides[key]
-                            ? "border-primary/30 bg-primary/10 text-primary"
-                            : "bg-background text-muted-foreground hover:bg-muted"
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setTemplateOverrides({
-                      ...templateOverrides,
-                      mermaidRenderMode: templateOverrides.mermaidRenderMode === "card" ? "image" : "card",
-                    })}
-                    className="w-full rounded-md border bg-background px-2 py-1.5 text-left text-[10px] text-muted-foreground hover:bg-muted"
-                  >
-                    Mermaid：{getMermaidRenderModeLabel(templateOverrides.mermaidRenderMode)}
-                  </button>
                 </div>
               )}
             </div>
@@ -570,7 +702,13 @@ export function SourcePanel({
             >
               <div className="space-y-1 p-2">
               {historyList.length === 0 ? (
-                <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">暂无快照</div>
+                <div className="flex h-44 flex-col items-center justify-center rounded-md border border-dashed bg-muted/10 px-4 text-center">
+                  <History className="mb-2 size-4 text-muted-foreground" />
+                  <div className="text-xs font-medium text-foreground">暂无快照</div>
+                  <div className="mt-1 max-w-[18rem] text-[11px] leading-relaxed text-muted-foreground">
+                    生成结果会自动保存在这里，之后可以恢复、重命名或导出快照包。
+                  </div>
+                </div>
               ) : (
                 historyList.map((snapshot) => {
                   const isRenaming = renamingSnapshotId === snapshot.id
@@ -595,7 +733,7 @@ export function SourcePanel({
                                   onCancelRenameSnapshot()
                                 }
                               }}
-                              className="h-6 min-w-0 text-[11px]"
+                              className="h-6 min-w-0 text-[11px] shadow-none"
                               autoFocus
                             />
                           ) : (
@@ -666,56 +804,59 @@ export function SourcePanel({
 
         {sourceWorkspaceTab === "outline" && (
           <ScrollArea className="h-full">
-            <div className="space-y-1.5 p-3">
+            <div className="p-2.5">
               {sourceOutlineSections.length === 0 ? (
-                <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">暂无结构</div>
+                <div className="flex h-44 flex-col items-center justify-center rounded-md border border-dashed bg-muted/10 px-4 text-center">
+                  <ListTree className="mb-2 size-4 text-muted-foreground" />
+                  <div className="text-xs font-medium text-foreground">暂无结构</div>
+                  <div className="mt-1 max-w-[18rem] text-[11px] leading-relaxed text-muted-foreground">
+                    输入带标题的 Markdown 后，可以在这里跳转到对应段落和预览位置。
+                  </div>
+                </div>
               ) : (
-                sourceOutlineSections.map((section, index) => (
-                  <button
-                    key={`${section.title}-${index}`}
-                    type="button"
-                    onClick={() => onSelectOutlineSection(section, index)}
-                    className={cn(
-                      "w-full rounded-xl border px-3 py-2.5 text-left transition-colors",
-                      activeOutlineIndex === index
-                        ? "border-primary/30 bg-primary/10"
-                        : "border-transparent bg-muted/25 hover:border-border hover:bg-muted/45"
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="w-7 shrink-0 font-mono text-[9px] font-semibold text-muted-foreground">
-                        {String(index + 1).padStart(2, "0")}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/85">
-                        {section.title}
-                      </span>
-                      {section.startLine && (
-                        <span className="shrink-0 font-mono text-[9px] text-muted-foreground">
-                          L{section.startLine}
-                        </span>
-                      )}
-                    </div>
-                    {section.body && (
-                      <p className="mt-1.5 line-clamp-2 pl-9 text-[10px] leading-relaxed text-muted-foreground">
-                        {section.body}
-                      </p>
-                    )}
-                    {!!section.bullets?.length && (
-                      <div className="mt-1.5 flex flex-wrap gap-1 pl-9">
-                        {section.bullets.slice(0, 3).map((bullet) => (
-                          <span key={bullet} className="max-w-full truncate rounded bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground">
-                            {bullet}
-                          </span>
-                        ))}
-                        {section.bullets.length > 3 && (
-                          <span className="rounded bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground">
-                            +{section.bullets.length - 3}
-                          </span>
+                <div className="space-y-0.5">
+                  {sourceOutlineSections.map((section, index) => {
+                    const level = getOutlineLevel(section)
+                    const active = activeOutlineIndex === index
+                    return (
+                      <button
+                        key={`${section.title}-${index}`}
+                        type="button"
+                        onClick={() => onSelectOutlineSection(section, index)}
+                        className={cn(
+                          "group grid h-8 w-full grid-cols-[2rem_minmax(0,1fr)_3.75rem] items-center gap-2 rounded-md border border-transparent px-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          active
+                            ? "bg-muted text-foreground"
+                            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
                         )}
-                      </div>
-                    )}
-                  </button>
-                ))
+                        title={section.title}
+                        aria-current={active ? "true" : undefined}
+                      >
+                        <span
+                          className={cn(
+                            "justify-self-start font-mono text-[9px] tabular-nums",
+                            active ? "font-semibold text-foreground" : "text-muted-foreground/70 group-hover:text-muted-foreground"
+                          )}
+                        >
+                          {String(index + 1).padStart(2, "0")}
+                        </span>
+                        <span
+                          className={cn(
+                            "flex min-w-0 items-center text-[11px] leading-none",
+                            level <= 2 ? "font-semibold" : "font-medium",
+                            active ? "text-foreground" : "text-foreground/80"
+                          )}
+                          style={{ paddingLeft: `${getOutlineTitleIndent(level)}px` }}
+                        >
+                          <span className="min-w-0 truncate">{section.title}</span>
+                        </span>
+                        <span className="justify-self-end whitespace-nowrap text-right font-mono text-[9px] tabular-nums text-muted-foreground/70">
+                          H{level}{section.startLine ? ` · L${section.startLine}` : ""}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
               )}
             </div>
           </ScrollArea>
@@ -723,15 +864,15 @@ export function SourcePanel({
       </div>
       {hasGeneratedOutput && (
         <div className="shrink-0 border-t bg-background px-3 py-2">
-          <div className="flex items-center gap-1.5">
-            <div className="flex min-w-0 flex-1 items-center gap-1 rounded-full border bg-background p-1 shadow-sm">
-              <div className="pl-2 text-primary">
-                <Sparkles className="size-3" />
-              </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+              <Sparkles className="size-3.5" />
+            </div>
+            <div className="flex min-w-0 flex-1 items-center gap-1 rounded-md border bg-background p-1">
               <input
                 value={refineQuery}
                 onChange={(e) => setRefineQuery(e.target.value)}
-                placeholder="输入指令微调样式..."
+                placeholder="输入微调指令"
                 className="h-7 min-w-0 flex-1 bg-transparent px-1 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60"
                 disabled={status === "generating" || status === "streaming" || exportBusy}
                 onKeyDown={(e) => {
@@ -742,14 +883,14 @@ export function SourcePanel({
                 }}
               />
               {status === "streaming" && refining ? (
-                <Button size="sm" variant="destructive" className="h-7 shrink-0 gap-1 rounded-full px-2.5 text-[10px] font-semibold" onClick={onStop}>
+                <Button size="sm" variant="destructive" className="h-7 shrink-0 gap-1 px-2.5 text-[10px] font-semibold shadow-none" onClick={onStop}>
                   <Loader2 className="size-3 animate-spin" />
                   停止
                 </Button>
               ) : (
                 <Button
                   size="sm"
-                  className="h-7 shrink-0 rounded-full px-3 text-[10px] font-semibold"
+                  className="h-7 shrink-0 px-3 text-[10px] font-semibold shadow-none"
                   onClick={handleRefine}
                   disabled={!refineQuery.trim() || status === "generating" || status === "streaming" || exportBusy}
                 >
@@ -760,9 +901,9 @@ export function SourcePanel({
           </div>
         </div>
       )}
-      <div className="shrink-0 border-t bg-muted/20 px-3 py-1.5 text-[10px] text-muted-foreground flex flex-col gap-0.5">
+      <div className="flex shrink-0 flex-col gap-0.5 border-t bg-muted/20 px-3 py-1.5 text-[10px] text-muted-foreground">
         <div className="flex min-w-0 items-center justify-between gap-2">
-          <span className="truncate font-medium">模板：{selectedTemplateName}</span>
+          <span className="truncate font-medium">{isMokaMode ? "模式" : "模板"}：{selectedTemplateName}</span>
           <span className="truncate">
             {hasGeneratedOutput ? `输出：${generatedHtmlLength.toLocaleString()} chars` : "输出：尚未生成"}
           </span>

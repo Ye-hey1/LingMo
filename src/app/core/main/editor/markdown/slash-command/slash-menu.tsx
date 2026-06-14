@@ -210,7 +210,7 @@ export const SlashMenu = forwardRef<SlashMenuRef, SlashMenuProps>(({ editor, que
   }
 
   return (
-    <div className="max-h-64 overflow-auto p-1 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border border-border rounded-lg shadow-lg min-w-36">
+    <div className="max-h-64 overflow-auto p-1 bg-background border border-border rounded-lg shadow-2xl ring-1 ring-border/40 min-w-36">
       {groupedItems.map(([group, groupItems], groupIdx) => {
         // 计算当前分组之前的累积偏移量
         let offset = 0

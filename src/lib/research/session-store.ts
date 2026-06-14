@@ -1,5 +1,41 @@
 import { exists, mkdir, writeTextFile, readTextFile, readDir } from '@tauri-apps/plugin-fs'
 import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
+import type { ResearchProviderHealth, ResearchSearchCacheStats } from './deep-research'
+
+// ---------------------------------------------------------------------------
+// 恢复研究卡片 — 消息内容中的结构化元数据（嵌入 chat content）
+// ---------------------------------------------------------------------------
+
+export type ResearchResumeMeta = {
+  sessionId: string
+  query: string
+  startedAt: string
+  pendingQueriesCount: number
+  sourcesCount: number
+  evidencesCount: number
+}
+
+const RESEARCH_RESUME_PREFIX = '<!-- deep-research-resume '
+const RESEARCH_RESUME_SUFFIX = ' -->'
+
+export function encodeResearchResumeData(meta: ResearchResumeMeta): string {
+  return `${RESEARCH_RESUME_PREFIX}${encodeURIComponent(JSON.stringify(meta))}${RESEARCH_RESUME_SUFFIX}`
+}
+
+export function parseResearchResumeData(content?: string | null): ResearchResumeMeta | null {
+  if (!content?.startsWith(RESEARCH_RESUME_PREFIX)) return null
+  const endIndex = content.indexOf(RESEARCH_RESUME_SUFFIX)
+  if (endIndex < 0) return null
+  try {
+    return JSON.parse(decodeURIComponent(content.slice(RESEARCH_RESUME_PREFIX.length, endIndex)))
+  } catch {
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session 持久化
+// ---------------------------------------------------------------------------
 
 export interface DeepResearchSessionState {
   id: string
@@ -15,6 +51,8 @@ export interface DeepResearchSessionState {
   totalDepth: number
   currentBreadth: number
   totalBreadth: number
+  cacheStats?: ResearchSearchCacheStats
+  providerHealth?: ResearchProviderHealth[]
 }
 
 export interface DeepResearchSessionSummary {

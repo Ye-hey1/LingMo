@@ -7,7 +7,7 @@ import useVectorStore from '@/stores/vector'
 
 interface VectorCalcProps {
   aiCompletionEnabled: boolean
-  onToggleAICompletion: (enabled: boolean) => void
+  onToggleAICompletion: (enabled: boolean) => void | Promise<void>
 }
 
 export function VectorCalc({
@@ -42,14 +42,16 @@ export function VectorCalc({
     <>
       {/* AI Completion Toggle */}
       <button
-        onClick={() => onToggleAICompletion(!aiCompletionEnabled)}
+        onClick={() => {
+          void onToggleAICompletion(!aiCompletionEnabled)
+        }}
         className={cn(
           'h-5 w-5 flex items-center justify-center rounded transition-colors',
           aiCompletionEnabled
             ? 'text-[#1677ff] bg-[#1677ff]/10'
             : 'text-muted-foreground hover:bg-muted hover:text-foreground'
         )}
-        title={aiCompletionEnabled ? 'AI 补全已启用' : 'AI 补全已禁用'}
+        title={aiCompletionEnabled ? '关闭 AI 补全，Tab 接受灰字' : '开启 AI 补全'}
       >
         <Sparkles size={12} />
       </button>

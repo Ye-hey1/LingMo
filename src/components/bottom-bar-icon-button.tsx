@@ -31,7 +31,7 @@ export function BottomBarIconButton({
             disabled={disabled}
             aria-label={label}
             className={cn(
-              "inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50",
+              "inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50",
               active && "bg-accent text-foreground",
               className
             )}

@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, RefreshCw, Save, Send, Sparkles } from 'lucide-react'
+import { Loader2, RefreshCw, Save, Send, Sparkles, CheckCircle2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -26,6 +26,7 @@ interface DrawioMessage {
 const DRAWIO_SRC = '/drawio/index.html?embed=1&proto=json&spin=1&libraries=1&ui=min&lang=zh&configure=1&noExitBtn=1&noSaveBtn=1&saveAndExit=0'
 const DRAWIO_DEFAULT_LIBRARIES = 'general;basic;arrows2;flowchart'
 const SAVE_DEBOUNCE_MS = 500
+const TOOLBAR_BTN = 'h-7 shrink-0 rounded-sm bg-transparent text-muted-foreground shadow-none hover:bg-muted/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
 
 // 全局变量，记录应用生命周期内，Draw.io 是否已至少加载过一次
 let globalHasInitialized = false
@@ -124,6 +125,7 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
       try {
         await saveDiagramFileContent(filePath, xml)
         setStatus('saved')
+        setTimeout(() => setStatus((prev) => prev === 'saved' ? 'ready' : prev), 1500)
       } catch (error) {
         setStatus('error')
         toast({
@@ -270,16 +272,16 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
 
   const isLoading = status === 'loading'
   const isSaving = status === 'saving'
+  const isSaved = status === 'saved'
   const isBusy = isLoading || isSaving
-  const saveButtonLabel = isLoading ? '加载中' : isSaving ? '保存中' : '保存'
+  const saveButtonLabel = isLoading ? '加载中' : isSaving ? '保存中' : isSaved ? '已保存' : '保存'
   const isFirstLoading = isLoading && !hasInitializedRef.current && !globalHasInitialized
   const isHotLoading = isLoading && !hasInitializedRef.current && globalHasInitialized
-
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-background">
       <div className="relative min-h-0 flex-1">
         <div className="pointer-events-none absolute right-3 top-2 z-20">
-          <div className="pointer-events-auto flex h-8 items-center gap-1">
+          <div className="pointer-events-auto flex items-center gap-0.5 rounded-md border border-border/50 bg-background/90 px-1 py-0.5">
             <Button
               aria-label="发送图表到 AI"
               title="发送图表到 AI"
@@ -287,7 +289,7 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
               disabled={isLoading}
               variant="ghost"
               size="sm"
-              className="h-7 shrink-0 gap-1 rounded-sm bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-muted/80 hover:text-foreground"
+              className={`${TOOLBAR_BTN} gap-1 px-2 text-xs`}
             >
               <Send className="size-3.5" />
               <span>AI</span>
@@ -299,9 +301,9 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
               disabled={isLoading}
               variant="ghost"
               size="icon"
-              className="h-7 w-7 shrink-0 rounded-sm bg-transparent text-muted-foreground shadow-none hover:bg-muted/80 hover:text-foreground"
+              className={`${TOOLBAR_BTN} w-7`}
             >
-              {isSaving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+              {isSaving ? <Loader2 className="size-3.5 animate-spin" /> : isSaved ? <CheckCircle2 className="size-3.5 text-emerald-500" /> : <Save className="size-3.5" />}
             </Button>
             <Button
               aria-label="打开模板"
@@ -310,7 +312,7 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
               disabled={isBusy}
               variant="ghost"
               size="icon"
-              className="h-7 w-7 shrink-0 rounded-sm bg-transparent text-muted-foreground shadow-none hover:bg-muted/80 hover:text-foreground"
+              className={`${TOOLBAR_BTN} w-7`}
             >
               <Sparkles className="size-3.5" />
             </Button>
@@ -321,7 +323,7 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
               disabled={isSaving}
               variant="ghost"
               size="icon"
-              className="h-7 w-7 shrink-0 rounded-sm bg-transparent text-muted-foreground shadow-none hover:bg-muted/80 hover:text-foreground"
+              className={`${TOOLBAR_BTN} w-7`}
             >
               <RefreshCw className="size-3.5" />
             </Button>
@@ -355,16 +357,16 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
             </div>
             
             {/* 中间核心加载指示器 */}
-            <div className="relative z-10 flex flex-col items-center gap-3 px-6 py-4 rounded-xl border bg-card shadow-md">
-              <Loader2 className="size-5 animate-spin text-indigo-500" />
-              <span className="text-xs font-semibold text-foreground/75 animate-pulse">正在打开 Draw.io 编辑器...</span>
+            <div className="relative z-10 flex flex-col items-center gap-3 px-6 py-4 rounded-lg border bg-card">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              <span className="text-xs font-semibold text-foreground/75">正在打开 Draw.io 编辑器...</span>
               <span className="text-[10px] text-muted-foreground/60">首次打开可能需要载入外部静态库，请稍候</span>
             </div>
           </div>
         ) : null}
         {isHotLoading ? (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/40 backdrop-blur-[2px] select-none">
-            <Loader2 className="size-4 animate-spin text-indigo-500/80" />
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/40 select-none">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : null}
         <iframe

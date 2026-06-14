@@ -29,6 +29,17 @@ globalThis.MOCKS = {
       })
     }
   },
+  settingStore: {
+    default: {
+      getState: () => ({
+        researchSearchSerpApiEnabled: false,
+        serpApiKey: '',
+        researchSearchExaEnabled: false,
+        exaApiKey: '',
+        researchSearchTavilyEnabled: true,
+      }),
+    },
+  },
   aiUtils: {
     createOpenAIClient: async () => {
       return {
@@ -155,9 +166,31 @@ globalThis.MOCKS = {
     readTextFile: async () => '',
     writtenFiles: {},
   },
+  tauriHttp: {
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ organic_results: [] }),
+    }),
+  },
   workspace: {
     getFilePathOptions: async (relativePath) => ({ path: relativePath, baseDir: 'appdata' }),
     getWorkspacePath: async () => ({ isCustom: false, path: 'workspace' }),
+  },
+  filenameUtils: {
+    sanitizeFileName: (fileName) => {
+      const sanitized = String(fileName)
+        .trim()
+        .replace(/^#{1,6}\s+/, '')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/\*(.*?)\*/g, '$1')
+        .replace(/__(.*?)__/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
+        .replace(/\s+/g, ' ')
+        .replace(/[. ]+$/g, '')
+      return sanitized || 'untitled'
+    },
   },
   sessionStore: {
     saveSessionState: async (state) => {
@@ -177,6 +210,19 @@ globalThis.MOCKS = {
       reloadCalled: false,
     }
   },
+  researchEnhancements: {
+    assessResearchQuality: (result) => ({
+      overall: 78,
+      sourceDiversity: 75,
+      evidenceStrength: 80,
+      coverage: 79,
+      grade: 'B',
+      summary: `来源 ${result.sources.length} 个，证据 ${result.evidences.length} 条`,
+    }),
+  },
+  xiaomoPrompt: {
+    buildXiaoMoDeepResearchSystemPrompt: () => 'You are 小墨. Cite sources with clickable Markdown links whenever a URL exists.',
+  },
   OpenAI: class {
     constructor() {}
   }
@@ -190,14 +236,19 @@ async function importTsModule(relativePath) {
   source = source.replace(/import\s+OpenAI\s+from\s+['"]openai['"]/g, 'const OpenAI = globalThis.MOCKS.OpenAI;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/lib\/mcp\/server-manager['"]/g, 'const {$1} = globalThis.MOCKS.mcpServerManager;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/stores\/mcp['"]/g, 'const {$1} = globalThis.MOCKS.mcpStore;')
+  source = source.replace(/import\s+useSettingStore\s+from\s*['"]@\/stores\/setting['"]/g, 'const useSettingStore = globalThis.MOCKS.settingStore.default;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/lib\/ai\/utils['"]/g, 'const {$1} = globalThis.MOCKS.aiUtils;')
+  source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/lib\/ai\/xiaomo-prompt['"]/g, 'const {$1} = globalThis.MOCKS.xiaomoPrompt;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/lib\/tavily['"]/g, 'const {$1} = globalThis.MOCKS.tavily;')
+  source = source.replace(/import\s*\{\s*fetch\s+as\s+tauriFetch\s*\}\s*from\s*['"]@tauri-apps\/plugin-http['"]/g, 'const { fetch: tauriFetch } = globalThis.MOCKS.tauriHttp;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@tauri-apps\/plugin-fs['"]/g, 'const {$1} = globalThis.MOCKS.tauriFs;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/lib\/workspace['"]/g, 'const {$1} = globalThis.MOCKS.workspace;')
+  source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/lib\/sync\/filename-utils['"]/g, 'const {$1} = globalThis.MOCKS.filenameUtils;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]\.\/session-store['"]/g, 'const {$1} = globalThis.MOCKS.sessionStore;')
+  source = source.replace(/import\s*\{\s*assessResearchQuality\s*,\s*type\s+ResearchQualityScore\s*\}\s*from\s*['"]\.\/research-enhancements['"]/g, 'const { assessResearchQuality } = globalThis.MOCKS.researchEnhancements;')
   source = source.replace(/await\s+import\s*\(\s*['"]@\/stores\/article['"]\s*\)/g, 'globalThis.MOCKS.articleStore')
   
-  if (!source.includes('globalThis.MOCKS.articleStore')) {
+  if (source.includes('import("@/stores/article")') && !source.includes('globalThis.MOCKS.articleStore')) {
     console.log('警告：没有找到 import("@/stores/article") 进行替换！')
   }
 
@@ -326,8 +377,8 @@ try {
   assert.equal(resumeResult.session.sources.some(s => s.title === '旧来源'), true, '应该保留旧有的来源列表')
   console.log('✅ 测试 3：断点续传与持久化状态机成功通过。')
 
-  // 4. 验证统一的 Event Bus 发射、沉淀至 docs/research-reports/ 以及触发热重载
-  console.log('--- 开始测试 4：Event Bus 发射与知识库热重载、本地文件沉淀 ---')
+  // 4. 验证统一的 Event Bus 发射与质量评分输出
+  console.log('--- 开始测试 4：Event Bus 发射与研究质量评分 ---')
   
   let eventsEmitted = []
   const mockEventBus = {
@@ -351,18 +402,46 @@ try {
   const completedEvent = eventsEmitted.find(e => e.event === 'research.completed')
   assert.ok(startedEvent, '应该广播 research.started 事件')
   assert.ok(completedEvent, '应该广播 research.completed 事件')
+  assert.equal(finalRes.quality.grade, 'B', '最终结果应该包含研究质量评分')
+  assert.equal(finalRes.session.quality.grade, 'B', 'Session 应该保存研究质量评分')
+  assert.equal(completedEvent.data.quality.grade, 'B', 'research.completed 事件应该携带质量评分')
+  assert.equal(completedEvent.data.sourceCount, finalRes.sources.length, '完成事件应该携带来源数量')
+  assert.equal(completedEvent.data.evidenceCount, finalRes.evidences.length, '完成事件应该携带证据数量')
+  assert.equal(completedEvent.data.breadth, 1, '完成事件应该携带研究广度')
+  assert.equal(completedEvent.data.depth, 1, '完成事件应该携带研究深度')
+  assert.ok(completedEvent.data.cacheStats, '完成事件应该携带搜索缓存统计')
+  assert.ok(finalRes.session.cacheStats, 'Session 应该保存搜索缓存统计')
+  assert.equal(typeof finalRes.session.cacheStats.misses, 'number', '缓存统计应该包含 miss 次数')
+  assert.ok(Array.isArray(completedEvent.data.providerHealth), '完成事件应该携带 Provider 健康状态')
+  assert.ok(Array.isArray(finalRes.session.providerHealth), 'Session 应该保存 Provider 健康状态')
+  assert.ok(finalRes.session.providerHealth.some(provider => provider.name === 'tavily'), 'Provider 健康状态应该包含 Tavily')
 
-  // 验证知识库写入
-  const writtenPaths = Object.keys(globalThis.MOCKS.tauriFs.writtenFiles)
-  const reportPath = writtenPaths.find(p => p.startsWith('docs/research-reports/research-'))
-  assert.ok(reportPath, '应该在 docs/research-reports/ 下生成报告文件')
-  assert.match(globalThis.MOCKS.tauriFs.writtenFiles[reportPath], /type: research_report/, '报告中应该包含 frontmatter')
-  assert.match(globalThis.MOCKS.tauriFs.writtenFiles[reportPath], /附录：多源证据交叉验证印证表/, '报告中应该包含附录多源证据交叉验证印证表')
+  console.log('✅ 测试 4：Event Bus 与研究质量评分成功通过。')
 
-  // 验证触发了热重载
-  assert.equal(globalThis.MOCKS.articleStore.reloadCalled, true, '在写入报告后，应该触发 useArticleStore 的 loadFileTree()')
+  // 5. 验证研究报告文件命名：标题+日期，并自动避让重名
+  console.log('--- 开始测试 5：研究报告文件命名工具 ---')
+  globalThis.MOCKS.tauriFs.exists = async (path) => path === 'research/AI Agent-20260607.md'
+  const reportFileModule = await importTsModule('src/lib/research/report-file.ts')
+  const {
+    buildUniqueResearchReportTarget,
+    normalizeResearchReportTitle,
+    formatResearchReportDate,
+    formatYamlScalar,
+  } = reportFileModule
 
-  console.log('✅ 测试 4：Event Bus、报告沉淀与知识库热重载成功通过。')
+  assert.equal(formatResearchReportDate(new Date('2026-06-07T12:00:00Z')), '20260607', '日期格式应为 YYYYMMDD')
+  assert.equal(normalizeResearchReportTitle('直接开始研究 AI Agent: 记忆/图谱?', ''), 'AI Agent_ 记忆_图谱', '文件名标题应清理控制词和非法字符')
+  assert.equal(formatYamlScalar('AI "Research"'), '"AI \\"Research\\""', 'YAML 标量应安全转义')
+
+  const target = await buildUniqueResearchReportTarget({
+    query: 'AI Agent',
+    report: '',
+    date: new Date('2026-06-07T12:00:00Z'),
+  })
+  assert.equal(target.fileName, 'AI Agent-20260607-2.md', '同日同题重名时应追加序号')
+  assert.equal(target.sessionFileName, 'AI Agent-20260607-2.research.json', 'Session 文件应与报告文件同名')
+
+  console.log('✅ 测试 5：研究报告文件命名工具成功通过。')
   console.log('\n🎉 所有深度研究重构逻辑的测试均已全部成功通过！')
 
 } catch (error) {

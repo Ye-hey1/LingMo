@@ -1,10 +1,19 @@
 import type { AiHotspotRawItem, AiHotspotSourceKind, AiHotspotSourceStatus } from '../types'
 
+export interface AiHotspotFetcherOptions {
+  /** 上次成功拉取的时间戳，用于增量过滤 */
+  lastFetchAt?: string | null
+  /** 手动刷新时跳过条件请求与增量过滤 */
+  force?: boolean
+  /** 中断信号 */
+  signal?: AbortSignal
+}
+
 export interface AiHotspotFetcher {
   sourceId: string
   sourceName: string
   kind: AiHotspotSourceKind
-  fetch(now: Date): Promise<AiHotspotRawItem[]>
+  fetch(now: Date, options?: AiHotspotFetcherOptions): Promise<AiHotspotRawItem[]>
 }
 
 export abstract class BaseAiHotspotFetcher implements AiHotspotFetcher {
@@ -12,7 +21,7 @@ export abstract class BaseAiHotspotFetcher implements AiHotspotFetcher {
   abstract sourceName: string
   kind: AiHotspotSourceKind = 'default'
 
-  abstract fetch(now: Date): Promise<AiHotspotRawItem[]>
+  abstract fetch(now: Date, options?: AiHotspotFetcherOptions): Promise<AiHotspotRawItem[]>
 
   protected createItem(params: {
     feedName: string
@@ -30,6 +39,24 @@ export abstract class BaseAiHotspotFetcher implements AiHotspotFetcher {
       publishedAt: params.publishedAt,
       meta: params.meta || {},
     }
+  }
+
+  /**
+   * 过滤掉早于 lastFetchAt 的条目，实现增量拉取。
+   * 如果没有 lastFetchAt（首次拉取），返回全部条目。
+   * 保留没有 publishedAt 的条目（无法判断新旧，宁可多留）。
+   */
+  protected filterByLastFetchAt(items: AiHotspotRawItem[], lastFetchAt?: string | null): AiHotspotRawItem[] {
+    if (!lastFetchAt) return items
+
+    const cutoff = Date.parse(lastFetchAt)
+    if (!Number.isFinite(cutoff)) return items
+
+    return items.filter(item => {
+      // 没有发布时间的条目保留，避免遗漏
+      if (!item.publishedAt) return true
+      return item.publishedAt.getTime() >= cutoff
+    })
   }
 }
 
@@ -77,11 +104,15 @@ function failureStatus(fetcher: AiHotspotFetcher, error: unknown, startedAt: num
   }
 }
 
-export async function runAiHotspotFetcher(fetcher: AiHotspotFetcher, now: Date) {
+export async function runAiHotspotFetcher(
+  fetcher: AiHotspotFetcher,
+  now: Date,
+  options?: AiHotspotFetcherOptions,
+) {
   const startedAt = performance.now()
 
   try {
-    const items = await fetcher.fetch(now)
+    const items = await fetcher.fetch(now, options)
     return { items, status: successStatus(fetcher, items.length, startedAt) }
   } catch (error) {
     return { items: [], status: failureStatus(fetcher, error, startedAt) }

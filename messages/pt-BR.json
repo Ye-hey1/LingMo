@@ -3006,6 +3006,7 @@
       "polish": "Polir",
       "concise": "Conciso",
       "expand": "Expandir",
+      "explain": "Explicar",
       "translate": "Traduzir",
       "translateSubtitle": "Traduzir para",
       "quoteToChat": "Citar no Chat",
@@ -3047,6 +3048,26 @@
       },
       "customLanguagePlaceholder": "Idioma personalizado..."
     },
+    "inlineAI": {
+      "generateTitle": "Inspiração com IA",
+      "rewriteTitle": "Reescrever seleção com IA",
+      "generatingTitle": "A IA está gerando",
+      "generateDescription": "Continue a partir do cursor ou gere conteúdo por instrução",
+      "rewriteDescription": "Processe o texto selecionado com sua instrução",
+      "generatePlaceholder": "Ex.: adicionar o próximo parágrafo, listar três pontos...",
+      "rewritePlaceholder": "Ex.: traduzir para inglês, deixar mais persuasivo...",
+      "generate": "Gerar",
+      "generating": "Gerando",
+      "close": "Fechar painel de IA",
+      "continue": "Continuar escrevendo",
+      "continueDesc": "Ler o contexto e escrever a próxima parte",
+      "polish": "Polir",
+      "polishDesc": "Manter o sentido e melhorar a redação",
+      "concise": "Resumir",
+      "conciseDesc": "Remover redundâncias e manter o ponto principal",
+      "expand": "Expandir",
+      "expandDesc": "Adicionar detalhes e enriquecer o conteúdo"
+    },
     "emptyLineMenu": {
       "open": "Inserir ou converter bloco",
       "basic": "Básico",
@@ -3074,7 +3095,14 @@
       "accept": "Aceitar",
       "reject": "Rejeitar",
       "generating": "Gerando...",
-      "abort": "Abortar"
+      "abort": "Abortar",
+      "explainTitle": "Explicação da IA",
+      "explaining": "Explicando...",
+      "selectedText": "Texto selecionado",
+      "explainHint": "Apenas para leitura, não será inserido na nota",
+      "copy": "Copiar",
+      "copied": "Copiado",
+      "close": "Fechar"
     },
     "image": {
       "insert": "Inserir imagem",
@@ -3133,8 +3161,8 @@
         "chart": "Gráfico"
       },
       "items": {
-        "continue": "Continuar",
-        "continueDesc": "IA continua escrevendo o conteúdo",
+        "continue": "Continuar com IA",
+        "continueDesc": "Gerar a partir do cursor atual",
         "heading1": "Título 1",
         "heading1Desc": "Título grande",
         "heading2": "Título 2",
@@ -3153,6 +3181,8 @@
         "tableDesc": "Inserir uma tabela",
         "blockquote": "Citação",
         "blockquoteDesc": "Capturar conteúdo citado",
+        "callout": "Destaque",
+        "calloutDesc": "Inserir um bloco de nota colorido",
         "codeBlock": "Bloco de Código",
         "codeBlockDesc": "Capturar trechos de código",
         "divider": "Divisor",

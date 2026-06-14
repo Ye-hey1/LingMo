@@ -2,7 +2,6 @@
 
 import { Editor } from '@tiptap/react'
 import { useEffect, useState } from 'react'
-import { Type } from 'lucide-react'
 
 interface WordCountProps {
   editor: Editor

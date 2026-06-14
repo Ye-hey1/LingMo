@@ -98,7 +98,10 @@ export function buildToolExecutionPrompt(userInput: string): string {
       '- The user is asking about recent, current, latest, or trending information.',
       '- Your training data may be outdated. You MUST use web_search to get up-to-date results BEFORE answering.',
       '- Do NOT guess or fabricate recent information from training data alone.',
-      '- Call web_search with a specific, relevant query, then synthesize the results into your answer.',
+      '- Call web_search with a specific, relevant query and a date window such as days=7/30/365 or startDate/endDate, then synthesize the results into your answer.',
+      '- Use only dated in-window results for strict latest/recent/current claims. If results are old or undated, say that recent dated evidence was not found.',
+      '- For every cited source, include a clickable Markdown link using the URL from web_search, for example [Source Title](https://example.com).',
+      '- Write the summary like a human briefing: direct, concrete, useful, and light on formal academic language.',
     )
   }
 

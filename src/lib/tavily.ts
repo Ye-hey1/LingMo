@@ -6,6 +6,8 @@ import useSettingStore from '@/stores/setting'
 export type TavilySearchDepth = 'basic' | 'advanced'
 export type TavilyExtractFormat = 'markdown' | 'text'
 export type WebSearchProvider = 'tavily' | 'duckduckgo'
+export type TavilySearchTopic = 'general' | 'news'
+export type TavilySearchTimeRange = 'day' | 'week' | 'month' | 'year' | 'd' | 'w' | 'm' | 'y'
 
 export interface TavilySearchResult {
   title: string
@@ -84,6 +86,11 @@ export interface TavilySearchOptions {
   query: string
   maxResults?: number
   searchDepth?: TavilySearchDepth
+  topic?: TavilySearchTopic
+  days?: number
+  timeRange?: TavilySearchTimeRange
+  startDate?: string
+  endDate?: string
   includeAnswer?: boolean
   includeDomains?: string[]
   excludeDomains?: string[]
@@ -147,6 +154,39 @@ function normalizeFallbackSearchQuery(query: string): string {
 
 function normalizeSearchDepth(value: unknown): TavilySearchDepth {
   return value === 'advanced' ? 'advanced' : 'basic'
+}
+
+function normalizeSearchTopic(value: unknown): TavilySearchTopic | undefined {
+  return value === 'news' || value === 'general' ? value : undefined
+}
+
+function normalizeSearchTimeRange(value: unknown): TavilySearchTimeRange | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const normalized = value.trim().toLowerCase()
+  return normalized === 'day' || normalized === 'week' || normalized === 'month' || normalized === 'year' ||
+    normalized === 'd' || normalized === 'w' || normalized === 'm' || normalized === 'y'
+    ? normalized
+    : undefined
+}
+
+function normalizeDateString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return undefined
+  }
+
+  const timestamp = Date.parse(trimmed)
+  if (!Number.isFinite(timestamp)) {
+    return undefined
+  }
+
+  return new Date(timestamp).toISOString().slice(0, 10)
 }
 
 function normalizeExtractFormat(value: unknown): TavilyExtractFormat {
@@ -602,6 +642,10 @@ export async function tavilySearch(options: TavilySearchOptions): Promise<Tavily
 
   const maxResults = clampNumber(options.maxResults, 5, 1, 10)
   const searchDepth = normalizeSearchDepth(options.searchDepth || defaultSearchDepth)
+  const topic = normalizeSearchTopic(options.topic)
+  const timeRange = normalizeSearchTimeRange(options.timeRange)
+  const startDate = normalizeDateString(options.startDate)
+  const endDate = normalizeDateString(options.endDate)
   const includeDomains = normalizeDomainList(options.includeDomains)
   const excludeDomains = normalizeDomainList(options.excludeDomains)
   const body: Record<string, unknown> = {
@@ -612,6 +656,18 @@ export async function tavilySearch(options: TavilySearchOptions): Promise<Tavily
     include_raw_content: false,
   }
 
+  if (topic) {
+    body.topic = topic
+  }
+  if (timeRange && !startDate && !endDate) {
+    body.time_range = timeRange
+  }
+  if (startDate) {
+    body.start_date = startDate
+  }
+  if (endDate) {
+    body.end_date = endDate
+  }
   if (includeDomains) {
     body.include_domains = includeDomains
   }

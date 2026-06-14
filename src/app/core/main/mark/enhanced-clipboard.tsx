@@ -25,12 +25,17 @@ import {
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { BaseDirectory, exists, mkdir, remove, writeFile } from '@tauri-apps/plugin-fs'
-import { hasImage, hasText, readImageBase64, readText, writeImageBase64 } from 'tauri-plugin-clipboard-api'
+import { hasImage, hasText, readImageBase64, readText } from 'tauri-plugin-clipboard-api'
 import { v4 as uuid } from 'uuid'
 
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/hooks/use-toast'
@@ -45,7 +50,6 @@ import useMarkStore from '@/stores/mark'
 import useSettingStore from '@/stores/setting'
 import useTagStore from '@/stores/tag'
 
-import { ClipboardDropzone } from './clipboard-dropzone'
 import { RecognitionHistory } from './recognition-history'
 import { RecognitionSettings } from './recognition-settings'
 
@@ -56,6 +60,7 @@ interface EnhancedClipboardProps {
 type SourceKind = 'empty' | 'text' | 'image'
 type SourceOrigin = 'empty' | 'clipboard-text' | 'clipboard-image' | 'drop-text' | 'drop-image' | 'manual'
 type ProcessingAction = 'clipboard' | 'recognize' | 'organize' | 'tag' | 'title' | 'translate' | 'import' | 'copy' | null
+type WorkbenchActionId = 'recognize' | 'organize' | 'summarize' | 'extract' | 'tag' | 'title' | 'translate' | 'import'
 type WorkbenchStatus =
   | 'idle'
   | 'ready'
@@ -160,6 +165,24 @@ const LANGUAGE_OPTIONS = [
   'Español',
   'Русский',
 ]
+
+const WORKBENCH_ACTIONS: Array<{
+  id: WorkbenchActionId
+  step?: WorkflowStepId
+  icon: typeof ImageIcon
+  labelKey: string
+}> = [
+  { id: 'recognize', step: 'recognize', icon: ImageIcon, labelKey: 'recognize' },
+  { id: 'organize', step: 'organize', icon: Wand2, labelKey: 'organize' },
+  { id: 'summarize', step: 'organize', icon: FileText, labelKey: 'summarize' },
+  { id: 'extract', step: 'organize', icon: ClipboardCheck, labelKey: 'extract' },
+  { id: 'tag', step: 'tag', icon: Tag, labelKey: 'tag' },
+  { id: 'title', step: 'title', icon: Sparkles, labelKey: 'title' },
+  { id: 'translate', icon: Languages, labelKey: 'translate' },
+  { id: 'import', step: 'import', icon: ArrowDownToLine, labelKey: 'import' },
+]
+
+type WorkbenchAction = (typeof WORKBENCH_ACTIONS)[number]
 
 function compactText(value: string) {
   return value.replace(/\r/g, '\n').replace(/[ \t]+/g, ' ').trim()
@@ -394,7 +417,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
   const [draftContent, setDraftContent] = useState('')
   const [draftImage, setDraftImage] = useState<DraftImage | null>(null)
   const [draftTags, setDraftTags] = useState<string[]>([])
-  const [targetLanguage, setTargetLanguage] = useState('English')
+  const [targetLanguage, setTargetLanguage] = useState('中文')
   const [processingAction, setProcessingAction] = useState<ProcessingAction>(null)
   const [status, setStatus] = useState<WorkbenchStatus>('idle')
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStepStateMap>(() => createWorkflowStepStates())
@@ -502,28 +525,6 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
     toast({ title: t('record.mark.enhancedClipboard.messages.undoSuccess', { action: latest.label }) })
   }, [restoreWorkbenchSnapshot, t, undoStack])
 
-  const statusText = useMemo(() => {
-    if (status === 'translated') {
-      return t('record.mark.enhancedClipboard.status.translated', { language: targetLanguage })
-    }
-    if (status === 'noClipboard') {
-      return t('record.mark.enhancedClipboard.messages.noClipboard')
-    }
-    if (status === 'readFail') {
-      return t('record.mark.enhancedClipboard.messages.readFail')
-    }
-    if (status === 'processFail') {
-      return t('record.mark.enhancedClipboard.messages.processFail')
-    }
-    if (status === 'importFail') {
-      return t('record.mark.enhancedClipboard.messages.importFail')
-    }
-    if (status === 'historyRestored') {
-      return t('record.mark.enhancedClipboard.messages.historyRestored')
-    }
-    return t(`record.mark.enhancedClipboard.status.${status}`)
-  }, [status, targetLanguage, t])
-
   const saveHistorySnapshot = useCallback((next?: {
     type?: 'image' | 'text'
     sourceOrigin?: SourceOrigin
@@ -574,12 +575,12 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
     setSourceText(normalized)
     setDraftImage(null)
     setDraftContent(normalized)
-    setDraftTitle(inferTitle(normalized, t('record.mark.enhancedClipboard.draft.untitled')))
+    setDraftTitle('')
     setDraftTags([])
     setLastError(null)
     setWorkflowStep('read', 'done')
     setStatus('ready')
-  }, [setWorkflowStep, t])
+  }, [setWorkflowStep])
 
   const organizeDraftText = useCallback(async (text: string, title: string, originLabel: string) => {
     const prompt = [
@@ -594,6 +595,51 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
       `来源：${originLabel}`,
       '',
       text,
+    ].join('\n')
+
+    const result = await fetchAi(prompt)
+    const normalized = result.trim()
+    if (!normalized) {
+      throw new Error(t('record.mark.enhancedClipboard.messages.emptyAiResult'))
+    }
+    return normalized
+  }, [t])
+
+  const summarizeDraftText = useCallback(async (text: string, title: string) => {
+    const prompt = [
+      '请为下面这段内容生成一份简洁的知识摘要。',
+      '要求：',
+      '1. 用 3-5 句话概括核心信息和主要结论。',
+      '2. 保留关键数据、专有名词和重要细节。',
+      '3. 如果有不同观点或争议，简要指出。',
+      '4. 只输出摘要正文，不要标题、不要解释处理过程。',
+      '',
+      `原标题：${title || '未命名'}`,
+      '',
+      text.slice(0, 12000),
+    ].join('\n')
+
+    const result = await fetchAi(prompt)
+    const normalized = result.trim()
+    if (!normalized) {
+      throw new Error(t('record.mark.enhancedClipboard.messages.emptyAiResult'))
+    }
+    return normalized
+  }, [t])
+
+  const extractKeyPoints = useCallback(async (text: string, title: string) => {
+    const prompt = [
+      '请从下面这段内容中提取关键知识点和要点。',
+      '要求：',
+      '1. 用清晰的编号列表格式输出，每个要点一行。',
+      '2. 每个要点应包含一个具体的事实、数据、概念或结论。',
+      '3. 对重要概念用 **加粗** 标记。',
+      '4. 如果内容包含步骤/流程/方法，保留顺序。',
+      '5. 只输出要点列表，不要前言、总结或解释。',
+      '',
+      `原标题：${title || '未命名'}`,
+      '',
+      text.slice(0, 12000),
     ].join('\n')
 
     const result = await fetchAi(prompt)
@@ -722,7 +768,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
         base64: primaryImageMethod === 'vlm' ? image.dataUrl : undefined,
         method: primaryImageMethod,
         sourceLabel: t('record.mark.enhancedClipboard.source.image'),
-        modelKey: 'knowledgeRelayVisionModel',
+        modelKey: 'imageMethodModel',
       })
       const nextContent = recognition.content.trim()
       const nextTitle = recognition.desc || inferTitle(nextContent, image.fileName)
@@ -811,7 +857,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
     setSourceText('')
     setDraftImage(image)
     setDraftContent('')
-    setDraftTitle(inferTitle(image.fileName, t('record.mark.enhancedClipboard.source.image')))
+    setDraftTitle('')
     setDraftTags([])
     setLastError(null)
     setWorkflowStep('read', 'done')
@@ -919,29 +965,10 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
       setDraftTitle(nextTitle)
       setWorkflowStep('organize', 'done')
       setStatus('organized')
-      saveHistorySnapshot({
-        type: draftImage ? 'image' : 'text',
-        sourceOrigin,
-        sourceLabel,
-        desc: nextTitle,
-        content: result,
-        thumbnail: draftImage?.dataUrl,
-      })
 
       const preferences = readRecognitionPreferences()
       if (preferences.autoTagAfterOrganize) {
-        const tags = await runTagWorkflow(result, nextTitle)
-        if (tags.length > 0) {
-          saveHistorySnapshot({
-            type: draftImage ? 'image' : 'text',
-            sourceOrigin,
-            sourceLabel,
-            desc: nextTitle,
-            content: result,
-            thumbnail: draftImage?.dataUrl,
-            tags,
-          })
-        }
+        await runTagWorkflow(result, nextTitle)
       }
     } catch (error) {
       const message = getErrorMessage(error) || t('record.mark.enhancedClipboard.messages.processFail')
@@ -968,6 +995,100 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
     t,
   ])
 
+  const handleSummarize = useCallback(async () => {
+    const text = (draftContent || sourceText).trim()
+    if (!text) {
+      toast({ title: t('record.mark.enhancedClipboard.messages.organizeEmpty') })
+      return
+    }
+
+    pushUndoSnapshot('organize', t('record.mark.enhancedClipboard.workflow.undo.organize'))
+    setProcessingAction('organize')
+    setStatus('organizing')
+    setWorkflowStep('organize', 'running')
+    setLastError(null)
+
+    try {
+      const summary = await summarizeDraftText(text, draftTitle)
+      // 保留原文 + 追加摘要
+      const contentWithSummary = [
+        text,
+        '',
+        '---',
+        `**📌 知识摘要**`,
+        '',
+        summary,
+      ].join('\n')
+      setDraftContent(contentWithSummary)
+      setWorkflowStep('organize', 'done')
+      setStatus('organized')
+    } catch (error) {
+      const message = getErrorMessage(error) || t('record.mark.enhancedClipboard.messages.processFail')
+      console.error('Failed to summarize draft:', error)
+      setStepError('organize', message)
+      setStatus('processFail')
+      toast({ title: message })
+    } finally {
+      setProcessingAction((current) => current === 'organize' ? null : current)
+    }
+  }, [
+    draftContent,
+    draftTitle,
+    pushUndoSnapshot,
+    setStepError,
+    setWorkflowStep,
+    sourceText,
+    summarizeDraftText,
+    t,
+  ])
+
+  const handleExtract = useCallback(async () => {
+    const text = (draftContent || sourceText).trim()
+    if (!text) {
+      toast({ title: t('record.mark.enhancedClipboard.messages.organizeEmpty') })
+      return
+    }
+
+    pushUndoSnapshot('organize', t('record.mark.enhancedClipboard.workflow.undo.organize'))
+    setProcessingAction('organize')
+    setStatus('organizing')
+    setWorkflowStep('organize', 'running')
+    setLastError(null)
+
+    try {
+      const points = await extractKeyPoints(text, draftTitle)
+      // 保留原文 + 追加要点
+      const contentWithPoints = [
+        text,
+        '',
+        '---',
+        `**📋 关键要点**`,
+        '',
+        points,
+      ].join('\n')
+      setDraftContent(contentWithPoints)
+      setWorkflowStep('organize', 'done')
+      setStatus('organized')
+    } catch (error) {
+      const message = getErrorMessage(error) || t('record.mark.enhancedClipboard.messages.processFail')
+      console.error('Failed to extract key points:', error)
+      setStepError('organize', message)
+      setStatus('processFail')
+      toast({ title: message })
+    } finally {
+      setProcessingAction((current) => current === 'organize' ? null : current)
+    }
+  }, [
+    draftContent,
+    draftTitle,
+    extractKeyPoints,
+    pushUndoSnapshot,
+    setStepError,
+    setWorkflowStep,
+    sourceText,
+    t,
+  ])
+
   const handleGenerateTags = useCallback(async () => {
     const text = draftContent.trim()
     if (!text) {
@@ -975,19 +1096,8 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
       return
     }
 
-    const tags = await runTagWorkflow(text, draftTitle)
-    if (tags.length > 0) {
-      saveHistorySnapshot({
-        type: draftImage ? 'image' : 'text',
-        sourceOrigin,
-        sourceLabel,
-        desc: draftTitle || inferTitle(text, t('record.mark.enhancedClipboard.draft.untitled')),
-        content: text,
-        thumbnail: draftImage?.dataUrl,
-        tags,
-      })
-    }
-  }, [draftContent, draftImage, draftTitle, runTagWorkflow, saveHistorySnapshot, sourceLabel, sourceOrigin, t])
+    await runTagWorkflow(text, draftTitle)
+  }, [draftContent, draftImage, draftTitle, runTagWorkflow, t])
 
   const handleGenerateTitle = useCallback(async () => {
     const text = draftContent.trim()
@@ -996,19 +1106,37 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
       return
     }
 
-    const title = await runTitleWorkflow(text, draftTitle)
-    if (title.trim()) {
-      saveHistorySnapshot({
-        type: draftImage ? 'image' : 'text',
-        sourceOrigin,
-        sourceLabel,
-        desc: title,
-        content: text,
-        thumbnail: draftImage?.dataUrl,
-        tags: draftTags,
+    await runTitleWorkflow(text, draftTitle)
+  }, [draftContent, draftTitle, runTitleWorkflow, t])
+
+  /**
+   * 将原文和译文组合为交替段落对照格式。
+   * 每个段落：原文 → 引用块译文，方便阅读时对照。
+   */
+  function buildBilingualContent(original: string, translated: string, language: string): string {
+    const languageLabel = `(${language})`
+    const originalParagraphs = original.split(/\n{2,}/).filter(Boolean)
+    const translatedParagraphs = translated.split(/\n{2,}/).filter(Boolean)
+
+    // 如果段落数量一致，逐段对照；否则整块对照
+    if (originalParagraphs.length === translatedParagraphs.length && originalParagraphs.length > 1) {
+      const pairs = originalParagraphs.map((orig, i) => {
+        const trans = translatedParagraphs[i] || ''
+        return `${orig.trim()}\n\n> ${trans.trim()} ${languageLabel}`
       })
+      return pairs.join('\n\n')
     }
-  }, [draftContent, draftImage, draftTags, draftTitle, runTitleWorkflow, saveHistorySnapshot, sourceLabel, sourceOrigin, t])
+
+    // 整块对照：原文 + 分隔线 + 译文
+    return [
+      original.trim(),
+      '',
+      '---',
+      `**${languageLabel}**`,
+      '',
+      translated.trim(),
+    ].join('\n')
+  }
 
   const handleTranslate = useCallback(async () => {
     const text = draftContent.trim()
@@ -1025,18 +1153,11 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
     try {
       const translated = await fetchAiTranslate(text, targetLanguage)
       if (translated.trim()) {
-        setDraftContent(translated.trim())
+        // 生成原文+译文交替段落的对照格式
+        const bilingualContent = buildBilingualContent(text, translated.trim(), targetLanguage)
+        setDraftContent(bilingualContent)
         setDraftTitle(inferTitle(translated, draftTitle || targetLanguage))
         setStatus('translated')
-        saveHistorySnapshot({
-          type: draftImage ? 'image' : 'text',
-          sourceOrigin,
-          sourceLabel,
-          desc: inferTitle(translated, draftTitle || targetLanguage),
-          content: translated.trim(),
-          thumbnail: draftImage?.dataUrl,
-          tags: draftTags,
-        })
       }
     } catch (error) {
       const message = getErrorMessage(error) || t('record.mark.enhancedClipboard.messages.processFail')
@@ -1080,24 +1201,6 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
     }
   }, [draftContent, setStepError, t])
 
-  const handleCopyImage = useCallback(async () => {
-    if (!draftImage) return
-
-    setProcessingAction('copy')
-    try {
-      await writeImageBase64(draftImage.base64)
-      setStatus('copied')
-      toast({ title: t('record.mark.enhancedClipboard.messages.copySuccess') })
-    } catch (error) {
-      const message = getErrorMessage(error) || t('record.mark.enhancedClipboard.messages.copyFail')
-      console.error('Failed to copy image:', error)
-      setStepError('copy', message)
-      toast({ title: message })
-    } finally {
-      setProcessingAction((current) => current === 'copy' ? null : current)
-    }
-  }, [draftImage, setStepError, t])
-
   const handleDraftContentChange = useCallback((value: string) => {
     setDraftContent(value)
     if (sourceKind === 'empty') {
@@ -1106,7 +1209,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
       setSourceText(value)
     }
     if (!draftTitle.trim() && value.trim()) {
-      setDraftTitle(inferTitle(value, t('record.mark.enhancedClipboard.draft.untitled')))
+      // Don't auto-fill title from content — let AI workflows generate it
     }
     if (status === 'idle') {
       setStatus('ready')
@@ -1300,6 +1403,59 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
 
   const latestUndo = undoStack[0]
 
+  const getActionDisabled = useCallback((action: WorkbenchActionId) => {
+    if (isBusy) return true
+    if (action === 'recognize') return !draftImage || !enableImageRecognition
+    if (action === 'organize') return !canProcessText
+    if (action === 'tag') return !draftContent.trim()
+    if (action === 'summarize') return !canProcessText
+    if (action === 'extract') return !canProcessText
+    if (action === 'title') return !draftContent.trim()
+    if (action === 'translate') return !draftContent.trim()
+    return !hasDraft
+  }, [canProcessText, draftContent, draftImage, enableImageRecognition, hasDraft, isBusy])
+
+  const runWorkbenchAction = useCallback((action: WorkbenchActionId) => {
+    if (action === 'recognize') return recognizeImage()
+    if (action === 'organize') return handleOrganize()
+    if (action === 'summarize') return handleSummarize()
+    if (action === 'extract') return handleExtract()
+    if (action === 'tag') return handleGenerateTags()
+    if (action === 'title') return handleGenerateTitle()
+    if (action === 'translate') return handleTranslate()
+    return handleImportRecord()
+  }, [
+    handleExtract,
+    handleGenerateTags,
+    handleGenerateTitle,
+    handleImportRecord,
+    handleOrganize,
+    handleSummarize,
+    handleTranslate,
+    recognizeImage,
+  ])
+
+  const recommendedActionId = useMemo<WorkbenchActionId>(() => {
+    if (draftImage && workflowSteps.recognize.status !== 'done' && enableImageRecognition) return 'recognize'
+    if (canProcessText && workflowSteps.organize.status !== 'done') return 'organize'
+    if (draftContent.trim() && draftTags.length === 0) return 'tag'
+    if (draftContent.trim() && !draftTitle.trim()) return 'title'
+    return 'import'
+  }, [
+    canProcessText,
+    draftContent,
+    draftImage,
+    draftTags.length,
+    draftTitle,
+    enableImageRecognition,
+    workflowSteps.organize.status,
+    workflowSteps.recognize.status,
+  ])
+
+  const processingActions = WORKBENCH_ACTIONS.filter((item) => item.id !== 'import' && item.id !== 'recognize')
+  const importAction = WORKBENCH_ACTIONS.find((item) => item.id === 'import') ?? WORKBENCH_ACTIONS[0]!
+  const activeWorkflowSteps = WORKFLOW_STEPS.filter((step) => workflowSteps[step].status !== 'idle')
+
   const renderStepIcon = (stepStatus: WorkflowStepStatus) => {
     if (stepStatus === 'running') return <Loader2 className="size-3.5 animate-spin text-primary" />
     if (stepStatus === 'done') return <CheckCircle2 className="size-3.5 text-emerald-500" />
@@ -1307,41 +1463,70 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
     return <Circle className="size-3.5 text-muted-foreground/45" />
   }
 
-  return (
-    <div className={cn('space-y-3', className)}>
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <ClipboardCheck className="size-4 text-primary" />
-              <h3 className="truncate text-sm font-semibold">
-                {t('record.mark.enhancedClipboard.title')}
-              </h3>
-            </div>
-            <p className="mt-1 truncate text-xs text-muted-foreground">
-              {statusText}
-            </p>
-          </div>
-          <TabsList className="grid h-7 w-full grid-cols-3 bg-muted/40 sm:w-[260px]">
-            <TabsTrigger value="workbench" className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-none">
-              <Wand2 className="mr-1.5 size-3.5" />
-              {t('record.mark.enhancedClipboard.tabs.clipboard')}
-            </TabsTrigger>
-            <TabsTrigger value="history" className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-none">
-              <History className="mr-1.5 size-3.5" />
-              {t('record.mark.enhancedClipboard.tabs.history')}
-            </TabsTrigger>
-            <TabsTrigger value="settings" className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-none">
-              <Settings className="mr-1.5 size-3.5" />
-              {t('record.mark.enhancedClipboard.tabs.settings')}
-            </TabsTrigger>
-          </TabsList>
-        </div>
+  const renderActionButton = (action: WorkbenchAction, primary = false) => {
+    const Icon = action.icon
+    const isProcessing = processingAction === action.id
+    const isRecommended = recommendedActionId === action.id
 
-        <TabsContent value="workbench" className="mt-2 space-y-2">
-          {/* Row 1: Paste button + drop zone */}
+    return (
+      <button
+        key={action.id}
+        type="button"
+        className={cn(
+          'inline-flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40',
+          primary
+            ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
+            : 'border-border/60 bg-background text-foreground hover:bg-muted',
+          isRecommended && !primary && 'border-primary/40 bg-primary/5 text-primary',
+        )}
+        onClick={() => {
+          void runWorkbenchAction(action.id)
+        }}
+        disabled={getActionDisabled(action.id)}
+        aria-current={isRecommended ? 'step' : undefined}
+      >
+        {isProcessing ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Icon className="size-3.5" />
+        )}
+        <span className="truncate">
+          {t(`record.mark.enhancedClipboard.actions.${action.labelKey}`)}
+        </span>
+      </button>
+    )
+  }
+
+  return (
+    <div className={cn('space-y-2', className)}>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+      {/* Header: title + tabs */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <ClipboardCheck className="size-4 text-primary" />
+          <h3 className="truncate text-sm font-semibold">
+            {t('record.mark.enhancedClipboard.title')}
+          </h3>
+        </div>
+        <TabsList className="grid h-7 grid-cols-3 bg-muted/40 shrink-0">
+          <TabsTrigger value="workbench" className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-none">
+            <Wand2 className="mr-1 size-3" />
+            {t('record.mark.enhancedClipboard.tabs.clipboard')}
+          </TabsTrigger>
+          <TabsTrigger value="history" className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-none">
+            <History className="mr-1 size-3" />
+            {t('record.mark.enhancedClipboard.tabs.history')}
+          </TabsTrigger>
+          <TabsTrigger value="settings" className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-none">
+            <Settings className="mr-1 size-3" />
+            {t('record.mark.enhancedClipboard.tabs.settings')}
+          </TabsTrigger>
+        </TabsList>
+      </div>
+        {/* ========== Workbench Tab — Left/Right Layout ========== */}
+        <TabsContent value="workbench" className="mt-0">
           <div
-            className="flex items-center gap-2 rounded-md bg-muted/30 px-2.5 py-1.5"
+            className="grid h-[320px] gap-2 rounded-lg border border-border/50 bg-muted/10 p-2 sm:grid-cols-[200px_minmax(0,1fr)]"
             onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
             onDrop={(e) => {
               e.preventDefault(); e.stopPropagation()
@@ -1352,169 +1537,159 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
               else if (text) handleTextDrop(text)
             }}
           >
-            <button
-              type="button"
-              className="inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-40"
-              onClick={handleReadClipboard}
-              disabled={isBusy}
-            >
-              {processingAction === 'clipboard' ? (
-                <Loader2 className="size-3 animate-spin" />
+            {/* ---- Left Panel: Source & Controls ---- */}
+            <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
+              {/* Read clipboard */}
+              <button
+                type="button"
+                className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-background border border-border/60 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
+                onClick={handleReadClipboard}
+                disabled={isBusy}
+              >
+                {processingAction === 'clipboard' ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <ClipboardPaste className="size-3.5" />
+                )}
+                {t('record.mark.enhancedClipboard.source.clipboard')}
+              </button>
+
+              {/* Source info */}
+              <div className="flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
+                <ClipboardCheck className="size-3 shrink-0 text-muted-foreground/70" />
+                <span className="truncate">{sourceLabel}</span>
+              </div>
+
+              {/* Image preview / Drag hint */}
+              {draftImage ? (
+                <div className="flex items-center gap-2 rounded-md border border-border/40 bg-muted/20 px-2 py-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={draftImage.dataUrl} alt="" className="h-8 w-8 shrink-0 rounded object-cover" />
+                  <div className="min-w-0 flex-1 text-[10px] text-muted-foreground">
+                    <span className="block truncate">{draftImage.fileName}</span>
+                    <span>{draftImage.sizeLabel}</span>
+                  </div>
+                </div>
               ) : (
-                <ClipboardPaste className="size-3" />
+                <div className="rounded-md border border-dashed border-border/50 bg-muted/10 px-2 py-3 text-center text-[11px] text-muted-foreground/60">
+                  {t('record.mark.enhancedClipboard.source.dragHint')}
+                </div>
               )}
-              {t('record.mark.enhancedClipboard.source.clipboard')}
-            </button>
-            <span className="text-[11px] text-muted-foreground/60">
-              {t('record.mark.enhancedClipboard.source.dragHint')}
-            </span>
-          </div>
 
-          {/* Row 2: AI action buttons */}
-          <div className="flex items-center gap-0.5">
-            <button
-              type="button"
-              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-              onClick={() => recognizeImage()}
-              disabled={isBusy || !draftImage || !enableImageRecognition}
-            >
-              {processingAction === 'recognize' ? <Loader2 className="size-3 animate-spin" /> : <ImageIcon className="size-3" />}
-              {t('record.mark.enhancedClipboard.actions.recognize')}
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-              onClick={handleOrganize}
-              disabled={isBusy || !canProcessText}
-            >
-              {processingAction === 'organize' ? <Loader2 className="size-3 animate-spin" /> : <Wand2 className="size-3" />}
-              {t('record.mark.enhancedClipboard.actions.organize')}
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-              onClick={handleGenerateTags}
-              disabled={isBusy || !draftContent.trim()}
-            >
-              {processingAction === 'tag' ? <Loader2 className="size-3 animate-spin" /> : <Tag className="size-3" />}
-              {t('record.mark.enhancedClipboard.actions.tag')}
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-              onClick={handleGenerateTitle}
-              disabled={isBusy || !draftContent.trim()}
-            >
-              {processingAction === 'title' ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
-              {t('record.mark.enhancedClipboard.actions.title')}
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-              onClick={handleTranslate}
-              disabled={isBusy || !draftContent.trim()}
-            >
-              {processingAction === 'translate' ? <Loader2 className="size-3 animate-spin" /> : <Languages className="size-3" />}
-              {t('record.mark.enhancedClipboard.actions.translate')}
-            </button>
-            <Select value={targetLanguage} onValueChange={setTargetLanguage}>
-              <SelectTrigger className="h-6 w-[72px] shrink-0 border-0 bg-muted/30 px-1.5 text-[11px] shadow-none ring-0 shadow ring-offset-0 focus:ring-0 focus:shadow-none [&>svg]:size-3">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="border-0 shadow-sm rounded">
-                {LANGUAGE_OPTIONS.map((language) => (
-                  <SelectItem key={language} value={language} className="text-xs py-1">{language}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Image preview */}
-          {draftImage && (
-            <div className="flex items-center gap-2 rounded-md border border-border/40 bg-muted/20 px-2.5 py-1.5">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={draftImage.dataUrl} alt="" className="size-8 rounded object-cover" />
-              <span className="truncate text-[11px] text-muted-foreground">{draftImage.fileName}</span>
-              <span className="shrink-0 text-[11px] text-muted-foreground">{draftImage.sizeLabel}</span>
-            </div>
-          )}
-
-          {/* Tags */}
-          {draftTags.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {draftTags.map((item) => (
-                <span key={item} className="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-1.5 py-px text-[11px] text-primary">#{item}</span>
-              ))}
-            </div>
-          )}
-
-          {/* Title + Content */}
-          <Input
-            value={draftTitle}
-            onChange={(event) => setDraftTitle(event.target.value)}
-            placeholder={t('record.mark.enhancedClipboard.draft.titlePlaceholder')}
-            className="h-7 text-sm"
-          />
-          <Textarea
-            value={draftContent}
-            onChange={(event) => handleDraftContentChange(event.target.value)}
-            placeholder={t('record.mark.enhancedClipboard.draft.contentPlaceholder')}
-            className="min-h-[160px] resize-none border-border/40 text-sm leading-relaxed"
-          />
-
-          {/* Bottom bar */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-muted-foreground">
-                {t('record.mark.enhancedClipboard.draft.characters', { count: draftCharacterCount })}
-              </span>
-              {latestUndo && (
-                <button
-                  type="button"
-                  onClick={handleUndo}
-                  disabled={isBusy}
-                  title={latestUndo.label}
-                  className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Undo2 className="size-3" />
-                  {latestUndo.label}
-                </button>
+              {/* Tags */}
+              {draftTags.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {draftTags.map((item) => (
+                    <span key={item} className="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-1.5 py-px text-[11px] text-primary">#{item}</span>
+                  ))}
+                </div>
               )}
+
+              {/* Workflow steps */}
+              {activeWorkflowSteps.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border/40 bg-muted/10 px-2 py-1">
+                  {activeWorkflowSteps.map((step) => {
+                    const stepState = workflowSteps[step]
+                    return (
+                      <div key={step} className="inline-flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
+                        {renderStepIcon(stepState.status)}
+                        <span className="truncate">{t(`record.mark.enhancedClipboard.workflow.steps.${step}`)}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Action buttons (bottom of left panel) */}
+              <div className="flex flex-col gap-1 pt-2">
+                <div className="grid grid-cols-2 gap-1">
+                  {processingActions.map((action) => renderActionButton(action))}
+                </div>
+                <div className="flex items-center gap-1">
+                  <Select value={targetLanguage} onValueChange={setTargetLanguage} disabled={isBusy}>
+                    <SelectTrigger
+                      className="h-7 flex-1 rounded-md border-border/60 bg-background px-1.5 text-[11px] shadow-none"
+                      aria-label={t('record.mark.enhancedClipboard.actions.translateTo')}
+                    >
+                      <Languages className="size-3 shrink-0 text-muted-foreground" />
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LANGUAGE_OPTIONS.map((language) => (
+                        <SelectItem key={language} value={language} className="text-xs">
+                          {language}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {renderActionButton(importAction, true)}
+              </div>
             </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                className="inline-flex h-6 w-6 items-center justify-center rounded text-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-                onClick={handleCopyDraftText}
-                disabled={isBusy || !draftContent.trim()}
-                title={t('record.mark.enhancedClipboard.actions.copyText')}
-              >
-                <Copy className="size-3" />
-              </button>
-              <button
-                type="button"
-                className="inline-flex h-6 w-6 items-center justify-center rounded text-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-                onClick={handleClear}
-                disabled={isBusy || !hasDraft}
-                title={t('record.mark.enhancedClipboard.source.clear')}
-              >
-                <Trash2 className="size-3" />
-              </button>
-              <button
-                type="button"
-                className="inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-primary transition-colors hover:bg-primary/10 disabled:opacity-40"
-                onClick={handleImportRecord}
-                disabled={isBusy || !hasDraft}
-              >
-                <ArrowDownToLine className="size-3" />
-                {t('record.mark.enhancedClipboard.actions.import')}
-              </button>
+
+            {/* ---- Right Panel: Editor ---- */}
+            <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
+              {/* Title */}
+              <Input
+                value={draftTitle}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                placeholder={t('record.mark.enhancedClipboard.draft.titlePlaceholder')}
+                className="h-8 text-sm"
+              />
+
+              {/* Content editor */}
+              <Textarea
+                value={draftContent}
+                onChange={(event) => handleDraftContentChange(event.target.value)}
+                placeholder={t('record.mark.enhancedClipboard.draft.contentPlaceholder')}
+                className="flex-1 resize-none border-border/40 text-sm leading-relaxed"
+              />
+
+              {/* Bottom bar */}
+              <div className="flex items-center justify-between">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground">
+                    {t('record.mark.enhancedClipboard.draft.characters', { count: draftCharacterCount })}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {latestUndo && (
+                    <button
+                      type="button"
+                      onClick={handleUndo}
+                      disabled={isBusy}
+                      title={latestUndo.label}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded text-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+                    >
+                      <Undo2 className="size-3.5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded text-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+                    onClick={handleCopyDraftText}
+                    disabled={isBusy || !draftContent.trim()}
+                    title={t('record.mark.enhancedClipboard.actions.copyText')}
+                  >
+                    <Copy className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded text-foreground/60 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+                    onClick={handleClear}
+                    disabled={isBusy || !hasDraft}
+                    title={t('record.mark.enhancedClipboard.source.clear')}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </TabsContent>
 
-        <TabsContent value="history" className="mt-2">
-          <div className="h-[420px] overflow-y-auto">
+        <TabsContent value="history" className="mt-0">
+          <div className="h-[320px] overflow-y-auto rounded-lg border border-border/50 bg-muted/10 p-2">
           <RecognitionHistory
             version={historyVersion}
             onSelect={handleHistorySelect}
@@ -1524,19 +1699,12 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="settings" className="mt-2">
-          <div className="h-[420px] overflow-y-auto">
+        <TabsContent value="settings" className="mt-0">
+          <div className="h-[320px] overflow-y-auto rounded-lg border border-border/50 bg-muted/10 p-2">
           <RecognitionSettings />
           </div>
         </TabsContent>
       </Tabs>
-
-      {isBusy && (
-        <div className="flex items-center gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
-          <Loader2 className="size-3.5 animate-spin" />
-          {t('record.mark.enhancedClipboard.actions.processing')}
-        </div>
-      )}
 
       {lastError && (
         <div className="flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">

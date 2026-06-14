@@ -2,13 +2,11 @@
 
 import { useTranslations } from "next-intl"
 import { Filter, RotateCcw, Search } from "lucide-react"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Toggle } from "@/components/ui/toggle"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import useMarkStore, { type RecordProcessState, type RecordTimePreset } from "@/stores/mark"
 import { cn } from "@/lib/utils"
-import { getMarkTypeChipClasses, MARK_TYPE_OPTIONS } from "./mark-type-meta"
+import { MARK_TYPE_OPTIONS } from "./mark-type-meta"
 import { useState } from "react"
 
 const TIME_OPTIONS: RecordTimePreset[] = ['all', 'today', 'last7Days', 'last30Days']
@@ -44,7 +42,7 @@ export function MarkFilterPopover() {
             value={recordFilters.search}
             onChange={(e) => setRecordSearch(e.target.value)}
             placeholder="搜索记录..."
-            className="h-6 rounded border-0 bg-muted/30 pl-8 pr-2 text-xs shadow-none ring-0 focus-visible:ring-0 focus-visible:border-0"
+            className="h-7 rounded border-0 bg-muted/30 pl-8 pr-2 text-xs shadow-none ring-0 focus-visible:ring-0 focus-visible:border-0"
           />
         </div>
         <TooltipProvider>
@@ -54,7 +52,7 @@ export function MarkFilterPopover() {
                 type="button"
                 onClick={() => setExpanded(!expanded)}
                 className={cn(
-                  "inline-flex size-7 items-center justify-center rounded-md transition-colors",
+                  "inline-flex size-7 items-center justify-center rounded-md transition-colors duration-150",
                   isActive || expanded ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
               >
@@ -68,7 +66,7 @@ export function MarkFilterPopover() {
           <button
             type="button"
             onClick={resetRecordFilters}
-            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
             title="清除筛选"
           >
             <RotateCcw className="size-3" />
@@ -78,7 +76,7 @@ export function MarkFilterPopover() {
 
       {/* Row 2: Inline filter toggles (flat, not floating) */}
       {expanded && (
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1.5">
           {/* Process state */}
           {!trashState && PROCESS_OPTIONS.map((option) => (
             <button
@@ -86,7 +84,7 @@ export function MarkFilterPopover() {
               type="button"
               onClick={() => setRecordProcessState(option.value)}
               className={cn(
-                "h-5 rounded px-1.5 text-[10px] transition-colors",
+                "h-6 rounded px-2 text-[11px] transition-colors duration-150",
                 recordFilters.processState === option.value
                   ? "bg-foreground/10 text-foreground font-medium"
                   : "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
@@ -96,6 +94,9 @@ export function MarkFilterPopover() {
             </button>
           ))}
 
+          {/* Separator between process state and time */}
+          {!trashState && <div className="h-3 w-px bg-border/40" />}
+
           {/* Time */}
           {TIME_OPTIONS.map((preset) => (
             <button
@@ -103,7 +104,7 @@ export function MarkFilterPopover() {
               type="button"
               onClick={() => setRecordTimePreset(preset)}
               className={cn(
-                "h-5 rounded px-1.5 text-[10px] transition-colors",
+                "h-6 rounded px-2 text-[11px] transition-colors duration-150",
                 recordFilters.timePreset === preset
                   ? "bg-foreground/10 text-foreground font-medium"
                   : "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
@@ -113,6 +114,9 @@ export function MarkFilterPopover() {
             </button>
           ))}
 
+          {/* Separator between time and type */}
+          <div className="h-3 w-px bg-border/40" />
+
           {/* Type */}
           {MARK_TYPE_OPTIONS.map((type) => (
             <button
@@ -120,7 +124,7 @@ export function MarkFilterPopover() {
               type="button"
               onClick={() => toggleRecordType(type)}
               className={cn(
-                "h-5 rounded px-1.5 text-[10px] transition-colors",
+                "h-6 rounded px-2 text-[11px] transition-colors duration-150",
                 recordFilters.selectedTypes.includes(type)
                   ? "bg-primary/10 text-primary font-medium"
                   : "text-muted-foreground/70 hover:bg-muted hover:text-foreground",

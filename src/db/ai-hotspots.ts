@@ -1,6 +1,8 @@
 import { getDb, serializedWrite } from './index'
 import type {
   AiHotspotItem,
+  AiHotspotDigestStatus,
+  AiHotspotSuggestedAction,
   AiHotspotSourceKind,
   AiHotspotSourceStatus,
   AiHotspotUserFeed,
@@ -25,6 +27,16 @@ interface AiHotspotItemRow {
   is_favorite: number | null
   is_read: number | null
   saved_note_path: string | null
+  signal_summary: string | null
+  signal_essence: string | null
+  impact_audience_json: string | null
+  suggested_action: AiHotspotSuggestedAction | null
+  related_signal_ids_json: string | null
+  is_ignored: number | null
+  deleted_at: string | null
+  digest_status: AiHotspotDigestStatus | null
+  snapshot_id: string | null
+  meta_json: string | null
 }
 
 interface AiHotspotSourceRow {
@@ -94,8 +106,25 @@ export function parseArray(value: string | null | undefined) {
   }
 }
 
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
 function stringifyJson(value: unknown) {
   return JSON.stringify(value)
+}
+
+async function ensureColumn(tableName: string, columnName: string, definition: string) {
+  const db = await getDb()
+  const columns = await db.select<Array<{ name: string }>>(`pragma table_info(${tableName})`)
+  if (columns.some(column => column.name === columnName)) return
+  await db.execute(`alter table ${tableName} add column ${columnName} ${definition}`)
 }
 
 export function mapItemRow(row: AiHotspotItemRow): AiHotspotItem {
@@ -118,6 +147,16 @@ export function mapItemRow(row: AiHotspotItemRow): AiHotspotItem {
     isFavorite: Boolean(row.is_favorite),
     isRead: Boolean(row.is_read),
     savedNotePath: row.saved_note_path,
+    signalSummary: row.signal_summary,
+    signalEssence: row.signal_essence,
+    impactAudience: parseArray(row.impact_audience_json),
+    suggestedAction: row.suggested_action,
+    relatedSignalIds: parseArray(row.related_signal_ids_json),
+    isIgnored: Boolean(row.is_ignored),
+    deletedAt: row.deleted_at,
+    digestStatus: row.digest_status || 'none',
+    snapshotId: row.snapshot_id,
+    meta: parseJsonObject(row.meta_json),
   }
 }
 
@@ -171,9 +210,30 @@ export async function initAiHotspotsDb() {
         score integer default 0,
         is_favorite integer default 0,
         is_read integer default 0,
-        saved_note_path text
+        saved_note_path text,
+        signal_summary text,
+        signal_essence text,
+        impact_audience_json text,
+        suggested_action text,
+        related_signal_ids_json text,
+        is_ignored integer default 0,
+        deleted_at text,
+        digest_status text default 'none',
+        snapshot_id text,
+        meta_json text
       )
     `)
+
+    await ensureColumn('ai_hotspot_items', 'signal_summary', 'text')
+    await ensureColumn('ai_hotspot_items', 'signal_essence', 'text')
+    await ensureColumn('ai_hotspot_items', 'impact_audience_json', 'text')
+    await ensureColumn('ai_hotspot_items', 'suggested_action', 'text')
+    await ensureColumn('ai_hotspot_items', 'related_signal_ids_json', 'text')
+    await ensureColumn('ai_hotspot_items', 'is_ignored', 'integer default 0')
+    await ensureColumn('ai_hotspot_items', 'deleted_at', 'text')
+    await ensureColumn('ai_hotspot_items', 'digest_status', "text default 'none'")
+    await ensureColumn('ai_hotspot_items', 'snapshot_id', 'text')
+    await ensureColumn('ai_hotspot_items', 'meta_json', 'text')
 
     await db.execute(`
       create table if not exists ai_hotspot_sources (
@@ -218,6 +278,8 @@ export async function initAiHotspotsDb() {
     await db.execute('create index if not exists idx_ai_hotspot_items_last_seen_at on ai_hotspot_items(last_seen_at desc)')
     await db.execute('create index if not exists idx_ai_hotspot_items_source on ai_hotspot_items(source_id)')
     await db.execute('create index if not exists idx_ai_hotspot_items_favorite on ai_hotspot_items(is_favorite)')
+    await db.execute('create index if not exists idx_ai_hotspot_items_deleted_at on ai_hotspot_items(deleted_at)')
+    await db.execute('create index if not exists idx_ai_hotspot_items_ignored on ai_hotspot_items(is_ignored)')
   })
 }
 
@@ -241,8 +303,10 @@ export async function upsertAiHotspotItems(items: AiHotspotItem[]) {
         `insert into ai_hotspot_items
           (id, source_id, source_name, feed_name, title, title_original, title_en, title_zh,
            url, published_at, first_seen_at, last_seen_at, summary, tags_json, score,
-           is_favorite, is_read, saved_note_path)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+           is_favorite, is_read, saved_note_path, signal_summary, signal_essence,
+           impact_audience_json, suggested_action, related_signal_ids_json, is_ignored,
+           deleted_at, digest_status, snapshot_id, meta_json)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
          on conflict(id) do update set
            source_id = excluded.source_id,
            source_name = excluded.source_name,
@@ -260,7 +324,17 @@ export async function upsertAiHotspotItems(items: AiHotspotItem[]) {
            score = excluded.score,
            is_favorite = ai_hotspot_items.is_favorite,
            is_read = ai_hotspot_items.is_read,
-           saved_note_path = ai_hotspot_items.saved_note_path`,
+           saved_note_path = ai_hotspot_items.saved_note_path,
+           signal_summary = coalesce(ai_hotspot_items.signal_summary, excluded.signal_summary),
+           signal_essence = coalesce(ai_hotspot_items.signal_essence, excluded.signal_essence),
+           impact_audience_json = coalesce(ai_hotspot_items.impact_audience_json, excluded.impact_audience_json),
+           suggested_action = coalesce(ai_hotspot_items.suggested_action, excluded.suggested_action),
+           related_signal_ids_json = coalesce(ai_hotspot_items.related_signal_ids_json, excluded.related_signal_ids_json),
+           is_ignored = ai_hotspot_items.is_ignored,
+           deleted_at = ai_hotspot_items.deleted_at,
+           digest_status = ai_hotspot_items.digest_status,
+           snapshot_id = ai_hotspot_items.snapshot_id,
+           meta_json = excluded.meta_json`,
         [
           item.id,
           item.sourceId,
@@ -280,6 +354,16 @@ export async function upsertAiHotspotItems(items: AiHotspotItem[]) {
           Number(item.isFavorite),
           Number(item.isRead),
           item.savedNotePath,
+          item.signalSummary,
+          item.signalEssence,
+          stringifyArray(item.impactAudience),
+          item.suggestedAction,
+          stringifyArray(item.relatedSignalIds),
+          Number(item.isIgnored),
+          item.deletedAt,
+          item.digestStatus,
+          item.snapshotId,
+          stringifyJson(item.meta || {}),
         ],
       )
     }
@@ -472,15 +556,93 @@ export async function setAiHotspotSavedNotePath(id: string, path: string | null)
   })
 }
 
-export async function pruneAiHotspotItems(keepAfterIso: string) {
+export async function setAiHotspotIgnored(id: string, ignored: boolean) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute('update ai_hotspot_items set is_ignored = $1 where id = $2', [Number(ignored), id])
+  })
+}
+
+export async function setAiHotspotDeletedAt(id: string, deletedAt: string | null) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute('update ai_hotspot_items set deleted_at = $1 where id = $2', [deletedAt, id])
+  })
+}
+
+export async function setAiHotspotDigestStatus(id: string, digestStatus: AiHotspotDigestStatus) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute('update ai_hotspot_items set digest_status = $1 where id = $2', [digestStatus, id])
+  })
+}
+
+export async function setAiHotspotSnapshotId(id: string, snapshotId: string | null) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute('update ai_hotspot_items set snapshot_id = $1 where id = $2', [snapshotId, id])
+  })
+}
+
+export async function setAiHotspotInsight(id: string, patch: Pick<
+  AiHotspotItem,
+  'signalSummary' | 'signalEssence' | 'impactAudience' | 'suggestedAction' | 'relatedSignalIds'
+>) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute(
+      `update ai_hotspot_items
+       set signal_summary = $1,
+           signal_essence = $2,
+           impact_audience_json = $3,
+           suggested_action = $4,
+           related_signal_ids_json = $5
+       where id = $6`,
+      [
+        patch.signalSummary,
+        patch.signalEssence,
+        stringifyArray(patch.impactAudience),
+        patch.suggestedAction,
+        stringifyArray(patch.relatedSignalIds),
+        id,
+      ],
+    )
+  })
+}
+
+export async function pruneAiHotspotItems(keepAfterIso: string, dailyKeepAfterIso = keepAfterIso) {
   await serializedWrite(async () => {
     const db = await getDb()
     await db.execute(
       `delete from ai_hotspot_items
        where is_favorite = 0
          and saved_note_path is null
+         and deleted_at is null
+         and feed_name <> 'AI HOT 日报'
+         and feed_name not like 'AI HOT 日报明细%'
          and coalesce(published_at, last_seen_at) < $1`,
       [keepAfterIso],
+    )
+    await db.execute(
+      `delete from ai_hotspot_items
+       where is_favorite = 0
+         and saved_note_path is null
+         and deleted_at is null
+         and (feed_name = 'AI HOT 日报' or feed_name like 'AI HOT 日报明细%')
+         and coalesce(published_at, last_seen_at) < $1`,
+      [dailyKeepAfterIso],
+    )
+  })
+}
+
+export async function cleanupAiHotspotTrash(deleteBeforeIso: string) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute(
+      `delete from ai_hotspot_items
+       where deleted_at is not null
+         and deleted_at < $1`,
+      [deleteBeforeIso],
     )
   })
 }

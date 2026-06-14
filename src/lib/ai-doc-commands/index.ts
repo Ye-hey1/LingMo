@@ -19,9 +19,7 @@
  */
 
 import {
-  Brain,
   FileText,
-  NotebookPen,
   Sparkles,
   Link2,
   WalletCards,
@@ -36,7 +34,6 @@ import {
 import {
   analyzeActivityScope,
   buildActivityReviewPrompt,
-  buildHighValueConversationNote,
   getBaselineDays,
   getRecentDays,
   type ActivityGoalContext,

@@ -1,11 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
 import {
-  ArchiveRestore,
-  ChevronDown,
-  Clock,
   Download,
   FileText,
   History,
@@ -17,7 +13,16 @@ import {
 } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 
-import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -76,11 +81,11 @@ export function RecognitionHistory({
 }: RecognitionHistoryProps) {
   const t = useTranslations()
   const [history, setHistory] = useState<RecognitionHistoryItem[]>([])
-  const [isExpanded, setIsExpanded] = useState(true)
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState<HistoryTypeFilter>('all')
   const [sourceFilter, setSourceFilter] = useState<HistorySourceFilter>('all')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
 
   const loadHistory = useCallback(() => {
     if (typeof window === 'undefined') return
@@ -156,18 +161,6 @@ export function RecognitionHistory({
 
   const allFilteredSelected = filteredHistory.length > 0 && filteredHistory.every((item) => selectedIds.has(item.id))
 
-  const toggleSelect = useCallback((id: string) => {
-    setSelectedIds((current) => {
-      const next = new Set(current)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }, [])
-
   const toggleSelectFiltered = useCallback(() => {
     setSelectedIds((current) => {
       const next = new Set(current)
@@ -200,6 +193,7 @@ export function RecognitionHistory({
   const handleClear = useCallback(() => {
     saveHistory([])
     setSelectedIds(new Set())
+    setClearDialogOpen(false)
     onClear()
   }, [onClear, saveHistory])
 
@@ -240,35 +234,21 @@ export function RecognitionHistory({
   }, [formatExportMarkdown, t])
 
   return (
-    <div className={cn('overflow-hidden rounded-xl border border-border/50 bg-card', className)}>
-      <div
-        className="flex cursor-pointer items-center justify-between border-b border-border/50 bg-muted/30 px-4 py-3"
-        onClick={() => setIsExpanded(!isExpanded)}
-      >
+    <div className={cn('flex flex-col', className)}>
+      {/* Header bar */}
+      <div className="flex items-center justify-between pb-2">
         <div className="flex items-center gap-2">
-          <History className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium">
+          <History className="size-3.5 text-muted-foreground" />
+          <span className="text-xs font-medium text-muted-foreground">
             {t('record.mark.recognitionHistory.title')}
           </span>
-          <span className="rounded-full bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
+          <span className="rounded-md bg-muted/50 px-1.5 py-0 text-[10px] text-muted-foreground">
             {history.length}
           </span>
         </div>
-        <ChevronDown className={cn(
-          'size-4 text-muted-foreground transition-transform duration-200',
-          isExpanded && 'rotate-180'
-        )} />
       </div>
 
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            {history.length === 0 ? (
+      {history.length === 0 ? (
               <div className="p-8 text-center">
                 <History className="mx-auto mb-2 size-8 text-muted-foreground/30" />
                 <p className="text-sm text-muted-foreground">
@@ -344,29 +324,20 @@ export function RecognitionHistory({
                   </div>
                 </div>
 
-                <ScrollArea className="max-h-[430px]">
-                  <div className="space-y-1 p-2">
+                <ScrollArea className="max-h-[350px]">
+                  <div className="space-y-px p-1.5">
                     {filteredHistory.length === 0 ? (
-                      <div className="p-8 text-center text-sm text-muted-foreground">
+                      <div className="py-6 text-center text-xs text-muted-foreground">
                         {t('record.mark.recognitionHistory.noResults')}
                       </div>
-                    ) : filteredHistory.map((item, index) => (
-                      <motion.div
+                    ) : filteredHistory.map((item) => (
+                      <div
                         key={item.id}
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: Math.min(index * 0.02, 0.12) }}
-                        className="group flex cursor-pointer items-center gap-3 rounded-lg p-2 transition-colors hover:bg-muted/50"
+                        className="group flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-muted/50"
                         onClick={() => onSelect(item)}
                       >
-                        <Checkbox
-                          checked={selectedIds.has(item.id)}
-                          onClick={(event) => event.stopPropagation()}
-                          onCheckedChange={() => toggleSelect(item.id)}
-                        />
-
                         <div className={cn(
-                          'flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg',
+                          'flex size-8 shrink-0 items-center justify-center overflow-hidden rounded',
                           item.type === 'image'
                             ? 'bg-blue-500/10 text-blue-500'
                             : 'bg-green-500/10 text-green-500'
@@ -375,103 +346,77 @@ export function RecognitionHistory({
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={item.thumbnail} alt="" className="h-full w-full object-cover" />
                           ) : item.type === 'image' ? (
-                            <ImageIcon className="size-4" />
+                            <ImageIcon className="size-3.5" />
                           ) : (
-                            <FileText className="size-4" />
+                            <FileText className="size-3.5" />
                           )}
                         </div>
 
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-sm font-medium">
-                              {item.desc || t('record.mark.recognitionHistory.noDescription')}
-                            </p>
-                            {item.favorite && (
-                              <Star className="size-3.5 shrink-0 fill-amber-400 text-amber-400" />
-                            )}
-                          </div>
-                          <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-                            {item.content || t('record.mark.recognitionHistory.noDescription')}
+                          <p className="truncate text-xs font-medium">
+                            {item.desc || t('record.mark.recognitionHistory.noDescription')}
                           </p>
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                            <span className="inline-flex items-center gap-1">
-                              <Clock className="size-3" />
-                              {formatTime(item.timestamp)}
-                            </span>
-                            <span className="rounded bg-muted px-1.5 py-0.5">
-                              {sourceLabel(item.sourceOrigin, item.sourceLabel)}
-                            </span>
-                            {(item.tags || []).slice(0, 3).map((tag) => (
-                              <span key={tag} className="rounded bg-primary/5 px-1.5 py-0.5 text-primary">
-                                #{tag}
-                              </span>
-                            ))}
+                          <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-muted-foreground/70">
+                            <span>{formatTime(item.timestamp)}</span>
+                            {item.favorite && <Star className="size-2.5 fill-amber-400 text-amber-400" />}
                           </div>
                         </div>
 
-                        <div className="flex shrink-0 items-center gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100">
-                          <Button
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
                             type="button"
-                            variant="ghost"
-                            size="icon"
-                            title={t('record.mark.recognitionHistory.actions.favorite')}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleFavorite(item.id)
-                            }}
-                            className="size-8"
+                            title={item.favorite ? '取消收藏' : '收藏'}
+                            onClick={(event) => { event.stopPropagation(); handleFavorite(item.id) }}
+                            className="inline-flex size-5 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
                           >
-                            <Star className={cn('size-3.5', item.favorite && 'fill-amber-400 text-amber-400')} />
-                          </Button>
-                          <Button
+                            <Star className={cn('size-3', item.favorite && 'fill-amber-400 text-amber-400')} />
+                          </button>
+                          <button
                             type="button"
-                            variant="ghost"
-                            size="icon"
-                            title={t('record.mark.recognitionHistory.actions.restore')}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              onSelect(item)
-                            }}
-                            className="size-8"
-                          >
-                            <ArchiveRestore className="size-3.5" />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
                             title={t('record.mark.recognitionHistory.actions.delete')}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleDelete(item.id)
-                            }}
-                            className="size-8 text-destructive hover:text-destructive"
+                            onClick={(event) => { event.stopPropagation(); handleDelete(item.id) }}
+                            className="inline-flex size-5 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-muted hover:text-destructive"
                           >
-                            <Trash2 className="size-3.5" />
-                          </Button>
+                            <Trash2 className="size-3" />
+                          </button>
                         </div>
-                      </motion.div>
+                      </div>
                     ))}
                   </div>
                 </ScrollArea>
 
                 <div className="border-t border-border/50 p-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleClear}
-                    className="w-full text-xs text-destructive hover:text-destructive"
-                  >
-                    <Trash2 className="mr-1.5 size-3.5" />
-                    {t('record.mark.recognitionHistory.clearAll')}
-                  </Button>
+                  <AlertDialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+                    <button
+                      type="button"
+                      onClick={() => setClearDialogOpen(true)}
+                      className="w-full rounded py-1.5 text-[11px] text-muted-foreground/60 transition-colors hover:bg-muted hover:text-destructive"
+                    >
+                      {t('record.mark.recognitionHistory.clearAll')}
+                    </button>
+                    <AlertDialogContent className="rounded-lg shadow-none">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle className="text-base">
+                          {t('record.mark.recognitionHistory.confirmClearTitle')}
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                          {t('record.mark.recognitionHistory.confirmClearDesc', { count: history.length })}
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={handleClear}
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                          {t('record.mark.recognitionHistory.confirmClearAction')}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
               </>
             )}
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   )
 }

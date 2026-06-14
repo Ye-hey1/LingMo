@@ -37,8 +37,8 @@ export function MarketModal({
   if (!show) return null
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="relative w-full max-w-md rounded-xl border bg-background p-5 shadow-2xl animate-in zoom-in-95 duration-150 text-foreground flex flex-col max-h-[80vh]">
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 animate-in fade-in duration-150">
+      <div className="relative flex max-h-[80vh] w-full max-w-md flex-col rounded-lg border bg-background p-5 text-foreground animate-in fade-in duration-150">
         <button
           type="button"
           className="absolute right-3 top-3 grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
@@ -65,11 +65,11 @@ export function MarketModal({
                   value={githubUrl}
                   onChange={(e) => onGithubUrlChange(e.target.value)}
                   placeholder="owner/repo 或完整 URL"
-                  className="h-8 text-xs flex-1"
+                  className="h-8 flex-1 text-xs shadow-none"
                 />
                 <Button
                   size="sm"
-                  className="h-8 text-xs shrink-0"
+                  className="h-8 shrink-0 text-xs shadow-none"
                   onClick={onInstall}
                   disabled={!githubUrl.trim()}
                 >
@@ -86,12 +86,12 @@ export function MarketModal({
                   value={customTemplateName}
                   onChange={(e) => onCustomTemplateNameChange(e.target.value)}
                   placeholder="输入模板名称..."
-                  className="h-8 text-xs flex-1"
+                  className="h-8 flex-1 text-xs shadow-none"
                 />
                 <Button
                   size="sm"
                   variant="secondary"
-                  className="h-8 text-xs shrink-0"
+                  className="h-8 shrink-0 text-xs shadow-none"
                   onClick={onCreateCustomTemplate}
                   disabled={!customTemplateName.trim()}
                 >
@@ -136,7 +136,7 @@ export function MarketModal({
               <Button
                 variant="outline"
                 size="sm"
-                className="text-[11px] h-7"
+                className="h-7 text-[11px] shadow-none"
                 onClick={onClose}
               >
                 关闭

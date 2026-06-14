@@ -50,6 +50,7 @@ export interface HtmlOutlineItem {
 
 export interface ExtractedSection {
   title: string
+  level?: number
   body?: string
   bullets?: string[]
   importance?: "low" | "medium" | "high"

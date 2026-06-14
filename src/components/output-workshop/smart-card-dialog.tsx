@@ -10,6 +10,7 @@ import {
   Loader2,
   Sparkles,
   AlertTriangle,
+  MousePointer2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -47,9 +48,12 @@ interface SmartCardDialogProps {
   generatedHtml: string
   selectedTemplate: OutputTemplate | null
   sizePresetId: PreviewSizePreset["id"]
+  activeCardIndex?: number
   exportBusy: boolean
   onExport: (cards: SmartCard[], preset: PreviewSizePreset, selectedIndices: number[]) => void
 }
+
+type SelectionMode = "all" | "current" | "custom"
 
 // ---------------------------------------------------------------------------
 // Detection method label
@@ -62,6 +66,11 @@ const METHOD_LABELS: Record<string, { label: string; color: string }> = {
   fallback: { label: "整页导出", color: "text-slate-600 bg-slate-50 border-slate-200" },
 }
 
+function getExportablePresetId(id: PreviewSizePreset["id"] | string | undefined): PreviewSizePreset["id"] {
+  const match = PREVIEW_SIZE_PRESETS.find((preset) => preset.id === id && preset.id !== "auto")
+  return match?.id ?? "3:4"
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -72,22 +81,32 @@ export function SmartCardDialog({
   generatedHtml,
   selectedTemplate,
   sizePresetId,
+  activeCardIndex = 0,
   exportBusy,
   onExport,
 }: SmartCardDialogProps) {
   // Parse cards from HTML
   const [parsedResult, setParsedResult] = React.useState<SmartCardParsed | null>(null)
   const [selectedIndices, setSelectedIndices] = React.useState<Set<number>>(new Set())
-  const [currentPresetId, setCurrentPresetId] = React.useState<PreviewSizePreset["id"]>(sizePresetId)
+  const [selectionMode, setSelectionMode] = React.useState<SelectionMode>("all")
+  const [currentPresetId, setCurrentPresetId] = React.useState<PreviewSizePreset["id"]>(() => getExportablePresetId(sizePresetId))
   const [thumbnails, setThumbnails] = React.useState<Map<number, string>>(new Map())
+  const [thumbnailErrors, setThumbnailErrors] = React.useState<Set<number>>(new Set())
   const [loadingThumbs, setLoadingThumbs] = React.useState(false)
 
   const currentPreset = getPresetById(currentPresetId) || PREVIEW_SIZE_PRESETS[0]
+  const cards = parsedResult?.cards ?? []
+  const currentCardIndex = React.useMemo(() => {
+    if (cards.some((card) => card.index === activeCardIndex)) return activeCardIndex
+    return cards[0]?.index ?? 0
+  }, [activeCardIndex, cards])
 
   // Parse cards when dialog opens or HTML changes
   React.useEffect(() => {
     if (!open || !generatedHtml) {
       setParsedResult(null)
+      setThumbnails(new Map())
+      setThumbnailErrors(new Set())
       return
     }
 
@@ -98,43 +117,67 @@ export function SmartCardDialog({
     // Auto-select all cards
     const allIndices = new Set(result.cards.map((c) => c.index))
     setSelectedIndices(allIndices)
+    setSelectionMode("all")
+    setThumbnails(new Map())
+    setThumbnailErrors(new Set())
 
     // Auto-select preset from blueprint
-    if (blueprint?.defaultRatio) {
-      const match = PREVIEW_SIZE_PRESETS.find((p) => p.id === blueprint.defaultRatio)
-      if (match) setCurrentPresetId(match.id)
-    }
-  }, [open, generatedHtml, selectedTemplate])
+    setCurrentPresetId(getExportablePresetId(blueprint?.defaultRatio || sizePresetId))
+  }, [open, generatedHtml, selectedTemplate, sizePresetId])
 
   // Generate thumbnails
   React.useEffect(() => {
-    if (!parsedResult || parsedResult.cards.length === 0) return
+    if (!parsedResult || parsedResult.cards.length === 0) {
+      setLoadingThumbs(false)
+      return
+    }
 
     let cancelled = false
     setLoadingThumbs(true)
     const newThumbs = new Map<number, string>()
+    const failedThumbs = new Set<number>()
 
     const generateAll = async () => {
-      for (const card of parsedResult.cards) {
-        if (cancelled) break
-        try {
-          const dataUrl = await renderCardThumbnail(card, 270, 360)
-          if (cancelled) break
-          newThumbs.set(card.index, dataUrl)
-          setThumbnails(new Map(newThumbs))
-        } catch {
-          // Skip failed thumbnail
+      const queue = parsedResult.cards.slice()
+      let cursor = 0
+      const thumbnailConcurrency = Math.min(3, queue.length)
+      const nextCard = () => {
+        const card = queue[cursor]
+        cursor += 1
+        return card
+      }
+
+      try {
+        await Promise.all(Array.from({ length: thumbnailConcurrency }, async () => {
+          while (!cancelled) {
+            const card = nextCard()
+            if (!card) break
+            try {
+              const dataUrl = await renderCardThumbnail(card, 270, 360)
+              if (cancelled) break
+              newThumbs.set(card.index, dataUrl)
+              setThumbnails(new Map(newThumbs))
+            } catch {
+              if (cancelled) break
+              failedThumbs.add(card.index)
+              setThumbnailErrors(new Set(failedThumbs))
+            }
+          }
+        }))
+      } finally {
+        if (!cancelled) {
+          setLoadingThumbs(false)
         }
       }
-      setLoadingThumbs(false)
     }
 
-    generateAll()
+    void generateAll()
     return () => { cancelled = true }
   }, [parsedResult])
 
   // Selection helpers
   const toggleSelect = (idx: number) => {
+    setSelectionMode("custom")
     setSelectedIndices((prev) => {
       const next = new Set(prev)
       if (next.has(idx)) next.delete(idx)
@@ -145,11 +188,26 @@ export function SmartCardDialog({
 
   const selectAll = () => {
     if (!parsedResult) return
+    setSelectionMode("all")
     setSelectedIndices(new Set(parsedResult.cards.map((c) => c.index)))
   }
 
   const deselectAll = () => {
+    setSelectionMode("custom")
     setSelectedIndices(new Set())
+  }
+
+  const selectCurrent = () => {
+    setSelectionMode("current")
+    setSelectedIndices(new Set([currentCardIndex]))
+  }
+
+  const setCustomMode = () => {
+    setSelectionMode("custom")
+    setSelectedIndices((prev) => {
+      if (prev.size > 0) return prev
+      return new Set([currentCardIndex])
+    })
   }
 
   const handleExport = () => {
@@ -167,24 +225,23 @@ export function SmartCardDialog({
     }
   }
 
-  const cards = parsedResult?.cards ?? []
   const method = parsedResult?.detectionMethod ?? "fallback"
   const methodInfo = METHOD_LABELS[method] ?? METHOD_LABELS.fallback
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="z-[10040] max-w-4xl">
+      <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Layers className="size-4.5" />
             智能卡片导出
           </DialogTitle>
           <DialogDescription>
-            自动识别页面中的卡片结构，每张卡片独立渲染为高清 PNG，打包为 ZIP 下载。
+            自动识别页面中的卡片结构，支持导出当前页、全部页或自定义多选，并打包为 ZIP 下载。
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-5 md:grid-cols-[1fr_260px]">
+        <div className="grid gap-4 md:grid-cols-[1fr_280px]">
           {/* 左侧 — 卡片预览网格 */}
           <div className="space-y-3">
             {/* 顶栏：检测信息 + 全选 */}
@@ -202,30 +259,26 @@ export function SmartCardDialog({
                   检测到 <strong>{cards.length}</strong> 张卡片
                 </span>
               </div>
-              <div className="flex items-center gap-1">
-                <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={selectAll}>
-                  全选
-                </Button>
-                <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={deselectAll}>
-                  取消全选
-                </Button>
-              </div>
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-[10px]" onClick={deselectAll}>
+                清空
+              </Button>
             </div>
 
             {/* 卡片网格 */}
             {cards.length > 0 ? (
-              <div className="grid grid-cols-3 gap-2.5 max-h-[420px] overflow-y-auto pr-1">
+              <div className="grid grid-cols-3 gap-2 max-h-[420px] overflow-y-auto pr-1">
                 {cards.map((card) => {
                   const isSelected = selectedIndices.has(card.index)
                   const thumb = thumbnails.get(card.index)
+                  const thumbFailed = thumbnailErrors.has(card.index)
                   return (
                     <div
                       key={card.index}
                       className={cn(
-                        "relative rounded-xl border-2 overflow-hidden cursor-pointer transition-all group",
+                        "group relative cursor-pointer overflow-hidden rounded-md border transition-colors duration-150",
                         isSelected
-                          ? "border-primary shadow-md ring-1 ring-primary/20"
-                          : "border-border hover:border-primary/40 opacity-70 hover:opacity-100"
+                          ? "border-primary/55 bg-primary/5"
+                          : "border-border bg-background opacity-75 hover:border-primary/40 hover:opacity-100"
                       )}
                       onClick={() => toggleSelect(card.index)}
                     >
@@ -242,14 +295,18 @@ export function SmartCardDialog({
                           />
                         ) : (
                           <div className="flex flex-col items-center gap-1 text-muted-foreground">
-                            <Loader2 className={cn("size-4 animate-spin", !loadingThumbs && "hidden")} />
-                            <span className="text-[9px]">#{card.index + 1}</span>
+                            {thumbFailed ? (
+                              <AlertTriangle className="size-4 text-amber-500" />
+                            ) : (
+                              <Loader2 className={cn("size-4 animate-spin", !loadingThumbs && "hidden")} />
+                            )}
+                            <span className="text-[10px]">{thumbFailed ? "预览失败" : `#${card.index + 1}`}</span>
                           </div>
                         )}
                       </div>
 
                       {/* 选中标记 */}
-                      <div className="absolute top-1.5 left-1.5">
+                      <div className="absolute top-2 left-2">
                         {isSelected ? (
                           <CheckSquare className="size-4 text-primary fill-primary/20" />
                         ) : (
@@ -258,9 +315,9 @@ export function SmartCardDialog({
                       </div>
 
                       {/* 序号和标题 */}
-                      <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5">
-                        <p className="text-[9px] text-white font-semibold truncate">
-                          #{card.index + 1} {card.title}
+                      <div className="absolute inset-x-0 bottom-0 border-t bg-background/95 px-2 py-1.5">
+                        <p className="truncate text-[10px] font-semibold text-foreground">
+                          #{card.index + 1} {card.index === currentCardIndex ? "当前页 · " : ""}{card.title}
                         </p>
                       </div>
 
@@ -268,7 +325,7 @@ export function SmartCardDialog({
                       <button
                         className={cn(
                           "absolute top-1.5 right-1.5 size-5 rounded-md bg-black/50 text-white",
-                          "flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity",
+                          "flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150",
                           "hover:bg-black/70"
                         )}
                         onClick={(e) => {
@@ -293,34 +350,93 @@ export function SmartCardDialog({
 
             {/* 底部统计 */}
             <div className="grid grid-cols-3 gap-2">
-              <div className="rounded-lg border bg-muted/20 px-3 py-1.5 text-center">
-                <div className="text-[9px] text-muted-foreground uppercase tracking-wider">卡片总数</div>
-                <div className="mt-0.5 text-xs font-bold">{cards.length}</div>
+              <div className="rounded-md border bg-muted/20 px-3 py-2 text-center">
+                <div className="text-[10px] text-muted-foreground">卡片总数</div>
+                <div className="mt-0.5 text-xs font-bold tabular-nums">{cards.length}</div>
               </div>
-              <div className="rounded-lg border bg-muted/20 px-3 py-1.5 text-center">
-                <div className="text-[9px] text-muted-foreground uppercase tracking-wider">已选中</div>
-                <div className="mt-0.5 text-xs font-bold text-primary">{selectedIndices.size}</div>
+              <div className="rounded-md border bg-muted/20 px-3 py-2 text-center">
+                <div className="text-[10px] text-muted-foreground">已选中</div>
+                <div className="mt-0.5 text-xs font-bold tabular-nums text-primary">{selectedIndices.size}</div>
               </div>
-              <div className="rounded-lg border bg-muted/20 px-3 py-1.5 text-center">
-                <div className="text-[9px] text-muted-foreground uppercase tracking-wider">导出尺寸</div>
-                <div className="mt-0.5 text-xs font-bold">{currentPreset.width}×{currentPreset.height}</div>
+              <div className="rounded-md border bg-muted/20 px-3 py-2 text-center">
+                <div className="text-[10px] text-muted-foreground">导出尺寸</div>
+                <div className="mt-0.5 text-xs font-bold tabular-nums">{currentPreset.width}×{currentPreset.height}</div>
               </div>
             </div>
           </div>
 
           {/* 右侧 — 导出控制 */}
-          <div className="space-y-3.5">
+          <div className="space-y-3">
+            {/* 选择方式 */}
+            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+              <div className="text-xs font-semibold text-muted-foreground">选择方式</div>
+              <div className="grid gap-2">
+                <button
+                  type="button"
+                  onClick={selectAll}
+                  className={cn(
+                    "flex h-9 items-center justify-between rounded-md border px-3 text-left text-[11px] transition-all duration-150",
+                    selectionMode === "all"
+                      ? "border-primary/40 bg-primary/10 text-primary"
+                      : "border-input bg-background text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <Layers className="size-3.5" />
+                    全部页
+                  </span>
+                  <span className="font-mono text-[10px] tabular-nums">{cards.length}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={selectCurrent}
+                  disabled={cards.length === 0}
+                  className={cn(
+                    "flex h-9 items-center justify-between rounded-md border px-3 text-left text-[11px] transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50",
+                    selectionMode === "current"
+                      ? "border-primary/40 bg-primary/10 text-primary"
+                      : "border-input bg-background text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <MousePointer2 className="size-3.5" />
+                    当前页
+                  </span>
+                  <span className="font-mono text-[10px] tabular-nums">#{currentCardIndex + 1}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={setCustomMode}
+                  className={cn(
+                    "flex h-9 items-center justify-between rounded-md border px-3 text-left text-[11px] transition-all duration-150",
+                    selectionMode === "custom"
+                      ? "border-primary/40 bg-primary/10 text-primary"
+                      : "border-input bg-background text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <CheckSquare className="size-3.5" />
+                    自定义选择
+                  </span>
+                  <span className="font-mono text-[10px] tabular-nums">{selectedIndices.size}</span>
+                </button>
+              </div>
+              <p className="text-[10px] leading-relaxed text-muted-foreground/70">
+                点击左侧缩略图会自动进入自定义选择模式。
+              </p>
+            </div>
+
             {/* 尺寸预设 */}
-            <div className="rounded-xl border bg-muted/10 p-3.5 space-y-2.5">
+            <div className="space-y-3 rounded-md border bg-muted/10 p-3">
               <div className="text-xs font-semibold text-muted-foreground">导出尺寸</div>
-              <div className="grid grid-cols-2 gap-1.5">
+              <div className="grid grid-cols-2 gap-2">
                 {PREVIEW_SIZE_PRESETS.filter((p) => p.id !== "auto").map((preset) => (
                   <button
                     key={preset.id}
                     type="button"
                     onClick={() => setCurrentPresetId(preset.id)}
                     className={cn(
-                      "h-7 rounded-md text-[10px] font-semibold transition-all border",
+                      "h-8 rounded-md text-[10px] font-semibold transition-all duration-150 border",
                       currentPresetId === preset.id
                         ? "bg-primary/10 text-primary border-primary/40"
                         : "bg-background text-muted-foreground hover:text-foreground border-input"
@@ -336,7 +452,7 @@ export function SmartCardDialog({
             </div>
 
             {/* 检测方式说明 */}
-            <div className="rounded-xl border bg-muted/10 p-3.5 space-y-2">
+            <div className="space-y-2 rounded-md border bg-muted/10 p-3">
               <div className="text-xs font-semibold text-muted-foreground">检测方式</div>
               <div className="text-[11px] leading-relaxed text-muted-foreground/80 space-y-1">
                 {method === "blueprint" && (
