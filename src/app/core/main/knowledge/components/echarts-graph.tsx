@@ -197,7 +197,7 @@ function getNodeImportance(node: GraphNode) {
 
 function getAdaptiveFontSize(node: GraphNode, active: boolean) {
   const radiusHint = Math.sqrt(Math.max(node.nodeSize ?? 18, 18));
-  return Math.max(9, Math.min(18, 8 + radiusHint * 1.15 + getNodeImportance(node) * 3 + (active ? 1.5 : 0)));
+  return Math.max(11, Math.min(22, 10 + radiusHint * 1.3 + getNodeImportance(node) * 4 + (active ? 2 : 0)));
 }
 
 function _getEdgeGradient(sourceColor: string, targetColor: string, opacity: number) {
@@ -616,7 +616,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
         ? (visibleLabels && (symbolSize >= 12 || connections >= 3)) || labelActive
         : visibleLabels || labelActive || role === 'current' || connections >= 3;
       const labelFontSize = isTopicNode
-        ? Math.max(8, Math.min(18, 7.8 + Math.sqrt(symbolSize) * 1.1 + Math.min(3.5, connections * 0.15) + (labelActive ? 1.5 : 0)))
+        ? Math.max(10, Math.min(22, 9 + Math.sqrt(symbolSize) * 1.3 + Math.min(4, connections * 0.2) + (labelActive ? 2 : 0)))
         : getAdaptiveFontSize(node, labelActive);
 
       return {
