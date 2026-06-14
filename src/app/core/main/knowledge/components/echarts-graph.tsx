@@ -41,33 +41,32 @@ interface GraphLayoutPosition {
 export type LayoutMode = 'force' | 'circular' | 'tree' | 'radial';
 
 const CATEGORIES = [
-  { name: '核心笔记', itemStyle: { color: '#f59e0b' } },
-  { name: '关联笔记', itemStyle: { color: '#3b82f6' } },
-  { name: '普通笔记', itemStyle: { color: '#64748b' } },
-  { name: '概念', itemStyle: { color: '#10b981' } },
-  { name: '人物', itemStyle: { color: '#f97316' } },
-  { name: '项目', itemStyle: { color: '#8b5cf6' } },
-  { name: '标签', itemStyle: { color: '#ec4899' } },
+  { name: '核心笔记', itemStyle: { color: '#d97706' } },
+  { name: '关联笔记', itemStyle: { color: '#2563eb' } },
+  { name: '普通笔记', itemStyle: { color: '#94a3b8' } },
+  { name: '概念', itemStyle: { color: '#059669' } },
+  { name: '人物', itemStyle: { color: '#ea580c' } },
+  { name: '项目', itemStyle: { color: '#7c3aed' } },
+  { name: '标签', itemStyle: { color: '#db2777' } },
 ];
 
 const _CATEGORY_INDEX = new Map(CATEGORIES.map((category, index) => [category.name, index]));
 
 const NODE_ROLE_COLORS: Record<string, string> = {
-  current: '#f59e0b',
-  hub: '#f97316',
-  linked: '#3b82f6',
-  note: '#64748b',
-  concept: '#10b981',
-  person: '#f97316',
-  project: '#8b5cf6',
-  tag: '#ec4899',
+  current: '#d97706',
+  hub: '#ea580c',
+  linked: '#2563eb',
+  note: '#94a3b8',
+  concept: '#059669',
+  person: '#ea580c',
+  project: '#7c3aed',
+  tag: '#db2777',
 };
 
 const VOS_PALETTE = [
-  '#ef4444', '#f97316', '#f59e0b', '#eab308',
-  '#84cc16', '#22c55e', '#10b981', '#14b8a6',
-  '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1',
-  '#8b5cf6', '#a855f7', '#d946ef', '#ec4899',
+  '#e11d48', '#db2777', '#c026d3', '#9333ea', '#7c3aed',
+  '#4f46e5', '#2563eb', '#0284c7', '#0891b2', '#0f766e',
+  '#059669', '#16a34a', '#65a30d', '#ca8a04', '#d97706', '#ea580c',
 ];
 
 const NODE_TYPE_LABELS: Record<string, string> = {
@@ -459,7 +458,6 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
     selectedEdge,
     hoveredNode,
     zoom,
-    enable3D,
     enableInertialDrag,
     selectNode,
     selectEdge,
@@ -604,19 +602,19 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
       const role = getNodeRole(node);
       const importance = getNodeImportance(node);
       const baseSize = role === 'hub' || role === 'current'
-        ? 36 + Math.sqrt(Math.max(connections, 1)) * 8.5
-        : 19 + Math.sqrt(Math.max(connections, 1)) * 6.5;
+        ? 28 + Math.sqrt(Math.max(connections, 1)) * 6
+        : 14 + Math.sqrt(Math.max(connections, 1)) * 4.5;
       const symbolSize = isTopicNode
-        ? Math.max(5, Math.min(44, node.nodeSize ?? 12))
-        : Math.max(12, Math.min(68, node.nodeSize ? Math.max(node.nodeSize, baseSize) : baseSize));
+        ? Math.max(4, Math.min(36, node.nodeSize ?? 10))
+        : Math.max(10, Math.min(56, node.nodeSize ? Math.max(node.nodeSize, baseSize) : baseSize));
       const color = getNodeColor(node);
       const _fillColor = isTopicNode ? withAlpha(color, isSelected ? 0.98 : isHovered ? 0.95 : 0.84) : color;
       const position = layoutPositions.get(node.id)
         ?? buildInitialPosition(node, localIndex, roleIndex, roleCounts.get(categoryName) ?? 1, width, height);
       const labelActive = isSelected || isHovered;
       const labelVisible = isTopicNode
-        ? (visibleLabels && (symbolSize >= 9 || connections >= 2)) || labelActive
-        : visibleLabels || labelActive || role === 'current' || connections >= 2;
+        ? (visibleLabels && (symbolSize >= 12 || connections >= 3)) || labelActive
+        : visibleLabels || labelActive || role === 'current' || connections >= 3;
       const labelFontSize = isTopicNode
         ? Math.max(8, Math.min(18, 7.8 + Math.sqrt(symbolSize) * 1.1 + Math.min(3.5, connections * 0.15) + (labelActive ? 1.5 : 0)))
         : getAdaptiveFontSize(node, labelActive);
@@ -634,90 +632,69 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
         itemStyle: {
           color: {
             type: 'radial',
-            x: 0.35,
-            y: 0.3,
-            r: 0.7,
+            x: 0.4,
+            y: 0.4,
+            r: 0.6,
             colorStops: [
-              { offset: 0, color: withAlpha(mixColors(color, '#ffffff', 0.2), 1) },
-              { offset: 0.3, color: withAlpha(color, 1) },
-              { offset: 0.6, color: withAlpha(color, 0.92) },
-              { offset: 0.85, color: withAlpha(mixColors(color, '#000000', 0.1), 0.78) },
-              { offset: 1, color: withAlpha(mixColors(color, '#000000', 0.25), 0.55) },
+              { offset: 0, color: withAlpha(color, 1) },
+              { offset: 0.6, color: withAlpha(color, 0.9) },
+              { offset: 1, color: withAlpha(color, 0.7) },
             ],
           },
           borderColor: isSelected 
             ? theme.foreground 
             : isHovered 
-              ? withAlpha(theme.foreground, 0.9) 
-              : withAlpha(mixColors(color, '#ffffff', 0.3), 0.6),
-          borderWidth: isSelected ? 3.5 : isHovered ? 2.8 : 1.2,
-          shadowBlur: isSelected ? 48 : isHovered ? 36 : 8 + importance * 20,
-          shadowOffsetX: 2 + importance * 3,
-          shadowOffsetY: 3 + importance * 4,
-          shadowColor: withAlpha('#000000', isSelected ? 0.45 : isHovered ? 0.38 : 0.18 + importance * 0.12),
-          opacity: isDimmed ? 0.2 : 1,
+              ? withAlpha(color, 0.8) 
+              : withAlpha(color, 0.3),
+          borderWidth: isSelected ? 2.5 : isHovered ? 2 : 0.8,
+          shadowBlur: isSelected ? 20 : isHovered ? 15 : 4 + importance * 8,
+          shadowColor: withAlpha(color, isSelected ? 0.4 : isHovered ? 0.3 : 0.15),
+          opacity: isDimmed ? 0.15 : 1,
         },
         label: {
           show: labelVisible,
           position: isTopicNode
-            ? symbolSize >= 28 ? 'inside' : 'right'
-            : role === 'hub' || symbolSize >= 44 ? 'inside' : 'right',
-          formatter: (params: any) => {
-            const name = params.name || '';
-            return name.length > 12 ? name.slice(0, 11) + '…' : name;
-          },
+            ? symbolSize >= 32 ? 'inside' : 'right'
+            : role === 'hub' || symbolSize >= 48 ? 'inside' : 'right',
+          formatter: '{b}',
           fontSize: labelFontSize,
-          fontWeight: isSelected || role === 'hub' || (isTopicNode && symbolSize >= 28) || symbolSize >= 44 ? 600 : 500,
+          fontWeight: isSelected || role === 'hub' ? 600 : 400,
           color: isDimmed
-            ? 'rgba(115, 115, 115, 0.38)'
+            ? 'rgba(115, 115, 115, 0.3)'
             : isSelected || isHovered
               ? theme.foreground
-              : withAlpha(theme.foreground, 0.92),
-          distance: 6,
+              : withAlpha(theme.foreground, 0.75),
+          distance: 5,
           overflow: 'truncate',
           width: isTopicNode
-            ? (isSelected || isHovered ? 140 : Math.max(48, Math.min(100, 44 + importance * 50)))
-            : (isSelected || isHovered ? 160 : Math.max(70, Math.min(130, 60 + importance * 60))),
-          backgroundColor: isDimmed 
-            ? 'transparent' 
-            : isSelected || isHovered
-              ? withAlpha(theme.surface, 0.95)
-              : withAlpha(theme.surface, 0.82),
-          borderColor: isDimmed
-            ? 'transparent'
-            : isSelected 
-              ? withAlpha(theme.foreground, 0.6)
-              : isHovered
-                ? withAlpha(theme.foreground, 0.4)
-                : withAlpha(theme.border, 0.5),
-          borderWidth: isSelected ? 1.5 : isHovered ? 1 : 0.5,
-          borderRadius: 8,
-          padding: isSelected || isHovered ? [4, 10] : [3, 8],
-          shadowBlur: isSelected ? 12 : isHovered ? 8 : 0,
-          shadowColor: withAlpha('#000000', isSelected ? 0.2 : isHovered ? 0.15 : 0),
-          shadowOffsetY: 2,
+            ? (isSelected || isHovered ? 120 : Math.max(40, Math.min(90, 36 + importance * 40)))
+            : (isSelected || isHovered ? 140 : Math.max(60, Math.min(110, 50 + importance * 50))),
+          backgroundColor: 'transparent',
+          borderColor: 'transparent',
+          borderWidth: 0,
+          borderRadius: 4,
+          padding: 0,
         },
         emphasis: {
           itemStyle: {
-            borderWidth: 3.5,
+            borderWidth: 2.5,
             borderColor: theme.foreground,
-            shadowBlur: 38,
-            shadowColor: withAlpha(color, 0.52),
+            shadowBlur: 20,
+            shadowColor: withAlpha(color, 0.4),
           },
           label: {
             show: true,
-            fontSize: 14,
-            fontWeight: 700,
+            fontSize: 13,
+            fontWeight: 600,
             color: theme.foreground,
-            backgroundColor: withAlpha(theme.surface, 0.96),
-            borderColor: withAlpha(theme.foreground, 0.5),
-            borderWidth: 1.5,
-            borderRadius: 10,
-            padding: [6, 14],
-            shadowBlur: 15,
-            shadowColor: withAlpha('#000000', 0.25),
-            shadowOffsetY: 3,
-            distance: 8,
+            backgroundColor: withAlpha(theme.surface, 0.9),
+            borderColor: withAlpha(theme.border, 0.5),
+            borderWidth: 1,
+            borderRadius: 6,
+            padding: [4, 8],
+            shadowBlur: 8,
+            shadowColor: 'rgba(0,0,0,0.15)',
+            distance: 6,
           },
         },
         nodeData: node,
@@ -735,8 +712,8 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
       const sourceColor = getNodeColor(nodeIndex.get(edge.source) ?? ({ id: edge.source, nodeType: 'note', nodeLabel: edge.source, nodeProperties: {}, nodeMetadata: { createdAt: '', updatedAt: '' } } as GraphNode));
       const targetColor = getNodeColor(nodeIndex.get(edge.target) ?? ({ id: edge.target, nodeType: 'note', nodeLabel: edge.target, nodeProperties: {}, nodeMetadata: { createdAt: '', updatedAt: '' } } as GraphNode));
       const opacity = isTopicEdge
-        ? (isDimmed ? 0.04 : isSelected || isHighlighted ? 0.78 : Math.max(0.06, Math.min(0.32, 0.08 + Math.sqrt(weight) * 0.1)))
-        : (isDimmed ? 0.06 : isSelected || isHighlighted ? 0.88 : Math.max(0.1, Math.min(0.52, 0.18 + Math.sqrt(weight) * 0.14)));
+        ? (isDimmed ? 0.03 : isSelected || isHighlighted ? 0.6 : Math.max(0.05, Math.min(0.25, 0.06 + Math.sqrt(weight) * 0.08)))
+        : (isDimmed ? 0.05 : isSelected || isHighlighted ? 0.7 : Math.max(0.08, Math.min(0.4, 0.15 + Math.sqrt(weight) * 0.1)));
 
       return {
         id: edge.id,
@@ -759,17 +736,17 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
             ],
           },
           width: isTopicEdge
-            ? (isSelected ? config.width + 1.4 : isHighlighted ? config.width + 0.7 : Math.max(0.35, config.width * Math.min(1.15, Math.sqrt(weight))))
-            : (isSelected ? config.width + 2.5 : isHighlighted ? config.width + 1.6 : Math.max(0.7, config.width * Math.min(1.7, Math.sqrt(weight)))),
+            ? (isSelected ? config.width + 1 : isHighlighted ? config.width + 0.5 : Math.max(0.3, config.width * Math.min(1.1, Math.sqrt(weight))))
+            : (isSelected ? config.width + 1.5 : isHighlighted ? config.width + 1 : Math.max(0.5, config.width * Math.min(1.3, Math.sqrt(weight)))),
           type: config.type,
-          curveness: isTopicEdge ? 0.05 : filteredNodes.length > 90 ? 0.12 : 0.22,
+          curveness: isTopicEdge ? 0.04 : filteredNodes.length > 90 ? 0.1 : 0.18,
           opacity: 1,
-          shadowBlur: isSelected ? 12 : isHighlighted ? 8 : 0,
-          shadowColor: withAlpha(sourceColor, isSelected ? 0.35 : isHighlighted ? 0.25 : 0),
+          shadowBlur: isSelected ? 8 : isHighlighted ? 5 : 0,
+          shadowColor: withAlpha(sourceColor, isSelected ? 0.25 : isHighlighted ? 0.15 : 0),
         },
         emphasis: {
           lineStyle: {
-            width: config.width + 2,
+            width: config.width + 1.5,
             color: {
               type: 'linear',
               x: 0,
@@ -777,16 +754,14 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
               x2: 1,
               y2: 0,
               colorStops: [
-                { offset: 0, color: withAlpha(sourceColor, 0.92) },
-                { offset: 0.3, color: withAlpha(sourceColor, 0.78) },
-                { offset: 0.5, color: withAlpha(mixColors(sourceColor, targetColor), 0.65) },
-                { offset: 0.7, color: withAlpha(targetColor, 0.78) },
-                { offset: 1, color: withAlpha(targetColor, 0.92) },
+                { offset: 0, color: withAlpha(sourceColor, 0.8) },
+                { offset: 0.5, color: withAlpha(mixColors(sourceColor, targetColor), 0.6) },
+                { offset: 1, color: withAlpha(targetColor, 0.8) },
               ],
             },
-            opacity: 0.98,
-            shadowBlur: 15,
-            shadowColor: withAlpha(sourceColor, 0.4),
+            opacity: 0.9,
+            shadowBlur: 10,
+            shadowColor: withAlpha(sourceColor, 0.3),
           },
         },
         edgeData: edge,
@@ -796,20 +771,20 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
     const smallGraph = filteredNodes.length <= 36;
     const sparseGraph = filteredEdges.length < filteredNodes.length * (topicMode ? 1.15 : 0.65);
     const forceRepulsion = smallGraph
-      ? (sparseGraph ? 42 : 62)
+      ? (sparseGraph ? 50 : 80)
       : filteredNodes.length > 140
-        ? (topicMode ? 98 : 124)
-        : (topicMode ? (sparseGraph ? 58 : 84) : (sparseGraph ? 92 : 118));
+        ? (topicMode ? 120 : 150)
+        : (topicMode ? (sparseGraph ? 70 : 100) : (sparseGraph ? 100 : 130));
     const forceGravity = smallGraph
-      ? (sparseGraph ? 0.42 : 0.32)
+      ? (sparseGraph ? 0.3 : 0.25)
       : filteredNodes.length > 140
-        ? (topicMode ? 0.16 : 0.12)
-        : (topicMode ? (sparseGraph ? 0.3 : 0.22) : (sparseGraph ? 0.2 : 0.15));
+        ? (topicMode ? 0.12 : 0.1)
+        : (topicMode ? (sparseGraph ? 0.22 : 0.18) : (sparseGraph ? 0.18 : 0.14));
     const forceEdgeLength = smallGraph
-      ? (sparseGraph ? [24, 50] : [30, 62])
+      ? (sparseGraph ? [30, 60] : [40, 80])
       : filteredNodes.length > 140
-        ? (topicMode ? [26, 70] : [48, 102])
-        : (topicMode ? [24, 62] : [44, 108]);
+        ? (topicMode ? [35, 80] : [60, 120])
+        : (topicMode ? [30, 70] : [50, 100]);
 
     const getForceConfig = () => {
       if (layoutMode === 'circular') {
@@ -950,21 +925,21 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
           blurScope: 'coordinateSystem',
           scale: true,
           itemStyle: {
-            borderWidth: 3.5,
+            borderWidth: 2.5,
             borderColor: theme.foreground,
-            shadowBlur: 45,
-            shadowColor: withAlpha(theme.primary, 0.55),
+            shadowBlur: 20,
+            shadowColor: withAlpha(theme.primary, 0.4),
           },
           lineStyle: {
-            width: 3.5,
-            shadowBlur: 22,
-            shadowColor: withAlpha(theme.primary, 0.45),
+            width: 2.5,
+            shadowBlur: 12,
+            shadowColor: withAlpha(theme.primary, 0.3),
           },
         },
         blur: {
-          itemStyle: { opacity: 0.18 },
-          lineStyle: { opacity: 0.04 },
-          label: { opacity: 0.15 },
+          itemStyle: { opacity: 0.12 },
+          lineStyle: { opacity: 0.03 },
+          label: { opacity: 0.1 },
         },
         scaleLimit: {
           min: 0.32,
@@ -978,10 +953,10 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
         selectedMode: 'single',
         select: {
           itemStyle: {
-            borderWidth: 4,
+            borderWidth: 3,
             borderColor: theme.foreground,
-            shadowBlur: 50,
-            shadowColor: withAlpha(theme.primary, 0.6),
+            shadowBlur: 25,
+            shadowColor: withAlpha(theme.primary, 0.45),
           },
         },
         lineStyle: {
@@ -1096,15 +1071,11 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
   return (
     <div
       className="relative h-full w-full touch-none bg-background"
-      style={{ perspective: enable3D ? '1200px' : 'none', perspectiveOrigin: '50% 50%' }}
       onWheel={handleWheel}
       {...dragHandlers}
     >
       <div style={{
-        transformStyle: enable3D ? 'preserve-3d' : 'flat',
-        transform: enable3D
-          ? `rotateX(2deg) translate(${panOffset.x}px, ${panOffset.y}px)`
-          : `translate(${panOffset.x}px, ${panOffset.y}px)`,
+        transform: `translate(${panOffset.x}px, ${panOffset.y}px)`,
         transition: isDragging ? 'none' : 'transform 0.1s ease-out',
       }}>
         <ReactECharts
