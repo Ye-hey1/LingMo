@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGraphStore, type GraphNode, type GraphEdge } from '../store/graph-store';
 import { useInertialDrag } from '../hooks/use-inertial-drag';
+import { NodeDetailPopup } from './node-detail-popup';
 
 interface EChartsGraphProps {
   width: number;
@@ -448,6 +449,8 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
 
   const [isDragging, setIsDragging] = useState(false);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [popupNode, setPopupNode] = useState<GraphNode | null>(null);
+  const [popupRelatedNodes, setPopupRelatedNodes] = useState<Array<{ node: GraphNode; edgeLabel: string }>>([]);
 
   const {
     filteredNodes,
@@ -1006,14 +1009,32 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
   const onEvents = useMemo(() => ({
     click: (params: EChartsEventParams) => {
       if (params.dataType === 'node' && params.data?.id) {
-        selectNode(params.data.id);
+        const clickedNode = filteredNodes.find(n => n.id === params.data!.id);
+        if (clickedNode) {
+          const related: Array<{ node: GraphNode; edgeLabel: string }> = [];
+          for (const edge of filteredEdges) {
+            if (edge.source === clickedNode.id) {
+              const targetNode = filteredNodes.find(n => n.id === edge.target);
+              if (targetNode) related.push({ node: targetNode, edgeLabel: edge.label });
+            }
+            if (edge.target === clickedNode.id) {
+              const sourceNode = filteredNodes.find(n => n.id === edge.source);
+              if (sourceNode) related.push({ node: sourceNode, edgeLabel: edge.label });
+            }
+          }
+          setPopupNode(clickedNode);
+          setPopupRelatedNodes(related);
+          selectNode(params.data.id);
+        }
         selectEdge(null);
       } else if (params.dataType === 'edge' && params.data?.id) {
         selectEdge(params.data.id);
         selectNode(null);
+        setPopupNode(null);
       } else {
         selectNode(null);
         selectEdge(null);
+        setPopupNode(null);
       }
     },
     mouseover: (params: EChartsEventParams) => {
@@ -1027,7 +1048,37 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
     graphRoam: () => {
       setZoom(useGraphStore.getState().zoom);
     },
-  }), [selectEdge, selectNode, setHoveredNode, setZoom]);
+  }), [selectEdge, selectNode, setHoveredNode, setZoom, filteredNodes, filteredEdges]);
+
+  const handleOpenNote = useCallback(async (path: string) => {
+    const useArticleStore = (await import('@/stores/article')).default;
+    useArticleStore.getState().setActiveFilePath(path);
+    setPopupNode(null);
+  }, []);
+
+  const handleCopyPath = useCallback(async (path: string) => {
+    await navigator.clipboard.writeText(path);
+  }, []);
+
+  const handleSelectNodeFromPopup = useCallback((nodeId: string) => {
+    selectNode(nodeId);
+    const newNode = filteredNodes.find(n => n.id === nodeId);
+    if (newNode) {
+      const related: Array<{ node: GraphNode; edgeLabel: string }> = [];
+      for (const edge of filteredEdges) {
+        if (edge.source === nodeId) {
+          const targetNode = filteredNodes.find(n => n.id === edge.target);
+          if (targetNode) related.push({ node: targetNode, edgeLabel: edge.label });
+        }
+        if (edge.target === nodeId) {
+          const sourceNode = filteredNodes.find(n => n.id === edge.source);
+          if (sourceNode) related.push({ node: sourceNode, edgeLabel: edge.label });
+        }
+      }
+      setPopupNode(newNode);
+      setPopupRelatedNodes(related);
+    }
+  }, [selectNode, filteredNodes, filteredEdges]);
 
   if (!isLoaded || !ReactECharts) {
     return (
@@ -1063,6 +1114,17 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
           lazyUpdate
         />
       </div>
+
+      {popupNode && (
+        <NodeDetailPopup
+          node={popupNode}
+          relatedNodes={popupRelatedNodes}
+          onClose={() => setPopupNode(null)}
+          onOpenNote={handleOpenNote}
+          onCopyPath={handleCopyPath}
+          onSelectNode={handleSelectNodeFromPopup}
+        />
+      )}
     </div>
   );
 }
