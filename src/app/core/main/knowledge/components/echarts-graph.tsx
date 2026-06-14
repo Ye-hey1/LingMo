@@ -657,26 +657,40 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
           position: isTopicNode
             ? symbolSize >= 28 ? 'inside' : 'right'
             : role === 'hub' || symbolSize >= 44 ? 'inside' : 'right',
-          formatter: '{b}',
+          formatter: (params: any) => {
+            const name = params.name || '';
+            return name.length > 12 ? name.slice(0, 11) + '…' : name;
+          },
           fontSize: labelFontSize,
           fontWeight: isSelected || role === 'hub' || (isTopicNode && symbolSize >= 28) || symbolSize >= 44 ? 600 : 500,
           color: isDimmed
             ? 'rgba(115, 115, 115, 0.38)'
-            : isTopicNode && symbolSize >= 28
+            : isSelected || isHovered
               ? theme.foreground
-              : symbolSize >= 44
-              ? theme.foreground
-              : withAlpha(color, isTopicNode ? 0.85 : 0.94),
-          distance: isTopicNode ? 2 : 4,
+              : withAlpha(theme.foreground, 0.92),
+          distance: 6,
           overflow: 'truncate',
           width: isTopicNode
-            ? (isSelected || isHovered ? 160 : Math.max(52, Math.min(115, 48 + importance * 62)))
-            : (isSelected || isHovered ? 200 : Math.max(90, Math.min(168, 76 + importance * 82))),
-          backgroundColor: 'transparent',
-          borderColor: 'transparent',
-          borderWidth: 0,
-          borderRadius: 6,
-          padding: 0,
+            ? (isSelected || isHovered ? 140 : Math.max(48, Math.min(100, 44 + importance * 50)))
+            : (isSelected || isHovered ? 160 : Math.max(70, Math.min(130, 60 + importance * 60))),
+          backgroundColor: isDimmed 
+            ? 'transparent' 
+            : isSelected || isHovered
+              ? withAlpha(theme.surface, 0.95)
+              : withAlpha(theme.surface, 0.82),
+          borderColor: isDimmed
+            ? 'transparent'
+            : isSelected 
+              ? withAlpha(theme.foreground, 0.6)
+              : isHovered
+                ? withAlpha(theme.foreground, 0.4)
+                : withAlpha(theme.border, 0.5),
+          borderWidth: isSelected ? 1.5 : isHovered ? 1 : 0.5,
+          borderRadius: 8,
+          padding: isSelected || isHovered ? [4, 10] : [3, 8],
+          shadowBlur: isSelected ? 12 : isHovered ? 8 : 0,
+          shadowColor: withAlpha('#000000', isSelected ? 0.2 : isHovered ? 0.15 : 0),
+          shadowOffsetY: 2,
         },
         emphasis: {
           itemStyle: {
@@ -690,13 +704,15 @@ export function EChartsGraph({ width, height, layoutMode = 'force' }: EChartsGra
             fontSize: 14,
             fontWeight: 700,
             color: theme.foreground,
-            backgroundColor: withAlpha(theme.surface, 0.95),
-            borderColor: theme.border,
+            backgroundColor: withAlpha(theme.surface, 0.96),
+            borderColor: withAlpha(theme.foreground, 0.5),
             borderWidth: 1.5,
-            borderRadius: 8,
-            padding: [5, 12],
-            shadowBlur: 12,
-            shadowColor: 'rgba(0,0,0,0.25)',
+            borderRadius: 10,
+            padding: [6, 14],
+            shadowBlur: 15,
+            shadowColor: withAlpha('#000000', 0.25),
+            shadowOffsetY: 3,
+            distance: 8,
           },
         },
         nodeData: node,
