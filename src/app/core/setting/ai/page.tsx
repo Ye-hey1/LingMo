@@ -24,7 +24,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import Image from "next/image"
 
 import { FormItem } from "../components/setting-base"
-import { AiConfig, ModelConfig, ModelType, builtinProviderTemplates, mergeProviderTemplateModels } from "../config"
+import { AiConfig, ModelConfig, ModelType, builtinProviderTemplates, cleanupConfiguredModels, inferModelTypeFromId, mergeProviderTemplateModels } from "../config"
 import useSettingStore from "@/stores/setting"
 
 import { BotMessageSquare, Eye, EyeOff, LoaderCircle, Minus, Plus, Search, Trash2, X } from "lucide-react"
@@ -252,17 +252,6 @@ export default function AiPage() {
       ...currentConfig,
       enabled,
     })
-  }
-
-  const inferModelTypeFromId = (modelId: string): ModelType => {
-    const value = modelId.toLowerCase()
-    if (value.includes('embedding')) return 'embedding'
-    if (value.includes('rerank')) return 'rerank'
-    if (value.includes('tts') || value.includes('speech')) return 'tts'
-    if (value.includes('stt') || value.includes('transcribe') || value.includes('whisper')) return 'stt'
-    if (value.includes('image') || value.includes('vision')) return 'image'
-    if (value.includes('video')) return 'video'
-    return 'chat'
   }
 
   const parseErrorText = async (response: Response) => {
@@ -616,7 +605,7 @@ export default function AiPage() {
       modelType: template.modelType,
       enabled: template.enabled !== false,
     }
-    const newConfig = mergeProviderTemplateModels(templateConfig).config
+    const newConfig = cleanupConfiguredModels(mergeProviderTemplateModels(templateConfig).config).config
 
     const updatedList = [newConfig, ...aiModelListInStore]
     await store.set('aiModelList', updatedList)
@@ -844,9 +833,23 @@ export default function AiPage() {
   const updateModelConfig = async (modelId: string, field: keyof ModelConfig, value: any) => {
     if (!currentConfig) return
 
-    const updatedModels = (currentConfig.models || []).map((item) =>
-      item.id === modelId ? { ...item, [field]: value } : item
-    )
+    const updatedModels = (currentConfig.models || []).map((item) => {
+      if (item.id !== modelId) return item
+
+      const updatedModel = { ...item, [field]: value }
+      if (field === 'model') {
+        const inferredType = inferModelTypeFromId(String(value || ''))
+        if (inferredType !== 'chat' && item.modelType === 'chat') {
+          return {
+            ...updatedModel,
+            modelType: inferredType,
+            contextWindow: undefined,
+          }
+        }
+      }
+
+      return updatedModel
+    })
 
     const updatedConfig: AiConfig = {
       ...currentConfig,
@@ -895,7 +898,7 @@ export default function AiPage() {
 
   const migrateOldConfig = (config: AiConfig): AiConfig => {
     const templateMerged = mergeProviderTemplateModels(config)
-    config = templateMerged.config
+    config = cleanupConfiguredModels(templateMerged.config).config
 
     if (config.models && config.models.length > 0) {
       return config

@@ -2,6 +2,15 @@ import { create } from 'zustand'
 import { Store } from '@tauri-apps/plugin-store'
 import type { MCPServerConfig, MCPServerState } from '@/lib/mcp/types'
 
+async function refreshAgentMcpTools() {
+  try {
+    const { refreshMcpToolsForAgent } = await import('@/lib/mcp/agent-ready')
+    await refreshMcpToolsForAgent()
+  } catch (error) {
+    console.warn('[MCP] Failed to refresh agent tool registry:', error)
+  }
+}
+
 interface MCPState {
   // 服务器配置列表
   servers: MCPServerConfig[]
@@ -44,9 +53,14 @@ export const useMcpStore = create<MCPState>((set, get) => ({
   addServer: async (server: MCPServerConfig) => {
     const store = await Store.load('store.json')
     const servers = [...get().servers, server]
+    const selectedServerIds = server.enabled
+      ? Array.from(new Set([...get().selectedServerIds, server.id]))
+      : get().selectedServerIds
     await store.set('mcp.servers', servers)
+    await store.set('mcp.selectedServerIds', selectedServerIds)
     await store.save()
-    set({ servers })
+    set({ servers, selectedServerIds })
+    await refreshAgentMcpTools()
   },
   
   updateServer: async (id: string, updates: Partial<MCPServerConfig>) => {
@@ -57,6 +71,7 @@ export const useMcpStore = create<MCPState>((set, get) => ({
     await store.set('mcp.servers', servers)
     await store.save()
     set({ servers })
+    await refreshAgentMcpTools()
   },
   
   deleteServer: async (id: string) => {
@@ -72,6 +87,7 @@ export const useMcpStore = create<MCPState>((set, get) => ({
     serverStates.delete(id)
     
     set({ servers, serverStates, selectedServerIds })
+    await refreshAgentMcpTools()
   },
   
   toggleServerEnabled: async (id: string) => {
@@ -79,9 +95,15 @@ export const useMcpStore = create<MCPState>((set, get) => ({
     const servers = get().servers.map(s =>
       s.id === id ? { ...s, enabled: !s.enabled } : s
     )
+    const target = servers.find(server => server.id === id)
+    const selectedServerIds = target?.enabled
+      ? Array.from(new Set([...get().selectedServerIds, id]))
+      : get().selectedServerIds.filter(serverId => serverId !== id)
     await store.set('mcp.servers', servers)
+    await store.set('mcp.selectedServerIds', selectedServerIds)
     await store.save()
-    set({ servers })
+    set({ servers, selectedServerIds })
+    await refreshAgentMcpTools()
   },
   
   setServerState: (id: string, state: MCPServerState) => {
@@ -99,6 +121,7 @@ export const useMcpStore = create<MCPState>((set, get) => ({
     await store.set('mcp.selectedServerIds', ids)
     await store.save()
     set({ selectedServerIds: ids })
+    await refreshAgentMcpTools()
   },
   
   toggleServerSelection: async (id: string) => {
@@ -111,6 +134,7 @@ export const useMcpStore = create<MCPState>((set, get) => ({
     await store.set('mcp.selectedServerIds', newSelected)
     await store.save()
     set({ selectedServerIds: newSelected })
+    await refreshAgentMcpTools()
   },
   
   clearSelectedServers: async () => {
@@ -118,6 +142,7 @@ export const useMcpStore = create<MCPState>((set, get) => ({
     await store.set('mcp.selectedServerIds', [])
     await store.save()
     set({ selectedServerIds: [] })
+    await refreshAgentMcpTools()
   },
   
   loadMcpConfig: async () => {
@@ -125,10 +150,19 @@ export const useMcpStore = create<MCPState>((set, get) => ({
       const store = await Store.load('store.json')
       const servers = await store.get<MCPServerConfig[]>('mcp.servers')
       const selectedServerIds = await store.get<string[]>('mcp.selectedServerIds')
+      const loadedServers = servers ?? []
+      const loadedSelection = selectedServerIds === undefined
+        ? loadedServers.filter(server => server.enabled).map(server => server.id)
+        : selectedServerIds.filter(id => loadedServers.some(server => server.id === id && server.enabled))
+
+      if (selectedServerIds === undefined) {
+        await store.set('mcp.selectedServerIds', loadedSelection)
+        await store.save()
+      }
 
       set({
-        servers: servers ?? [],
-        selectedServerIds: selectedServerIds ?? [],
+        servers: loadedServers,
+        selectedServerIds: loadedSelection,
       })
     } catch (error) {
       console.error('Failed to load MCP config:', error)
@@ -146,10 +180,19 @@ export const useMcpStore = create<MCPState>((set, get) => ({
       const store = await Store.load('store.json')
       const servers = await store.get<MCPServerConfig[]>('mcp.servers')
       const selectedServerIds = await store.get<string[]>('mcp.selectedServerIds')
+      const loadedServers = servers ?? []
+      const loadedSelection = selectedServerIds === undefined
+        ? loadedServers.filter(server => server.enabled).map(server => server.id)
+        : selectedServerIds.filter(id => loadedServers.some(server => server.id === id && server.enabled))
+
+      if (selectedServerIds === undefined) {
+        await store.set('mcp.selectedServerIds', loadedSelection)
+        await store.save()
+      }
 
       set({
-        servers: servers ?? [],
-        selectedServerIds: selectedServerIds ?? [],
+        servers: loadedServers,
+        selectedServerIds: loadedSelection,
         initialized: true,
       })
     } catch (error) {

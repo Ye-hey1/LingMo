@@ -76,6 +76,9 @@ export class MCPClient {
     })
     
     this.isInitialized = true
+    await this.sendNotification('notifications/initialized', {}).catch(() => {
+      // Some legacy MCP servers do not require or accept initialized notifications.
+    })
     return response as InitializeResult
   }
   
@@ -174,6 +177,24 @@ export class MCPClient {
     } else {
       return this.sendHttpRequest(request)
     }
+  }
+
+  private async sendNotification(method: string, params: any): Promise<void> {
+    const request = {
+      jsonrpc: '2.0' as const,
+      method,
+      params,
+    }
+
+    if (this.config.type === 'stdio') {
+      await invoke<void>('send_mcp_notification', {
+        serverId: this.config.id,
+        message: JSON.stringify(request),
+      })
+      return
+    }
+
+    await this.sendHttpNotification(request)
   }
   
   /**
@@ -287,6 +308,38 @@ export class MCPClient {
     } catch (error) {
       // 静默处理错误，不在控制台输出
       throw error
+    }
+  }
+
+  private async sendHttpNotification(request: Omit<JSONRPCRequest, 'id'>): Promise<void> {
+    if (!this.config.url) {
+      throw new Error('HTTP server URL is required')
+    }
+
+    let customHeaders: Record<string, string> = {}
+    if (this.config.headers) {
+      try {
+        customHeaders = typeof this.config.headers === 'string'
+          ? JSON.parse(this.config.headers)
+          : this.config.headers
+      } catch (error) {
+        console.warn('Failed to parse custom headers:', error)
+      }
+    }
+
+    const response = await tauriFetch(this.config.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+        ...customHeaders,
+      },
+      body: JSON.stringify(request),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => response.statusText)
+      throw new Error(`HTTP ${response.status}: ${errorText}`)
     }
   }
 }

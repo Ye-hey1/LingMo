@@ -25,16 +25,7 @@ import {
 import { cn } from "@/lib/utils"
 import { openPath } from "@tauri-apps/plugin-opener"
 import { normalizeOutputWorkshopHtml } from "@/lib/output-workshop/html-normalizer"
-import type {
-  GenerationStatus,
-  ViewMode,
-  PreviewWorkspaceTab,
-  SourceWorkspaceTab,
-  BuildStage,
-  ExportRecord,
-  TemplateOverrides,
-} from "./types"
-import type { DeckParsed } from "@/lib/output-workshop/export"
+import type { TemplateOverrides } from "./types"
 import { getStatusText } from "./utils"
 import {
   BUILD_STAGES,
@@ -43,6 +34,7 @@ import {
   getPresetById,
   PREVIEW_SIZE_PRESETS,
 } from "./workshop-controls"
+import { useWorkshopContext } from "./workshop-context"
 
 // 流式脉冲边框关键帧（CSS-in-JS 注入一次）
 const STREAMING_STYLE_ID = "ow-streaming-keyframes"
@@ -268,115 +260,52 @@ function LogRow({
   )
 }
 
-interface PreviewPanelProps {
-  // Preview workspace state
-  previewTab: PreviewWorkspaceTab
-  setPreviewTab: (tab: PreviewWorkspaceTab) => void
-  viewMode: ViewMode
-  setViewMode: (mode: ViewMode) => void
+// PreviewPanel 现通过 useWorkshopContext() 获取所有依赖，不再接受 props
 
-  // Generation state
-  status: GenerationStatus
-  errorMessage: string
-  progressText: string
-  elapsed: number
-  generatedHtml: string
-  setGeneratedHtml: (html: string) => void
-  hasGeneratedOutput: boolean
-
-  // Template info
-  selectedTemplatePreviewHtml: string
-  title: string
-
-  // Viewport
-  templateOverrides: TemplateOverrides
-  setTemplateOverrides: (next: TemplateOverrides) => void
-  buildStageId: BuildStage["id"] | null
-  lastExportRecord: ExportRecord | null
-
-  // Deck data
-  parsedDeckData: DeckParsed
-  activeSlideIdx: number
-  setActiveSlideIdx: (idx: number) => void
-  scrollToSlide: (idx: number) => void
-
-  // Streaming
-  streamingHtml: string
-
-  // Refs
-  iframeRef: React.RefObject<HTMLIFrameElement>
-
-  // Export state
-  exportBusy: boolean
-  exportProgressText: string
-
-  // Deploy state
-  showDeployModal: boolean
-  deployProgress: string
-  deployedUrl: string
-
-  // Source info for log tab
-  sourceLabel: string
-  sourceContent: string
-  sourceWorkspaceTab: SourceWorkspaceTab
-
-  // Refine
-  refining: boolean
-  handleStop: () => void
-  handleGenerate: () => void
-
-  // Moka generated-card editing
-  mokaEditingEnabled?: boolean
-  onMokaTextEdit?: (path: string, value: string) => void
-  onMokaStyleEdit?: (path: string, style: Record<string, string>) => void
-  onMokaReorder?: (from: number, to: number) => void
-
-  // Fold
-  sourcePanelCollapsed: boolean
-  toggleSourcePanel: () => void
-}
-
-export function PreviewPanel({
-  previewTab,
-  setPreviewTab,
-  viewMode,
-  setViewMode,
-  status,
-  errorMessage,
-  progressText,
-  elapsed,
-  generatedHtml,
-  setGeneratedHtml,
-  hasGeneratedOutput,
-  selectedTemplatePreviewHtml,
-  title: _title,
-  templateOverrides,
-  setTemplateOverrides,
-  buildStageId,
-  lastExportRecord,
-  parsedDeckData,
-  activeSlideIdx,
-  scrollToSlide,
-  streamingHtml,
-  iframeRef,
-  exportBusy,
-  exportProgressText,
-  showDeployModal,
-  deployProgress,
-  deployedUrl,
-  sourceLabel,
-  sourceContent,
-  sourceWorkspaceTab,
-  refining,
-  sourcePanelCollapsed,
-  toggleSourcePanel,
-  handleStop: _handleStop,
-  handleGenerate,
-  mokaEditingEnabled = false,
-  onMokaTextEdit,
-  onMokaStyleEdit,
-  onMokaReorder,
-}: PreviewPanelProps) {
+export function PreviewPanel() {
+  const ctx = useWorkshopContext()
+  const {
+    previewTab,
+    setPreviewTab,
+    viewMode,
+    setViewMode,
+    generatedHtml,
+    setGeneratedHtml,
+    hasGeneratedOutput,
+    templateOverrides,
+    setTemplateOverrides,
+    activeSlideIdx,
+    scrollToSlide,
+    sourceLabel,
+    sourceContent,
+    sourceWorkspaceTab,
+    sourcePanelCollapsed,
+    toggleSourcePanel,
+    iframeRef,
+  } = ctx
+  const {
+    status,
+    errorMessage,
+    progressText,
+    elapsed,
+    buildStageId,
+    lastExportRecord,
+    streamingHtml,
+    exportBusy,
+    exportProgressText,
+    showDeployModal,
+    deployProgress,
+    deployedUrl,
+    refining,
+    mokaRenderMemory,
+    handleMokaTextEdit: onMokaTextEdit,
+    handleMokaStyleEdit: onMokaStyleEdit,
+    handleMokaReorder: onMokaReorder,
+    handleGenerate,
+  } = ctx.generation
+  const selectedTemplatePreviewHtml = ctx.templates.selectedTemplatePreviewHtml
+  const parsedDeckData = ctx.parsedDeckData
+  const mokaEditingEnabled = Boolean(mokaRenderMemory) && !refining && status === "done"
   const activeSizePreset = getPresetById(templateOverrides.sizePresetId)
   const [mermaidStatus, setMermaidStatus] = React.useState<{ ok: boolean; text: string }>({
     ok: true,

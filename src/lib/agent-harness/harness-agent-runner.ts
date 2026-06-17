@@ -3,13 +3,12 @@ import { createOpenAIClient, getAISettings } from '@/lib/ai/utils'
 import { prepareMessagesWithImages } from '@/lib/ai/vision-bridge'
 import { getModelCapabilityProfile } from '@/lib/ai/model-capabilities'
 import { estimateTokens } from '@/lib/ai/token-counter'
-import { getToolByName, getAllToolsSync, reloadMcpTools } from '@/lib/agent/tools'
+import { getAllToolsSync, reloadMcpTools } from '@/lib/agent/tools'
 import type { AgentEvent, ReActStep, Tool, ToolCall, ToolResult } from '@/lib/agent/types'
 import type { AgentRunControl } from './types'
 import { createAgentEventBus, type AgentEventBus } from '@/lib/agent/event-bus'
 import { deriveIntentPolicy, READ_ONLY_TOOLS, type IntentPolicy } from '@/lib/agent/tool-policy'
 import { buildContextPack } from './context-engine'
-import { writeAgentVfsText } from './vfs'
 import { buildAgentSystemPrompt } from '@/lib/agent/prompt-assembler'
 import { buildAgentHistoryContext } from '@/lib/agent/context-compression'
 import { filterToolsWithCache } from '@/lib/agent/dynamic-tool-filter'
@@ -19,12 +18,15 @@ import { executeGovernedHarnessTool } from './tool-governance'
 import type { SkillMatchSummary } from '@/lib/skills/types'
 import { skillManager } from '@/lib/skills'
 import { getConcreteToolCompletionBlockReason } from '@/lib/agent/final-answer'
+import { withTransientRetry } from '@/lib/agent/transient-retry'
 import { isSupportOnlyToolName } from '@/lib/agent/support-tools'
 import { createAiStreamContentProcessor } from '@/lib/ai/sanitize'
 import { validateFinalAnswer } from '@/lib/agent/final-answer'
 import type { LinkedResource } from '@/lib/files'
+import { AgentLifecycleController } from './turn-lifecycle'
 
 export interface HarnessAgentRunnerConfig {
+  runId?: string
   runControl?: AgentRunControl
   maxIterations?: number
   webSearchEnabled?: boolean
@@ -55,6 +57,16 @@ interface ModelToolCall {
   name: string
   argumentsText: string
 }
+
+const THOUGHT_UPDATE_MIN_INTERVAL_MS = 180
+const FINAL_ANSWER_RESERVE_ITERATIONS = 1
+const REPEATED_TOOL_CALL_THRESHOLD = 3
+const OUTPUT_LENGTH_CONTINUATION_LIMIT = 3
+const INVALID_OUTPUT_CONTINUATION_LIMIT = 2
+const MAX_DYNAMIC_REACT_ITERATIONS = 42
+const DEFAULT_READ_ONLY_BATCH_LIMIT = 3
+const MAX_READ_ONLY_BATCH_LIMIT = 6
+const BUDGET_EXHAUSTION_TEXT_PATTERN = /工具(?:调用)?(?:次数|预算|上限|迭代|step|steps).{0,24}(?:耗尽|不足|用尽|达到|限制|上限)|(?:达到|超过|耗尽|用尽).{0,24}(?:工具(?:调用)?(?:次数|预算|上限)|迭代上限|最大步数|max(?:imum)? steps?|tool budget|tool calls?)/i
 
 function isLengthTruncated(reason?: string | null) {
   return reason === 'length' || reason === 'max_tokens'
@@ -135,11 +147,30 @@ function buildSkippedToolResultMessage(toolCall: ModelToolCall, reason: string):
     toolCall.id,
     {
       success: false,
+      status: 'skipped',
       error: reason,
       message: reason,
     },
     reason,
   )
+}
+
+function getBaseToolNameForRunner(toolName: string) {
+  return toolName.includes('__') ? toolName.split('__').pop() || toolName : toolName
+}
+
+function getGovernedToolCallStatus(input: {
+  result: ToolResult
+  policyBlocked: boolean
+  cached: boolean
+  cancelled: boolean
+}): ToolCall['status'] {
+  if (input.cancelled) return 'cancelled'
+  if (input.cached) return 'cached'
+  if (input.policyBlocked) return 'blocked'
+  if (!input.result.success) return 'error'
+  if (input.result.status === 'adjusted') return 'adjusted'
+  return 'success'
 }
 
 function isSuccessfulStep(step: ReActStep) {
@@ -162,6 +193,10 @@ function isConcreteCompletionTool(toolName?: string) {
     /diagram|visual_report|export|render|pptx|pdf|docx|xlsx/i.test(toolName)
 }
 
+function isInformationQueryRequest(userInput: string) {
+  return /查看|查询|获取|检索|搜索|总结|汇总|梳理|分析|解读|列出|最新|热点|新闻|资讯|趋势|信息|内容|数据|资料|事实|来源|攻略|指南|方案|find|search|fetch|get|retrieve|summari[sz]e|analy[sz]e|latest|news|trending|information|research|source|guide/i.test(userInput)
+}
+
 function validateHarnessFinalAnswer(input: {
   userInput: string
   finalAnswer: string
@@ -173,7 +208,8 @@ function validateHarnessFinalAnswer(input: {
   const validation = validateFinalAnswer(input.finalAnswer, input.userInput, hasSuccessfulTool)
   if (!validation.ok) return validation
 
-  const actionLikeRequest = input.intentPolicy.allowWrite || input.intentPolicy.allowExecute || input.intentPolicy.allowDestructive
+  const actionLikeRequest = input.intentPolicy.allowWrite || input.intentPolicy.allowDestructive
+  const informationQuery = isInformationQueryRequest(input.userInput)
   const hasOnlySupportProgress = input.steps.length > 0 &&
     input.steps.every(step => !step.action || isSupportOnlyToolName(step.action.tool))
   const hasConcreteSuccessfulAction = input.steps.some(step => (
@@ -193,7 +229,8 @@ function validateHarnessFinalAnswer(input: {
 
   const normalizedInput = input.userInput.toLowerCase()
   const claimsExecution = /已生成|已创建|已保存|已完成|已导出|已验证|成功使用|generated|created|saved|exported|verified|completed/.test(input.finalAnswer)
-  const requestedArtifact = /生成|创建|制作|导出|保存|输出|pptx|pdf|docx|xlsx|文件|演示文稿|generate|create|export|save|file|presentation/.test(normalizedInput)
+  const requestedArtifact = !informationQuery &&
+    /生成|创建|制作|导出|保存|输出|pptx|pdf|docx|xlsx|文件|演示文稿|generate|create|export|save|file|presentation/.test(normalizedInput)
   const requestedEdit = /修改|编辑|改成|改为|改回|替换|删除|移动|重命名|复制|插入|rewrite|edit|modify|change|replace|delete|move|rename|copy|insert/.test(normalizedInput)
   const claimsEditApplied = /已修改|已更新|已改为|已改回|已删除|已移动|已重命名|已复制|现在为|已经是|updated|changed|modified|deleted|moved|renamed|copied/.test(input.finalAnswer)
   const hasMutationSuccess = input.steps.some(step => isMutationTool(step.action?.tool) && isSuccessfulStep(step))
@@ -222,6 +259,230 @@ function validateHarnessFinalAnswer(input: {
   }
 
   return { ok: true }
+}
+
+function getFinalAnswerRejectionDisplayReason(reason?: string) {
+  if (!reason) return '最终答案还不完整，正在继续。'
+  if (/内容不能为空|empty/i.test(reason)) {
+    return '模型没有返回可展示正文，正在继续请求完整回答。'
+  }
+  return reason
+}
+
+function buildFinalAnswerRecoveryPrompt(reason?: string) {
+  if (reason && /内容不能为空|empty/i.test(reason)) {
+    return '上一轮没有返回可展示正文。请基于已有工具结果直接给出完整、用户可见的 Markdown 回答；不要输出空 JSON、工具调用日志、Action/Observation 或 Final Answer 标签。'
+  }
+
+  return `你的上一条回答还不能作为最终答案：${reason || '最终答案尚未满足任务要求'} 请继续使用必要工具，或在证据充分后直接给出完整、用户可见的 Markdown 回答。`
+}
+
+function buildOutputLengthContinuationPrompt() {
+  return [
+    '上一条回答因为模型输出长度限制被截断。',
+    '请从截断处继续同一个任务，不要重启、不要重复已经写过的内容。',
+    '如果已经足够回答用户，请直接给出完整收尾；只有确实缺少关键信息时才调用工具。',
+  ].join('\n')
+}
+
+function compactObservationText(value: string, maxChars = 900) {
+  const cleaned = value.replace(/\s+/g, ' ').trim()
+  if (cleaned.length <= maxChars) return cleaned
+  return `${cleaned.slice(0, maxChars).trim()}...`
+}
+
+function buildObservationDigest(steps: ReActStep[], maxSteps = 8) {
+  const usefulSteps = steps
+    .filter(step => step.observation?.trim())
+    .slice(-maxSteps)
+
+  if (usefulSteps.length === 0) return ''
+
+  return usefulSteps.map((step, index) => {
+    const toolLabel = step.action?.tool ? ` (${step.action.tool})` : ''
+    return `${index + 1}. ${toolLabel} ${compactObservationText(step.observation || '')}`.trim()
+  }).join('\n')
+}
+
+function buildMaxIterationFallback(steps: ReActStep[]) {
+  const digest = buildObservationDigest(steps, 6)
+
+  if (digest) {
+    return [
+      '我先基于目前已经确认的信息整理如下：',
+      '',
+      digest,
+      '',
+      '仍未确认的部分我会标明为待核实，并给出下一步建议。',
+    ].join('\n')
+  }
+
+  return '这轮暂时没有拿到足够的可展示信息。可以把任务拆成更小的一步继续，我会从当前上下文接着处理。'
+}
+
+function buildForcedFinalAnswerPrompt(userInput: string, steps: ReActStep[], _reason: string) {
+  const digest = buildObservationDigest(steps, 10)
+  return [
+    '现在进入最终回答阶段，不再继续调用工具，直到下一轮用户输入为止。',
+    '必须基于已有对话和工具 Observation 直接写给用户的最终 Markdown 回答；不要输出 JSON、Action、Observation、Final Answer 标签或工具调用日志。',
+    '如果资料仍不完整，请明确区分“目前已确认”和“仍待核实”，然后给出可执行的下一步建议。',
+    '不要提及任何未向用户公开的内部控制信息。',
+    '回答必须包含：已确认内容、可执行结论、仍待核实项、下一步建议。',
+    `用户原始任务：${userInput}`,
+    digest ? `已有工具结果摘要：\n${digest}` : '',
+  ].filter(Boolean).join('\n\n')
+}
+
+function sanitizeFinalAnswerContent(content: string) {
+  const cleanedLines = content
+    .split(/\r?\n/)
+    .filter(line => !BUDGET_EXHAUSTION_TEXT_PATTERN.test(line))
+
+  const cleaned = cleanedLines.join('\n')
+    .replace(/此段因[^。\n]*(?:工具调用次数|工具预算|迭代上限|最大步数)[^。\n]*[。\n]?/g, '')
+    .replace(/因[^。\n]*(?:工具调用次数|工具预算|迭代上限|最大步数)[^。\n]*未能[^。\n]*[。\n]?/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  return cleaned || content.trim()
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`
+}
+
+function buildToolStepSignature(toolName?: string, params?: Record<string, any>) {
+  if (!toolName || isSupportOnlyToolName(toolName)) return undefined
+  return `tool:${toolName}:${stableStringify(params || {})}`
+}
+
+function summarizeToolParamsForSessionLog(params: Record<string, any>): string | undefined {
+  try {
+    return JSON.stringify(params).slice(0, 500)
+  } catch {
+    return '[unserializable params]'
+  }
+}
+
+function countRecentMatchingToolSteps(steps: ReActStep[], signature: string) {
+  let count = 0
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index]
+    const stepSignature = buildToolStepSignature(step.action?.tool, step.action?.params)
+    if (!stepSignature) break
+    if (stepSignature !== signature) break
+    count += 1
+  }
+  return count
+}
+
+function estimateInformationLookupDensity(userInput: string, taskPlan: TaskPlan | null) {
+  let density = 0
+  if (isInformationQueryRequest(userInput)) density += 1
+  if (taskPlan?.isComplex) density += Math.min(5, taskPlan.steps.length)
+  if (/批量|多个|多项|所有|全部|每个|分别|逐[一项条段个]|对比|比较|清单|列表|batch|multiple|all|every|each|compare|list/i.test(userInput)) {
+    density += 2
+  }
+  const delimiterCount = userInput.match(/[、,，;；]/g)?.length || 0
+  density += Math.min(3, Math.floor(delimiterCount / 2))
+  const numberedCount = userInput.match(/\d+[、.．)]/g)?.length || 0
+  density += Math.min(4, numberedCount)
+  return density
+}
+
+function countUsefulReadOnlySteps(steps: ReActStep[]) {
+  return steps.filter(step => (
+    step.action?.tool &&
+    !isSupportOnlyToolName(step.action.tool) &&
+    !isMutationTool(step.action.tool) &&
+    isSuccessfulStep(step)
+  )).length
+}
+
+function resolveReActMaxIterations(userInput: string, configuredMaxIterations: number | undefined, taskPlan: TaskPlan | null) {
+  const configured = configuredMaxIterations || 18
+  const plannedStepBudget = taskPlan?.isComplex
+    ? Math.min(MAX_DYNAMIC_REACT_ITERATIONS, Math.max(configured, taskPlan.steps.length * 3 + 6))
+    : configured
+  const lookupDensity = estimateInformationLookupDensity(userInput, taskPlan)
+  const multiLookupBudget = lookupDensity >= 6
+    ? Math.max(plannedStepBudget, 34)
+    : lookupDensity >= 3
+      ? Math.max(plannedStepBudget, 28)
+      : lookupDensity >= 2
+        ? Math.max(plannedStepBudget, 22)
+        : plannedStepBudget
+
+  return Math.min(MAX_DYNAMIC_REACT_ITERATIONS, Math.max(6, multiLookupBudget))
+}
+
+function buildReActBudgetPrompt(input: {
+  currentIteration: number
+  maxToolIterations: number
+  maxIterations: number
+}) {
+  const remainingToolEnabledCycles = Math.max(0, input.maxToolIterations - input.currentIteration)
+  const urgency = remainingToolEnabledCycles <= 0
+    ? '这是接近收尾的步骤。除非缺少决定性证据，否则不要再调用工具，直接收束。'
+    : remainingToolEnabledCycles <= 2
+      ? '可用轮次已经不多。只补关键缺口，避免探索性搜索，准备最终回答。'
+      : '优先使用最少工具拿到足够证据，证据足够时立即回答。'
+
+  return [
+    '## Execution Cadence',
+    `- Current cycle: ${input.currentIteration}/${input.maxToolIterations}. A final no-tool answer pass is reserved before the overall cap (${input.maxIterations}).`,
+    `- Tool-capable cycles remaining after this one: ${remainingToolEnabledCycles}.`,
+    `- ${urgency}`,
+    '- Do not repeat deterministic read/search tools with identical arguments. Use previous observations, change strategy, or answer with current evidence.',
+    '- Prefer one high-value tool call. Multiple read-only tool calls are allowed only when they answer distinct missing facts.',
+    '- When enough evidence exists, stop calling tools and write the user-visible Markdown answer.',
+    '- The final user-visible answer must not mention internal control messages.',
+  ].join('\n')
+}
+
+function isReadOnlyHarnessTool(tool?: Tool) {
+  if (!tool) return false
+  const baseName = getBaseToolNameForRunner(tool.name)
+  if (READ_ONLY_TOOLS.has(tool.name) || READ_ONLY_TOOLS.has(baseName)) return true
+  const capabilities = new Set(tool.capabilities || [])
+  if (capabilities.has('write') || capabilities.has('delete') || capabilities.has('execute')) return false
+  if (capabilities.has('read')) return true
+  if (tool.category === 'search' || tool.category === 'web') return true
+  if (tool.category !== 'mcp') return false
+  if (tool.risk === 'low' && !tool.requiresConfirmation) return true
+  return /^(read|list|search|fetch|get|query|find|lookup|describe|inspect|detail|text_search|search_detail|weather)(_|$)/i.test(baseName)
+}
+
+function resolveReadOnlyBatchLimit(input: {
+  requestedToolCallCount: number
+  remainingToolIterations: number
+  completedReadOnlySteps: number
+  allRequestedToolsReadOnly: boolean
+  taskPlan: TaskPlan | null
+}) {
+  if (!input.allRequestedToolsReadOnly || input.requestedToolCallCount <= 1) return 1
+
+  const requestedCap = Math.min(input.requestedToolCallCount, MAX_READ_ONLY_BATCH_LIMIT)
+  const remaining = Math.max(1, input.remainingToolIterations)
+  let limit = DEFAULT_READ_ONLY_BATCH_LIMIT
+
+  if (input.requestedToolCallCount > DEFAULT_READ_ONLY_BATCH_LIMIT) {
+    limit = Math.min(requestedCap, 4)
+  }
+  if (input.requestedToolCallCount >= 5 || remaining <= 2) {
+    limit = requestedCap
+  }
+  if (input.taskPlan?.isComplex && input.taskPlan.steps.length >= 3) {
+    limit = Math.max(limit, Math.min(requestedCap, 4))
+  }
+  if (input.completedReadOnlySteps >= 12 && remaining > 2) {
+    limit = Math.min(limit, DEFAULT_READ_ONLY_BATCH_LIMIT)
+  }
+
+  return Math.max(1, Math.min(requestedCap, limit))
 }
 
 function getToolSubset(allTools: Tool[], steps: ReActStep[], forcedSkillIds: string[], selectedSkillIds: Set<string>) {
@@ -267,9 +528,14 @@ export class HarnessAgentRunner {
   private selectedSkillIds = new Set<string>()
   private currentIteration = 0
   private taskPlan: TaskPlan | null = null
+  private visibleToolsByName = new Map<string, Tool>()
+  private outputLengthContinuations = 0
+  private invalidOutputContinuations = 0
+  private lifecycle: AgentLifecycleController
 
   constructor(private config: HarnessAgentRunnerConfig) {
-    this.eventBus = createAgentEventBus({ runId: config.runControl?.runId || createRunId() })
+    this.eventBus = createAgentEventBus({ runId: config.runControl?.runId || config.runId || createRunId() })
+    this.lifecycle = new AgentLifecycleController(this.eventBus.getRunId())
   }
 
   stop() {
@@ -285,6 +551,14 @@ export class HarnessAgentRunner {
 
   getCurrentIteration() {
     return this.currentIteration
+  }
+
+  getLifecycleSnapshot() {
+    return this.lifecycle.getSnapshot()
+  }
+
+  private flushLifecycleSessionLog() {
+    this.config.runControl?.setSessionLog?.(this.lifecycle.getSessionLog())
   }
 
   private emitEvent(type: AgentEvent['type'], payload?: Record<string, any>) {
@@ -415,11 +689,21 @@ export class HarnessAgentRunner {
     }
   }
 
+  private setVisibleTools(tools: Tool[]) {
+    this.visibleToolsByName = new Map(tools.map(tool => [tool.name, tool]))
+  }
+
+  private getVisibleToolByName(name: string): Tool | undefined {
+    return this.visibleToolsByName.get(name)
+      || [...this.visibleToolsByName.entries()].find(([toolName]) => toolName.split('__').pop() === name)?.[1]
+  }
+
   private async streamModel(input: {
     messages: OpenAI.Chat.ChatCompletionMessageParam[]
     tools: Tool[]
     imageUrls?: string[]
     maxTokens?: number
+    streamAnswerDelta?: boolean
   }): Promise<{ content: string; toolCalls: ModelToolCall[]; finishReason?: string | null }> {
     const aiConfig = await getAISettings()
     const openai = await createOpenAIClient(aiConfig)
@@ -435,23 +719,53 @@ export class HarnessAgentRunner {
     }
     if (capabilities.supportsToolChoice) requestParams.tool_choice = 'auto'
     if (input.maxTokens && input.maxTokens > 0) requestParams.max_tokens = input.maxTokens
+    if (input.tools.length === 0) {
+      delete requestParams.tools
+      delete requestParams.tool_choice
+    }
 
+    const modelStartedAt = Date.now()
     this.emitEvent('model.request.started', {
       mode: 'harness-tools',
       messageCount: messages.length,
       toolCount: input.tools.length,
       inputTokens: estimateTokens(JSON.stringify(messages)),
+      startedAt: modelStartedAt,
     })
 
-    const stream = await openai.chat.completions.create(requestParams, {
-      signal: this.abortController?.signal,
-    }) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+    const stream = await withTransientRetry(
+      () => openai.chat.completions.create(requestParams, {
+        signal: this.abortController?.signal,
+      }) as unknown as Promise<AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>>,
+      {
+        signal: this.abortController?.signal,
+        onRetry: ({ attempt, delayMs, reason }) => {
+          console.warn(`[Agent Runner] Retrying LLM request (attempt ${attempt}) after ${delayMs}ms: ${reason}`)
+          this.emitEvent('model.request.started', {
+            mode: 'harness-tools',
+            retry: { attempt, delayMs, reason },
+            messageCount: messages.length,
+          })
+        },
+      },
+    )
 
     let content = ''
     let thinking = ''
+    let lastThoughtEmitAt = 0
+    let lastThoughtContent = ''
     let finishReason: string | null | undefined
     const toolCalls: ModelToolCall[] = []
     const streamProcessor = createAiStreamContentProcessor()
+    const emitThoughtUpdate = (force = false) => {
+      if (!thinking || thinking === lastThoughtContent) return
+      const now = Date.now()
+      if (!force && now - lastThoughtEmitAt < THOUGHT_UPDATE_MIN_INTERVAL_MS) return
+      lastThoughtEmitAt = now
+      lastThoughtContent = thinking
+      this.config.onThought?.(thinking)
+      this.emitEvent('thought.updated', { content: thinking, streaming: !force, throttled: !force })
+    }
 
     for await (const chunk of stream) {
       if (this.stopped) throw new Error('USER_STOPPED')
@@ -461,8 +775,7 @@ export class HarnessAgentRunner {
       const thinkingContent = (delta as any)?.reasoning_content || ''
       if (thinkingContent) {
         thinking += thinkingContent
-        this.config.onThought?.(thinking)
-        this.emitEvent('thought.updated', { content: thinking, streaming: true })
+        emitThoughtUpdate()
       }
 
       if (delta?.tool_calls) {
@@ -486,12 +799,13 @@ export class HarnessAgentRunner {
         const processed = streamProcessor.push(text)
         if (processed.thinking) {
           thinking += processed.thinking
-          this.config.onThought?.(thinking)
-          this.emitEvent('thought.updated', { content: thinking, streaming: true })
+          emitThoughtUpdate()
         }
         if (processed.content) {
           content += processed.content
-          this.config.onAnswerDelta?.(content)
+          if (input.streamAnswerDelta) {
+            this.config.onAnswerDelta?.(content)
+          }
         }
       }
     }
@@ -499,12 +813,13 @@ export class HarnessAgentRunner {
     const remaining = streamProcessor.flush()
     if (remaining.thinking) {
       thinking += remaining.thinking
-      this.config.onThought?.(thinking)
-      this.emitEvent('thought.updated', { content: thinking, streaming: true })
     }
+    emitThoughtUpdate(true)
     if (remaining.content) {
       content += remaining.content
-      this.config.onAnswerDelta?.(content)
+      if (input.streamAnswerDelta) {
+        this.config.onAnswerDelta?.(content)
+      }
     }
 
     this.emitEvent('model.response.received', {
@@ -513,6 +828,7 @@ export class HarnessAgentRunner {
       finishReason,
       truncated: isLengthTruncated(finishReason),
       toolCallCount: toolCalls.length,
+      durationMs: Date.now() - modelStartedAt,
     })
 
     return { content, toolCalls: normalizeToolCalls(toolCalls), finishReason }
@@ -524,7 +840,7 @@ export class HarnessAgentRunner {
     intentPolicy: IntentPolicy
   }): Promise<OpenAI.Chat.ChatCompletionMessageParam> {
     const { toolCall, userInput, intentPolicy } = input
-    const tool = getToolByName(toolCall.name)
+    const tool = this.getVisibleToolByName(toolCall.name)
     const params = parseToolArguments(toolCall)
     this.config.onAction?.(toolCall.name, params)
     this.emitEvent('action.parsed', { tool: toolCall.name, params })
@@ -550,7 +866,24 @@ export class HarnessAgentRunner {
 
     uiToolCall.status = 'running'
     this.emitToolCall(uiToolCall)
-    this.emitEvent('tool.execution.started', { toolName: tool.name, params, toolCallId: uiToolCall.id })
+    const toolStartedAt = Date.now()
+    this.emitEvent('tool.execution.started', {
+      toolName: tool.name,
+      params,
+      toolCallId: uiToolCall.id,
+      startedAt: toolStartedAt,
+      toolCall: {
+        ...uiToolCall,
+        params: { ...uiToolCall.params },
+      },
+    })
+    this.lifecycle.enqueueEntry({
+      type: 'tool_call_started',
+      iteration: this.currentIteration,
+      toolName: tool.name,
+      toolCallId: uiToolCall.id,
+      paramsSummary: summarizeToolParamsForSessionLog(params),
+    })
 
     const governed = await executeGovernedHarnessTool({
       tool,
@@ -578,9 +911,15 @@ export class HarnessAgentRunner {
 
     const result = governed.execution.result
     uiToolCall.params = governed.params
-    uiToolCall.status = result.success ? 'success' : 'error'
+    uiToolCall.status = getGovernedToolCallStatus({
+      result,
+      policyBlocked: governed.policyBlocked,
+      cached: governed.cached,
+      cancelled: governed.cancelled,
+    })
     uiToolCall.result = {
       ...result,
+      status: uiToolCall.status,
       data: {
         ...(result.data && typeof result.data === 'object' && !Array.isArray(result.data) ? result.data : result.data !== undefined ? { value: result.data } : {}),
         dataRef: governed.execution.observation.dataRef,
@@ -588,6 +927,8 @@ export class HarnessAgentRunner {
         retryable: governed.execution.observation.retryable,
         errorKind: governed.execution.observation.errorKind,
         cached: governed.cached,
+        warnings: Array.isArray(result.data?.warnings) ? result.data.warnings : undefined,
+        outputEncoding: typeof result.data?.outputEncoding === 'string' ? result.data.outputEncoding : undefined,
       },
     }
     this.emitToolCall(uiToolCall)
@@ -596,12 +937,30 @@ export class HarnessAgentRunner {
       params: governed.params,
       toolCallId: uiToolCall.id,
       success: result.success,
+      status: uiToolCall.status,
       message: result.message,
       error: result.error,
       dataRef: governed.execution.observation.dataRef,
       retryable: governed.execution.observation.retryable,
       errorKind: governed.execution.observation.errorKind,
       cached: governed.cached,
+      durationMs: Date.now() - toolStartedAt,
+      toolCall: {
+        ...uiToolCall,
+        params: { ...uiToolCall.params },
+        result: uiToolCall.result ? { ...uiToolCall.result } : undefined,
+      },
+    })
+    this.lifecycle.enqueueEntry({
+      type: 'tool_result',
+      iteration: this.currentIteration,
+      toolName: tool.name,
+      toolCallId: uiToolCall.id,
+      success: result.success,
+      status: uiToolCall.status,
+      summary: result.message || result.error || governed.execution.observation.summary || '',
+      dataRef: governed.execution.observation.dataRef,
+      retryable: governed.execution.observation.retryable,
     })
 
     if (tool.name === 'select_skill' && result.success && Array.isArray(result.data?.selected_skills)) {
@@ -636,6 +995,53 @@ export class HarnessAgentRunner {
     return buildToolResultMessage(toolCall.id, result, governed.observationText)
   }
 
+  private async synthesizeFinalAnswer(input: {
+    messages: OpenAI.Chat.ChatCompletionMessageParam[]
+    userInput: string
+    intentPolicy: IntentPolicy
+    reason: string
+  }): Promise<string> {
+    const finalMessages = [
+      ...input.messages,
+      {
+        role: 'user' as const,
+        content: buildForcedFinalAnswerPrompt(input.userInput, this.steps, input.reason),
+      },
+    ]
+
+    this.emitEvent('final.answer.rejected', {
+      reason: '工具循环已到收尾阶段，正在基于现有结果生成最终回答。',
+      internalReason: input.reason,
+    })
+    const response = await this.streamModel({
+      messages: finalMessages,
+      tools: [],
+      streamAnswerDelta: true,
+      maxTokens: 2400,
+    })
+    const candidate = sanitizeFinalAnswerContent(response.content)
+    const validation = validateHarnessFinalAnswer({
+      userInput: input.userInput,
+      finalAnswer: candidate,
+      steps: this.steps,
+      intentPolicy: input.intentPolicy,
+      selectedSkillIds: this.selectedSkillIds,
+    })
+
+    if (validation.ok && candidate) {
+      return candidate
+    }
+
+    if (candidate) {
+      this.emitEvent('final.answer.rejected', {
+        reason: getFinalAnswerRejectionDisplayReason(validation.reason),
+        internalReason: validation.reason,
+      })
+    }
+
+    return sanitizeFinalAnswerContent(buildMaxIterationFallback(this.steps))
+  }
+
   async run(
     userInput: string,
     contextOrMessages?: string | OpenAI.Chat.ChatCompletionMessageParam[],
@@ -645,11 +1051,18 @@ export class HarnessAgentRunner {
     this.stopped = false
     this.steps = []
     this.currentIteration = 0
+    this.outputLengthContinuations = 0
+    this.invalidOutputContinuations = 0
     this.selectedSkillIds = new Set((this.config.forcedSkillIds || []).filter(Boolean))
     const forcedSkillIds = Array.from(this.selectedSkillIds)
     const intentPolicy = deriveIntentPolicy(userInput)
 
     this.emitEvent('agent.started', { userInput, intentPolicy, forcedSkillIds })
+    this.lifecycle = new AgentLifecycleController(this.eventBus.getRunId())
+    this.lifecycle.startRun({
+      route: this.config.runControl?.route || 'agent',
+      userGoal: userInput,
+    })
     if (forcedSkillIds.length > 0) this.emitEvent('skills.selected', { skillIds: forcedSkillIds, explicit: true })
 
     const directReply = forcedSkillIds.length === 0 ? getDirectAgentReply(userInput, imageUrls) : null
@@ -658,64 +1071,111 @@ export class HarnessAgentRunner {
       this.emitEvent('final', { content: directReply })
       this.emitEvent('final.answer.rendered', { content: directReply })
       this.emitEvent('agent.completed', { result: directReply })
+      this.lifecycle.finish({ status: 'completed', finalAnswer: directReply })
+      this.flushLifecycleSessionLog()
       return directReply
     }
 
-    await reloadMcpTools().catch(() => {})
-
-    if (isTaskLikelyComplex(userInput)) {
+    try {
       try {
-        const toolNames = getAllToolsSync().map(tool => tool.name)
-        this.taskPlan = await generateTaskPlan(userInput, toolNames, this.abortController.signal)
-        if (this.taskPlan.isComplex) {
-          this.emitEvent('agent.planning', { plan: this.taskPlan })
-        }
+        const { ensureMcpReadyForAgent } = await import('@/lib/mcp/agent-ready')
+        await ensureMcpReadyForAgent()
       } catch {
-        this.taskPlan = null
+        await reloadMcpTools().catch(() => {})
       }
-    }
 
-    let systemPrompt = await this.buildSystemPrompt(userInput, intentPolicy)
-    const messages = this.buildMessages(systemPrompt, userInput, contextOrMessages)
+      try {
+        const { ensureSkillsReadyForAgent } = await import('@/lib/skills/agent-ready')
+        await ensureSkillsReadyForAgent()
+      } catch (error) {
+        console.warn('[AgentHarness] Failed to prepare Skills runtime:', error)
+      }
 
-    const contextItems = messages.map((message, index) => ({
-      id: `message-${index}`,
-      source: message.role === 'user' ? 'user' as const : 'history' as const,
-      priority: message.role === 'user' ? 100 : 65,
-      content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content || ''),
-      tokenEstimate: estimateTokens(typeof message.content === 'string' ? message.content : JSON.stringify(message.content || '')),
-    }))
-    const pack = buildContextPack({
-      runId: this.eventBus.getRunId(),
-      tokenBudget: 70000,
-      items: contextItems,
-    })
-    await writeAgentVfsText(this.eventBus.getRunId(), 'context', 'initial-context-pack.json', JSON.stringify(pack, null, 2), `${pack.included.length} context items`)
+      if (isTaskLikelyComplex(userInput)) {
+        try {
+          const toolNames = getAllToolsSync().map(tool => tool.name)
+          this.taskPlan = await generateTaskPlan(userInput, toolNames, this.abortController.signal)
+          if (this.taskPlan.isComplex) {
+            this.emitEvent('agent.planning', { plan: this.taskPlan })
+          }
+        } catch {
+          this.taskPlan = null
+        }
+      }
 
-    const maxIterations = this.config.maxIterations || 18
-    let finalAnswer = ''
+      let systemPrompt = await this.buildSystemPrompt(userInput, intentPolicy)
+      const messages = this.buildMessages(systemPrompt, userInput, contextOrMessages)
 
-    while (this.currentIteration < maxIterations) {
-      if (this.stopped) throw new Error('USER_STOPPED')
-      this.currentIteration += 1
-      this.emitEvent('iteration.started')
+      const contextItems = messages.map((message, index) => ({
+        id: `message-${index}`,
+        source: message.role === 'user' ? 'user' as const : 'history' as const,
+        priority: message.role === 'user' ? 100 : 65,
+        content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content || ''),
+        tokenEstimate: estimateTokens(typeof message.content === 'string' ? message.content : JSON.stringify(message.content || '')),
+      }))
+      const pack = this.config.runControl
+        ? await this.config.runControl.setContextPack({
+          tokenBudget: 70000,
+          items: contextItems,
+        })
+        : buildContextPack({
+          runId: this.eventBus.getRunId(),
+          tokenBudget: 70000,
+          items: contextItems,
+        })
+      const contextPackRef = this.config.runControl?.getSnapshot().contextPackRef
 
-      systemPrompt = await this.buildSystemPrompt(userInput, intentPolicy)
-      messages[0] = { role: 'system', content: systemPrompt }
-      const allTools = getAllToolsSync()
-      const preparedStep = await this.prepareHarnessModelStep({ allTools, userInput, intentPolicy })
-      const availableTools = preparedStep.tools
+      const maxIterations = resolveReActMaxIterations(userInput, this.config.maxIterations, this.taskPlan)
+      const maxToolIterations = Math.max(1, maxIterations - FINAL_ANSWER_RESERVE_ITERATIONS)
+      let finalAnswer = ''
+
+      while (this.currentIteration < maxIterations) {
+        if (this.stopped) throw new Error('USER_STOPPED')
+        this.currentIteration += 1
+        this.emitEvent('iteration.started')
+
+        systemPrompt = await this.buildSystemPrompt(userInput, intentPolicy)
+        messages[0] = { role: 'system', content: systemPrompt }
+        const allTools = getAllToolsSync()
+        const preparedStep = await this.prepareHarnessModelStep({ allTools, userInput, intentPolicy })
+        const availableTools = preparedStep.tools
+        this.setVisibleTools(availableTools)
+        this.lifecycle.createTurn({
+          runId: this.eventBus.getRunId(),
+          iteration: this.currentIteration,
+          route: this.config.runControl?.route || 'agent',
+          userGoal: userInput,
+          systemPrompt,
+          tools: availableTools,
+          contextPack: pack,
+          contextPackRef,
+          runtimeSnapshot: this.config.runControl?.getMiddlewareState().runtime?.snapshot,
+        })
       if (preparedStep.promptSections.length > 0) {
         const promptWithMiddleware = [
           systemPrompt,
           ...preparedStep.promptSections,
+          buildReActBudgetPrompt({ currentIteration: this.currentIteration, maxToolIterations, maxIterations }),
         ].join('\n\n')
         messages[0] = { role: 'system', content: promptWithMiddleware }
+      } else {
+        messages[0] = {
+          role: 'system',
+          content: [
+            systemPrompt,
+            buildReActBudgetPrompt({ currentIteration: this.currentIteration, maxToolIterations, maxIterations }),
+          ].join('\n\n'),
+        }
       }
       const response = await this.streamModel({
         messages,
         tools: availableTools,
         imageUrls: this.currentIteration === 1 ? imageUrls : undefined,
+        streamAnswerDelta: true,
+      })
+      this.lifecycle.savePoint({
+        finishReason: response.finishReason,
+        toolCallCount: response.toolCalls.length,
       })
 
       if (response.toolCalls.length === 0) {
@@ -727,19 +1187,80 @@ export class HarnessAgentRunner {
           intentPolicy,
           selectedSkillIds: this.selectedSkillIds,
         })
-        if (validation.ok || this.currentIteration >= maxIterations) {
-          finalAnswer = candidate || validation.reason || '任务执行完成。'
+        if (validation.ok) {
+          finalAnswer = candidate || '任务执行完成。'
           break
         }
 
-        this.emitEvent('final.answer.rejected', { reason: validation.reason })
+        if (
+          isLengthTruncated(response.finishReason) &&
+          this.currentIteration < maxToolIterations &&
+          this.outputLengthContinuations < OUTPUT_LENGTH_CONTINUATION_LIMIT
+        ) {
+          this.outputLengthContinuations += 1
+          this.emitEvent('final.answer.rejected', {
+            reason: '模型输出被长度限制截断，正在续写。',
+            internalReason: response.finishReason || 'length',
+            continuationAttempt: this.outputLengthContinuations,
+          })
+          messages.push({ role: 'assistant', content: candidate })
+          messages.push({
+            role: 'user',
+            content: buildOutputLengthContinuationPrompt(),
+          })
+          continue
+        }
+
+        if (
+          (!candidate || /内容不能为空|empty|Final Answer 内容不能为空/i.test(validation.reason || '')) &&
+          this.currentIteration < maxToolIterations &&
+          this.invalidOutputContinuations < INVALID_OUTPUT_CONTINUATION_LIMIT
+        ) {
+          this.invalidOutputContinuations += 1
+          const displayReason = getFinalAnswerRejectionDisplayReason(validation.reason)
+          this.emitEvent('final.answer.rejected', {
+            reason: displayReason,
+            internalReason: validation.reason,
+            continuationAttempt: this.invalidOutputContinuations,
+          })
+          this.emitObservation(validation.reason || '上一轮没有可展示正文，正在请求模型直接收尾。', { internal: true, visibility: 'hidden' })
+          messages.push({ role: 'assistant', content: candidate })
+          messages.push({
+            role: 'user',
+            content: buildFinalAnswerRecoveryPrompt(validation.reason),
+          })
+          continue
+        }
+
+        if (this.currentIteration >= maxToolIterations) {
+          finalAnswer = await this.synthesizeFinalAnswer({
+            messages,
+            userInput,
+            intentPolicy,
+            reason: validation.reason || 'final answer validation failed at iteration limit',
+          })
+          break
+        }
+
+        const displayReason = getFinalAnswerRejectionDisplayReason(validation.reason)
+        this.emitEvent('final.answer.rejected', { reason: displayReason, internalReason: validation.reason })
         this.emitObservation(validation.reason || '最终答案尚未满足任务要求，请继续执行必要工具。', { internal: true, visibility: 'hidden' })
         messages.push({ role: 'assistant', content: candidate })
         messages.push({
           role: 'user',
-          content: `你的上一条回答还不能作为最终答案：${validation.reason} 请继续使用必要工具，或在证据充分后给出最终答案。`,
+          content: buildFinalAnswerRecoveryPrompt(validation.reason),
         })
         continue
+      }
+
+      if (this.currentIteration >= maxToolIterations) {
+        finalAnswer = await this.synthesizeFinalAnswer({
+          messages,
+          userInput,
+          intentPolicy,
+          reason: `model requested ${response.toolCalls.length} additional action(s) during the finalization cycle`,
+        })
+        break
       }
 
       messages.push({
@@ -756,40 +1277,139 @@ export class HarnessAgentRunner {
       } as OpenAI.Chat.ChatCompletionMessageParam)
 
       const readOnlyBatch = response.toolCalls.length > 1 &&
-        response.toolCalls.every(call => {
-          const tool = getToolByName(call.name)
-          return tool && READ_ONLY_TOOLS.has(tool.name)
-        })
-      const callsToRun = readOnlyBatch ? response.toolCalls.slice(0, 3) : response.toolCalls.slice(0, 1)
+        response.toolCalls.every(call => isReadOnlyHarnessTool(this.getVisibleToolByName(call.name)))
+      const remainingToolIterations = Math.max(0, maxToolIterations - this.currentIteration)
+      const readOnlyBatchLimit = resolveReadOnlyBatchLimit({
+        requestedToolCallCount: response.toolCalls.length,
+        remainingToolIterations,
+        completedReadOnlySteps: countUsefulReadOnlySteps(this.steps),
+        allRequestedToolsReadOnly: readOnlyBatch,
+        taskPlan: this.taskPlan,
+      })
+      const callsToRun = readOnlyBatch ? response.toolCalls.slice(0, readOnlyBatchLimit) : response.toolCalls.slice(0, 1)
       const callsToSkip = response.toolCalls.slice(callsToRun.length)
       for (const toolCall of callsToRun) {
+        const params = parseToolArguments(toolCall)
+        const signature = buildToolStepSignature(toolCall.name, params)
+        const tool = this.getVisibleToolByName(toolCall.name)
+        const repeatedTool = tool
+          && isReadOnlyHarnessTool(tool)
+          && signature
+          && countRecentMatchingToolSteps(this.steps, signature) >= REPEATED_TOOL_CALL_THRESHOLD - 1
+        if (repeatedTool) {
+          const reason = [
+            'Skipped repeated tool call because the same tool and arguments have already been used repeatedly without progress.',
+            'Change strategy, use a different query/tool, or answer from the existing observations.',
+          ].join(' ')
+          messages.push(buildSkippedToolResultMessage(toolCall, reason))
+          this.emitEvent('tool.execution.finished', {
+            toolName: toolCall.name,
+            toolCallId: toolCall.id,
+            success: false,
+            status: 'skipped',
+            message: reason,
+            error: 'REPEATED_TOOL_CALL',
+            retryable: true,
+            toolCall: {
+              id: toolCall.id,
+              toolName: toolCall.name,
+              params,
+              status: 'skipped',
+              timestamp: Date.now(),
+              result: {
+                success: false,
+                status: 'skipped',
+                error: 'REPEATED_TOOL_CALL',
+                message: reason,
+                data: { retryable: true },
+              },
+            },
+          })
+          this.lifecycle.enqueueEntry({
+            type: 'tool_result',
+            iteration: this.currentIteration,
+            toolName: toolCall.name,
+            toolCallId: toolCall.id,
+            success: false,
+            status: 'skipped',
+            summary: reason,
+            retryable: true,
+          })
+          this.completeStep({ thought: `Skipped repeated tool call: ${toolCall.name}`, action: { tool: toolCall.name, params }, observation: reason })
+          continue
+        }
+        this.lifecycle.enterToolPhase()
         messages.push(await this.executeModelToolCall({ toolCall, userInput, intentPolicy }))
         if (this.stopped) throw new Error('USER_STOPPED')
       }
       for (const toolCall of callsToSkip) {
         const reason = readOnlyBatch
-          ? 'Skipped extra read-only tool call because this step already reached the maximum parallel read limit. Please request remaining lookups in the next model step if still needed.'
+          ? 'Deferred extra read-only lookup for the next continuation cycle. Use completed observations first; request the remaining distinct lookup only if it is still necessary.'
           : 'Skipped extra tool call because write, execute, delete, and uncertain operations must be handled one at a time. Please wait for the completed observation before requesting another tool.'
         messages.push(buildSkippedToolResultMessage(toolCall, reason))
         this.emitEvent('tool.execution.finished', {
           toolName: toolCall.name,
           toolCallId: toolCall.id,
           success: false,
+          status: 'skipped',
           message: reason,
           error: 'SKIPPED_TOOL_CALL',
           retryable: true,
+          toolCall: {
+            id: toolCall.id,
+            toolName: toolCall.name,
+            params: parseToolArguments(toolCall),
+            status: 'skipped',
+            timestamp: Date.now(),
+            result: {
+              success: false,
+              status: 'skipped',
+              error: 'SKIPPED_TOOL_CALL',
+              message: reason,
+              data: { retryable: true },
+            },
+          },
+        })
+        this.lifecycle.enqueueEntry({
+          type: 'tool_result',
+          iteration: this.currentIteration,
+          toolName: toolCall.name,
+          toolCallId: toolCall.id,
+          success: false,
+          status: 'skipped',
+          summary: reason,
+          retryable: true,
         })
       }
+      this.lifecycle.savePoint()
     }
 
     if (!finalAnswer) {
-      finalAnswer = '已达到最大迭代次数，任务可能未完全完成。'
+      finalAnswer = await this.synthesizeFinalAnswer({
+        messages,
+        userInput,
+        intentPolicy,
+        reason: 'tool loop ended without an accepted final answer',
+      })
     }
 
     this.config.onFinalAnswerRender?.(finalAnswer)
     this.emitEvent('final', { content: finalAnswer })
     this.emitEvent('final.answer.rendered', { content: finalAnswer })
     this.emitEvent('agent.completed', { result: finalAnswer })
+    this.lifecycle.finish({ status: 'completed', finalAnswer })
+    this.flushLifecycleSessionLog()
     return finalAnswer
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!['settled', 'failed'].includes(this.lifecycle.getPhase())) {
+        this.lifecycle.finish({
+          status: message === 'USER_STOPPED' ? 'paused' : 'failed',
+          error: message,
+        })
+      }
+      this.flushLifecycleSessionLog()
+      throw error
+    }
   }
 }

@@ -2,12 +2,12 @@ use std::fs;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
-use tauri::{command, AppHandle, Manager};
+use tauri::{AppHandle, Manager, command};
 
-use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipArchive;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 #[command]
 pub async fn import_app_data_from_file(

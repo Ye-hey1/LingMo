@@ -208,6 +208,8 @@ export interface ScriptExecutionResult {
   error?: string                // 错误信息
   exitCode?: number             // 退出码
   executionTime: number          // 执行耗时 (ms)
+  warnings?: string[]            // 非致命警告，例如输出编码兜底
+  outputEncoding?: 'utf8' | 'utf8-replacement'
 }
 
 /**

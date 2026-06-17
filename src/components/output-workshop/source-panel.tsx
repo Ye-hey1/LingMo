@@ -38,18 +38,11 @@ import { cn } from "@/lib/utils"
 import { toast } from "@/hooks/use-toast"
 import { Popover, PopoverContent, PopoverAnchor } from "@/components/ui/popover"
 import { ModelSelect } from "@/app/core/setting/components/model-select"
-import type { MarkdownFile } from "@/lib/files"
-import type {
-  SourceWorkspaceTab,
-  ExtractedSection,
-  HistorySnapshot,
-  GenerationStatus,
-  TemplateOverrides,
-} from "./types"
-import type { OutputTemplate } from "@/lib/output-workshop/templates"
+import type { ExtractedSection } from "./types"
 import { isMokaTemplateId } from "@/lib/output-workshop/moka"
 import { getMermaidRenderModeLabel } from "./workshop-controls"
-import { MokaDesignPanel, type MokaPanelMode, type MokaPanelPlatform } from "./moka-design-panel"
+import { MokaDesignPanel } from "./moka-design-panel"
+import { useWorkshopContext } from "./workshop-context"
 
 const FONT_PRESETS = [
   {
@@ -115,161 +108,87 @@ function getOutlineTitleIndent(level: number): number {
   return Math.min(3, Math.max(0, level - 1)) * 14
 }
 
-interface SourcePanelProps {
-  sourceContent: string
-  setSourceContent: (v: string) => void
-  sourceLabel: string
-  setSourceLabel: (v: string) => void
-  title: string
-  customInstructions: string
-  setCustomInstructions: (v: string) => void
-  showAdvanced: boolean
-  setShowAdvanced: (v: boolean) => void
-  sourceWorkspaceTab: SourceWorkspaceTab
-  setSourceWorkspaceTab: (v: SourceWorkspaceTab) => void
-  sourcePanelCollapsed: boolean
-  toggleSourcePanel: () => void
-  isBuilding: boolean
-  exportBusy: boolean
-  status: GenerationStatus
-  isCsvDetected: boolean
-  selectedTemplateId: string
-  templateOverrides: TemplateOverrides
-  setTemplateOverrides: (next: TemplateOverrides) => void
-  onSelectTemplate: (templateId: string) => void
-  mokaMode: MokaPanelMode
-  setMokaMode: (mode: MokaPanelMode) => void
-  mokaPlatform: MokaPanelPlatform
-  setMokaPlatform: (platform: MokaPanelPlatform) => void
-  mokaStyleId: string
-  setMokaStyleId: (styleId: string) => void
-  mokaPaletteId: string
-  setMokaPaletteId: (paletteId: string) => void
-  mokaReferenceImageDataUrl: string
-  mokaReferenceImageName: string
-  onMokaReferenceImageChange: (dataUrl: string, name: string) => void
-  onClearMokaReferenceImage: () => void
-  onGenerate: () => void
-  onStop: () => void
-  // File picker
-  showFilePicker: boolean
-  setShowFilePicker: (v: boolean) => void
-  fileSearchQuery: string
-  setFileSearchQuery: (v: string) => void
-  loadingFiles: boolean
-  filteredFiles: MarkdownFile[]
-  onSelectFile: (file: MarkdownFile) => void
-  onBrowseLocalFile: () => void
-  canLoadLinkedFile: boolean
-  onLoadLinkedFile: () => void
-  // History
-  historyList: HistorySnapshot[]
-  templateList: OutputTemplate[]
-  renamingSnapshotId: string | null
-  renamingSnapshotTitle: string
-  setRenamingSnapshotTitle: (v: string) => void
-  onRestoreSnapshot: (snapshot: HistorySnapshot) => void
-  onStartRenameSnapshot: (snapshot: HistorySnapshot) => void
-  onCancelRenameSnapshot: () => void
-  onCommitRenameSnapshot: () => void
-  onDeleteSnapshot: (id: string) => void
-  formatSnapshotTime: (ts: number) => string
-  // Batch operations
-  onClearAllSnapshots: () => void
-  onExportSnapshotPack: () => void
-  // Outline
-  sourceOutlineSections: ExtractedSection[]
-  activeOutlineIndex: number | null
-  onSelectOutlineSection: (section: ExtractedSection, index: number) => void
-  // 微调相关
-  hasGeneratedOutput: boolean
-  refineQuery: string
-  setRefineQuery: (v: string) => void
-  handleRefine: () => void
-  refining: boolean
-  // footer 相关
-  selectedTemplateName: string
-  generatedHtmlLength: number
-  exportProgressText: string
-  isDeploying: boolean
-  deployProgress: string
-}
+// SourcePanel 现通过 useWorkshopContext() 获取所有依赖，不再接受 props
 
-export function SourcePanel({
-  sourceContent,
-  setSourceContent,
-  sourceLabel,
-  setSourceLabel,
-  title: _title,
-  customInstructions,
-  setCustomInstructions,
-  showAdvanced,
-  setShowAdvanced,
-  sourceWorkspaceTab,
-  setSourceWorkspaceTab,
-  sourcePanelCollapsed,
-  toggleSourcePanel,
-  isBuilding,
-  exportBusy,
-  status,
-  isCsvDetected,
-  selectedTemplateId,
-  templateOverrides,
-  setTemplateOverrides,
-  onSelectTemplate,
-  mokaMode,
-  setMokaMode,
-  mokaPlatform,
-  setMokaPlatform,
-  mokaStyleId,
-  setMokaStyleId,
-  mokaPaletteId,
-  setMokaPaletteId,
-  mokaReferenceImageDataUrl,
-  mokaReferenceImageName,
-  onMokaReferenceImageChange,
-  onClearMokaReferenceImage,
-  onGenerate,
-  onStop,
-  showFilePicker,
-  setShowFilePicker,
-  fileSearchQuery,
-  setFileSearchQuery,
-  loadingFiles,
-  filteredFiles,
-  onSelectFile,
-  onBrowseLocalFile,
-  canLoadLinkedFile,
-  onLoadLinkedFile,
-  historyList,
-  templateList: _templateList,
-  renamingSnapshotId,
-  renamingSnapshotTitle,
-  setRenamingSnapshotTitle,
-  onRestoreSnapshot,
-  onStartRenameSnapshot,
-  onCancelRenameSnapshot,
-  onCommitRenameSnapshot,
-  onDeleteSnapshot,
-  formatSnapshotTime,
-  onClearAllSnapshots,
-  onExportSnapshotPack,
-  sourceOutlineSections,
-  activeOutlineIndex,
-  onSelectOutlineSection,
-  // 微调相关
-  hasGeneratedOutput,
-  refineQuery,
-  setRefineQuery,
-  handleRefine,
-  refining,
-  // footer 相关
-  selectedTemplateName,
-  generatedHtmlLength,
-  exportProgressText,
-  isDeploying,
-  deployProgress,
-}: SourcePanelProps) {
+export function SourcePanel() {
+  const ctx = useWorkshopContext()
+  const {
+    sourceContent,
+    setSourceContent,
+    sourceLabel,
+    setSourceLabel,
+    customInstructions,
+    setCustomInstructions,
+    showAdvanced,
+    setShowAdvanced,
+    sourceWorkspaceTab,
+    setSourceWorkspaceTab,
+    sourcePanelCollapsed,
+    toggleSourcePanel,
+    isBuilding,
+    isCsvDetected,
+    selectedTemplateId,
+    templateOverrides,
+    setTemplateOverrides,
+    mokaMode,
+    setMokaMode,
+    mokaPlatform,
+    setMokaPlatform,
+    mokaStyleId,
+    setMokaStyleId,
+    mokaPaletteId,
+    setMokaPaletteId,
+    mokaReferenceImageDataUrl,
+    mokaReferenceImageName,
+    onMokaReferenceImageChange,
+    onClearMokaReferenceImage,
+    sourceOutlineSections,
+    activeOutlineIndex,
+    handleSelectOutlineSection: onSelectOutlineSection,
+    hasGeneratedOutput,
+  } = ctx
+  const {
+    exportBusy,
+    status,
+    handleGenerate: onGenerate,
+    handleStop: onStop,
+    refineQuery,
+    setRefineQuery,
+    handleRefine,
+    refining,
+    exportProgressText,
+    isDeploying,
+    deployProgress,
+  } = ctx.generation
+  const {
+    showFilePicker,
+    setShowFilePicker,
+    fileSearchQuery,
+    setFileSearchQuery,
+    loadingFiles,
+    filteredFiles,
+    handleSelectFile: onSelectFile,
+    browseLocalMarkdownFile: onBrowseLocalFile,
+    canLoadLinkedFile,
+    loadLinkedFile: onLoadLinkedFile,
+  } = ctx.files
+  const {
+    historyList,
+    renamingSnapshotId,
+    renamingSnapshotTitle,
+    setRenamingSnapshotTitle,
+    restoreSnapshot: onRestoreSnapshot,
+    startRenameSnapshot: onStartRenameSnapshot,
+    cancelRenameSnapshot: onCancelRenameSnapshot,
+    commitRenameSnapshot: onCommitRenameSnapshot,
+    deleteSnapshot: onDeleteSnapshot,
+    formatSnapshotTime,
+    clearAllSnapshots: onClearAllSnapshots,
+    exportSnapshotPack: onExportSnapshotPack,
+  } = ctx.history
+  const { handleSelectTemplate: onSelectTemplate } = ctx.templates
+  const selectedTemplateName = ctx.selectedTemplate.name
+  const generatedHtmlLength = ctx.generatedHtml.length
   const sourceTextareaRef = React.useRef<HTMLTextAreaElement | null>(null)
   const isMokaMode = isMokaTemplateId(selectedTemplateId)
 

@@ -33,6 +33,7 @@ import { useMcpStore } from '@/stores/mcp'
 import type { MCPServerConfig, MCPServerType } from '@/lib/mcp/types'
 import { Loader2, AlertTriangle } from 'lucide-react'
 import { mcpServerManager } from '@/lib/mcp/server-manager'
+import { connectMcpServerForAgent, reconnectMcpServerForAgent } from '@/lib/mcp/agent-ready'
 import { useToast } from '@/hooks/use-toast'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { isMobileDevice as checkIsMobileDevice } from '@/lib/check'
@@ -204,8 +205,11 @@ export function ServerConfigDialog({
       toast({ description: t('serverUpdated') })
 
       if (config.enabled) {
+        if (!selectedServerIds.includes(config.id)) {
+          await setSelectedServers([...selectedServerIds, config.id])
+        }
         try {
-          await mcpServerManager.reconnectServer(config)
+          await reconnectMcpServerForAgent(config)
         } catch (error) {
           console.error('Failed to reconnect after save:', error)
         }
@@ -216,7 +220,7 @@ export function ServerConfigDialog({
 
       if (config.enabled) {
         try {
-          await mcpServerManager.connectServer(config)
+          await connectMcpServerForAgent(config)
         } catch (error) {
           console.error('Failed to auto-connect after save:', error)
         }

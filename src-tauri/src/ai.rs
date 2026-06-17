@@ -1,13 +1,13 @@
 use futures_util::StreamExt;
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE},
-    multipart::{Form, Part},
     Client, Method, Url,
+    header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue},
+    multipart::{Form, Part},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, str::FromStr, time::Duration};
-use tauri::{ipc::Channel, State};
+use tauri::{State, ipc::Channel};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -316,9 +316,7 @@ struct SseDecoder {
 
 impl SseDecoder {
     fn new() -> Self {
-        Self {
-            buffer: Vec::new(),
-        }
+        Self { buffer: Vec::new() }
     }
 
     fn push(&mut self, chunk: &[u8]) -> Vec<String> {

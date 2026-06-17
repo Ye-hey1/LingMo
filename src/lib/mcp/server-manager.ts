@@ -26,6 +26,7 @@ interface MCPBatchTestResult {
 export class MCPServerManager {
   private static instance: MCPServerManager
   private clients: Map<string, MCPClient> = new Map()
+  private toolGeneration = 0
   
   private constructor() {}
   
@@ -34,6 +35,15 @@ export class MCPServerManager {
       MCPServerManager.instance = new MCPServerManager()
     }
     return MCPServerManager.instance
+  }
+
+  getToolGeneration(): number {
+    return this.toolGeneration
+  }
+
+  private bumpToolGeneration(): number {
+    this.toolGeneration += 1
+    return this.toolGeneration
   }
   
   /**
@@ -47,12 +57,15 @@ export class MCPServerManager {
     }
     
     // 设置连接中状态
+    const connectingGeneration = this.bumpToolGeneration()
     store.setServerState(config.id, {
       id: config.id,
       status: 'connecting',
       tools: [],
       resources: [],
       lastAttemptedAt: Date.now(),
+      toolGeneration: connectingGeneration,
+      staleTools: true,
     })
     
     try {
@@ -74,6 +87,7 @@ export class MCPServerManager {
       this.clients.set(config.id, client)
       
       // 更新连接成功状态
+      const connectedGeneration = this.bumpToolGeneration()
       store.setServerState(config.id, {
         id: config.id,
         status: 'connected',
@@ -81,6 +95,7 @@ export class MCPServerManager {
         resources,
         connectedAt: Date.now(),
         lastToolRefreshAt: Date.now(),
+        toolGeneration: connectedGeneration,
         staleTools: false,
       })
       
@@ -88,6 +103,7 @@ export class MCPServerManager {
       store.updateServer(config.id, { lastConnected: Date.now() })
     } catch (error) {
       // 静默处理错误，设置错误状态
+      const failedGeneration = this.bumpToolGeneration()
       store.setServerState(config.id, {
         id: config.id,
         status: 'failed',
@@ -95,6 +111,8 @@ export class MCPServerManager {
         resources: [],
         error: error instanceof Error ? error.message : String(error),
         lastAttemptedAt: Date.now(),
+        toolGeneration: failedGeneration,
+        staleTools: true,
       })
       
       throw error
@@ -112,11 +130,14 @@ export class MCPServerManager {
     }
     
     const store = useMcpStore.getState()
+    const disconnectedGeneration = this.bumpToolGeneration()
     store.setServerState(serverId, {
       id: serverId,
       status: 'disconnected',
       tools: [],
       resources: [],
+      toolGeneration: disconnectedGeneration,
+      staleTools: true,
     })
   }
   
@@ -129,8 +150,15 @@ export class MCPServerManager {
   }
 
   async connectEnabledServers(servers: MCPServerConfig[]): Promise<void> {
+    const store = useMcpStore.getState()
+
     for (const server of servers) {
       if (!server.enabled) {
+        continue
+      }
+
+      const state = store.getServerState(server.id)
+      if (state?.status === 'connected' && state.staleTools !== true) {
         continue
       }
 

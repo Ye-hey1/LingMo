@@ -1,11 +1,13 @@
 use crate::skills_v2::content_hash::hash_directory;
 use crate::skills_v2::error::SkillResult;
 use crate::skills_v2::migrations::run_migrations;
-use crate::skills_v2::skill_metadata::{is_skill_directory, sanitize_skill_name};
+use crate::skills_v2::paths::{path_is_inside, workspace_skills_dir};
+use crate::skills_v2::skill_metadata::{is_skill_directory, parse_skill_md, sanitize_skill_name};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillRecord {
@@ -179,6 +181,22 @@ impl SkillStore {
         self.conn.execute(
             "UPDATE skills SET name = ?1, central_path = ?2, content_hash = ?3, updated_at = ?4 WHERE id = ?5",
             (name, central_path, content_hash, updated_at, id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update_skill_inventory_snapshot(
+        &self,
+        id: &str,
+        name: &str,
+        description: Option<&str>,
+        central_path: &str,
+        content_hash: Option<&str>,
+        updated_at: i64,
+    ) -> SkillResult<()> {
+        self.conn.execute(
+            "UPDATE skills SET name = ?1, description = ?2, central_path = ?3, content_hash = ?4, status = 'ok', updated_at = ?5 WHERE id = ?6",
+            (name, description, central_path, content_hash, updated_at, id),
         )?;
         Ok(())
     }
@@ -357,9 +375,8 @@ impl SkillStore {
         Ok(records)
     }
 
-    fn migrate_installed_skill_roots(&self, app_data_dir: &Path) -> SkillResult<()> {
-        let central_root = app_data_dir.join("skills");
-        fs::create_dir_all(&central_root)?;
+    pub fn migrate_installed_skill_roots(&self, app_data_dir: &Path) -> SkillResult<()> {
+        let central_root = workspace_skills_dir(app_data_dir)?;
 
         for record in self.get_all_skills()? {
             if let Err(error) = self.migrate_installed_skill_root(&record, &central_root) {
@@ -367,6 +384,108 @@ impl SkillStore {
                     "[skills-v2] Failed to migrate skill '{}' to root skills directory: {}",
                     record.name, error
                 );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn sync_workspace_skill_inventory(&self, app_data_dir: &Path) -> SkillResult<()> {
+        let central_root = workspace_skills_dir(app_data_dir)?;
+        let mut existing_records = self.get_all_skills()?;
+
+        for entry in fs::read_dir(&central_root)? {
+            let entry = entry?;
+            let skill_dir = entry.path();
+            if !skill_dir.is_dir() || !is_skill_directory(&skill_dir) {
+                continue;
+            }
+
+            let meta = match parse_skill_md(&skill_dir) {
+                Ok(meta) => meta,
+                Err(error) => {
+                    eprintln!(
+                        "[skills-v2] Failed to parse skill metadata at '{}': {}",
+                        skill_dir.display(),
+                        error
+                    );
+                    continue;
+                }
+            };
+
+            let dir_name = skill_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or("unnamed-skill");
+            let name = meta
+                .as_ref()
+                .and_then(|meta| meta.name.clone())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| dir_name.to_string());
+            let description = meta.and_then(|meta| meta.description);
+            let central_path = skill_dir.to_string_lossy().to_string();
+            let content_hash = hash_directory(&skill_dir);
+            let now = chrono::Utc::now().timestamp();
+
+            if let Some(record) = existing_records
+                .iter_mut()
+                .find(|record| paths_equivalent(Path::new(&record.central_path), &skill_dir))
+            {
+                if record.name != name
+                    || record.description != description
+                    || record.central_path != central_path
+                    || record.content_hash != content_hash
+                    || record.status != "ok"
+                {
+                    self.update_skill_inventory_snapshot(
+                        &record.id,
+                        &name,
+                        description.as_deref(),
+                        &central_path,
+                        content_hash.as_deref(),
+                        now,
+                    )?;
+                    record.name = name;
+                    record.description = description;
+                    record.central_path = central_path;
+                    record.content_hash = content_hash;
+                    record.status = "ok".to_string();
+                    record.updated_at = now;
+                }
+                continue;
+            }
+
+            let record = SkillRecord {
+                id: Uuid::new_v4().to_string(),
+                name,
+                description,
+                source_type: "workspace".into(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path,
+                content_hash,
+                enabled: true,
+                status: "ok".into(),
+                update_status: "unknown".into(),
+                created_at: now,
+                updated_at: now,
+            };
+            self.insert_skill(&record)?;
+            existing_records.push(record);
+        }
+
+        for record in existing_records {
+            let central_path = PathBuf::from(&record.central_path);
+            if path_is_inside(&central_path, &central_root)
+                && central_path != central_root
+                && (!central_path.exists() || !is_skill_directory(&central_path))
+            {
+                self.delete_skill(&record.id)?;
             }
         }
 
@@ -436,13 +555,13 @@ impl SkillStore {
     }
 }
 
-fn path_is_inside(path: &Path, root: &Path) -> bool {
-    if path.starts_with(root) {
+fn paths_equivalent(left: &Path, right: &Path) -> bool {
+    if left == right {
         return true;
     }
 
-    match (path.canonicalize(), root.canonicalize()) {
-        (Ok(canonical_path), Ok(canonical_root)) => canonical_path.starts_with(canonical_root),
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
 }
@@ -486,5 +605,128 @@ pub fn init_skill_store(app_data_dir: &Path) -> SkillResult<SkillStore> {
     let db_path = app_data_dir.join("skills-v2").join("skills.db");
     let store = SkillStore::new(&db_path)?;
     store.migrate_installed_skill_roots(app_data_dir)?;
+    store.sync_workspace_skill_inventory(app_data_dir)?;
     Ok(store)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_skill(root: &Path, dir_name: &str, contents: &str) -> PathBuf {
+        let skill_dir = root.join("article").join("skills").join(dir_name);
+        fs::create_dir_all(&skill_dir).expect("skill dir should be created");
+        fs::write(skill_dir.join("SKILL.md"), contents).expect("skill file should be written");
+        skill_dir
+    }
+
+    #[test]
+    fn sync_workspace_inventory_imports_disk_skills() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_skill(
+            temp.path(),
+            "amap-jsapi-skill",
+            r#"
+| **name** | amap-jsapi-skill |
+| **description** | 高德地图 JSAPI Skill |
+
+# AMap
+"#,
+        );
+
+        let store = SkillStore::new(&temp.path().join("skills-v2").join("skills.db"))
+            .expect("store should initialize");
+        store
+            .sync_workspace_skill_inventory(temp.path())
+            .expect("inventory should sync");
+
+        let records = store.get_all_skills().expect("records should load");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].name, "amap-jsapi-skill");
+        assert_eq!(
+            records[0].description.as_deref(),
+            Some("高德地图 JSAPI Skill")
+        );
+        assert_eq!(records[0].source_type, "workspace");
+        assert!(records[0].enabled);
+    }
+
+    #[test]
+    fn sync_workspace_inventory_preserves_enabled_state() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let skill_dir = write_skill(
+            temp.path(),
+            "writing-skills",
+            r#"---
+name: writing-skills
+description: Writing support
+---
+# Writing
+"#,
+        );
+
+        let store = SkillStore::new(&temp.path().join("skills-v2").join("skills.db"))
+            .expect("store should initialize");
+        let now = chrono::Utc::now().timestamp();
+        store
+            .insert_skill(&SkillRecord {
+                id: "existing-id".to_string(),
+                name: "writing-skills".to_string(),
+                description: Some("old".to_string()),
+                source_type: "local".to_string(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: skill_dir.to_string_lossy().to_string(),
+                content_hash: None,
+                enabled: false,
+                status: "ok".to_string(),
+                update_status: "unknown".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("existing record should insert");
+
+        store
+            .sync_workspace_skill_inventory(temp.path())
+            .expect("inventory should sync");
+
+        let record = store
+            .get_skill_by_id("existing-id")
+            .expect("record lookup")
+            .expect("record exists");
+        assert_eq!(record.description.as_deref(), Some("Writing support"));
+        assert!(!record.enabled);
+    }
+
+    #[test]
+    fn sync_workspace_inventory_removes_missing_workspace_records() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let skill_dir = write_skill(
+            temp.path(),
+            "temporary-skill",
+            r#"---
+name: temporary-skill
+description: Temporary
+---
+# Temporary
+"#,
+        );
+
+        let store = SkillStore::new(&temp.path().join("skills-v2").join("skills.db"))
+            .expect("store should initialize");
+        store
+            .sync_workspace_skill_inventory(temp.path())
+            .expect("inventory should sync");
+        fs::remove_dir_all(skill_dir).expect("skill dir should be removed");
+        store
+            .sync_workspace_skill_inventory(temp.path())
+            .expect("inventory should resync");
+
+        let records = store.get_all_skills().expect("records should load");
+        assert!(records.is_empty());
+    }
 }

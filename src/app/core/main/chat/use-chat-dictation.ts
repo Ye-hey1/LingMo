@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { NO_TRANSCRIPTION_MESSAGE, transcribeRecording } from "@/lib/audio"
 import { polishDictationText, type DictationPolishMode } from "@/lib/ai/dictation-polish"
+import { formatError, type ErrorKind } from "@/lib/ai/error-handler"
 import { toast } from "@/hooks/use-toast"
 import useRecordingStore from "@/stores/recording"
 
@@ -20,6 +21,14 @@ const CHAT_DICTATION_OWNER_ID = "chat-input-dictation"
 const CHAT_VOICE_MODEL_MISSING_MESSAGE = "请先在设置 > 音频里配置语音识别模型。"
 const CHAT_DICTATION_START_TIMEOUT_MS = 12000
 const CHAT_DICTATION_START_TIMEOUT_MESSAGE = "录音启动超时，请检查麦克风权限弹窗或系统权限设置。"
+const EXPECTED_DICTATION_ERROR_KINDS = new Set<ErrorKind>([
+  "aborted",
+  "unauthorized",
+  "billing",
+  "rate_limit",
+  "permission",
+  "validation",
+])
 
 function formatDuration(seconds: number) {
   const mins = Math.floor(seconds / 60)
@@ -150,10 +159,17 @@ export function useChatDictation({
       onTranscript(finalText)
     } catch (error) {
       if (mountedRef.current && sessionIdRef.current === sessionId) {
-        console.error("聊天语音识别失败:", error)
+        const formattedError = formatError(error)
+        if (EXPECTED_DICTATION_ERROR_KINDS.has(formattedError.kind)) {
+          if (formattedError.kind !== "aborted") {
+            console.warn("聊天语音识别未完成:", formattedError.message)
+          }
+        } else {
+          console.error("聊天语音识别失败:", error)
+        }
         toast({
-          title: activeTask === "polishing" ? "语音整理失败" : "语音识别失败",
-          description: error instanceof Error ? error.message : String(error),
+          title: activeTask === "polishing" ? `语音整理失败：${formattedError.title}` : `语音识别失败：${formattedError.title}`,
+          description: formattedError.message,
           variant: "destructive",
         })
       }

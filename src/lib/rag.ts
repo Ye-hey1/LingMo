@@ -20,6 +20,7 @@ import { Store } from "@tauri-apps/plugin-store";
 import { createHash } from 'crypto';
 import { isSkillsFolder } from './skills/utils';
 import { getVectorDocumentKey } from './vector-document-key';
+import { prepareKnowledgeIndexText } from './knowledge-topic-cleaner';
 
 /**
  * 统一错误处理函数
@@ -183,7 +184,7 @@ export function chunkText(
       // 如果单个段落过长，需要强制分割
       if (paragraph.length > chunkSize) {
         // 先尝试按句子分割
-        const sentences = paragraph.split(/(?:\.|\?|\!)\s+/);
+        const sentences = paragraph.split(/(?<=[。！？；.!?])\s*/);
         let sentenceChunk = '';
         
         for (const sentence of sentences) {
@@ -513,7 +514,12 @@ export async function processMarkdownFile(
     const store = await Store.load('store.json')
     const chunkSize = await store.get<number>('ragChunkSize');
     const chunkOverlap = await store.get<number>('ragChunkOverlap');
-    const chunks = chunkText(content, chunkSize, chunkOverlap).filter(chunk => chunk.trim().length > 0);
+    const indexContent = prepareKnowledgeIndexText(content);
+    if (!indexContent || indexContent.trim().length === 0) {
+      return false;
+    }
+
+    const chunks = chunkText(indexContent, chunkSize, chunkOverlap).filter(chunk => chunk.trim().length > 0);
     // 如果没有有效的文本块，跳过处理
     if (chunks.length === 0) {
       return false;

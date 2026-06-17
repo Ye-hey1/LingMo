@@ -11,27 +11,34 @@ import { ScenarioManager } from './scenario-manager'
 import { SkillInstall } from './skill-install'
 import { SkillMarket } from './skill-market'
 import { SkillCardV2 } from './skill-card-v2'
-import { useSkillsV2Store } from '@/stores/skills-v2'
+import { useSkillsStore } from '@/stores/skills'
 import { useToast } from '@/hooks/use-toast'
 
 export function SkillsSettings() {
   const t = useTranslations('settings.skills')
   const tc = useTranslations('common')
   const { toast } = useToast()
-  const { skills, fetchSkills, deleteSkill, setEnabled, loading, deletingSkillId } = useSkillsV2Store()
+  const {
+    installedSkills,
+    fetchSkills,
+    deleteInstalledSkill,
+    setInstalledSkillEnabled,
+    loading,
+    deletingSkillId,
+  } = useSkillsStore()
   const [search, setSearch] = useState('')
 
   useEffect(() => {
     fetchSkills()
   }, [fetchSkills])
 
-  const enabledCount = skills.filter(s => s.enabled).length
+  const enabledCount = installedSkills.filter(s => s.enabled).length
   const filtered = search
-    ? skills.filter(s =>
+    ? installedSkills.filter(s =>
         s.name.toLowerCase().includes(search.toLowerCase()) ||
         (s.description && s.description.toLowerCase().includes(search.toLowerCase()))
       )
-    : skills
+    : installedSkills
 
   const sourceLabel = (type: string) => {
     const map: Record<string, string> = {
@@ -45,7 +52,7 @@ export function SkillsSettings() {
 
   const handleDelete = async (id: string) => {
     try {
-      await deleteSkill(id)
+      await deleteInstalledSkill(id)
       toast({ title: t('skillDeleted') })
     } catch (error) {
       toast({
@@ -63,9 +70,9 @@ export function SkillsSettings() {
           <TabsTrigger value="market">{t('tabMarket')}</TabsTrigger>
           <TabsTrigger value="all">
             {t('tabAll')}
-            {skills.length > 0 && (
+            {installedSkills.length > 0 && (
               <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">
-                {skills.length}
+                {installedSkills.length}
               </Badge>
             )}
           </TabsTrigger>
@@ -73,7 +80,7 @@ export function SkillsSettings() {
           <TabsTrigger value="install">{t('tabInstall')}</TabsTrigger>
           <TabsTrigger value="scenarios">{t('tabScenarios')}</TabsTrigger>
         </TabsList>
-        {skills.length > 0 && (
+        {installedSkills.length > 0 && (
           <Badge variant="outline" className="text-xs">
             {t('enabledCount', { count: enabledCount })}
           </Badge>
@@ -86,7 +93,7 @@ export function SkillsSettings() {
 
       <TabsContent value="all">
         <div className="space-y-4">
-          {skills.length > 0 && (
+          {installedSkills.length > 0 && (
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
               <Input
@@ -102,7 +109,7 @@ export function SkillsSettings() {
               <SkillCardV2
                 key={skill.id}
                 skill={skill}
-                onToggle={setEnabled}
+                onToggle={setInstalledSkillEnabled}
                 onDelete={handleDelete}
                 sourceLabel={sourceLabel(skill.source_type)}
                 deleteTitle={t('deleteSkillTitle')}
@@ -114,7 +121,7 @@ export function SkillsSettings() {
               />
             ))}
           </div>
-          {skills.length === 0 && !loading && (
+          {installedSkills.length === 0 && !loading && (
             <div className="text-center py-12 text-muted-foreground">
               <Search className="mx-auto h-12 w-12 mb-4 opacity-50" />
               <p>{t('noSkillsV2')}</p>

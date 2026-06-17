@@ -98,6 +98,21 @@ function convertMcpToolToAgentTool(serverId: string, tool: any): Tool {
         }
 
         const { callTool } = await import('@/lib/mcp/tools')
+        const { mcpServerManager } = await import('@/lib/mcp/server-manager')
+        const currentGeneration = mcpServerManager.getToolGeneration()
+        if (mcpToolsLoaded && mcpCacheGeneration !== currentGeneration) {
+          return {
+            success: false,
+            status: 'blocked',
+            error: 'STALE_MCP_TOOL_REGISTRY',
+            message: 'MCP tool registry changed after this tool was exposed. Refreshing tools before retry is required.',
+            data: {
+              retryable: true,
+              cachedGeneration: mcpCacheGeneration,
+              currentGeneration,
+            },
+          }
+        }
         const result = await callTool(serverId, tool.name, params)
 
         if (result.isError) {
@@ -154,9 +169,14 @@ export function getAllTools(): Tool[] {
 let mcpToolsCache: Tool[] = []
 let mcpToolsLoaded = false
 let mcpCacheKey = '' // tracks which servers are cached
+let mcpCacheGeneration = -1
 
-function buildMcpCacheKey(serverIds: string[]): string {
-  return serverIds.slice().sort().join(',')
+function buildMcpCacheKey(serverIds: string[], generation: number): string {
+  return `${generation}:${serverIds.slice().sort().join(',')}`
+}
+
+export function getMcpToolsCacheGeneration(): number {
+  return mcpCacheGeneration
 }
 
 /**
@@ -176,7 +196,8 @@ export async function getAllToolsAsync(): Promise<Tool[]> {
     const { mcpServerManager } = await import('@/lib/mcp/server-manager')
 
     const mcpStore = useMcpStore.getState()
-    const currentKey = buildMcpCacheKey(mcpStore.selectedServerIds)
+    const currentGeneration = mcpServerManager.getToolGeneration()
+    const currentKey = buildMcpCacheKey(mcpStore.selectedServerIds, currentGeneration)
 
     // Return cached if server selection hasn't changed
     if (mcpToolsLoaded && mcpCacheKey === currentKey) {
@@ -211,6 +232,7 @@ export async function getAllToolsAsync(): Promise<Tool[]> {
     }
     mcpToolsLoaded = true
     mcpCacheKey = currentKey
+    mcpCacheGeneration = currentGeneration
   } catch (error) {
     console.error('[Agent MCP] Failed to load MCP tools:', error)
   }
@@ -235,6 +257,7 @@ export async function reloadMcpTools(): Promise<void> {
   mcpToolsCache = []
   mcpToolsLoaded = false
   mcpCacheKey = ''
+  mcpCacheGeneration = -1
   await getAllToolsAsync()
 }
 

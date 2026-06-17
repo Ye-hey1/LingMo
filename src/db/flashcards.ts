@@ -9,12 +9,13 @@ import type {
   FlashcardReviewRating,
   FlashcardStatus,
 } from '@/types/flashcard'
-import { scheduleFlashcardReviewLegacy } from '@/lib/flashcard-scheduler'
+import { applyReviewRating } from '@/lib/flashcard-scheduler'
 
 const DEFAULT_EASE = 2.5
 const DEFAULT_INTERVAL = 0
 const DEFAULT_DECK_NAME = '默认牌组'
 const LEGACY_DEFAULT_DECK_NAMES = new Set([DEFAULT_DECK_NAME])
+const SEARCH_HISTORY_LIMIT = 20
 
 function now() {
   return Date.now()
@@ -28,7 +29,50 @@ function startOfToday() {
 
 function normalizeTags(tags?: string[]) {
   if (!tags || tags.length === 0) return null
-  return JSON.stringify(tags.map(item => item.trim()).filter(Boolean))
+  return JSON.stringify(uniqueTags(tags))
+}
+
+function uniqueTags(tags?: string[] | null) {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const raw of tags || []) {
+    const tag = raw.trim()
+    const key = tag.toLowerCase()
+    if (!tag || seen.has(key)) continue
+    seen.add(key)
+    result.push(tag)
+  }
+  return result
+}
+
+function parseStoredTags(tags?: string | null) {
+  if (!tags) return []
+  try {
+    const parsed = JSON.parse(tags) as unknown
+    if (Array.isArray(parsed)) return uniqueTags(parsed.map(String))
+  } catch {
+    return uniqueTags(tags.split(','))
+  }
+  return []
+}
+
+async function syncFlashcardTagIndex(db: Awaited<ReturnType<typeof getDb>>, flashcardId: number, tags?: string[] | string | null) {
+  const normalized = Array.isArray(tags) ? uniqueTags(tags) : parseStoredTags(tags)
+  await db.execute('delete from flashcard_tag_index where flashcardId = $1', [flashcardId])
+  for (const tag of normalized) {
+    await db.execute(
+      'insert into flashcard_tag_index (flashcardId, tag, normalizedTag) values ($1, $2, $3)',
+      [flashcardId, tag, tag.toLowerCase()],
+    )
+  }
+}
+
+async function rebuildFlashcardTagIndex(db: Awaited<ReturnType<typeof getDb>>) {
+  const cards = await db.select<Array<{ id: number; tags?: string | null }>>('select id, tags from flashcards')
+  await db.execute('delete from flashcard_tag_index')
+  for (const card of cards) {
+    await syncFlashcardTagIndex(db, card.id, card.tags)
+  }
 }
 
 export async function initFlashcardDb() {
@@ -83,6 +127,31 @@ export async function initFlashcardDb() {
     create index if not exists idx_flashcards_deck_due
     on flashcards(deckId, dueAt)
   `)
+
+  await db.execute(`
+    create table if not exists flashcard_tag_index (
+      flashcardId integer not null,
+      tag text not null,
+      normalizedTag text not null,
+      primary key (flashcardId, normalizedTag)
+    )
+  `)
+
+  await db.execute(`
+    create index if not exists idx_flashcard_tag_index_tag
+    on flashcard_tag_index(normalizedTag)
+  `)
+
+  await db.execute(`
+    create table if not exists flashcard_search_history (
+      id integer primary key autoincrement,
+      query text not null,
+      filters text default null,
+      createdAt integer not null
+    )
+  `)
+
+  await rebuildFlashcardTagIndex(db)
 }
 
 export async function ensureDefaultFlashcardDeck() {
@@ -167,6 +236,7 @@ export async function createFlashcard(input: CreateFlashcardInput) {
   await serializedWrite(async () => {
     const db = await getDb()
     const ts = now()
+    const tags = uniqueTags(input.tags)
     await db.execute(
       `insert into flashcards
         (deckId, noteId, notePath, type, front, back, clozeText, tags, status, ease, interval, repetitions, dueAt, lastReviewAt, createdAt, updatedAt)
@@ -179,7 +249,7 @@ export async function createFlashcard(input: CreateFlashcardInput) {
         input.front ?? null,
         input.back ?? null,
         input.clozeText ?? null,
-        normalizeTags(input.tags),
+        normalizeTags(tags),
         'new',
         DEFAULT_EASE,
         DEFAULT_INTERVAL,
@@ -190,6 +260,10 @@ export async function createFlashcard(input: CreateFlashcardInput) {
         ts,
       ],
     )
+    const rows = await db.select<Array<{ id: number }>>('select last_insert_rowid() as id')
+    if (rows[0]?.id) {
+      await syncFlashcardTagIndex(db, rows[0].id, tags)
+    }
   })
 }
 
@@ -203,6 +277,7 @@ export async function createFlashcardsBatch(inputs: CreateFlashcardInput[]) {
         for (let index = 0; index < inputs.length; index += 1) {
           const input = inputs[index]
           const ts = now()
+          const tags = uniqueTags(input.tags)
           await db.execute(
             `insert into flashcards
               (deckId, noteId, notePath, type, front, back, clozeText, tags, status, ease, interval, repetitions, dueAt, lastReviewAt, createdAt, updatedAt)
@@ -215,7 +290,7 @@ export async function createFlashcardsBatch(inputs: CreateFlashcardInput[]) {
               input.front ?? null,
               input.back ?? null,
               input.clozeText ?? null,
-              normalizeTags(input.tags),
+              normalizeTags(tags),
               'new',
               DEFAULT_EASE,
               DEFAULT_INTERVAL,
@@ -226,6 +301,10 @@ export async function createFlashcardsBatch(inputs: CreateFlashcardInput[]) {
               ts,
             ],
           )
+          const rows = await db.select<Array<{ id: number }>>('select last_insert_rowid() as id')
+          if (rows[0]?.id) {
+            await syncFlashcardTagIndex(db, rows[0].id, tags)
+          }
         }
       })
     } catch (error) {
@@ -257,6 +336,7 @@ export async function moveFlashcardToDeck(flashcardId: number, targetDeckId: num
 export async function deleteFlashcard(flashcardId: number) {
   await serializedWrite(async () => {
     const db = await getDb()
+    await db.execute('delete from flashcard_tag_index where flashcardId = $1', [flashcardId])
     await db.execute('delete from flashcard_reviews where flashcardId = $1', [flashcardId])
     await db.execute('delete from flashcards where id = $1', [flashcardId])
   })
@@ -266,10 +346,263 @@ export async function updateFlashcardTags(flashcardId: number, tags: string[]) {
   await serializedWrite(async () => {
     const db = await getDb()
     const ts = now()
+    const normalizedTags = uniqueTags(tags)
     await db.execute(
       'update flashcards set tags = $1, updatedAt = $2 where id = $3',
-      [normalizeTags(tags), ts, flashcardId],
+      [normalizeTags(normalizedTags), ts, flashcardId],
     )
+    await syncFlashcardTagIndex(db, flashcardId, normalizedTags)
+  })
+}
+
+export async function updateFlashcardStatus(flashcardId: number, status: FlashcardStatus) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    await db.execute(
+      'update flashcards set status = $1, updatedAt = $2 where id = $3',
+      [status, ts, flashcardId],
+    )
+  })
+}
+
+export async function resetFlashcardProgress(flashcardId: number) {
+  await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    await db.execute(
+      `update flashcards
+       set status = $1, ease = $2, interval = $3, repetitions = $4, dueAt = $5, lastReviewAt = $6, updatedAt = $7
+       where id = $8`,
+      ['new', DEFAULT_EASE, DEFAULT_INTERVAL, 0, ts, null, ts, flashcardId],
+    )
+  })
+}
+
+export interface FlashcardSearchFilters {
+  query?: string
+  deckId?: number | null
+  statuses?: FlashcardStatus[]
+  tags?: string[]
+  notePath?: string | null
+  dueOnly?: boolean
+  overdueOnly?: boolean
+  importantOnly?: boolean
+  weakOnly?: boolean
+  limit?: number
+  offset?: number
+}
+
+export interface FlashcardSearchResult {
+  cards: Flashcard[]
+  total: number
+}
+
+function buildFlashcardSearchWhere(filters: FlashcardSearchFilters) {
+  const clauses: string[] = ['1=1']
+  const params: unknown[] = []
+
+  if (typeof filters.deckId === 'number') {
+    params.push(filters.deckId)
+    clauses.push(`f.deckId = $${params.length}`)
+  }
+
+  if (filters.statuses && filters.statuses.length > 0) {
+    const placeholders = filters.statuses.map(status => {
+      params.push(status)
+      return `$${params.length}`
+    })
+    clauses.push(`f.status in (${placeholders.join(',')})`)
+  }
+
+  const normalizedTags = uniqueTags(filters.tags).map(tag => tag.toLowerCase())
+  for (const tag of normalizedTags) {
+    params.push(tag)
+    clauses.push(`exists (
+      select 1
+      from flashcard_tag_index ti
+      where ti.flashcardId = f.id and ti.normalizedTag = $${params.length}
+    )`)
+  }
+
+  if (filters.notePath) {
+    params.push(`%${filters.notePath.toLowerCase()}%`)
+    clauses.push(`lower(coalesce(f.notePath, '')) like $${params.length}`)
+  }
+
+  if (filters.dueOnly) {
+    params.push(now())
+    clauses.push(`f.status != 'suspended' and f.dueAt <= $${params.length}`)
+  }
+
+  if (filters.overdueOnly) {
+    params.push(now())
+    clauses.push(`f.status != 'suspended' and f.dueAt < $${params.length}`)
+  }
+
+  if (filters.importantOnly) {
+    clauses.push(`exists (
+      select 1
+      from flashcard_tag_index important
+      where important.flashcardId = f.id and important.normalizedTag = '重点'
+    )`)
+  }
+
+  if (filters.weakOnly) {
+    clauses.push(`(
+      f.status = 'learning'
+      or (
+        select r.rating
+        from flashcard_reviews r
+        where r.flashcardId = f.id
+        order by r.reviewedAt desc
+        limit 1
+      ) <= 1
+    )`)
+  }
+
+  const queryTerms = filters.query?.trim().toLowerCase().split(/\s+/).filter(Boolean) || []
+  for (const term of queryTerms) {
+    params.push(`%${term}%`)
+    clauses.push(`(
+      lower(coalesce(f.front, '')) like $${params.length}
+      or lower(coalesce(f.back, '')) like $${params.length}
+      or lower(coalesce(f.clozeText, '')) like $${params.length}
+      or lower(coalesce(f.notePath, '')) like $${params.length}
+      or lower(coalesce(d.name, '')) like $${params.length}
+      or exists (
+        select 1
+        from flashcard_tag_index tagSearch
+        where tagSearch.flashcardId = f.id and lower(tagSearch.tag) like $${params.length}
+      )
+    )`)
+  }
+
+  return { whereSql: clauses.join(' and '), params }
+}
+
+export async function searchFlashcards(filters: FlashcardSearchFilters = {}): Promise<FlashcardSearchResult> {
+  const db = await getDb()
+  const limit = Math.min(200, Math.max(1, Math.floor(filters.limit ?? 80)))
+  const offset = Math.max(0, Math.floor(filters.offset ?? 0))
+  const { whereSql, params } = buildFlashcardSearchWhere(filters)
+
+  const countRows = await db.select<{ total: number }[]>(
+    `select count(*) as total
+     from flashcards f
+     left join flashcard_decks d on d.id = f.deckId
+     where ${whereSql}`,
+    params,
+  )
+  const cards = await db.select<Flashcard[]>(
+    `select f.*
+     from flashcards f
+     left join flashcard_decks d on d.id = f.deckId
+     where ${whereSql}
+     order by f.updatedAt desc, f.dueAt asc, f.id desc
+     limit ${limit} offset ${offset}`,
+    params,
+  )
+
+  return {
+    cards,
+    total: Number(countRows[0]?.total || 0),
+  }
+}
+
+export interface FlashcardTagStat {
+  tag: string
+  total: number
+}
+
+export async function getFlashcardTagStats(limit = 50): Promise<FlashcardTagStat[]> {
+  const db = await getDb()
+  const safeLimit = Math.min(100, Math.max(1, Math.floor(limit)))
+  return await db.select<FlashcardTagStat[]>(
+    `select tag, count(*) as total
+     from flashcard_tag_index
+     group by tag
+     order by count(*) desc, lower(tag) asc
+     limit ${safeLimit}`,
+  )
+}
+
+export interface FlashcardSearchHistoryItem {
+  id: number
+  query: string
+  filters?: string | null
+  createdAt: number
+}
+
+export async function getFlashcardSearchHistory(limit = SEARCH_HISTORY_LIMIT) {
+  const db = await getDb()
+  const safeLimit = Math.min(SEARCH_HISTORY_LIMIT, Math.max(1, Math.floor(limit)))
+  return await db.select<FlashcardSearchHistoryItem[]>(
+    `select *
+     from flashcard_search_history
+     order by createdAt desc, id desc
+     limit ${safeLimit}`,
+  )
+}
+
+export async function saveFlashcardSearchHistory(query: string, filters?: Record<string, unknown>) {
+  const cleanQuery = query.trim()
+  if (!cleanQuery) return
+
+  await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    await db.execute(
+      'insert into flashcard_search_history (query, filters, createdAt) values ($1, $2, $3)',
+      [cleanQuery, filters ? JSON.stringify(filters) : null, ts],
+    )
+    await db.execute(
+      `delete from flashcard_search_history
+       where id not in (
+         select id
+         from flashcard_search_history
+         order by createdAt desc, id desc
+         limit ${SEARCH_HISTORY_LIMIT}
+       )`,
+    )
+  })
+}
+
+export async function addFlashcardTagsBulk(flashcardIds: number[], tags: string[]) {
+  const tagList = uniqueTags(tags)
+  if (flashcardIds.length === 0 || tagList.length === 0) return
+
+  await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    for (const flashcardId of flashcardIds) {
+      const rows = await db.select<Array<{ tags?: string | null }>>('select tags from flashcards where id = $1 limit 1', [flashcardId])
+      const nextTags = uniqueTags([...parseStoredTags(rows[0]?.tags), ...tagList])
+      await db.execute(
+        'update flashcards set tags = $1, updatedAt = $2 where id = $3',
+        [normalizeTags(nextTags), ts, flashcardId],
+      )
+      await syncFlashcardTagIndex(db, flashcardId, nextTags)
+    }
+  })
+}
+
+export async function removeFlashcardTagsBulk(flashcardIds: number[], tags: string[]) {
+  const removeSet = new Set(uniqueTags(tags).map(tag => tag.toLowerCase()))
+  if (flashcardIds.length === 0 || removeSet.size === 0) return
+
+  await serializedWrite(async () => {
+    const db = await getDb()
+    const ts = now()
+    for (const flashcardId of flashcardIds) {
+      const rows = await db.select<Array<{ tags?: string | null }>>('select tags from flashcards where id = $1 limit 1', [flashcardId])
+      const nextTags = parseStoredTags(rows[0]?.tags).filter(tag => !removeSet.has(tag.toLowerCase()))
+      await db.execute(
+        'update flashcards set tags = $1, updatedAt = $2 where id = $3',
+        [normalizeTags(nextTags), ts, flashcardId],
+      )
+      await syncFlashcardTagIndex(db, flashcardId, nextTags)
+    }
   })
 }
 
@@ -382,17 +715,12 @@ export async function updateFlashcardReview(flashcardId: number, rating: Flashca
     const prevEase = current.ease
     const prevInterval = current.interval
     const ts = now()
-    const scheduled = scheduleFlashcardReviewLegacy({
-      ease: prevEase,
-      interval: prevInterval,
-      repetitions: current.repetitions,
-      rating,
-    })
+    const scheduled = applyReviewRating(prevEase, prevInterval, current.repetitions, rating)
     const nextEase = scheduled.ease
     const nextInterval = scheduled.interval
     const repetitions = scheduled.repetitions
     const status = rating <= 1 ? 'learning' : 'review'
-    const nextDueAt = ts + nextInterval * 24 * 60 * 60 * 1000
+    const nextDueAt = scheduled.dueAt
 
     await db.execute(
       `update flashcards

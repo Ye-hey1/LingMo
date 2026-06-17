@@ -51,7 +51,6 @@ export { useGraphStore } from './store/graph-store';
 
 // ==================== 组件导出 ====================
 export { EChartsGraph } from './components/echarts-graph';
-export { GraphToolbar } from './components/toolbar';
 export { DetailPanel } from './components/detail-panel';
 export { SearchDialog } from './components/search-dialog';
 export { FilterPanel } from './components/filter-panel';

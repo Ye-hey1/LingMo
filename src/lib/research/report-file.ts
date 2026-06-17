@@ -1,6 +1,6 @@
 import { exists } from '@tauri-apps/plugin-fs'
 import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
-import { sanitizeFileName } from '@/lib/sync/filename-utils'
+import { sanitizeFileName, sanitizeFilePath } from '@/lib/sync/filename-utils'
 
 const DEFAULT_RESEARCH_REPORT_TITLE = '研究报告'
 const MAX_RESEARCH_REPORT_TITLE_LENGTH = 70
@@ -101,11 +101,11 @@ export async function buildUniqueResearchReportTarget(params: {
   const { title, dateStamp, baseName } = buildResearchReportBaseName(params.query, params.report, params.date)
 
   for (let index = 0; index < 100; index++) {
-    const candidateBaseName = index === 0 ? baseName : `${baseName}-${index + 1}`
+    const candidateBaseName = sanitizeFileName(index === 0 ? baseName : `${baseName}-${index + 1}`)
     const fileName = `${candidateBaseName}.md`
     const sessionFileName = `${candidateBaseName}.research.json`
-    const relativeFilePath = `${researchDir}/${fileName}`
-    const relativeSessionFilePath = `${researchDir}/${sessionFileName}`
+    const relativeFilePath = sanitizeFilePath(`${researchDir}/${fileName}`)
+    const relativeSessionFilePath = sanitizeFilePath(`${researchDir}/${sessionFileName}`)
 
     const [reportExists, sessionExists] = await Promise.all([
       workspaceRelativePathExists(relativeFilePath),
@@ -125,14 +125,14 @@ export async function buildUniqueResearchReportTarget(params: {
     }
   }
 
-  const fallbackBaseName = `${baseName}-${Date.now()}`
+  const fallbackBaseName = sanitizeFileName(`${baseName}-${Date.now()}`)
   return {
     title,
     dateStamp,
     baseName: fallbackBaseName,
     fileName: `${fallbackBaseName}.md`,
     sessionFileName: `${fallbackBaseName}.research.json`,
-    relativeFilePath: `${researchDir}/${fallbackBaseName}.md`,
-    relativeSessionFilePath: `${researchDir}/${fallbackBaseName}.research.json`,
+    relativeFilePath: sanitizeFilePath(`${researchDir}/${fallbackBaseName}.md`),
+    relativeSessionFilePath: sanitizeFilePath(`${researchDir}/${fallbackBaseName}.research.json`),
   }
 }

@@ -70,6 +70,7 @@ function mergeMiddlewareState(
         }
       : current.runtime,
     visibleToolNames: patch.visibleToolNames || current.visibleToolNames,
+    toolExposureReasons: patch.toolExposureReasons || current.toolExposureReasons,
     promptSectionIds: uniqueStrings([...(current.promptSectionIds || []), ...(patch.promptSectionIds || [])]),
     persistedMemoryIds: uniqueStrings([...(current.persistedMemoryIds || []), ...(patch.persistedMemoryIds || [])]),
   }
@@ -226,27 +227,71 @@ function tokenize(input: string) {
   )
 }
 
-function scoreTool(tool: Tool, input: AgentBeforeModelInput, state: AgentRunMiddlewareState): number {
+function explainToolExposure(tool: Tool, input: AgentBeforeModelInput, state: AgentRunMiddlewareState) {
   let score = 0
+  const reasons: string[] = []
   const name = tool.name
   const baseName = baseToolName(name)
   const text = toolText(tool)
   const tokens = tokenize(input.userInput)
 
-  if (SUPPORT_TOOL_NAMES.has(name)) score += 100
-  if (BASE_ALWAYS_VISIBLE.includes(name) || BASE_ALWAYS_VISIBLE.includes(baseName)) score += 80
-  if (tool.category === 'mcp') score += 20
-  if (tool.category === 'web' && input.webSearchEnabled) score += 25
-  if (!input.webSearchEnabled && tool.category === 'web') score -= 100
-  if (tool.risk === 'low') score += 8
-  if (tool.capabilities?.includes('read')) score += 6
-  if (tool.capabilities?.includes('write') && input.intentPolicy?.allowWrite) score += 10
-  if (tool.capabilities?.includes('execute') && input.intentPolicy?.allowExecute) score += 10
-  if (tool.capabilities?.includes('delete') && input.intentPolicy?.allowDestructive) score += 10
+  if (SUPPORT_TOOL_NAMES.has(name)) {
+    score += 100
+    reasons.push('support tool')
+  }
+  if (BASE_ALWAYS_VISIBLE.includes(name) || BASE_ALWAYS_VISIBLE.includes(baseName)) {
+    score += 80
+    reasons.push('base tool')
+  }
+  if (tool.category === 'mcp') {
+    score += 20
+    reasons.push('MCP tool')
+  }
+  if (tool.category === 'web' && input.webSearchEnabled) {
+    score += 25
+    reasons.push('web search enabled')
+  }
+  if (!input.webSearchEnabled && tool.category === 'web') {
+    score -= 100
+    reasons.push('web search disabled')
+  }
+  if (tool.risk === 'low') {
+    score += 8
+    reasons.push('low risk')
+  }
+  if (tool.capabilities?.includes('read')) {
+    score += 6
+    reasons.push('read capability')
+  }
+  if (tool.capabilities?.includes('write')) {
+    if (input.intentPolicy?.allowWrite) {
+      score += 10
+      reasons.push('write intent allowed')
+    } else {
+      reasons.push('write intent not detected')
+    }
+  }
+  if (tool.capabilities?.includes('execute')) {
+    if (input.intentPolicy?.allowExecute) {
+      score += 10
+      reasons.push('execute intent allowed')
+    } else {
+      reasons.push('execute intent not detected')
+    }
+  }
+  if (tool.capabilities?.includes('delete')) {
+    if (input.intentPolicy?.allowDestructive) {
+      score += 10
+      reasons.push('destructive intent allowed')
+    } else {
+      reasons.push('destructive intent not detected')
+    }
+  }
 
   const lastTool = input.steps[input.steps.length - 1]?.action?.tool
   if (lastTool && name !== lastTool && baseName.includes(baseToolName(lastTool).split('_')[0])) {
     score += 8
+    reasons.push(`related to previous tool: ${lastTool}`)
   }
 
   const selectedSkills = new Set(input.selectedSkillIds)
@@ -254,16 +299,22 @@ function scoreTool(tool: Tool, input: AgentBeforeModelInput, state: AgentRunMidd
     const allowed = state.skills?.activeSkillMatches.find(match => match.id === skillId)
     if (allowed && text.includes(allowed.name.toLowerCase())) {
       score += 15
+      reasons.push(`matched selected skill: ${allowed.name}`)
     }
   }
 
+  const matchedTokens: string[] = []
   for (const token of tokens) {
     if (text.includes(token)) {
       score += 3
+      if (matchedTokens.length < 4) matchedTokens.push(token)
     }
   }
+  if (matchedTokens.length) reasons.push(`matched user tokens: ${matchedTokens.join(', ')}`)
 
-  return score
+  if (reasons.length === 0) reasons.push('low relevance to this turn')
+
+  return { score, reasons: uniqueStrings(reasons) }
 }
 
 function buildToolScopeSection(tools: Tool[], state: AgentRunMiddlewareState) {
@@ -358,9 +409,10 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
 
       try {
         const { useSkillsStore } = await import('@/stores/skills')
+        const { ensureSkillsReadyForAgent } = await import('@/lib/skills/agent-ready')
         const { skillManager } = await import('@/lib/skills')
         const skillsStore = useSkillsStore.getState()
-        await skillsStore.initSkills()
+        await ensureSkillsReadyForAgent()
         runtimeSkills = await skillsStore.getEnabledSkills()
 
         const forcedMatches = forcedSkillIds
@@ -398,6 +450,7 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
       const connectedServerIds: string[] = []
       let mcpToolNames: string[] = []
       let mcpRuntimeServers: McpRuntimeServerSnapshot[] = []
+      let mcpToolGeneration: number | undefined
 
       try {
         const { useMcpStore } = await import('@/stores/mcp')
@@ -409,24 +462,36 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
         selectedServerIds = [...mcpStore.selectedServerIds]
         await mcpIntegration.initialize()
         await reloadMcpTools()
+        mcpToolGeneration = mcpServerManager.getToolGeneration()
+        const serverById = new Map(useMcpStore.getState().servers.map(server => [server.id, server]))
+        const serverLabel = (serverId: string) => {
+          const name = serverById.get(serverId)?.name
+          return name ? `${name} (${serverId})` : serverId
+        }
 
         for (const serverId of selectedServerIds) {
           const state = useMcpStore.getState().getServerState(serverId)
           if (state?.status === 'connected') {
             connectedServerIds.push(serverId)
+            if (!state.tools?.length) {
+              mcpWarnings.push(`${serverLabel(serverId)}: connected but returned no MCP tools`)
+            }
           } else if (state?.error) {
-            mcpWarnings.push(`${serverId}: ${state.error}`)
+            mcpWarnings.push(`${serverLabel(serverId)}: ${state.error}`)
+          } else {
+            mcpWarnings.push(`${serverLabel(serverId)}: ${state?.status || 'not connected'}`)
           }
         }
 
         mcpRuntimeServers = selectedServerIds.map(serverId => {
           const state = useMcpStore.getState().getServerState(serverId)
+          const server = serverById.get(serverId)
           return {
             id: serverId,
-            name: state?.id || serverId,
+            name: server?.name || serverId,
             status: mapMcpRuntimeStatus(state?.status),
             selected: true,
-            enabled: true,
+            enabled: server?.enabled !== false,
             toolNames: state?.tools?.map((tool: { name: string }) => tool.name) || [],
             resourceCount: state?.resources?.length || 0,
             staleTools: state?.staleTools === true,
@@ -439,6 +504,10 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
         mcpToolNames = getAllToolsSync()
           .filter(tool => tool.category === 'mcp')
           .map(tool => tool.name)
+
+        if (selectedServerIds.length > 0 && mcpToolNames.length === 0) {
+          mcpWarnings.push('Selected MCP servers exposed no agent tools this turn')
+        }
 
         for (const [serverId, tools] of mcpServerManager.getAllTools()) {
           if (tools.length > 0 && !connectedServerIds.includes(serverId)) {
@@ -480,6 +549,7 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
               connectedServerIds,
               servers: mcpRuntimeServers,
               toolNames: mcpToolNames,
+              toolGeneration: mcpToolGeneration,
               warnings: mcpWarnings.map(message => createRuntimeWarning({
                 source: 'mcp',
                 level: 'warn',
@@ -504,6 +574,12 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
         ...BASE_ALWAYS_VISIBLE,
       ])
 
+      for (const tool of input.tools) {
+        if (tool.category === 'mcp') {
+          forcedToolNames.add(tool.name)
+        }
+      }
+
       for (const skillId of input.selectedSkillIds) {
         const skill = skillManager.findSkill(skillId)
         for (const toolName of skill?.metadata.allowedTools || []) {
@@ -513,7 +589,7 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
 
       const scored = input.tools.map(tool => ({
         tool,
-        score: scoreTool(tool, input, currentState),
+        ...explainToolExposure(tool, input, currentState),
       }))
       scored.sort((a, b) => b.score - a.score)
 
@@ -534,6 +610,26 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
         addTool(tool)
       }
 
+      const visibleReasons: Record<string, string[]> = {}
+      const hiddenReasons: Record<string, string[]> = {}
+      const selectedNameSet = new Set(selected.map(tool => tool.name))
+      const scoreByToolName = new Map(scored.map(item => [item.tool.name, item]))
+      for (const tool of selected) {
+        const explanation = scoreByToolName.get(tool.name)
+        const reasons = explanation?.reasons || ['selected']
+        visibleReasons[tool.name] = forcedToolNames.has(tool.name) || forcedToolNames.has(baseToolName(tool.name))
+          ? uniqueStrings([...reasons, 'forced visible'])
+          : reasons
+      }
+
+      for (const { tool, score, reasons } of scored) {
+        if (selectedNameSet.has(tool.name)) continue
+        const hidden = [...reasons]
+        if (score < 0) hidden.push('score below exposure threshold')
+        if (selected.length >= maxTools) hidden.push('max visible tool count reached')
+        hiddenReasons[tool.name] = uniqueStrings(hidden)
+      }
+
       const promptSections = [
         buildToolScopeSection(selected, currentState),
         buildSkillSection(input, currentState),
@@ -541,6 +637,10 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
       const toolExposure = buildToolExposureSnapshot({
         tools: input.tools,
         visibleToolNames: selected.map(tool => tool.name),
+        exposureReasons: {
+          ...hiddenReasons,
+          ...visibleReasons,
+        },
         maxVisibleTools: maxTools,
       })
 
@@ -549,6 +649,12 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
         promptSections,
         state: {
           visibleToolNames: selected.map(tool => tool.name),
+          toolExposureReasons: {
+            iteration: input.iteration,
+            visible: visibleReasons,
+            hidden: hiddenReasons,
+            maxVisibleTools: maxTools,
+          },
           promptSectionIds: ['tool-scope', 'skill-scope'],
           runtime: {
             tools: toolExposure,

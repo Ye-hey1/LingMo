@@ -112,6 +112,7 @@ export interface MCPServerState {
   connectedAt?: number
   lastAttemptedAt?: number
   lastToolRefreshAt?: number
+  toolGeneration?: number
   staleTools?: boolean
   authRequired?: boolean
   permissionRequired?: boolean

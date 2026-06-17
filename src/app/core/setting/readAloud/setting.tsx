@@ -8,6 +8,7 @@ import { Store } from "@tauri-apps/plugin-store";
 import useSettingStore from "@/stores/setting";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { SpeechMode } from '@/lib/speech/types';
+import { matchesConfiguredModelSelection } from '@/lib/ai/model-selection';
 
 export function Setting() {
   const t = useTranslations('settings.readAloud');
@@ -33,7 +34,11 @@ export function Setting() {
         // 检查新的 models 数组结构
         if (config.models && config.models.length > 0) {
           const targetModel = config.models.find((model: any) => 
-            model.id === audioModel && model.modelType === 'audio'
+            (model.modelType === 'audio' || model.modelType === 'tts') && matchesConfiguredModelSelection({
+              configKey: config.key,
+              modelId: model.id,
+              selectionId: audioModel,
+            })
           );
           if (targetModel && targetModel.speed !== undefined) {
             currentSpeed = targetModel.speed;
@@ -70,7 +75,11 @@ export function Setting() {
       if (config.models && config.models.length > 0) {
         const updatedConfig = { ...config };
         updatedConfig.models = config.models.map((model: any) => {
-          if (model.id === audioModel && model.modelType === 'audio') {
+          if ((model.modelType === 'audio' || model.modelType === 'tts') && matchesConfiguredModelSelection({
+            configKey: config.key,
+            modelId: model.id,
+            selectionId: audioModel,
+          })) {
             return { ...model, speed: newSpeed };
           }
           return model;

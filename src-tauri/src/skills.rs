@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::Path;
-use tauri::{command, AppHandle, Manager};
+use tauri::{AppHandle, Manager, command};
 use zip::ZipArchive;
+
+use crate::skills_v2::paths::workspace_skills_dir;
 
 #[command]
 pub async fn import_skill_zip(app_handle: AppHandle, zip_path: String) -> Result<String, String> {
@@ -10,12 +12,9 @@ pub async fn import_skill_zip(app_handle: AppHandle, zip_path: String) -> Result
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
 
-    // 确保 skills 目录存在
-    let skills_dir = app_data_dir.join("skills");
-    if !skills_dir.exists() {
-        fs::create_dir_all(&skills_dir)
-            .map_err(|e| format!("Failed to create skills directory: {}", e))?;
-    }
+    // 确保工作区 skills 目录存在
+    let skills_dir = workspace_skills_dir(&app_data_dir)
+        .map_err(|e| format!("Failed to create workspace skills directory: {}", e))?;
 
     // 创建临时目录用于解压
     let temp_dir = app_data_dir.join("temp_skill_import");

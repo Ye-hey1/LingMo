@@ -1,7 +1,7 @@
 import { Store } from '@tauri-apps/plugin-store'
 import { create } from 'zustand'
 import { getVersion } from '@tauri-apps/api/app'
-import { AiConfig, builtinProviderTemplates, mergeProviderTemplateModels } from '@/app/core/setting/config'
+import { AiConfig, builtinProviderTemplates, cleanupConfiguredModels, mergeProviderTemplateModels } from '@/app/core/setting/config'
 import { GitlabInstanceType } from '@/lib/sync/gitlab.types'
 import { GiteaInstanceType } from '@/lib/sync/gitea.types'
 import { CustomThemeColors } from '@/types/theme'
@@ -12,6 +12,7 @@ import type { SpeechMode } from '@/lib/speech/types'
 import { DEFAULT_OUTLINE_POSITION, normalizeOutlinePosition, type OutlinePosition } from '@/lib/outline-preferences'
 import { DEFAULT_REMINDER_SETTINGS } from '@/lib/reminders/types'
 import { normalizeProviderConfigTitle } from '@/lib/ai/provider-display'
+import { createConfiguredModelSelectionId, matchesConfiguredModelSelection } from '@/lib/ai/model-selection'
 
 const REMOVED_BUILTIN_MODEL_KEYS = new Set([
   'note-gen-free',
@@ -157,7 +158,7 @@ async function removeBuiltinLingMoModelSettings(store: Store) {
       // 保留真正的自定义配置
       return true
     })
-    .map((config) => mergeProviderTemplateModels(normalizeProviderConfigTitle(config)).config)
+    .map((config) => cleanupConfiguredModels(mergeProviderTemplateModels(normalizeProviderConfigTitle(config)).config).config)
   let changed = cleanedAiModelList.length !== aiModelList.length ||
     cleanedAiModelList.some((config, index) => JSON.stringify(config) !== JSON.stringify(aiModelList[index]))
 
@@ -189,7 +190,7 @@ function findConfiguredModelSelection(
 
     if (config.models?.length) {
       const model = config.models.find((item) => item.model && predicate(item, config))
-      if (model) return model.id
+      if (model) return createConfiguredModelSelectionId(config.key, model.id)
       continue
     }
 
@@ -213,16 +214,11 @@ function hasConfiguredModelSelection(aiModelList: AiConfig[], modelId?: string) 
     if (!config.baseURL || isRemovedBuiltinAiConfig(config)) continue
 
     if (config.models?.length) {
-      const directMatch = config.models.some((model) => model.id === modelId)
-      if (directMatch) return true
-
-      const expectedPrefix = `${config.key}-`
-      if (modelId.startsWith(expectedPrefix)) {
-        const originalModelId = modelId.substring(expectedPrefix.length)
-        if (config.models.some((model) => model.id === originalModelId)) {
-          return true
-        }
-      }
+      if (config.models.some((model) => matchesConfiguredModelSelection({
+        configKey: config.key,
+        modelId: model.id,
+        selectionId: modelId,
+      }))) return true
       continue
     }
 
@@ -752,6 +748,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   primaryModel: '',
   setPrimaryModel: async (primaryModel) => {
+    if (get().primaryModel === primaryModel) return
     const store = await Store.load('store.json')
     await store.set('primaryModel', primaryModel)
     await store.save()
@@ -760,6 +757,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   placeholderModel: '',
   setPlaceholderModel: async (placeholderModel) => {
+    if (get().placeholderModel === placeholderModel) return
     const store = await Store.load('store.json');
     await store.set('placeholderModel', placeholderModel)
     set({ placeholderModel })
@@ -767,6 +765,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   completionModel: '',
   setCompletionModel: async (completionModel) => {
+    if (get().completionModel === completionModel) return
     const store = await Store.load('store.json');
     await store.set('completionModel', completionModel)
     set({ completionModel })
@@ -774,6 +773,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   markDescModel: '',
   setMarkDescModel: async (markDescModel) => {
+    if (get().markDescModel === markDescModel) return
     const store = await Store.load('store.json');
     await store.set('markDescModel', markDescModel)
     set({ markDescModel })
@@ -781,6 +781,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   commitModel: '',
   setCommitModel: async (commitModel) => {
+    if (get().commitModel === commitModel) return
     const store = await Store.load('store.json');
     await store.set('commitModel', commitModel)
     set({ commitModel })
@@ -788,6 +789,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   embeddingModel: '',
   setEmbeddingModel: async (embeddingModel) => {
+    if (get().embeddingModel === embeddingModel) return
     const store = await Store.load('store.json');
     await store.set('embeddingModel', embeddingModel)
     set({ embeddingModel })
@@ -795,6 +797,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   rerankingModel: '',
   setRerankingModel: async (rerankingModel) => {
+    if (get().rerankingModel === rerankingModel) return
     const store = await Store.load('store.json');
     await store.set('rerankingModel', rerankingModel)
     set({ rerankingModel })
@@ -802,6 +805,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   imageMethodModel: '',
   setImageMethodModel: async (imageMethodModel) => {
+    if (get().imageMethodModel === imageMethodModel) return
     const store = await Store.load('store.json');
     await store.set('imageMethodModel', imageMethodModel)
     set({ imageMethodModel })
@@ -809,6 +813,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   audioModel: '',
   setAudioModel: async (audioModel) => {
+    if (get().audioModel === audioModel) return
     const store = await Store.load('store.json');
     await store.set('audioModel', audioModel)
     set({ audioModel })
@@ -816,6 +821,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   sttModel: '',
   setSttModel: async (sttModel) => {
+    if (get().sttModel === sttModel) return
     const store = await Store.load('store.json');
     await store.set('sttModel', sttModel)
     set({ sttModel })
@@ -839,6 +845,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   condenseModel: '',
   setCondenseModel: async (condenseModel) => {
+    if (get().condenseModel === condenseModel) return
     const store = await Store.load('store.json');
     await store.set('condenseModel', condenseModel)
     set({ condenseModel })
@@ -846,6 +853,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   inspirationModel: '',
   setInspirationModel: async (inspirationModel) => {
+    if (get().inspirationModel === inspirationModel) return
     const store = await Store.load('store.json');
     await store.set('inspirationModel', inspirationModel)
     set({ inspirationModel })
@@ -853,6 +861,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
 
   promptEnhancerModel: '',
   setPromptEnhancerModel: async (promptEnhancerModel) => {
+    if (get().promptEnhancerModel === promptEnhancerModel) return
     const store = await Store.load('store.json');
     await store.set('promptEnhancerModel', promptEnhancerModel)
     set({ promptEnhancerModel })

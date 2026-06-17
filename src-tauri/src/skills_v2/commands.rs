@@ -1,6 +1,7 @@
 use crate::skills_v2::db::{DiscoveredSkill, ScenarioRecord, SkillRecord, SkillStore};
 use crate::skills_v2::git_fetcher::PreviewSkill;
 use crate::skills_v2::installer;
+use crate::skills_v2::paths::{legacy_skill_roots, path_is_inside, workspace_skills_dir};
 use crate::skills_v2::scanner;
 use crate::skills_v2::skillssh_api::{self, SkillsShSkill};
 use std::sync::Mutex;
@@ -9,8 +10,18 @@ use tauri::{AppHandle, Manager, State};
 pub struct SkillState(pub Mutex<SkillStore>);
 
 #[tauri::command]
-pub fn skill_v2_get_all(state: State<'_, SkillState>) -> Result<Vec<SkillRecord>, String> {
+pub fn skill_v2_get_all(
+    app: AppHandle,
+    state: State<'_, SkillState>,
+) -> Result<Vec<SkillRecord>, String> {
     let store = state.0.lock().map_err(|e| e.to_string())?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    store
+        .migrate_installed_skill_roots(&app_data_dir)
+        .map_err(|e| e.to_string())?;
+    store
+        .sync_workspace_skill_inventory(&app_data_dir)
+        .map_err(|e| e.to_string())?;
     store.get_all_skills().map_err(|e| e.to_string())
 }
 
@@ -39,24 +50,21 @@ pub fn skill_v2_delete(
     if deleted {
         if let Some(record) = record {
             let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-            let central_root = app_data_dir.join("skills");
+            let workspace_root = workspace_skills_dir(&app_data_dir).map_err(|e| e.to_string())?;
             let central_path = std::path::PathBuf::from(record.central_path);
 
             if central_path.exists() {
-                let canonical_root = central_root
-                    .canonicalize()
-                    .unwrap_or_else(|_| central_root.clone());
-                let canonical_target = central_path
-                    .canonicalize()
-                    .unwrap_or_else(|_| central_path.clone());
+                let mut allowed_roots = vec![workspace_root];
+                allowed_roots.extend(legacy_skill_roots(&app_data_dir));
+                let can_delete = allowed_roots
+                    .iter()
+                    .any(|root| path_is_inside(&central_path, root) && central_path != *root);
 
-                if canonical_target.starts_with(&canonical_root)
-                    && canonical_target != canonical_root
-                {
-                    if canonical_target.is_dir() {
-                        std::fs::remove_dir_all(&canonical_target).map_err(|e| e.to_string())?;
+                if can_delete {
+                    if central_path.is_dir() {
+                        std::fs::remove_dir_all(&central_path).map_err(|e| e.to_string())?;
                     } else {
-                        std::fs::remove_file(&canonical_target).map_err(|e| e.to_string())?;
+                        std::fs::remove_file(&central_path).map_err(|e| e.to_string())?;
                     }
                 }
             }

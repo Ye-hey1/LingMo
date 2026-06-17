@@ -147,7 +147,9 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
             id: "install-uv-macos",
             title: "Install uv",
             command_preview: "curl -LsSf https://astral.sh/uv/install.sh | sh",
-            post_install_hint: Some("If uv is still unavailable after installation, restart LingMo or open a new terminal session and re-check."),
+            post_install_hint: Some(
+                "If uv is still unavailable after installation, restart LingMo or open a new terminal session and re-check.",
+            ),
             scope: "current_user",
             manual_only: false,
         }),
@@ -155,7 +157,9 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
             id: "install-uv-linux",
             title: "Install uv",
             command_preview: "curl -LsSf https://astral.sh/uv/install.sh | sh",
-            post_install_hint: Some("If uv is still unavailable after installation, restart LingMo or open a new terminal session and re-check."),
+            post_install_hint: Some(
+                "If uv is still unavailable after installation, restart LingMo or open a new terminal session and re-check.",
+            ),
             scope: "current_user",
             manual_only: false,
         }),
@@ -163,7 +167,9 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
             id: "install-uv-windows",
             title: "Install uv",
             command_preview: "powershell -ExecutionPolicy Bypass -c \"irm https://astral.sh/uv/install.ps1 | iex\"",
-            post_install_hint: Some("If uv is still unavailable after installation, restart LingMo or open a new terminal session and re-check."),
+            post_install_hint: Some(
+                "If uv is still unavailable after installation, restart LingMo or open a new terminal session and re-check.",
+            ),
             scope: "current_user",
             manual_only: false,
         }),
@@ -171,7 +177,9 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
             id: "install-bun-macos",
             title: "Install Bun",
             command_preview: "curl -fsSL https://bun.com/install | bash",
-            post_install_hint: Some("Bun installs into ~/.bun/bin. If bun is still unavailable after installation, add that directory to PATH, then restart LingMo or open a new terminal session and re-check."),
+            post_install_hint: Some(
+                "Bun installs into ~/.bun/bin. If bun is still unavailable after installation, add that directory to PATH, then restart LingMo or open a new terminal session and re-check.",
+            ),
             scope: "current_user",
             manual_only: false,
         }),
@@ -179,7 +187,9 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
             id: "install-bun-linux",
             title: "Install Bun",
             command_preview: "curl -fsSL https://bun.com/install | bash",
-            post_install_hint: Some("Bun installs into ~/.bun/bin and requires unzip on Linux. If bun is still unavailable after installation, add that directory to PATH, then restart LingMo or open a new terminal session and re-check."),
+            post_install_hint: Some(
+                "Bun installs into ~/.bun/bin and requires unzip on Linux. If bun is still unavailable after installation, add that directory to PATH, then restart LingMo or open a new terminal session and re-check.",
+            ),
             scope: "current_user",
             manual_only: false,
         }),
@@ -187,7 +197,9 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
             id: "install-bun-windows",
             title: "Install Bun",
             command_preview: "powershell -c \"irm bun.com/install.ps1 | iex\"",
-            post_install_hint: Some("If bun is still unavailable after installation, restart LingMo or open a new terminal session and re-check your PATH."),
+            post_install_hint: Some(
+                "If bun is still unavailable after installation, restart LingMo or open a new terminal session and re-check your PATH.",
+            ),
             scope: "current_user",
             manual_only: false,
         }),
@@ -195,7 +207,9 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
             id: "install-node-volta-unix",
             title: "Install Node.js via Volta",
             command_preview: "curl https://get.volta.sh | bash && export VOLTA_HOME=\"$HOME/.volta\" && export PATH=\"$VOLTA_HOME/bin:$PATH\" && volta install node",
-            post_install_hint: Some("Volta updates shell configuration for future sessions. If npx is still unavailable after installation, restart LingMo or open a new terminal session and re-check."),
+            post_install_hint: Some(
+                "Volta updates shell configuration for future sessions. If npx is still unavailable after installation, restart LingMo or open a new terminal session and re-check.",
+            ),
             scope: "current_user",
             manual_only: false,
         }),
@@ -203,7 +217,9 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
             id: "install-node-volta-windows",
             title: "Install Node.js via Volta",
             command_preview: "winget install Volta.Volta && volta install node",
-            post_install_hint: Some("Windows may not expose Volta in the current session immediately. If npx is still unavailable after installation, restart LingMo or open a new terminal session and re-check."),
+            post_install_hint: Some(
+                "Windows may not expose Volta in the current session immediately. If npx is still unavailable after installation, restart LingMo or open a new terminal session and re-check.",
+            ),
             scope: "current_user",
             manual_only: false,
         }),
@@ -216,7 +232,9 @@ pub fn install_recipe_for(kind: &RuntimeKind, platform: &str) -> Option<InstallR
             id: "install-python-manual",
             title: "Install Python",
             command_preview: "Install Python 3 in your user environment, or make sure python / py is on PATH, then re-check in LingMo.",
-            post_install_hint: Some("Use the official Python installer for your platform, then restart LingMo or open a new terminal session before re-checking."),
+            post_install_hint: Some(
+                "Use the official Python installer for your platform, then restart LingMo or open a new terminal session before re-checking.",
+            ),
             scope: "current_user",
             manual_only: true,
         }),
@@ -260,10 +278,7 @@ fn find_command_path(command: &str) -> Option<PathBuf> {
         }
 
         if command.eq_ignore_ascii_case("bunx") {
-            items.extend([
-                "bun".to_string(),
-                "bun.exe".to_string(),
-            ]);
+            items.extend(["bun".to_string(), "bun.exe".to_string()]);
         }
 
         items
@@ -346,16 +361,18 @@ fn install_recipe_command(recipe_id: &str) -> Option<(&'static str, Vec<&'static
         )),
         "install-uv-windows" => Some((
             "powershell",
-            vec!["-ExecutionPolicy", "Bypass", "-c", "irm https://astral.sh/uv/install.ps1 | iex"],
+            vec![
+                "-ExecutionPolicy",
+                "Bypass",
+                "-c",
+                "irm https://astral.sh/uv/install.ps1 | iex",
+            ],
         )),
         "install-bun-macos" | "install-bun-linux" => Some((
             "sh",
             vec!["-lc", "curl -fsSL https://bun.com/install | bash"],
         )),
-        "install-bun-windows" => Some((
-            "powershell",
-            vec!["-c", "irm bun.com/install.ps1 | iex"],
-        )),
+        "install-bun-windows" => Some(("powershell", vec!["-c", "irm bun.com/install.ps1 | iex"])),
         "install-node-volta-unix" => Some((
             "sh",
             vec![
@@ -687,8 +704,8 @@ pub async fn cancel_mcp_runtime_install(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_runtime_requirement, final_install_stage, install_recipe_for,
-        InstallProgressStage, RuntimeInstallManager, RuntimeKind,
+        InstallProgressStage, RuntimeInstallManager, RuntimeKind, classify_runtime_requirement,
+        final_install_stage, install_recipe_for,
     };
 
     #[test]

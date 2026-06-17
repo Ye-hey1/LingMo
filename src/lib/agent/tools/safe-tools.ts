@@ -251,6 +251,11 @@ async function readDirectory(relativePath: string) {
   return baseDir ? readDir(path, { baseDir }) : readDir(path)
 }
 
+function isMissingDirectoryError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /系统找不到指定的路径|os error 3|not found|no such file or directory|cannot find the path/i.test(message)
+}
+
 async function statPath(relativePath: string) {
   const { path, baseDir } = await getFilePathOptions(relativePath)
   return baseDir ? stat(path, { baseDir }) : stat(path)
@@ -501,7 +506,17 @@ export const safeListFilesTool: Tool = {
       const folderPath = await normalizeOptionalWorkspacePath(params.folderPath)
       const recursive = params.recursive === true
       const maxEntries = clampNumber(params.maxEntries, 100, 1, 500)
-      const entries = await collectEntries(folderPath, recursive, maxEntries, [], context?.abortSignal)
+      let entries: WorkspaceEntry[] = []
+      let missingFolder = false
+
+      try {
+        entries = await collectEntries(folderPath, recursive, maxEntries, [], context?.abortSignal)
+      } catch (error) {
+        if (!isMissingDirectoryError(error)) {
+          throw error
+        }
+        missingFolder = true
+      }
 
       return {
         success: true,
@@ -510,8 +525,11 @@ export const safeListFilesTool: Tool = {
           recursive,
           entries,
           truncated: entries.length >= maxEntries,
+          missingFolder,
         },
-        message: `Listed ${entries.length} workspace entries${entries.length >= maxEntries ? ' (truncated)' : ''}.`,
+        message: missingFolder
+          ? `Workspace folder "${folderPath || '/'}" does not exist. Listed 0 entries.`
+          : `Listed ${entries.length} workspace entries${entries.length >= maxEntries ? ' (truncated)' : ''}.`,
       }
     } catch (error) {
       return {

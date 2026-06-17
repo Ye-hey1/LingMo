@@ -17,14 +17,44 @@ import 'highlight.js/styles/github.min.css';
 import './chat.css';
 import { advanceStreamingSmoother } from './streaming-smoother';
 import { getMermaidRenderer } from '@/lib/mermaid';
+import {
+  getClawStreamVisibleMarkdown,
+  normalizeClawNestedFences,
+} from './claw-stream-format';
 
-function preprocessMarkdown(text: string): string {
+// 平衡行内标记（`, **, ~~）：流式时孤立的开始标记会把后续文本错误格式化，
+// 奇数个则在末尾补一个配对。仅在代码围栏外统计，避免误伤代码块内容。
+function balanceInlineMarks(text: string): string {
+  let result = text;
+  if ((result.match(/`/g) || []).length % 2 !== 0) result += '`';
+  if ((result.match(/\*\*/g) || []).length % 2 !== 0) result += '**';
+  if ((result.match(/~~/g) || []).length % 2 !== 0) result += '~~';
+  return result;
+}
+
+// 按 ``` 分段，仅对「围栏外」的普通文本段（偶数下标）做行内标记平衡。
+function balanceInlineMarksOutsideFences(text: string): string {
+  const segments = text.split(/```/);
+  for (let i = 0; i < segments.length; i += 2) {
+    segments[i] = balanceInlineMarks(segments[i]);
+  }
+  return segments.join('```');
+}
+
+function preprocessMarkdown(text: string, clawFormat = false): string {
+  if (clawFormat) {
+    return normalizeClawNestedFences(text);
+  }
+
   let processed = text;
 
   const codeBlockCount = (processed.match(/```/g) || []).length;
   if (codeBlockCount % 2 !== 0) {
     processed += '\n```\n';
   }
+
+  // 围栏外的行内标记平衡（流式容错：避免孤立 ` / ** / ~~ 破坏后续渲染）
+  processed = balanceInlineMarksOutsideFences(processed);
 
   const katexBlockCount = (processed.match(/\$\$/g) || []).length;
   if (katexBlockCount % 2 !== 0) {
@@ -42,6 +72,108 @@ function preprocessMarkdown(text: string): string {
 
 function getFenceLanguage(info: string): string {
   return info.trim().split(/\s+/)[0]?.replace(/^language-/, '').toLowerCase() || '';
+}
+
+function renderClawCodeBlockHtml(
+  source: string,
+  language: string,
+  highlightedHtml: string,
+  themeClass: string,
+  escapeHtml: (value: string) => string,
+): string {
+  const label = getFenceLanguage(language) || 'code';
+  const code = highlightedHtml || escapeHtml(source);
+  const body = code && !code.endsWith('\n') ? `${code}\n` : code;
+  return [
+    `<pre class="hljs ${themeClass} claw-code-block"><code>`,
+    `<span class="claw-code-block-border">╭─ ${escapeHtml(label)}</span>\n`,
+    body,
+    '<span class="claw-code-block-border">╰─</span>',
+    '</code></pre>',
+  ].join('');
+}
+
+function visibleTextWidth(value: string) {
+  return Array.from(value).length;
+}
+
+function renderClawTableRow(row: string[], widths: number[]) {
+  return `│${widths.map((width, index) => {
+    const cell = row[index] || '';
+    const padding = ' '.repeat(Math.max(0, width - visibleTextWidth(cell)) + 1);
+    return ` ${cell}${padding}`;
+  }).join('│')}│`;
+}
+
+function renderClawTableHtml(rows: string[][], escapeHtml: (value: string) => string) {
+  if (rows.length === 0) return '';
+  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const widths = Array.from({ length: columnCount }, (_, column) => {
+    return rows.reduce((max, row) => Math.max(max, visibleTextWidth(row[column] || '')), 0);
+  });
+  const separator = `│${widths.map(width => '─'.repeat(width + 2)).join('┼')}│`;
+  const lines = [
+    renderClawTableRow(rows[0], widths),
+    separator,
+    ...rows.slice(1).map(row => renderClawTableRow(row, widths)),
+  ];
+  return `<pre class="claw-table"><code>${escapeHtml(lines.join('\n'))}</code></pre>\n\n`;
+}
+
+function extractClawTableRows(tokens: any[]) {
+  const rows: string[][] = [];
+  let row: string[] | null = null;
+  let cell = '';
+  let inCell = false;
+
+  for (const token of tokens) {
+    if (token.type === 'tr_open') {
+      row = [];
+      continue;
+    }
+    if (token.type === 'th_open' || token.type === 'td_open') {
+      cell = '';
+      inCell = true;
+      continue;
+    }
+    if (token.type === 'inline' && inCell) {
+      cell += token.content || '';
+      continue;
+    }
+    if (token.type === 'th_close' || token.type === 'td_close') {
+      row?.push(cell.trim());
+      inCell = false;
+      cell = '';
+      continue;
+    }
+    if (token.type === 'tr_close') {
+      if (row && row.length > 0) rows.push(row);
+      row = null;
+    }
+  }
+
+  return rows;
+}
+
+function installClawTableRule(markdown: MarkdownIt) {
+  markdown.core.ruler.after('inline', 'claw_table_format', (state: any) => {
+    const tokens = state.tokens;
+    for (let index = 0; index < tokens.length; index += 1) {
+      if (tokens[index].type !== 'table_open') continue;
+
+      let endIndex = index + 1;
+      while (endIndex < tokens.length && tokens[endIndex].type !== 'table_close') {
+        endIndex += 1;
+      }
+      if (endIndex >= tokens.length) continue;
+
+      const tableTokens = tokens.slice(index, endIndex + 1);
+      const rows = extractClawTableRows(tableTokens);
+      const token = new state.Token('html_block', '', 0);
+      token.content = renderClawTableHtml(rows, state.md.utils.escapeHtml);
+      tokens.splice(index, endIndex - index + 1, token);
+    }
+  });
 }
 
 type MermaidRenderCacheEntry = {
@@ -305,6 +437,7 @@ type ChatPreviewProps = {
   streaming?: boolean; // 是否为流式内容
   highlightQuery?: string; // 搜索高亮关键词
   className?: string;
+  clawFormat?: boolean;
 };
 
 const MIN_RENDER_INTERVAL_MS = 33;
@@ -316,7 +449,7 @@ function getContentTextScaleRatio(scale: number): number {
   return Math.min(MAX_CONTENT_TEXT_SCALE, Math.max(MIN_CONTENT_TEXT_SCALE, scale)) / 100;
 }
 
-export default function ChatPreview({text, streaming = false, highlightQuery, className}: ChatPreviewProps) {
+export default function ChatPreview({text, streaming = false, highlightQuery, className, clawFormat = false}: ChatPreviewProps) {
   const previewRef = useRef<HTMLDivElement>(null);
   const { theme } = useTheme()
   const [mdTheme, setMdTheme] = useState<ThemeType>('light')
@@ -348,6 +481,10 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     }),
     [chatContentFontSize],
   );
+  const renderText = useMemo(
+    () => clawFormat ? getClawStreamVisibleMarkdown(text, streaming) : text,
+    [clawFormat, streaming, text],
+  );
 
   useEffect(() => {
     hljs.registerLanguage('javascript', javascript);
@@ -362,17 +499,23 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     const markdown = new MarkdownIt({
       html: true,
       linkify: true,
-      typographer: true,
+      typographer: !clawFormat,
       highlight: function (str, lang): string {
+        const themeClass = mdTheme === 'dark' ? 'hljs-dark' : 'hljs-light';
         if (lang && hljs.getLanguage(lang)) {
           try {
-            const themeClass = mdTheme === 'dark' ? 'hljs-dark' : 'hljs-light';
+            const highlighted = hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
+            if (clawFormat) {
+              return renderClawCodeBlockHtml(str, lang, highlighted, themeClass, markdown.utils.escapeHtml);
+            }
             return `<pre class="hljs ${themeClass}"><code>` +
-              hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
-            '</code></pre>';
+              highlighted +
+              '</code></pre>';
           } catch {}
         }
-        const themeClass = mdTheme === 'dark' ? 'hljs-dark' : 'hljs-light';
+        if (clawFormat) {
+          return renderClawCodeBlockHtml(str, lang, markdown.utils.escapeHtml(str), themeClass, markdown.utils.escapeHtml);
+        }
         return `<pre class="hljs ${themeClass}"><code>` +
           markdown.utils.escapeHtml(str) +
           '</code></pre>';
@@ -382,12 +525,16 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       errorColor: '#cc0000'
     });
 
+    if (clawFormat) {
+      installClawTableRule(markdown);
+    }
+
     const defaultFence = markdown.renderer.rules.fence!;
     markdown.renderer.rules.fence = function (tokens, idx, options, env, self) {
       const token = tokens[idx];
       const lang = getFenceLanguage(token.info);
 
-      if (!streaming && (lang === 'mermaid' || lang === 'mmd')) {
+      if (!clawFormat && !streaming && (lang === 'mermaid' || lang === 'mmd')) {
         const mermaidTheme = mdTheme === 'dark' ? 'dark' : 'light';
         return renderMermaidFence(
           token.content,
@@ -400,16 +547,33 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       return defaultFence(tokens, idx, options, env, self);
     };
 
+    const linkStack: string[] = [];
     markdown.renderer.rules.link_open = function (tokens, idx, options, _env, self) {
+      if (clawFormat) {
+        const href = tokens[idx].attrGet('href') || '';
+        linkStack.push(href);
+        const escapedHref = markdown.utils.escapeHtml(href);
+        return `<a href="${escapedHref}" target="_blank" rel="noopener noreferrer">[`;
+      }
       tokens[idx].attrSet('target', '_blank');
       tokens[idx].attrSet('rel', 'noopener noreferrer');
       return self.renderToken(tokens, idx, options);
+    }
+    markdown.renderer.rules.link_close = function () {
+      if (!clawFormat) return '</a>';
+      const href = linkStack.pop() || '';
+      return `](${markdown.utils.escapeHtml(href)})</a>`;
     }
 
     const defaultImage = markdown.renderer.rules.image || function (tokens, idx, options, _env, self) {
       return self.renderToken(tokens, idx, options);
     };
     markdown.renderer.rules.image = function (tokens, idx, options, env, self) {
+      if (clawFormat) {
+        const src = tokens[idx].attrGet('src') || '';
+        const escapedSrc = markdown.utils.escapeHtml(src);
+        return `<a href="${escapedSrc}" target="_blank" rel="noopener noreferrer">[image:${escapedSrc}]</a>`;
+      }
       tokens[idx].attrSet('referrerpolicy', 'no-referrer');
       return defaultImage(tokens, idx, options, env, self);
     };
@@ -417,11 +581,11 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     md.current = markdown;
 
     if (displayedTextRef.current) {
-      setHtmlContent(md.current.render(preprocessMarkdown(displayedTextRef.current)));
+      setHtmlContent(md.current.render(preprocessMarkdown(displayedTextRef.current, clawFormat)));
     } else {
       setHtmlContent('');
     }
-  }, [mdTheme, streaming]);
+  }, [clawFormat, mdTheme, streaming]);
 
   const renderDisplayedText = useCallback((nextText: string, force = false) => {
     displayedTextRef.current = nextText;
@@ -438,11 +602,11 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
 
     setDisplayedText(nextText);
     if (md.current) {
-      setHtmlContent(md.current.render(preprocessMarkdown(nextText)));
+      setHtmlContent(md.current.render(preprocessMarkdown(nextText, clawFormat)));
     } else {
       setHtmlContent(nextText);
     }
-  }, []);
+  }, [clawFormat]);
 
   const stopAnimation = useCallback(() => {
     if (animationRef.current !== null) {
@@ -498,28 +662,34 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
   useEffect(() => {
     if (!streaming) {
       stopAnimation();
-      targetTextRef.current = text;
-      renderDisplayedText(text, true);
+      targetTextRef.current = renderText;
+      renderDisplayedText(renderText, true);
       return;
     }
 
-    targetTextRef.current = text;
+    targetTextRef.current = renderText;
 
-    if (text.length < displayedTextRef.current.length) {
+    if (renderText.length < displayedTextRef.current.length) {
       stopAnimation();
-      renderDisplayedText(text, true);
+      renderDisplayedText(renderText, true);
       return;
     }
 
-    if (text.length === displayedTextRef.current.length) {
-      if (text !== displayedTextRef.current) {
-        renderDisplayedText(text, true);
+    if (renderText.length === displayedTextRef.current.length) {
+      if (renderText !== displayedTextRef.current) {
+        renderDisplayedText(renderText, true);
       }
       return;
     }
 
+    if (clawFormat) {
+      stopAnimation();
+      renderDisplayedText(renderText, true);
+      return;
+    }
+
     ensureStreamingAnimation();
-  }, [text, streaming, ensureStreamingAnimation, renderDisplayedText, stopAnimation]);
+  }, [clawFormat, renderText, streaming, ensureStreamingAnimation, renderDisplayedText, stopAnimation]);
 
   // 清理动画
   useEffect(() => {
@@ -837,7 +1007,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
 
   // 渲染 Mermaid 图表并添加交互控制
   useLayoutEffect(() => {
-    if (streaming) return
+    if (streaming || clawFormat) return
 
     const el = previewRef.current
     if (!el) return
@@ -917,7 +1087,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
           }
         }
         if (renderedFreshDiagram && !cancelled && md.current) {
-          setHtmlContent(md.current.render(preprocessMarkdown(displayedTextRef.current)));
+          setHtmlContent(md.current.render(preprocessMarkdown(displayedTextRef.current, clawFormat)));
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -935,7 +1105,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     return () => {
       cancelled = true;
     }
-  }, [applyMermaidTransform, getMermaidViewState, htmlContent, mdTheme, streaming])
+  }, [applyMermaidTransform, clawFormat, getMermaidViewState, htmlContent, mdTheme, streaming])
 
   useEffect(() => {
     if (!mermaidViewer) return
@@ -1013,10 +1183,8 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
 
   // 根据主题选择样式
   const getThemeClass = () => {
-    if (mdTheme === 'dark') {
-      return 'markdown-body markdown-dark';
-    }
-    return 'markdown-body';
+    const themeClass = mdTheme === 'dark' ? 'markdown-body markdown-dark' : 'markdown-body';
+    return clawFormat ? `${themeClass} claw-markdown` : themeClass;
   };
 
   // 应用高亮样式
@@ -1073,12 +1241,12 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
   }
 
   // 没有内容时不渲染
-  if (!text || !text.trim()) {
+  if (!renderText || !renderText.trim()) {
     return null
   }
 
   // 流式输出时，给最后一个可见内容块加上光标闪烁效果
-  const streamCursorClass = streaming && text.trim() ? 'streaming-cursor' : ''
+  const streamCursorClass = streaming && renderText.trim() ? 'streaming-cursor' : ''
 
   return (
     <div className={className || "flex-1 max-w-[calc(100vw-30px)] md:max-w-[calc(100vw-440px)]"}>

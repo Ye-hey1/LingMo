@@ -18,10 +18,13 @@ export type ErrorCategory =
   | 'auth'
   | 'rate_limit'
   | 'context_overflow'
+  | 'model_output'
+  | 'mcp_registry'
   | 'tool_not_found'
   | 'tool_execution'
   | 'policy_blocked'
   | 'user_cancelled'
+  | 'runtime'
   | 'unknown'
 
 export interface FriendlyError {
@@ -42,13 +45,17 @@ const ERROR_PATTERNS: Array<{
   category: ErrorCategory
 }> = [
   { pattern: /timeout|timed?\s*out/i, category: 'timeout' },
-  { pattern: /network|fetch|econnrefused|econnreset|enotfound|dns/i, category: 'network' },
-  { pattern: /unauthorized|401|invalid.*key|authentication/i, category: 'auth' },
+  { pattern: /network|fetch|econnrefused|econnreset|enotfound|dns|socket|connection|failed to fetch/i, category: 'network' },
+  { pattern: /unauthorized|401|403|invalid.*key|authentication|api.?key|permission denied/i, category: 'auth' },
   { pattern: /rate.?limit|429|too many requests|quota/i, category: 'rate_limit' },
-  { pattern: /context.*overflow|context.*length|prompt.*too.*long|too.*large/i, category: 'context_overflow' },
+  { pattern: /context.*overflow|context.*length|prompt.*too.*long|too.*large|maximum context|token.*limit/i, category: 'context_overflow' },
+  { pattern: /内容不能为空|empty.*(?:final|answer|response)|final answer.*empty|model.*empty|没有返回可展示正文/i, category: 'model_output' },
+  { pattern: /stale_mcp_tool_registry|mcp.*registry|tool registry changed|刷新.*工具|mcp.*not.*ready/i, category: 'mcp_registry' },
   { pattern: /tool.*not.*found|unknown.*tool/i, category: 'tool_not_found' },
+  { pattern: /tool .*failed|tool.*error|工具.*失败|工具.*出错|tool execution/i, category: 'tool_execution' },
   { pattern: /blocked.*policy|policy.*blocked|not.*allowed/i, category: 'policy_blocked' },
   { pattern: /user.*cancel|cancelled|stopped/i, category: 'user_cancelled' },
+  { pattern: /typeerror|referenceerror|syntaxerror|rangeerror|json|unexpected token|cannot read|undefined|null/i, category: 'runtime' },
 ]
 
 export function classifyError(error: string): ErrorCategory {
@@ -100,6 +107,20 @@ const ERROR_MESSAGES: Record<ErrorCategory, Omit<FriendlyError, 'technicalDetail
     suggestion: '请开启新的对话继续，或减少关联的文件数量。',
     retryable: false,
   },
+  model_output: {
+    category: 'model_output',
+    title: '模型输出异常',
+    message: '模型本轮没有返回可展示的最终正文，或输出格式不满足 Agent 收尾要求。',
+    suggestion: '系统会尝试基于已有工具结果收尾；如果反复出现，请切换模型或减少本轮上下文长度。',
+    retryable: true,
+  },
+  mcp_registry: {
+    category: 'mcp_registry',
+    title: 'MCP 工具状态已变化',
+    message: 'MCP 工具列表在本轮运行中发生变化，当前工具调用需要刷新后重试。',
+    suggestion: '请重新发送请求，系统会重新加载 MCP 工具列表。',
+    retryable: true,
+  },
   tool_not_found: {
     category: 'tool_not_found',
     title: '工具不存在',
@@ -127,13 +148,40 @@ const ERROR_MESSAGES: Record<ErrorCategory, Omit<FriendlyError, 'technicalDetail
     message: '操作已被用户取消。',
     retryable: false,
   },
-  unknown: {
-    category: 'unknown',
-    title: '未知错误',
-    message: '遇到了意外错误。',
-    suggestion: '请重试，如果问题持续，请反馈错误详情。',
+  runtime: {
+    category: 'runtime',
+    title: '运行时异常',
+    message: '应用运行过程中发生了代码或数据格式异常。',
+    suggestion: '请重试；如果再次出现，请保留当前问题文本和最近一次工具调用信息。',
     retryable: true,
   },
+  unknown: {
+    category: 'unknown',
+    title: '执行异常',
+    message: '发生了未分类异常。',
+    suggestion: '请重试；如果问题持续，请反馈错误详情。',
+    retryable: true,
+  },
+}
+
+function normalizeTechnicalError(error: string | Error): string {
+  if (error instanceof Error) {
+    return [error.name, error.message].filter(Boolean).join(': ')
+  }
+  if (typeof error === 'string') return error
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
+function summarizeTechnicalError(error: string, maxLength = 220) {
+  const cleaned = error
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!cleaned) return ''
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned
 }
 
 // ---------------------------------------------------------------------------
@@ -144,9 +192,20 @@ const ERROR_MESSAGES: Record<ErrorCategory, Omit<FriendlyError, 'technicalDetail
  * 将原始错误转换为用户友好的错误信息
  */
 export function formatFriendlyError(error: string | Error): FriendlyError {
-  const errorStr = error instanceof Error ? error.message : String(error)
+  const errorStr = normalizeTechnicalError(error)
   const category = classifyError(errorStr)
   const template = ERROR_MESSAGES[category]
+  const detail = summarizeTechnicalError(errorStr)
+
+  if (category === 'unknown') {
+    return {
+      ...template,
+      message: detail
+        ? `发生了未分类异常：${detail}`
+        : '发生了未分类异常，但底层没有返回错误详情。',
+      technicalDetails: errorStr,
+    }
+  }
 
   return {
     ...template,

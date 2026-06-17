@@ -99,11 +99,8 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     const { leftSidebarVisible, centerPanelVisible, rightSidebarVisible } = get()
     const visibleCount = [leftSidebarVisible, centerPanelVisible, rightSidebarVisible].filter(Boolean).length
 
+    // 如果中心面板已经是唯一可见的，不允许关闭
     if (centerPanelVisible && visibleCount === 1) {
-      return
-    }
-
-    if (centerPanelVisible && visibleCount === 2 && leftSidebarVisible && !rightSidebarVisible) {
       return
     }
 

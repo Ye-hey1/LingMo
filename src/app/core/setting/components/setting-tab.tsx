@@ -18,7 +18,7 @@ interface SettingTabProps {
 export function SettingTab({ currentPage: controlledPage, onNavigate, className }: SettingTabProps) {
   const [currentPage, setCurrentPage] = useState("about");
   const router = useRouter();
-  const pathname = usePathname();
+  const pathname = usePathname() || "";
   const t = useTranslations("settings");
   const { setLastSettingPage } = useSettingStore();
 

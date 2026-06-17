@@ -1,6 +1,8 @@
 'use client'
 
 import { Editor } from '@tiptap/react'
+import { TextSelection } from '@tiptap/pm/state'
+import { canSplit } from '@tiptap/pm/transform'
 import {
   AlignCenter,
   AlignLeft,
@@ -116,6 +118,15 @@ type FloatingMenuPosition = {
   left: number
 }
 
+type TextSelectionRange = {
+  from: number
+  to: number
+}
+
+function clampPosition(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(value, max))
+}
+
 type CellSelectionLike = {
   constructor: { name: string }
   from: number
@@ -205,6 +216,7 @@ export function BubbleMenu({
   const colorButtonRef = useRef<HTMLButtonElement>(null)
   const cellFillButtonRef = useRef<HTMLButtonElement>(null)
   const colorMenuRef = useRef<HTMLDivElement>(null)
+  const latestTextSelectionRef = useRef<TextSelectionRange | null>(null)
 
   const closeToolSubmenus = useCallback(() => {
     setShowAISubmenu(false)
@@ -287,6 +299,7 @@ export function BubbleMenu({
       Math.min(Math.max(top, VIEWPORT_MARGIN), window.innerHeight - VIEWPORT_MARGIN)
 
     if (isCellSelection(selection)) {
+      latestTextSelectionRef.current = null
       const rect = getCellSelectionRect(editor)
       if (!rect) {
         setShow(false)
@@ -324,6 +337,7 @@ export function BubbleMenu({
       setShow(false)
       return
     }
+    latestTextSelectionRef.current = { from, to }
 
     // 选区有效时不要因编辑器临时失焦隐藏菜单。
     // 点击浮动工具栏会触发 blur；如果这里隐藏，按钮 click 还没执行菜单就消失了。
@@ -517,30 +531,122 @@ export function BubbleMenu({
     }
   }, [editor, linkUrl, showLinkInput])
 
+  const createTextSelectionScopedChain = useCallback(() => {
+    return editor
+      .chain()
+      .focus()
+      .command(({ tr }) => {
+        const selectionRange = latestTextSelectionRef.current
+
+        if (!selectionRange) {
+          return true
+        }
+
+        const minTextPosition = TextSelection.atStart(tr.doc).from
+        const maxTextPosition = TextSelection.atEnd(tr.doc).to
+        const from = clampPosition(selectionRange.from, minTextPosition, maxTextPosition)
+        const to = clampPosition(selectionRange.to, minTextPosition, maxTextPosition)
+
+        if (from === to) {
+          return false
+        }
+
+        let selection: TextSelection
+        try {
+          selection = TextSelection.create(tr.doc, Math.min(from, to), Math.max(from, to))
+        } catch {
+          return false
+        }
+        const { $from, $to } = selection
+
+        if (!$from.parent.isTextblock || !$to.parent.isTextblock) {
+          tr.setSelection(selection)
+          return true
+        }
+
+        const hardBreakType = tr.doc.type.schema.nodes.hardBreak
+        const selectionStartsInsideBlock = selection.from > $from.start()
+        const selectionEndsInsideBlock = selection.to < $to.end()
+        const removeHardBreakBefore =
+          Boolean(hardBreakType) &&
+          selectionStartsInsideBlock &&
+          tr.doc.nodeAt(selection.from - 1)?.type === hardBreakType
+        const removeHardBreakAfter =
+          Boolean(hardBreakType) &&
+          selectionEndsInsideBlock &&
+          tr.doc.nodeAt(selection.to)?.type === hardBreakType
+
+        tr.setSelection(selection)
+
+        if (selectionEndsInsideBlock) {
+          const splitTo = tr.mapping.map(selection.to)
+          if (!canSplit(tr.doc, splitTo)) {
+            return false
+          }
+          tr.split(splitTo)
+        }
+
+        if (selectionStartsInsideBlock) {
+          const splitFrom = tr.mapping.map(selection.from)
+          if (!canSplit(tr.doc, splitFrom)) {
+            return false
+          }
+          tr.split(splitFrom)
+        }
+
+        if (removeHardBreakAfter) {
+          const hardBreakPos = tr.mapping.map(selection.to, 1)
+          const hardBreak = tr.doc.nodeAt(hardBreakPos)
+          if (hardBreak?.type === hardBreakType) {
+            tr.delete(hardBreakPos, hardBreakPos + hardBreak.nodeSize)
+          }
+        }
+
+        if (removeHardBreakBefore) {
+          const hardBreakPos = tr.mapping.map(selection.from - 1, -1)
+          const hardBreak = tr.doc.nodeAt(hardBreakPos)
+          if (hardBreak?.type === hardBreakType) {
+            tr.delete(hardBreakPos, hardBreakPos + hardBreak.nodeSize)
+          }
+        }
+
+        const nextMinTextPosition = TextSelection.atStart(tr.doc).from
+        const nextMaxTextPosition = TextSelection.atEnd(tr.doc).to
+        const nextFrom = clampPosition(tr.mapping.map(selection.from, 1), nextMinTextPosition, nextMaxTextPosition)
+        const nextTo = clampPosition(tr.mapping.map(selection.to, -1), nextMinTextPosition, nextMaxTextPosition)
+
+        if (nextFrom !== nextTo) {
+          tr.setSelection(TextSelection.create(tr.doc, Math.min(nextFrom, nextTo), Math.max(nextFrom, nextTo)))
+        }
+
+        return true
+      })
+  }, [editor])
+
   const toggleBold = () => editor.chain().focus().toggleBold().run()
   const toggleItalic = () => editor.chain().focus().toggleItalic().run()
   const toggleStrike = () => editor.chain().focus().toggleStrike().run()
   const toggleUnderline = () => editor.chain().focus().toggleUnderline().run()
   const toggleCode = () => editor.chain().focus().toggleCode().run()
-  const toggleBlockquote = () => editor.chain().focus().toggleBlockquote().run()
-  const toggleBulletList = () => editor.chain().focus().toggleBulletList().run()
-  const toggleOrderedList = () => editor.chain().focus().toggleOrderedList().run()
-  const toggleTaskList = () => editor.chain().focus().toggleTaskList().run()
-  const toggleCodeBlock = () => editor.chain().focus().toggleCodeBlock().run()
+  const toggleBlockquote = () => createTextSelectionScopedChain().toggleBlockquote().run()
+  const toggleBulletList = () => createTextSelectionScopedChain().toggleBulletList().run()
+  const toggleOrderedList = () => createTextSelectionScopedChain().toggleOrderedList().run()
+  const toggleTaskList = () => createTextSelectionScopedChain().toggleTaskList().run()
+  const toggleCodeBlock = () => createTextSelectionScopedChain().toggleCodeBlock().run()
   const setParagraph = () => {
-    editor.chain().focus().setParagraph().run()
+    createTextSelectionScopedChain().setParagraph().run()
     closeToolSubmenus()
   }
   const setHeading = (level: HeadingLevel) => {
-    editor.chain().focus().setHeading({ level }).run()
+    createTextSelectionScopedChain().setHeading({ level }).run()
     closeToolSubmenus()
   }
   const setTextAlign = (alignment: 'left' | 'center' | 'right') => {
-    editor.chain().focus().setTextAlign(alignment).run()
+    createTextSelectionScopedChain().setTextAlign(alignment).run()
     setShowAlignMenu(false)
   }
   const clearFormatting = () => {
-    editor.chain().focus().unsetAllMarks().clearNodes().run()
+    createTextSelectionScopedChain().unsetAllMarks().clearNodes().run()
     closeToolSubmenus()
   }
   const setTextColor = (color: string | null) => {

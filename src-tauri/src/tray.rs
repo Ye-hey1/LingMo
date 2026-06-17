@@ -1,9 +1,9 @@
 use tauri::Emitter;
 use tauri::{
+    AppHandle, Manager, Runtime,
     image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, Runtime,
 };
 
 pub const ID_SHOW_MAIN: &str = "show-main";

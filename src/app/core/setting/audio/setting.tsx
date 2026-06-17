@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import useSettingStore from "@/stores/setting";
 import { ModelSelect } from "../components/model-select";
 import type { SpeechMode } from '@/lib/speech/types';
+import { matchesConfiguredModelSelection } from '@/lib/ai/model-selection';
 
 export function Setting() {
   const t = useTranslations('settings.audio');
@@ -36,7 +37,11 @@ export function Setting() {
       for (const config of models) {
         if (config.models && config.models.length > 0) {
           const targetModel = config.models.find((model: any) =>
-            model.id === audioModel && model.modelType === 'tts'
+            model.modelType === 'tts' && matchesConfiguredModelSelection({
+              configKey: config.key,
+              modelId: model.id,
+              selectionId: audioModel,
+            })
           );
           if (targetModel && targetModel.speed !== undefined) {
             currentSpeed = targetModel.speed;
@@ -68,7 +73,11 @@ export function Setting() {
         return {
           ...config,
           models: config.models.map((model: any) =>
-            model.id === audioModel && model.modelType === 'tts'
+            model.modelType === 'tts' && matchesConfiguredModelSelection({
+              configKey: config.key,
+              modelId: model.id,
+              selectionId: audioModel,
+            })
               ? { ...model, speed: newSpeed }
               : model
           ),

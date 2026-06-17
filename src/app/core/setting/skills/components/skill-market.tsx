@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Loader2, Search, Download, CheckCircle, TrendingUp, Flame, Trophy, RefreshCw } from 'lucide-react'
-import { useSkillsV2Store, type MarketSkill } from '@/stores/skills-v2'
+import { useSkillsStore, type MarketSkill } from '@/stores/skills'
 import { useToast } from '@/hooks/use-toast'
 
 const DEBOUNCE_MS = 450
@@ -26,12 +26,12 @@ export function SkillMarket() {
     marketSkills,
     marketLoading,
     marketSearchLoading,
-    skills,
+    installedSkills,
     fetchLeaderboard,
     searchMarket,
     installFromMarket,
     installing,
-  } = useSkillsV2Store()
+  } = useSkillsStore()
 
   const [board, setBoard] = useState<string>('alltime')
   const [searchQuery, setSearchQuery] = useState('')
@@ -42,11 +42,11 @@ export function SkillMarket() {
   // Track installed skills from source_ref
   useEffect(() => {
     const refs = new Set<string>()
-    skills.forEach(s => {
+    installedSkills.forEach(s => {
       if (s.source_ref) refs.add(s.source_ref)
     })
     setInstalledSet(refs)
-  }, [skills])
+  }, [installedSkills])
 
   // Debounced search
   useEffect(() => {

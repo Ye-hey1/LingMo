@@ -25,7 +25,7 @@ import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFold
 import emitter from "@/lib/emitter"
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { ImageAttachment } from "./image-attachments"
-import { GlobeIcon, Loader2, Mic, MousePointer2, Square, WandSparkles } from "lucide-react"
+import { GlobeIcon, Loader2, Mic, MousePointer2, Square, WandSparkles, X } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
 import type { PendingQuote } from "@/stores/chat"
 import { convertFileSrc } from "@tauri-apps/api/core"
@@ -97,7 +97,23 @@ function parseSlashInput(input: string) {
   const trimmed = input.trim()
   if (!trimmed.startsWith('/')) return null
 
-  const body = trimmed.slice(1).trimStart()
+  const rawBody = trimmed.slice(1)
+  const hasLeadingSpace = /^\s/.test(rawBody)
+  const body = rawBody.trimStart()
+  const delimiterMatch = body.match(/^[,，、;；:：。.!！?？]\s*([\s\S]*)$/)
+  if (delimiterMatch) {
+    return {
+      commandToken: '',
+      userRequest: delimiterMatch[1].trim(),
+    }
+  }
+  if (hasLeadingSpace) {
+    return {
+      commandToken: '',
+      userRequest: body.trim(),
+    }
+  }
+
   const match = body.match(/^(\S+)(?:\s+([\s\S]*))?$/)
   return {
     commandToken: match?.[1] || '',
@@ -158,6 +174,7 @@ const RESEARCH_KEYWORDS = [
 
 const CHAT_DICTATION_POLISH_MODE_STORAGE_KEY = 'chat-dictation-polish-mode'
 const CHAT_RESEARCH_DEPTH_PRESET_STORAGE_KEY = 'chat-research-depth-preset'
+const CHAT_PRIMARY_ACTION_MODE_STORAGE_KEY = 'chat-primary-action-mode'
 
 function isSensitiveInstruction(val: string): boolean {
   const normalized = val.toLowerCase()
@@ -321,10 +338,13 @@ export const ChatInput = React.memo(function ChatInput() {
   const [enhancingPrompt, setEnhancingPrompt] = useState(false)
   const [placeholder, setPlaceholder] = useState('')
   const [, setAiQuickPrompts] = useState<QuickPrompt[]>([])
+  const [selectedSlashCommand, setSelectedSlashCommand] = useState<SlashCommandItem | null>(null)
   const isModelRunning = loading || researchRunning
   const isResearchActive = researchRunning || (loading && chatMode === 'research')
   const effectivePlaceholder = isResearchActive
     ? '研究运行中,预计 3-6 分钟完成。你可以点击停止按钮中断。'
+    : selectedSlashCommand
+      ? `输入「${selectedSlashCommand.title}」的具体要求`
     : placeholder
 
   // 斜杠命令面板状态
@@ -336,11 +356,11 @@ export const ChatInput = React.memo(function ChatInput() {
   // 当输入以 / 开头时显示命令面板
   const slashQuery = useMemo(() => {
     // 已选中命令后不弹出面板
-    if (pendingCommandRef.current) return null
+    if (selectedSlashCommand) return null
     if (!text.startsWith('/')) return null
     if (text.includes('\n')) return null
     return parseSlashInput(text)?.commandToken ?? ''
-  }, [text])
+  }, [selectedSlashCommand, text])
   const slashOpen = slashQuery !== null
 
   // 异步加载命令列表（包含 Skills）
@@ -380,12 +400,18 @@ export const ChatInput = React.memo(function ChatInput() {
     }
 
     // 填入命令名，关闭 popover
+    const currentSlashInput = parseSlashInput(text)
+    const preservedRequest = currentSlashInput?.commandToken
+      ? ''
+      : currentSlashInput?.userRequest.trim()
     pendingCommandRef.current = slashCommand
-    setText(`/${slashCommand.title}`)
+    setSelectedSlashCommand(slashCommand)
+    setText(preservedRequest || '')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
+      setTimeout(() => textareaRef.current?.focus(), 0)
     }
-  }, [chatMode])
+  }, [chatMode, text])
 
   // ---- 阶段 2：按 Enter 后真正执行 ----
   const executeSlashCommand = useCallback(async (slashCommand: SlashCommandItem, userRequest?: string) => {
@@ -402,6 +428,7 @@ export const ChatInput = React.memo(function ChatInput() {
       if (!slashCommand.skillContent) return
 
       pendingCommandRef.current = null
+      setSelectedSlashCommand(null)
       setText('')
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
@@ -462,6 +489,7 @@ export const ChatInput = React.memo(function ChatInput() {
 
     // 清空输入框
     pendingCommandRef.current = null
+    setSelectedSlashCommand(null)
     setText('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
@@ -530,10 +558,15 @@ ${exec.prompt}`
     CHAT_RESEARCH_DEPTH_PRESET_STORAGE_KEY,
     'auto'
   )
+  const [primaryActionModeValue, setPrimaryActionModeValue] = useLocalStorage<string>(
+    CHAT_PRIMARY_ACTION_MODE_STORAGE_KEY,
+    'send'
+  )
   const dictationPolishMode: DictationPolishMode = isDictationPolishMode(dictationPolishModeValue)
     ? dictationPolishModeValue
     : 'raw'
   const researchDepthPreset = normalizeResearchDepthPreset(researchDepthPresetValue)
+  const primaryActionMode: 'send' | 'voice' = primaryActionModeValue === 'voice' ? 'voice' : 'send'
   const setResearchDepthPreset = useCallback((preset: ResearchDepthPreset) => {
     setResearchDepthPresetValue(preset)
   }, [setResearchDepthPresetValue])
@@ -566,16 +599,36 @@ ${exec.prompt}`
     : ''
   const hasContext = !!pendingQuote || linkedResources.length > 0 || attachedImages.length > 0
   const chatSendRef = useRef<ChatSendHandle>(null)
-  const sendCurrentChat = useCallback(() => {
+  const sendCurrentChat = useCallback((currentInput?: string) => {
     const depthConfig = getResearchDepthConfig(researchDepthPreset)
-    chatSendRef.current?.sendChat(undefined, chatMode === 'research'
+    const liveInput = currentInput?.trim()
+    const researchOptions = chatMode === 'research'
       ? {
           researchDepthPreset: depthConfig.preset,
           researchBreadth: depthConfig.breadth,
           researchDepth: depthConfig.depth,
         }
-      : undefined)
+      : undefined
+
+    if (liveInput) {
+      chatSendRef.current?.sendChat(liveInput, {
+        ...researchOptions,
+        displayText: liveInput,
+      })
+      return
+    }
+
+    chatSendRef.current?.sendChat(undefined, researchOptions)
   }, [chatMode, researchDepthPreset])
+  const submitInput = useCallback((currentInput?: string) => {
+    const value = currentInput ?? text
+    const selectedCommand = selectedSlashCommand || pendingCommandRef.current
+    if (selectedCommand) {
+      void executeSlashCommand(selectedCommand, value.trim())
+      return
+    }
+    sendCurrentChat(value)
+  }, [executeSlashCommand, selectedSlashCommand, sendCurrentChat, text])
   const isMobile = useIsMobile()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const inputDropZoneRef = useRef<HTMLDivElement>(null)
@@ -667,6 +720,71 @@ ${exec.prompt}`
     polishMode: dictationPolishMode,
     onTranscript: insertTextAtCursor,
   })
+
+  const togglePrimaryActionMode = useCallback(() => {
+    const nextMode = primaryActionMode === 'send' ? 'voice' : 'send'
+    setPrimaryActionModeValue(nextMode)
+    toast({
+      title: nextMode === 'send' ? '已切换为发送' : '已切换为语音输入',
+      description: '左键执行当前按钮功能，右键可再次切换。',
+    })
+  }, [primaryActionMode, setPrimaryActionModeValue])
+
+  const handleVoiceActionClick = useCallback(() => {
+    if (isModelRunning) {
+      void chatSendRef.current?.stopChat()
+      return
+    }
+
+    if (dictation.isActive) {
+      dictation.toggle()
+      return
+    }
+
+    if (!sttModel) {
+      toast({
+        title: '请先配置语音识别模型',
+        description: '配置后即可使用语音输入。',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    dictation.toggle()
+  }, [dictation, isModelRunning, sttModel])
+
+  const primaryActionBusy = dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting"
+  const primaryActionDisabled = !isModelRunning && (
+    !primaryModel ||
+    isResearchActive ||
+    primaryActionBusy ||
+    dictation.isOtherRecordingActive
+  )
+  const primaryActionIcon = isModelRunning || dictation.isListening
+    ? <Square className="size-4" />
+    : primaryActionBusy
+      ? <Loader2 className="size-4 animate-spin" />
+      : <Mic className="size-4" />
+  const primaryActionTooltip = isModelRunning
+    ? '停止生成'
+    : dictation.phase === "transcribing"
+      ? '正在识别语音...'
+      : dictation.phase === "polishing"
+        ? `正在整理语音文本:${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
+        : dictation.phase === "starting"
+          ? '正在启动录音...'
+          : dictation.isListening
+            ? `停止录音并转文字 ${dictation.formattedDuration},模式:${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
+            : dictation.isOtherRecordingActive
+                ? '当前已有录音任务。右键可切回发送'
+                : !sttModel
+                  ? '请先配置语音识别模型。右键可切回发送'
+                  : `语音输入,整理模式:${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}。右键切换为发送`
+  const primaryActionButtonClassName = isModelRunning || dictation.isListening
+    ? 'h-8 w-8 shrink-0 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90'
+    : primaryActionBusy
+      ? 'h-8 w-8 shrink-0 rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15 hover:bg-primary/15'
+      : 'h-8 w-8 shrink-0 rounded-lg border border-primary/25 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary'
 
   const ensureImageInputSupported = useCallback(() => {
     if (currentModelSupportsImages || visionBridgeAvailable) {
@@ -821,7 +939,7 @@ ${exec.prompt}`
     clearPendingAutoSend()
     pendingAutoSendTimerRef.current = window.setTimeout(() => {
       pendingAutoSendTimerRef.current = null
-      sendCurrentChat()
+      sendCurrentChat(content)
     }, 30)
   }, [applyTypedText, clearLinkedFiles, clearPendingAutoSend, loading, sendCurrentChat, setPendingQuote, startNewConversation])
 
@@ -869,7 +987,7 @@ ${exec.prompt}`
     clearPendingAutoSend()
     pendingAutoSendTimerRef.current = window.setTimeout(() => {
       pendingAutoSendTimerRef.current = null
-      sendCurrentChat()
+      sendCurrentChat(prompt)
     }, 30)
   }, [applyTypedText, chatMode, clearAllContexts, clearPendingAutoSend, sendCurrentChat, setChatMode, setPendingQuote])
 
@@ -1203,12 +1321,12 @@ ${exec.prompt}`
     }
   }
 
-  function handleSent() {
+  function handleSent(sentText?: string) {
     if (onboardingAgentPromptArmedRef.current) {
       onboardingAgentPromptArmedRef.current = false
       emitter.emit('onboarding-step-complete', { step: 'ai-polish' })
     }
-    addToHistory(text)
+    addToHistory(sentText || text)
     setText('')
     setHistoryIndex(-1)
     setAttachedImages([])
@@ -1807,6 +1925,25 @@ ${exec.prompt}`
             files={flattenedFiles}
             anchorRef={textareaRef}
           />
+          {selectedSlashCommand ? (
+            <div className="ml-2 mt-3 flex h-5 max-w-[42%] shrink-0 items-center gap-1 text-sky-600 dark:text-sky-300">
+              <span className="truncate text-[12px] font-medium leading-none">
+                {selectedSlashCommand.title}
+              </span>
+              <button
+                type="button"
+                className="flex size-4 shrink-0 items-center justify-center rounded-sm text-sky-500/70 hover:bg-sky-500/10 hover:text-sky-700 dark:text-sky-300/70 dark:hover:bg-sky-300/10 dark:hover:text-sky-100"
+                onClick={() => {
+                  pendingCommandRef.current = null
+                  setSelectedSlashCommand(null)
+                  setTimeout(() => textareaRef.current?.focus(), 0)
+                }}
+                aria-label="取消已选命令"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ) : null}
           <Textarea
             ref={textareaRef}
             className="relative min-h-[44px] max-h-[240px] flex-1 resize-none overflow-y-auto border-none bg-transparent px-3 py-2.5 text-sm leading-6 shadow-none outline-none placeholder:text-sm placeholder:text-muted-foreground/60 focus-visible:ring-0 disabled:opacity-60"
@@ -1816,7 +1953,7 @@ ${exec.prompt}`
             onChange={(e) => {
               const val = e.target.value
               // 用户编辑了已选命令的文字 → 取消待定状态，恢复为普通 / 搜索
-              if (pendingCommandRef.current && val !== `/${pendingCommandRef.current.title}`) {
+              if (!selectedSlashCommand && pendingCommandRef.current && !getSlashCommandInvocation(val, pendingCommandRef.current)) {
                 pendingCommandRef.current = null
               }
               setText(val)
@@ -1848,6 +1985,15 @@ ${exec.prompt}`
               const isAtEnd = cursorPosition === text.length
               const keyIsComposing = isKeyboardEventComposing(e) || (isComposing && e.key !== 'Enter')
               const isSendEnter = isSendEnterKey(e)
+
+              if (selectedSlashCommand && !keyIsComposing) {
+                if (e.key === 'Escape' || (e.key === 'Backspace' && text.trim() === '')) {
+                  e.preventDefault()
+                  pendingCommandRef.current = null
+                  setSelectedSlashCommand(null)
+                  return
+                }
+              }
 
               // @ 文件联想面板按键拦截
               if (atOpen && !keyIsComposing) {
@@ -1910,9 +2056,16 @@ ${exec.prompt}`
                 isSendEnter
               ) {
                 const slashCommand = pendingCommandRef.current
-                if (slashCommand && text === `/${slashCommand.title}`) {
+                if (slashCommand && selectedSlashCommand?.id === slashCommand.id) {
                   e.preventDefault()
-                  void executeSlashCommand(slashCommand)
+                  void executeSlashCommand(slashCommand, text.trim())
+                  return
+                }
+
+                const invocation = slashCommand ? getSlashCommandInvocation(text, slashCommand) : null
+                if (slashCommand && invocation) {
+                  e.preventDefault()
+                  void executeSlashCommand(slashCommand, invocation.userRequest)
                   return
                 }
                 // 文字已被用户修改，走正常 Enter 逻辑
@@ -1939,11 +2092,17 @@ ${exec.prompt}`
                 }
                 if (isSendEnter) {
                   e.preventDefault()
+                  const parsedSlashInput = parseSlashInput(text)
                   const currentInvocation = findSlashCommandInvocation(text, slashFilteredCommands)
                   const exactTarget = slashFilteredCommands.find(command =>
                     isExactSlashCommandInput(text, command),
                   )
-                  const selectedTarget = slashFilteredCommands[Math.min(slashSelectedIndex, slashFilteredCommands.length - 1)]
+                  const shouldUseSelectedTarget = Boolean(
+                    parsedSlashInput?.commandToken || !parsedSlashInput?.userRequest,
+                  )
+                  const selectedTarget = shouldUseSelectedTarget
+                    ? slashFilteredCommands[Math.min(slashSelectedIndex, slashFilteredCommands.length - 1)]
+                    : undefined
                   const target = currentInvocation?.command || exactTarget || selectedTarget
 
                   if (target) {
@@ -1975,7 +2134,7 @@ ${exec.prompt}`
                     }
 
                     pendingCommandRef.current = null
-                    sendCurrentChat()
+                    submitInput(textarea.value)
                   })()
                   return
                 }
@@ -1992,7 +2151,7 @@ ${exec.prompt}`
                   return
                 }
                 pendingCommandRef.current = null
-                sendCurrentChat()
+                submitInput(textarea.value)
               }
               if (e.key === "Escape" && dictation.isActive) {
                 e.preventDefault()
@@ -2080,50 +2239,48 @@ ${exec.prompt}`
               disabled={loading || enhancingPrompt || isResearchActive}
               buttonClassName={enhancingPrompt ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/15' : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-background/70 hover:text-foreground'}
             />
-            <TooltipButton
-              variant={isModelRunning || dictation.isListening ? "destructive" : dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting" ? "secondary" : "ghost"}
-              size="icon"
-              icon={
-                isModelRunning || dictation.isListening
-                  ? <Square className="size-4" />
-                  : dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting"
-                  ? <Loader2 className="size-4 animate-spin" />
-                  : <Mic className="size-4" />
-              }
-              tooltipText={
-                isModelRunning
-                  ? '停止生成'
-                  : dictation.phase === "transcribing"
-                  ? '正在识别语音...'
-                  : dictation.phase === "polishing"
-                    ? `正在整理语音文本:${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
-                  : dictation.phase === "starting"
-                    ? '正在启动录音...'
-                    : dictation.isListening
-                    ? `停止录音并转文字 ${dictation.formattedDuration},模式:${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
-                    : dictation.isOtherRecordingActive
-                      ? '当前已有录音任务'
-                      : !sttModel
-                        ? '请先配置语音识别模型'
-                        : `语音输入,整理模式:${DICTATION_POLISH_MODE_LABELS[dictationPolishMode]}`
-              }
-              onClick={() => {
-                if (isModelRunning) {
-                  void chatSendRef.current?.stopChat()
-                  return
-                }
-
-                dictation.toggle()
+            <div
+              className="shrink-0"
+              onContextMenu={(event) => {
+                event.preventDefault()
+                if (isModelRunning || dictation.isActive) return
+                togglePrimaryActionMode()
               }}
-              disabled={!isModelRunning && (!primaryModel || isResearchActive || dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.isOtherRecordingActive)}
-              buttonClassName={isModelRunning || dictation.isListening
-                ? 'h-8 w-8 shrink-0 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                : dictation.phase === "transcribing" || dictation.phase === "polishing" || dictation.phase === "starting"
-                  ? 'h-8 w-8 shrink-0 rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15 hover:bg-primary/15'
-                  : 'h-8 w-8 shrink-0 rounded-lg border border-primary/25 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary'
-              }
-            />
-            <div className="shrink-0">
+            >
+              {isModelRunning || primaryActionMode === 'send' ? (
+                <ChatSend
+                  inputValue={text}
+                  onSent={handleSent}
+                  linkedResource={linkedResources[0] || null}
+                  linkedResources={linkedResources}
+                  linkedResourcePreviews={linkedResourcePreviews}
+                  attachedImages={attachedImages}
+                  quoteData={pendingQuote}
+                  webSearchEnabled={webSearchEnabled}
+                  allowAutoCurrentFileContext={!autoLinkSuppressedRef.current}
+                  getLiveInputValue={() => textareaRef.current?.value || text}
+                  onSubmitOverride={(value) => {
+                    if (!selectedSlashCommand) return false
+                    submitInput(value)
+                    return true
+                  }}
+                  canSubmitOverride={Boolean(selectedSlashCommand)}
+                  hideIdleButton={false}
+                  ref={chatSendRef}
+                />
+              ) : (
+                <TooltipButton
+                  variant={dictation.isListening ? "destructive" : "ghost"}
+                  size="icon"
+                  icon={primaryActionIcon}
+                  tooltipText={primaryActionTooltip}
+                  onClick={handleVoiceActionClick}
+                  disabled={primaryActionDisabled}
+                  buttonClassName={primaryActionButtonClassName}
+                />
+              )}
+            </div>
+            {primaryActionMode === 'voice' && !isModelRunning ? (
               <ChatSend
                 inputValue={text}
                 onSent={handleSent}
@@ -2134,11 +2291,17 @@ ${exec.prompt}`
                 quoteData={pendingQuote}
                 webSearchEnabled={webSearchEnabled}
                 allowAutoCurrentFileContext={!autoLinkSuppressedRef.current}
+                getLiveInputValue={() => textareaRef.current?.value || text}
+                onSubmitOverride={(value) => {
+                  if (!selectedSlashCommand) return false
+                  submitInput(value)
+                  return true
+                }}
+                canSubmitOverride={Boolean(selectedSlashCommand)}
                 hideButton
-                hideIdleButton
                 ref={chatSendRef}
               />
-            </div>
+            ) : null}
           </div>
         </div>
         </div> {/* 关闭输入框外层容器 */}

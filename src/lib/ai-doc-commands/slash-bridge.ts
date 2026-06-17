@@ -62,6 +62,20 @@ export interface SlashCommandItem {
 let cachedSkillItems: SlashCommandItem[] | null = null
 let cacheTimestamp = 0
 const CACHE_TTL = 30_000 // 30 秒
+const SKILL_SLASH_LOAD_TIMEOUT_MS = 1200
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), timeoutMs)
+    promise
+      .then((value) => resolve(value))
+      .catch((error) => {
+        console.warn('[SlashBridge] Timed operation failed:', error)
+        resolve(fallback)
+      })
+      .finally(() => clearTimeout(timer))
+  })
+}
 
 /**
  * 获取已安装 Skills 转换后的 SlashCommandItem 列表
@@ -73,33 +87,45 @@ async function getSkillSlashItems(): Promise<SlashCommandItem[]> {
     return cachedSkillItems
   }
 
-  await skillManager.initialize()
-  const skills = skillManager.getUserInvocableSkills()
-
-  cachedSkillItems = skills.map((skill) => {
-    const runtime = resolveSkillRuntimeProfile(skill)
-
-    return {
-      id: `skill:${skill.metadata.id}`,
-      title: skill.metadata.name,
-      description: skill.metadata.description || '',
-      icon: Sparkles,
-      category: 'skill' as const,
-      source: 'skill' as SlashCommandSource,
-      executionMode: skillRuntimeNeedsAgentMode(runtime.profile) ? 'agent' as const : 'chat' as const,
-      runtimeProfile: runtime.profile,
-      runtimeProfileReason: runtime.reason,
-      searchTerms: [
-        skill.metadata.id,
-        skill.metadata.name,
-        skill.metadata.description,
-        skill.metadata.runtimeProfile,
-        ...(skill.metadata.capabilities || []),
-        ...(skill.metadata.author ? [skill.metadata.author] : []),
-      ].filter((term): term is string => Boolean(term)),
-      skillContent: skill,
+  try {
+    try {
+      const { useSkillsStore } = await import('@/stores/skills')
+      await useSkillsStore.getState().initSkills()
+    } catch (error) {
+      console.warn('[SlashBridge] Failed to prepare Skills store, falling back to skill manager:', error)
+      await skillManager.initialize()
     }
-  })
+
+    const skills = skillManager.getUserInvocableSkills()
+
+    cachedSkillItems = skills.map((skill) => {
+      const runtime = resolveSkillRuntimeProfile(skill)
+
+      return {
+        id: `skill:${skill.metadata.id}`,
+        title: skill.metadata.name,
+        description: skill.metadata.description || '',
+        icon: Sparkles,
+        category: 'skill' as const,
+        source: 'skill' as SlashCommandSource,
+        executionMode: skillRuntimeNeedsAgentMode(runtime.profile) ? 'agent' as const : 'chat' as const,
+        runtimeProfile: runtime.profile,
+        runtimeProfileReason: runtime.reason,
+        searchTerms: [
+          skill.metadata.id,
+          skill.metadata.name,
+          skill.metadata.description,
+          skill.metadata.runtimeProfile,
+          ...(skill.metadata.capabilities || []),
+          ...(skill.metadata.author ? [skill.metadata.author] : []),
+        ].filter((term): term is string => Boolean(term)),
+        skillContent: skill,
+      }
+    })
+  } catch (error) {
+    console.warn('[SlashBridge] Failed to build Skill slash commands:', error)
+    cachedSkillItems = []
+  }
 
   cacheTimestamp = now
   return cachedSkillItems
@@ -130,7 +156,7 @@ export async function getAllSlashCommands(): Promise<SlashCommandItem[]> {
     searchTerms: cmd.searchTerms,
   }))
 
-  const skillItems = await getSkillSlashItems()
+  const skillItems = await withTimeout(getSkillSlashItems(), SKILL_SLASH_LOAD_TIMEOUT_MS, [])
   return [...builtinItems, ...skillItems]
 }
 

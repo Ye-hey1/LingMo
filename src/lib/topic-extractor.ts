@@ -6,6 +6,14 @@ import {
   type NoteTopic,
 } from '@/db/note-topics'
 import { upsertNoteRelationsBatch, type RelationInput } from '@/db/note-relations'
+import {
+  isUsefulKnowledgeTopic,
+  normalizeKnowledgeTopic,
+  prepareKnowledgeIndexText,
+  topicQualityScore,
+} from '@/lib/knowledge-topic-cleaner'
+
+const KNOWLEDGE_TOPIC_POS = ['n', 'ns', 'nr', 'nz', 'eng']
 
 interface KeywordResult {
   text: string
@@ -28,15 +36,27 @@ export async function extractAndStoreTopics(
   if (!content || content.trim().length === 0) return []
 
   try {
+    const cleanedText = prepareKnowledgeIndexText(content)
+    if (!cleanedText) return []
+
     const keywords = await invoke<KeywordResult[]>('rank_keywords', {
-      text: content,
-      topK,
+      text: cleanedText,
+      topK: Math.max(topK * 2, 24),
+      allowedPos: KNOWLEDGE_TOPIC_POS,
     })
 
-    const topics: TopicInput[] = keywords.map(kw => ({
-      keyword: kw.text,
-      weight: kw.weight,
-    }))
+    const topicMap = new Map<string, number>()
+    for (const kw of keywords) {
+      const keyword = normalizeKnowledgeTopic(kw.text)
+      if (!isUsefulKnowledgeTopic(keyword)) continue
+      const weight = kw.weight * topicQualityScore(keyword)
+      topicMap.set(keyword, Math.max(topicMap.get(keyword) ?? 0, weight))
+    }
+
+    const topics: TopicInput[] = Array.from(topicMap.entries())
+      .map(([keyword, weight]) => ({ keyword, weight }))
+      .sort((left, right) => right.weight - left.weight)
+      .slice(0, topK)
 
     // 带重试的写入（database locked 时等待后重试）
     let lastError: unknown = null
@@ -74,10 +94,12 @@ export async function computeKeywordOverlapPairs(
   // 按文件分组关键词
   const topicsByFile = new Map<string, Map<string, number>>()
   for (const topic of allTopics) {
+    const keyword = normalizeKnowledgeTopic(topic.keyword)
+    if (!isUsefulKnowledgeTopic(keyword)) continue
     if (!topicsByFile.has(topic.filename)) {
       topicsByFile.set(topic.filename, new Map())
     }
-    topicsByFile.get(topic.filename)!.set(topic.keyword, topic.weight)
+    topicsByFile.get(topic.filename)!.set(keyword, topic.weight)
   }
 
   const filenames = Array.from(topicsByFile.keys())

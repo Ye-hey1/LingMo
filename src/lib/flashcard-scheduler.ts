@@ -113,16 +113,24 @@ export function applyReviewRating(
     const newEase = Math.max(1.3, ease - 0.2)
     return {
       ease: newEase,
-      interval: 1,
+      interval: 0,
       repetitions: 0,
-      dueAt: calculateDueAt(1),
+      dueAt: learningStepDueAt(0),
     }
   }
 
   if (rating === 1) {
     // Hard: shorter interval, slight ease decrease
     const newEase = Math.max(1.3, ease - 0.15)
-    const newInterval = Math.max(1, Math.round((interval || 1) * 1.2))
+    if (interval <= 0) {
+      return {
+        ease: newEase,
+        interval: 0,
+        repetitions,
+        dueAt: learningStepDueAt(1),
+      }
+    }
+    const newInterval = Math.max(1, Math.round(interval * 1.2))
     return {
       ease: newEase,
       interval: newInterval,

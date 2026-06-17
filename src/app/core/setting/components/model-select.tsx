@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useEffect, useState } from "react"
-import { AiConfig, ModelConfig, builtinProviderTemplates } from "../../setting/config"
+import { AiConfig, ModelConfig } from "../../setting/config"
 import { Store } from "@tauri-apps/plugin-store"
 import useSettingStore from "@/stores/setting"
 import { ChevronsUpDown, X } from "lucide-react"
@@ -24,10 +24,11 @@ import { cn } from "@/lib/utils"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { TooltipButton } from "@/components/tooltip-button"
-import { getCachedProviderTemplates, getProviderTemplateMatch } from "@/lib/ai/provider-templates-runtime"
 import { getConfiguredProviderDisplayTitle } from "@/lib/ai/provider-display"
+import { createConfiguredModelSelectionId, matchesConfiguredModelSelection } from "@/lib/ai/model-selection"
 
 interface GroupedModel {
+  value: string
   configKey: string
   providerTitle: string
   model: ModelConfig
@@ -61,6 +62,25 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
   const [open, setOpen] = React.useState(false)
   const t = useTranslations('settings.defaultModel')
 
+  function getCurrentStoreModelValue(): string {
+    const state = useSettingStore.getState()
+    switch (modelKey) {
+      case 'primaryModel': return state.primaryModel
+      case 'imageMethod': return state.imageMethodModel
+      case 'completion': return state.completionModel
+      case 'markDesc': return state.markDescModel
+      case 'audio':
+      case 'tts': return state.audioModel
+      case 'stt': return state.sttModel
+      case 'embedding': return state.embeddingModel
+      case 'reranking': return state.rerankingModel
+      case 'condense': return state.condenseModel
+      case 'inspiration': return state.inspirationModel
+      case 'promptEnhancer': return state.promptEnhancerModel
+      default: return ''
+    }
+  }
+
   function getStoreKey(modelKey: string): string {
     switch (modelKey) {
       case 'primaryModel': return 'primaryModel'
@@ -80,6 +100,10 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
   }
 
   function setPrimaryModelHandler(primaryModel: string) {
+    if (model === primaryModel && getCurrentStoreModelValue() === primaryModel) {
+      return
+    }
+
     setModel(primaryModel)
     switch (modelKey) {
       case 'primaryModel': setPrimaryModel(primaryModel); break
@@ -108,26 +132,53 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
     }
   }
 
+  function createModelSelectValue(configKey: string, modelId: string): string {
+    return createConfiguredModelSelectionId(configKey, modelId)
+  }
+
+  function getProviderTitle(config: AiConfig): string {
+    return getConfiguredProviderDisplayTitle(config) || config.key || ''
+  }
+
+  function modelMatchesSelection(item: GroupedModel, selectedModel: string): boolean {
+    if (!selectedModel) return false
+    return matchesConfiguredModelSelection({
+      configKey: item.configKey,
+      modelId: item.model.id,
+      selectionId: selectedModel,
+    })
+  }
+
+  function getModelDedupKey(item: GroupedModel): string {
+    return [
+      (item.providerTitle || item.configKey).trim().toLowerCase(),
+      item.model.modelType,
+      item.model.model.trim().toLowerCase(),
+    ].join(':')
+  }
+
+  function dedupeGroupedModels(models: GroupedModel[], selectedModel = '') {
+    const deduped = new Map<string, GroupedModel>()
+
+    for (const item of models) {
+      const key = getModelDedupKey(item)
+      const existing = deduped.get(key)
+      if (existing && !modelMatchesSelection(item, selectedModel)) {
+        continue
+      }
+      deduped.set(key, item)
+    }
+
+    return Array.from(deduped.values())
+  }
+
   async function initModelList() {
     const store = await Store.load('store.json');
     const aiConfigs = await store.get<AiConfig[]>('aiModelList')
     if (!aiConfigs) return
 
-    // 加载 provider 模板，用于统一供应商显示名称
-    const templates = await getCachedProviderTemplates()
-
     const models: GroupedModel[] = []
     const targetModelType = getTargetModelType(modelKey)
-
-    const getProviderTitleWithTemplates = (config: AiConfig, tpl: AiConfig[]): string => {
-      const matched = getProviderTemplateMatch(config, tpl)
-      const builtin = builtinProviderTemplates.find((tpl2) => {
-        if (config.templateKey && config.templateKey === tpl2.key) return true
-        const norm = (u?: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase()
-        return norm(config.baseURL) === norm(tpl2.baseURL)
-      })
-      return getConfiguredProviderDisplayTitle(config, matched) || getConfiguredProviderDisplayTitle(config, builtin)
-    }
 
     aiConfigs.forEach(config => {
       if (!config.baseURL) return
@@ -135,25 +186,47 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
       if (targetModelType === 'stt' && !config.apiKey?.trim()) return
 
       if (config.models && config.models.length > 0) {
-        const providerTitle = getProviderTitleWithTemplates(config, templates)
+        const providerTitle = getProviderTitle(config)
         config.models.forEach(m => {
           if (m.modelType === targetModelType && m.model) {
             models.push({
+              value: createModelSelectValue(config.key, m.id),
               configKey: config.key,
               providerTitle,
               model: m,
             })
           }
         })
+      } else if ((config.modelType || 'chat') === targetModelType && config.model) {
+        models.push({
+          value: config.key,
+          configKey: config.key,
+          providerTitle: getProviderTitle(config),
+          model: {
+            id: config.key,
+            model: config.model,
+            modelType: config.modelType || 'chat',
+            temperature: config.temperature,
+            topP: config.topP,
+            contextWindow: config.contextWindow,
+            voice: config.voice,
+            enableStream: config.enableStream,
+          },
+        })
       }
     })
 
-    setGroupedModels(models)
-
     const storeKey = getStoreKey(modelKey)
     const primaryModel = await store.get<string>(storeKey)
+    const visibleModels = dedupeGroupedModels(models, primaryModel)
+    setGroupedModels(visibleModels)
+
     if (!primaryModel) return
-    setPrimaryModelHandler(primaryModel)
+    const selectedModel = visibleModels.find(item => modelMatchesSelection(item, primaryModel))
+    const nextModel = selectedModel?.value || primaryModel
+    if (nextModel !== model || nextModel !== getCurrentStoreModelValue()) {
+      setPrimaryModelHandler(nextModel)
+    }
   }
 
   async function modelSelectChangeHandler(e: string) {
@@ -178,7 +251,7 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
 
   const findSelectedModelDisplay = () => {
     if (!model || !groupedModels.length) return null
-    const selectedItem = groupedModels.find(item => item.model.id === model)
+    const selectedItem = groupedModels.find(item => modelMatchesSelection(item, model))
     if (selectedItem) {
       return selectedItem.providerTitle
         ? `${selectedItem.model.model} (${selectedItem.providerTitle})`
@@ -238,8 +311,9 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
               <CommandGroup key={providerTitle || 'models-without-provider'} heading={providerTitle || undefined}>
                 {models.map((item) => (
                   <CommandItem
-                    key={item.model.id}
-                    value={item.model.id}
+                    key={item.value}
+                    value={item.value}
+                    keywords={[item.model.model, item.providerTitle, item.configKey]}
                     onSelect={(currentValue) => {
                       modelSelectChangeHandler(currentValue)
                       setOpen(false)
@@ -249,7 +323,7 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
                     <Check
                       className={cn(
                         "ml-auto",
-                        isModelSelected(item.model.id) ? "opacity-100" : "opacity-0"
+                        isModelSelected(item.value) ? "opacity-100" : "opacity-0"
                       )}
                     />
                   </CommandItem>

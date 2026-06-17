@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { Activity, BarChart3, Brain, CalendarDays, CloudSync, MessageSquare, RefreshCw, Sparkles } from 'lucide-react'
+import { Activity, Archive, BarChart3, Brain, CalendarClock, CalendarDays, CloudSync, GitBranch, MessageSquare, RefreshCw, Sparkles } from 'lucide-react'
 
 import { MEMORY_TAB_PATH } from '@/app/core/main/memory/memory-constants'
 import { requestOpenMemorySession } from '@/app/core/main/memory/memory-navigation'
@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { loadTodayNoteIntelligence, type TodayNoteIntelligence } from '@/lib/note-intelligence'
 import useArticleStore from '@/stores/article'
 import { useSidebarStore } from '@/stores/sidebar'
 import { cn } from '@/lib/utils'
@@ -28,7 +29,7 @@ interface ActivityPanelProps {
   mode?: 'page' | 'drawer'
 }
 
-type ActivityTab = 'overview' | 'timeline' | 'ai' | 'memory' | 'sync'
+type ActivityTab = 'overview' | 'timeline' | 'ai' | 'notes' | 'memory' | 'sync'
 type TimelineRangePreset = '7d' | '30d' | 'all' | 'custom'
 type ActivityFocusRange = ActivityHeatmapSelectionRange
 
@@ -488,6 +489,130 @@ function MemorySnapshot({ data }: { data: ActivityCalendarData }) {
             </div>
           )) : (
             <p className="py-6 text-center text-sm text-muted-foreground">暂无访问记录</p>
+          )}
+        </div>
+      </SectionShell>
+    </div>
+  )
+}
+
+function lifecycleLabelText(label: string) {
+  switch (label) {
+    case 'archive': return '可归档'
+    case 'extract': return '建议提炼'
+    case 'island': return '孤岛'
+    case 'sleeping': return '沉睡'
+    default: return '活跃'
+  }
+}
+
+function NoteIntelligenceTab({
+  onOpenNote,
+}: {
+  onOpenNote: (path: string) => void
+}) {
+  const [state, setState] = useState<TodayNoteIntelligence | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const load = async (refresh = false) => {
+    setLoading(true)
+    try {
+      const next = await loadTodayNoteIntelligence({ refresh })
+      setState(next)
+    } catch (error) {
+      console.error('[NoteIntelligence] Failed to load:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load(false)
+  }, [])
+
+  const wakeups = state?.wakeups || []
+  const connections = state?.connections || []
+  const lifecycle = state?.lifecycle || []
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-4">
+        <MetricTile label="今日唤醒" value={wakeups.length} hint="来自笔记条件" icon={<CalendarClock className="h-4 w-4" />} />
+        <MetricTile label="延迟连接" value={connections.length} hint="跨时间模式" tone="blue" icon={<GitBranch className="h-4 w-4" />} />
+        <MetricTile label="待整理" value={lifecycle.length} hint="衰减与提炼建议" tone="rose" icon={<Archive className="h-4 w-4" />} />
+        <div className="flex min-h-[92px] items-center justify-center rounded-lg border border-border/70 bg-background px-4 py-3 shadow-sm">
+          <Button type="button" size="sm" variant="outline" disabled={loading} onClick={() => void load(true)}>
+            <RefreshCw className={cn('mr-1.5 h-3.5 w-3.5', loading && 'animate-spin')} />
+            重新分析
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+        <SectionShell title="笔记唤醒">
+          <div className="space-y-2">
+            {wakeups.length ? wakeups.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                className="block w-full rounded-md bg-muted/35 px-3 py-2 text-left transition-colors hover:bg-muted/55"
+                onClick={() => item.notePath && onOpenNote(item.notePath)}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <p className="line-clamp-1 text-sm font-medium">{item.title}</p>
+                  <Badge variant="outline" className="shrink-0">{new Date(item.dueAt).toISOString().slice(5, 10)}</Badge>
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.message || item.notePath || '笔记唤醒条件已到期'}</p>
+              </button>
+            )) : (
+              <p className="py-8 text-center text-sm text-muted-foreground">今天没有到期的笔记唤醒</p>
+            )}
+          </div>
+        </SectionShell>
+
+        <SectionShell title="延迟连接器">
+          <div className="space-y-2">
+            {connections.length ? connections.map(item => (
+              <div key={`${item.sourceNote}-${item.targetNote}`} className="rounded-md bg-muted/35 px-3 py-2">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="line-clamp-2 text-sm font-medium">{item.title}</p>
+                  <Badge variant="outline" className="shrink-0">{Math.round(item.confidence * 100)}%</Badge>
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.summary}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onOpenNote(item.sourceNote)}>
+                    打开新笔记
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => onOpenNote(item.targetNote)}>
+                    打开旧笔记
+                  </Button>
+                </div>
+              </div>
+            )) : (
+              <p className="py-8 text-center text-sm text-muted-foreground">暂无跨时间连接。先构建语义关系后会更准确。</p>
+            )}
+          </div>
+        </SectionShell>
+      </div>
+
+      <SectionShell title="笔记衰减标记">
+        <div className="grid gap-2 lg:grid-cols-2">
+          {lifecycle.length ? lifecycle.map(item => (
+            <button
+              key={item.notePath}
+              type="button"
+              className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-left transition-colors hover:border-primary/35 hover:bg-muted/35"
+              onClick={() => onOpenNote(item.notePath)}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <p className="line-clamp-1 text-sm font-medium">{formatShortPath(item.notePath)}</p>
+                <Badge variant="outline" className="shrink-0">{lifecycleLabelText(item.label)}</Badge>
+              </div>
+              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.reason}</p>
+              <p className="mt-2 text-xs font-medium text-foreground">{item.suggestedAction}</p>
+            </button>
+          )) : (
+            <p className="col-span-full py-8 text-center text-sm text-muted-foreground">暂时没有需要整理的笔记</p>
           )}
         </div>
       </SectionShell>
@@ -1214,6 +1339,12 @@ export function ActivityPanel({
     }
   }
 
+  async function handleOpenNote(path: string) {
+    await setLeftSidebarTab('files')
+    await setActiveFilePath(path)
+    onEntryPathOpen?.()
+  }
+
   if (loading && !data) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -1266,6 +1397,7 @@ export function ActivityPanel({
           <TabsTrigger value="overview" className="gap-1.5"><BarChart3 className="h-3.5 w-3.5" />总览</TabsTrigger>
           <TabsTrigger value="timeline" className="gap-1.5"><Activity className="h-3.5 w-3.5" />时间线</TabsTrigger>
           <TabsTrigger value="ai" className="gap-1.5"><MessageSquare className="h-3.5 w-3.5" />AI交互</TabsTrigger>
+          <TabsTrigger value="notes" className="gap-1.5"><Sparkles className="h-3.5 w-3.5" />笔记智能</TabsTrigger>
           <TabsTrigger value="memory" className="gap-1.5"><Brain className="h-3.5 w-3.5" />记忆</TabsTrigger>
           <TabsTrigger value="sync" className="gap-1.5"><CloudSync className="h-3.5 w-3.5" />同步</TabsTrigger>
           </TabsList>
@@ -1313,6 +1445,10 @@ export function ActivityPanel({
 
           <TabsContent value="ai" className="mt-4">
             <AiInteractionTab data={data} onOpenEntryPath={handleOpenEntryPath} />
+          </TabsContent>
+
+          <TabsContent value="notes" className="mt-4">
+            <NoteIntelligenceTab onOpenNote={(path) => void handleOpenNote(path)} />
           </TabsContent>
 
           <TabsContent value="memory" className="mt-4">

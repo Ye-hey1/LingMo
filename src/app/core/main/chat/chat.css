@@ -190,6 +190,40 @@ pre.hljs {
   font-size: calc(var(--chat-content-font-size, 0.875rem) * 0.9) !important;
 }
 
+.claw-markdown {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.claw-code-block {
+  padding: 0.75rem 0.875rem !important;
+  border: 1px solid hsl(var(--border) / 0.35) !important;
+  border-radius: 6px;
+  line-height: 1.55;
+}
+
+.claw-code-block code,
+.claw-table code {
+  display: block;
+  white-space: pre;
+  font-family: inherit;
+}
+
+.claw-code-block-border {
+  color: hsl(var(--muted-foreground) / 0.8);
+  font-weight: 600;
+}
+
+.claw-table {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.5rem 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: hsl(var(--foreground)) !important;
+  font-size: calc(var(--chat-content-font-size, 0.875rem) * 0.9) !important;
+  line-height: 1.55;
+}
+
 /* 亮色模式下的代码高亮 */
 .hljs-light {
   background: hsl(var(--muted));

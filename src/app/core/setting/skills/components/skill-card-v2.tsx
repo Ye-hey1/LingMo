@@ -16,7 +16,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Sparkles, Trash2, GitBranch, Archive, FolderOpen, Monitor, Loader2 } from 'lucide-react'
-import type { SkillRecord } from '@/stores/skills-v2'
+import type { SkillRecord } from '@/stores/skills'
 
 const SOURCE_ICONS: Record<string, React.ReactNode> = {
   git: <GitBranch className="size-3.5" />,

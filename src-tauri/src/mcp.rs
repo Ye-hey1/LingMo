@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -26,13 +26,10 @@ fn encode_mcp_message(message: &str) -> Vec<u8> {
 }
 
 fn read_mcp_message<R: Read>(reader: &mut R) -> Result<String, String> {
-    let mut reader = BufReader::new(reader);
-    let mut first_line = String::new();
-    let bytes_read = reader
-        .read_line(&mut first_line)
-        .map_err(|e| format!("Failed to read MCP response: {}", e))?;
+    let first_line =
+        read_line(reader).map_err(|e| format!("Failed to read MCP response: {}", e))?;
 
-    if bytes_read == 0 {
+    if first_line.is_empty() {
         return Err("Unexpected EOF while reading MCP response".to_string());
     }
 
@@ -54,12 +51,9 @@ fn read_mcp_message<R: Read>(reader: &mut R) -> Result<String, String> {
     }
 
     loop {
-        let mut line = String::new();
-        let bytes_read = reader
-            .read_line(&mut line)
-            .map_err(|e| format!("Failed to read MCP header: {}", e))?;
+        let line = read_line(reader).map_err(|e| format!("Failed to read MCP header: {}", e))?;
 
-        if bytes_read == 0 {
+        if line.is_empty() {
             return Err("Unexpected EOF while reading MCP headers".to_string());
         }
 
@@ -88,6 +82,25 @@ fn read_mcp_message<R: Read>(reader: &mut R) -> Result<String, String> {
         .map_err(|e| format!("Unexpected EOF while reading MCP body: {}", e))?;
 
     String::from_utf8(body).map_err(|e| format!("MCP body is not valid UTF-8: {}", e))
+}
+
+fn read_line<R: Read>(reader: &mut R) -> std::io::Result<String> {
+    let mut bytes = Vec::new();
+    let mut byte = [0_u8; 1];
+
+    loop {
+        let read = reader.read(&mut byte)?;
+        if read == 0 {
+            break;
+        }
+        bytes.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+
+    String::from_utf8(bytes)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// 查找 npx 的完整路径
@@ -335,7 +348,7 @@ pub async fn send_mcp_message(
             let stdin = child.stdin.as_mut().ok_or("Failed to get stdin")?;
             stdin
                 .write_all(&payload)
-                .map_err(|e| format!("Failed to write framed MCP message: {}", e))?;
+                .map_err(|e| format!("Failed to write MCP message: {}", e))?;
 
             stdin
                 .flush()
@@ -344,6 +357,34 @@ pub async fn send_mcp_message(
 
         let stdout = child.stdout.as_mut().ok_or("Failed to get stdout")?;
         read_mcp_message(stdout)
+    } else {
+        Err(format!("Server {} not found", server_id))
+    }
+}
+
+/// 发送不需要响应的 JSON-RPC 通知到 MCP 服务器
+#[tauri::command]
+pub async fn send_mcp_notification(
+    server_id: String,
+    message: String,
+    manager: State<'_, McpServerManager>,
+) -> Result<(), String> {
+    let child = {
+        let processes = manager.processes.lock().unwrap();
+        processes.get(&server_id).cloned()
+    };
+
+    if let Some(child) = child {
+        let mut child = child.lock().unwrap();
+        let payload = encode_mcp_message(&message);
+        let stdin = child.stdin.as_mut().ok_or("Failed to get stdin")?;
+        stdin
+            .write_all(&payload)
+            .map_err(|e| format!("Failed to write MCP notification: {}", e))?;
+        stdin
+            .flush()
+            .map_err(|e| format!("Failed to flush stdin: {}", e))?;
+        Ok(())
     } else {
         Err(format!("Server {} not found", server_id))
     }

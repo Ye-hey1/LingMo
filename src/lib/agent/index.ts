@@ -10,23 +10,18 @@
  *   prompt-assembler.ts — 系统提示词构建
  *   task-planner.ts     — 任务规划
  *   parse-action-input.ts — Action 输入解析
- *   metrics-collector.ts  — 执行指标收集
  *   event-bus.ts        — 事件总线
  *   working-memory.ts   — 工作记忆
  *   context-compression.ts — 上下文压缩
- *   message-trimmer.ts  — 上下文裁剪
- *   token-budget.ts     — Token 预算管理
  *   tool-utils.ts       — 工具执行超时 + 结果压缩
  *   tool-cache.ts       — 工具结果缓存
  *   tool-policy.ts      — 工具策略（只读/读写分类）
  *   tool-intent.ts      — 工具意图识别
  *   dynamic-tool-filter.ts — 动态工具过滤
- *   confirmation-manager.ts — 确认管理器
  *   tool-confirmation-display.ts — 确认预览格式化
  *   session-approval.ts — 会话级审批
  *   persistent-approval.ts — 持久化审批
  *   loop-detection.ts   — 循环检测
- *   safety-guards.ts    — 安全保护
  *   friendly-errors.ts  — 用户友好的错误消息
  *   final-answer.ts     — Final Answer 检测 + 自动恢复
  *   enhanced-resume.ts  — 增强 Resume（快照管理）
@@ -108,6 +103,57 @@ export type {
   ToolExposureEntry,
   ToolExposureSnapshot,
 } from './runtime-snapshot'
+
+// ---- Dream / Distill ----
+export {
+  buildDistillRecommendations,
+  buildDreamCandidates,
+} from './dream'
+export type {
+  DistillRecommendation,
+  DreamCandidate,
+} from './dream'
+
+// ---- 稳定流式状态 ----
+export {
+  createInitialAgentPartSnapshot,
+  reduceAgentPartSnapshot,
+} from './part-reducer'
+export type {
+  AgentPart,
+  AgentPartSnapshot,
+  AgentToolPart,
+  AgentVisibleStatus,
+} from './part-reducer'
+
+// ---- Agent 运行底座 ----
+export {
+  appendAgentSessionEntry,
+  createAgentSessionLog,
+  getAgentSessionBranch,
+  reduceAgentSessionLogFromEvents,
+} from '../agent-harness/session-log'
+export type {
+  AgentSessionEntry,
+  AgentSessionEntryType,
+  AgentSessionLog,
+} from '../agent-harness/session-log'
+
+export {
+  AgentLifecycleController,
+  createAgentTurnState,
+} from '../agent-harness/turn-lifecycle'
+export type {
+  AgentHarnessPhase,
+  AgentLifecycleControllerSnapshot,
+  AgentTurnState,
+} from '../agent-harness/turn-lifecycle'
+
+export {
+  getMutationQueueSize,
+  getToolMutationTargets,
+  withMutationQueue,
+} from '../agent-harness/mutation-queue'
 
 // ---- React Diff Helpers ----
 export { replaceLinesInRange } from './tools/react-diff-helpers'

@@ -24,7 +24,7 @@ import { Label } from '@/components/ui/label'
 import { useMcpStore } from '@/stores/mcp'
 import type { MCPServerConfig } from '@/lib/mcp/types'
 import { useToast } from '@/hooks/use-toast'
-import { mcpServerManager } from '@/lib/mcp/server-manager'
+import { connectMcpServerForAgent, refreshMcpToolsForAgent } from '@/lib/mcp/agent-ready'
 import { AlertCircle } from 'lucide-react'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { isMobileDevice as checkIsMobileDevice } from '@/lib/check'
@@ -212,12 +212,13 @@ export function JsonImportDialog({ open, onOpenChange }: JsonImportDialogProps) 
         for (const config of addedConfigs) {
           if (config.enabled) {
             try {
-              await mcpServerManager.connectServer(config)
+              await connectMcpServerForAgent(config)
             } catch (error) {
               console.error(`Failed to auto-connect server ${config.name}:`, error)
             }
           }
         }
+        await refreshMcpToolsForAgent()
       }
 
       if (skippedCount > 0) {

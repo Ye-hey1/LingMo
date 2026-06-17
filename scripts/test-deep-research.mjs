@@ -191,6 +191,12 @@ globalThis.MOCKS = {
         .replace(/[. ]+$/g, '')
       return sanitized || 'untitled'
     },
+    sanitizeFilePath: (filePath) => String(filePath)
+      .split('/')
+      .map(part => part
+        ? globalThis.MOCKS.filenameUtils.sanitizeFileName(part)
+        : part)
+      .join('/'),
   },
   sessionStore: {
     saveSessionState: async (state) => {
@@ -431,6 +437,7 @@ try {
 
   assert.equal(formatResearchReportDate(new Date('2026-06-07T12:00:00Z')), '20260607', '日期格式应为 YYYYMMDD')
   assert.equal(normalizeResearchReportTitle('直接开始研究 AI Agent: 记忆/图谱?', ''), 'AI Agent_ 记忆_图谱', '文件名标题应清理控制词和非法字符')
+  assert.equal(normalizeResearchReportTitle('针对用户"转型AI产品经理的个人学习路线', ''), '针对用户_转型AI产品经理的个人学习路线', 'Windows 双引号应从研究报告文件名中清理')
   assert.equal(formatYamlScalar('AI "Research"'), '"AI \\"Research\\""', 'YAML 标量应安全转义')
 
   const target = await buildUniqueResearchReportTarget({
@@ -440,6 +447,14 @@ try {
   })
   assert.equal(target.fileName, 'AI Agent-20260607-2.md', '同日同题重名时应追加序号')
   assert.equal(target.sessionFileName, 'AI Agent-20260607-2.research.json', 'Session 文件应与报告文件同名')
+
+  const quotedTarget = await buildUniqueResearchReportTarget({
+    query: '针对用户"转型AI产品经理的个人学习路线',
+    report: '',
+    date: new Date('2026-05-15T15:00:00+08:00'),
+  })
+  assert.doesNotMatch(quotedTarget.relativeFilePath, /[<>:"\\|?*]/, '研究报告相对路径不应包含 Windows 非法字符')
+  assert.match(quotedTarget.fileName, /^针对用户_转型AI产品经理的个人学习路线-20260515\.md$/, '带引号的研究标题应保存为可打开文件名')
 
   console.log('✅ 测试 5：研究报告文件命名工具成功通过。')
   console.log('\n🎉 所有深度研究重构逻辑的测试均已全部成功通过！')

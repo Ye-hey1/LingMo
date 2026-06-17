@@ -179,6 +179,7 @@ function normalizeType(raw?: string): CreateFlashcardInput['type'] {
   if (t === 'choice') return 'choice'
   if (t === 'basic-reversed') return 'basic-reversed'
   if (t === 'cloze') return 'cloze'
+  if (t === 'true-false') return 'true-false'
   if (t === 'short-answer') return 'short-answer'
   return 'basic'
 }

@@ -31,7 +31,7 @@ export interface ExecutionSnapshot {
   currentIteration: number
 
   // Interrupt info
-  interruptReason: 'user_stop' | 'error' | 'timeout'
+  interruptReason: 'user_stop' | 'error' | 'timeout' | 'periodic'
   interruptedAt: number
   errorMessage?: string
 
@@ -232,6 +232,7 @@ ${snapshot.originalUserInput}
 ### 中断原因
 ${snapshot.interruptReason === 'user_stop' ? '用户手动停止' :
   snapshot.interruptReason === 'error' ? `错误: ${snapshot.errorMessage}` :
+  snapshot.interruptReason === 'periodic' ? '执行中断（自动恢复点）' :
   '执行超时'}
 
 ### 已完成的步骤 (${filteredSteps.length}/${snapshot.steps.length})

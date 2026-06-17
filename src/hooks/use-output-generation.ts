@@ -3,58 +3,20 @@
 import * as React from "react"
 import { toast } from "@/hooks/use-toast"
 import { fetchAiStream } from "@/lib/ai/chat"
-import {
-  buildEditorialArticle,
-  buildKamiParchment,
-  buildBrutalistStyle,
-  buildGuizangDeck,
-  buildTechSharing,
-  buildMagazinePoster,
-  buildHeroPoster,
-  buildDataDashboard,
-  buildInfographic,
-  buildGuizangSocialCard,
-  buildXiaohongshuStyle,
-  buildLearningCards,
-  buildMindmapStyle,
-  buildWaterfallStyle,
-  buildBentoStyle,
-  buildBusinessReportStyle,
-  buildLiquidGlassStyle,
-  buildAccordionManualStyle,
-  buildDarkTechStyle,
-} from "@/lib/output-workshop/html-builders"
+import { buildStyle } from "@/lib/output-workshop/html-builders"
+import { applyMokaTextEdit, applyMokaStyleEdit, applyMokaReorder } from "@/lib/output-workshop/moka/editor"
+import { useOutputExport, type OutputExportLatest } from "@/hooks/use-output-export"
 import { buildWechatArticle } from "@/lib/output-workshop/wechat-builder"
 import { isWechatStyleId } from "@/lib/output-workshop/wechat-styles"
 import {
-  toWechatHtml,
-  copyHtmlToClipboard,
-  copyTextToClipboard,
-  copyIframeToClipboard,
-  downloadIframeAsImage,
-  downloadTextFile,
-  exportDeckPngZip,
-  exportDeckPptx,
-  exportDeckPrint,
-  exportIframeLongPng,
-  exportIframeSlicesZip,
   saveCachedOutput,
-  saveHtmlToWorkspace,
-  saveTextAs,
   type DeckParsed,
 } from "@/lib/output-workshop/export"
-import {
-  exportSmartCardsZip,
-  type SmartCard,
-} from "@/lib/output-workshop/smart-card-export"
-import { deployToVercel } from "@/lib/output-workshop/deploy"
 import { parseOutputExtractionResult } from "@/lib/output-workshop/extraction"
 import type {
   BuildStage,
-  ExportRecord,
   GenerationStatus,
   TemplateOverrides,
-  PreviewSizePreset,
 } from "@/components/output-workshop/types"
 import type { OutputTemplate } from "@/lib/output-workshop/templates"
 import {
@@ -141,92 +103,6 @@ function fetchOutputWorkshopAiStream(
   )
 }
 
-function cloneMokaResult(result: MokaParsedResult): MokaParsedResult {
-  return JSON.parse(JSON.stringify(result)) as MokaParsedResult
-}
-
-function isPathIndex(segment: string): boolean {
-  return /^\d+$/.test(segment)
-}
-
-function getPathValue(root: Record<string, unknown>, path: string): unknown {
-  const parts = path.split(".").filter(Boolean)
-  let current: unknown = root
-  for (const part of parts) {
-    if (!current || typeof current !== "object") return undefined
-    current = (current as Record<string, unknown>)[part]
-  }
-  return current
-}
-
-function setPathValue(root: Record<string, unknown>, path: string, value: unknown): boolean {
-  const parts = path.split(".").filter(Boolean)
-  if (parts.length === 0) return false
-
-  let current: Record<string, unknown> | unknown[] = root
-  for (let i = 0; i < parts.length - 1; i += 1) {
-    const part = parts[i]
-    const nextPart = parts[i + 1]
-    const key = isPathIndex(part) ? Number(part) : part
-    const holder = current as Record<string, unknown>
-    if (!holder[key] || typeof holder[key] !== "object") {
-      holder[key] = isPathIndex(nextPart) ? [] : {}
-    }
-    current = holder[key] as Record<string, unknown> | unknown[]
-  }
-
-  const finalPart = parts[parts.length - 1]
-  const finalKey = isPathIndex(finalPart) ? Number(finalPart) : finalPart
-  ;(current as Record<string, unknown>)[finalKey] = value
-  return true
-}
-
-function applyMokaTextEdit(result: MokaParsedResult, path: string, value: string): MokaParsedResult | null {
-  if (result.kind !== "ai-single" && result.kind !== "ai-split") return null
-  const next = cloneMokaResult(result)
-  if (next.kind !== "ai-single" && next.kind !== "ai-split") return null
-  const root = next.design as unknown as Record<string, unknown>
-  const normalizedValue = path.includes(".tags.") ? value.replace(/^#/, "").trim() : value.trim()
-  return setPathValue(root, path, normalizedValue) ? next : null
-}
-
-function sanitizeMokaInlineStyle(style: Record<string, string>): Record<string, string> {
-  const allowed = new Set(["left", "top", "marginLeft", "marginTop"])
-  return Object.fromEntries(
-    Object.entries(style).filter(([key, value]) => allowed.has(key) && /^-?\d+(?:\.\d+)?px$/.test(value))
-  )
-}
-
-function applyMokaStyleEdit(result: MokaParsedResult, path: string, style: Record<string, string>): MokaParsedResult | null {
-  if (result.kind !== "ai-single" && result.kind !== "ai-split") return null
-  const cleanStyle = sanitizeMokaInlineStyle(style)
-  if (Object.keys(cleanStyle).length === 0) return null
-  const next = cloneMokaResult(result)
-  if (next.kind !== "ai-single" && next.kind !== "ai-split") return null
-  const root = next.design as unknown as Record<string, unknown>
-  const existing = getPathValue(root, path)
-  const merged = {
-    ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing as Record<string, unknown> : {}),
-    ...cleanStyle,
-  }
-  if ("left" in cleanStyle || "top" in cleanStyle) {
-    delete merged.marginLeft
-    delete merged.marginTop
-  }
-  return setPathValue(root, path, merged) ? next : null
-}
-
-function applyMokaReorder(result: MokaParsedResult, from: number, to: number): MokaParsedResult | null {
-  if (result.kind !== "ai-split") return null
-  const slides = result.design.slides
-  if (!Number.isInteger(from) || !Number.isInteger(to)) return null
-  if (from < 0 || to < 0 || from >= slides.length || to >= slides.length || from === to) return null
-  const next = cloneMokaResult(result)
-  if (next.kind !== "ai-split") return null
-  const [moved] = next.design.slides.splice(from, 1)
-  next.design.slides.splice(to > from ? to - 1 : to, 0, moved)
-  return next
-}
 
 export function useOutputGeneration({
   selectedTemplateId,
@@ -259,17 +135,7 @@ export function useOutputGeneration({
   const [refining, setRefining] = React.useState(false)
   const [refineQuery, setRefineQuery] = React.useState("")
 
-  const [exportBusy, setExportBusy] = React.useState(false)
-  const [exportProgressText, setExportProgressText] = React.useState("")
-  const [lastExportRecord, setLastExportRecord] = React.useState<ExportRecord | null>(null)
   const [buildStageId, setBuildStageId] = React.useState<BuildStage["id"] | null>(null)
-
-  // 部署公网状态
-  const [vercelToken, setVercelToken] = React.useState("")
-  const [showDeployModal, setShowDeployModal] = React.useState(false)
-  const [isDeploying, setIsDeploying] = React.useState(false)
-  const [deployProgress, setDeployProgress] = React.useState("")
-  const [deployedUrl, setDeployedUrl] = React.useState("")
 
   const abortControllerRef = React.useRef<AbortController | null>(null)
   const startTimeRef = React.useRef<number>(0)
@@ -309,33 +175,6 @@ export function useOutputGeneration({
     mokaReferenceImageName,
   }
 
-  const buildExportBaseName = React.useCallback(() => {
-    const current = latestRef.current
-    const date = new Date()
-    const timestamp = [
-      date.getFullYear(),
-      String(date.getMonth() + 1).padStart(2, "0"),
-      String(date.getDate()).padStart(2, "0"),
-      String(date.getHours()).padStart(2, "0"),
-      String(date.getMinutes()).padStart(2, "0"),
-    ].join("")
-    const raw = [
-      current.title || "lingmo-output",
-      current.selectedTemplate?.name || current.selectedTemplateId,
-      current.templateOverrides.sizePresetId,
-      timestamp,
-    ].filter(Boolean).join("-")
-    return raw
-      .replace(/[\\/:*?"<>|]+/g, "-")
-      .replace(/\s+/g, "-")
-      .replace(/-+/g, "-")
-      .slice(0, 120)
-      .replace(/^-|-$/g, "") || "lingmo-output"
-  }, [])
-
-  const rememberExport = React.useCallback((record: Omit<ExportRecord, "finishedAt">) => {
-    setLastExportRecord({ ...record, finishedAt: Date.now() })
-  }, [])
 
   const clearMokaRenderMemory = React.useCallback(() => {
     mokaRenderMemoryRef.current = null
@@ -826,67 +665,8 @@ ${trimmed.slice(0, 15000)}
       let html = ""
       setProgressText("正在生成预览...")
       setBuildStageId("preview")
-      switch (tplId) {
-        case "article-editorial":
-          html = buildEditorialArticle(buildOptions)
-          break
-        case "article-kami":
-          html = buildKamiParchment(buildOptions)
-          break
-        case "article-brutalist":
-          html = buildBrutalistStyle(buildOptions)
-          break
-        case "deck-minimal":
-          html = buildGuizangDeck(buildOptions)
-          break
-        case "deck-tech":
-          html = buildTechSharing(buildOptions)
-          break
-        case "poster-magazine":
-          html = buildMagazinePoster(buildOptions)
-          break
-        case "poster-hero":
-          html = buildHeroPoster(buildOptions)
-          break
-        case "data-dashboard":
-          html = buildDataDashboard(buildOptions)
-          break
-        case "data-infographic":
-          html = buildInfographic(buildOptions)
-          break
-        case "social-card":
-          html = buildGuizangSocialCard(buildOptions)
-          break
-        case "social-xiaohongshu":
-          html = buildXiaohongshuStyle(buildOptions)
-          break
-        case "social-waterfall":
-          html = buildWaterfallStyle(buildOptions)
-          break
-        case "visual-bento":
-          html = buildBentoStyle(buildOptions)
-          break
-        case "report-business":
-          html = buildBusinessReportStyle(buildOptions)
-          break
-        case "read-glass":
-          html = buildLiquidGlassStyle(buildOptions)
-          break
-        case "read-accordion":
-          html = buildAccordionManualStyle(buildOptions)
-          break
-        case "read-dark-tech":
-          html = buildDarkTechStyle(buildOptions)
-          break
-        case "learning-flashcard":
-          html = buildLearningCards(buildOptions)
-          break
-        case "learning-mindmap":
-          html = buildMindmapStyle(buildOptions)
-          break
-        default:
-          html = buildEditorialArticle(buildOptions)
-      }
+      // 由 styles/index.ts 的 STYLE_BUILDERS 注册表按 tplId 分发，替代原 19-case switch（OCP）
+      html = buildStyle(tplId, buildOptions)
 
       html = normalizeOutputWorkshopHtml(html)
       setGeneratedHtml(html)
@@ -1035,242 +815,9 @@ ${query}
     setBuildStageId(null)
   }, [])
 
-  // ---------------------------------------------------------------------------
-  // 导出任务包装器
-  // ---------------------------------------------------------------------------
 
-  const runExportTask = React.useCallback(async (taskName: string, fn: () => Promise<boolean | void>) => {
-    setExportBusy(true)
-    setExportProgressText(`正在${taskName}...`)
-    try {
-      const completed = await fn()
-      if (completed !== false) {
-        toast({ title: `${taskName}成功！` })
-      }
-    } catch (e) {
-      console.error(e)
-      toast({
-        title: `${taskName}失败`,
-        description: e instanceof Error ? e.message : String(e),
-        variant: "destructive",
-      })
-    } finally {
-      setExportBusy(false)
-      setExportProgressText("")
-    }
-  }, [])
-
-  // 复制微信/知乎 Inline HTML
-  const handleCopyWechatHtml = React.useCallback(() => {
-    void runExportTask("转换并复制微信排版", async () => {
-      const html = toWechatHtml(latestRef.current.generatedHtml)
-      await copyHtmlToClipboard(html)
-    })
-  }, [runExportTask])
-
-  // 复制为高清图片到剪贴板
-  const handleCopyAsImage = React.useCallback(() => {
-    void runExportTask("生成并复制高清图片", async () => {
-      const iframe = iframeRef.current
-      if (!iframe) throw new Error("预览区域尚未加载完毕")
-      await copyIframeToClipboard(iframe)
-    })
-  }, [runExportTask, iframeRef])
-
-  // 高清下载 PNG 图片
-  const handleDownloadAsImage = React.useCallback(() => {
-    void runExportTask("生成高清图片并下载", async () => {
-      const iframe = iframeRef.current
-      if (!iframe) throw new Error("预览区域尚未加载完毕")
-      const result = await downloadIframeAsImage(iframe, buildExportBaseName())
-      if (result.canceled) return false
-      rememberExport({ target: "png", label: "PNG", fileName: result.fileName, filePath: result.filePath })
-    })
-  }, [runExportTask, iframeRef, buildExportBaseName, rememberExport])
-
-  const handleDownloadLongImage = React.useCallback(() => {
-    void runExportTask("生成长图并下载", async () => {
-      const iframe = iframeRef.current
-      if (!iframe) throw new Error("预览区域尚未加载完毕")
-      const result = await exportIframeLongPng(iframe, buildExportBaseName())
-      if (result.canceled) return false
-      rememberExport({ target: "long-png", label: "长图", fileName: result.fileName, filePath: result.filePath })
-    })
-  }, [runExportTask, iframeRef, buildExportBaseName, rememberExport])
-
-  const handleExportSlices = React.useCallback((sliceHeight: number | { top: number; height: number }[] = 1440) => {
-    void runExportTask("切割导出 PNG 包", async () => {
-      const iframe = iframeRef.current
-      if (!iframe) throw new Error("预览区域尚未加载完毕")
-      const result = await exportIframeSlicesZip(iframe, buildExportBaseName(), sliceHeight, (cur, total) => {
-        setExportProgressText(`切割图片中 (${cur}/${total})`)
-      })
-      if (result.canceled) return false
-      rememberExport({ target: "split-png", label: "切割导出", fileName: result.fileName, filePath: result.filePath })
-    })
-  }, [runExportTask, iframeRef, buildExportBaseName, rememberExport])
-
-  // 智能卡片导出
-  const handleExportSmartCards = React.useCallback((cards: SmartCard[], preset: PreviewSizePreset, selectedIndices: number[]) => {
-    void runExportTask("智能卡片导出", async () => {
-      const result = await exportSmartCardsZip(
-        cards,
-        preset.width,
-        preset.height,
-        buildExportBaseName(),
-        selectedIndices,
-        (cur, total) => {
-          setExportProgressText(`渲染卡片中 (${cur}/${total})`)
-        }
-      )
-      if (result.canceled) return false
-      rememberExport({ target: "smart-card", label: "智能卡片导出", fileName: result.fileName, filePath: result.filePath })
-      if (result.skipped?.length) {
-        const skippedPages = result.skipped.slice(0, 4).map((item) => `#${item.index + 1}`).join("、")
-        toast({
-          title: "智能卡片导出完成，部分页面已跳过",
-          description: `已导出 ${result.exportedCount ?? 0}/${result.totalCount ?? selectedIndices.length} 张；跳过 ${skippedPages}${result.skipped.length > 4 ? " 等页面" : ""}。`,
-        })
-        return false
-      }
-    })
-  }, [runExportTask, buildExportBaseName, rememberExport])
-
-  // 导出 PDF 打印
-  const handleExportPDF = React.useCallback(() => {
-    void runExportTask("调用系统打印导出 PDF", async () => {
-      if (parsedDeckData.isDeck) {
-        exportDeckPrint(parsedDeckData.slides, latestRef.current.title || "lingmo-deck")
-      } else {
-        const fakeSlide = {
-          html: latestRef.current.generatedHtml,
-          notes: "",
-          id: "1",
-          title: "page",
-        }
-        exportDeckPrint([fakeSlide], latestRef.current.title || "lingmo-output")
-      }
-      rememberExport({ target: "pdf", label: "PDF", fileName: `${buildExportBaseName()}.pdf` })
-    })
-  }, [runExportTask, parsedDeckData, buildExportBaseName, rememberExport])
-
-  // 导出 PPTX
-  const handleExportPPTX = React.useCallback(() => {
-    if (!parsedDeckData.isDeck) return
-    void runExportTask("生成 PPTX 报告", async () => {
-      const result = await exportDeckPptx(parsedDeckData.slides, buildExportBaseName(), (cur, total) => {
-        setExportProgressText(`导出 PPTX 中 (${cur}/${total})`)
-      })
-      if (result.canceled) return false
-      rememberExport({ target: "pptx", label: "PPTX", fileName: result.fileName, filePath: result.filePath })
-    })
-  }, [runExportTask, parsedDeckData, buildExportBaseName, rememberExport])
-
-  // 打包 ZIP 图片集下载
-  const handleExportZip = React.useCallback(() => {
-    if (!parsedDeckData.isDeck) return
-    void runExportTask("打包下载 PNG 图片集", async () => {
-      const result = await exportDeckPngZip(parsedDeckData.slides, buildExportBaseName(), (cur, total) => {
-        setExportProgressText(`打包图片中 (${cur}/${total})`)
-      })
-      if (result.canceled) return false
-      rememberExport({ target: "split-png", label: "PNG ZIP", fileName: result.fileName, filePath: result.filePath })
-    })
-  }, [runExportTask, parsedDeckData, buildExportBaseName, rememberExport])
-
-  // 复制原始 HTML 源码
-  const handleCopyRawHtml = React.useCallback(() => {
-    void runExportTask("复制 HTML 源码", async () => {
-      await copyTextToClipboard(latestRef.current.generatedHtml)
-    })
-  }, [runExportTask])
-
-  // 复制原生 Markdown 纯文本
-  const handleCopyRawText = React.useCallback(() => {
-    void runExportTask("复制 Markdown 文本", async () => {
-      await copyTextToClipboard(latestRef.current.sourceContent)
-    })
-  }, [runExportTask])
-
-  const handleDownloadMarkdown = React.useCallback(() => {
-    void runExportTask("下载 Markdown", async () => {
-      const result = await downloadTextFile(latestRef.current.sourceContent, `${buildExportBaseName()}.md`, "text/markdown;charset=utf-8")
-      if (result.canceled) return false
-      rememberExport({ target: "markdown", label: "Markdown", fileName: result.fileName })
-    })
-  }, [runExportTask, buildExportBaseName, rememberExport])
-
-  // 保存到本地笔记至工作区的 visual-reports 目录
-  const handleSaveToNotes = React.useCallback(() => {
-    const html = latestRef.current.generatedHtml
-    if (!html) return
-    void runExportTask("保存至项目本地 visual-reports 目录", async () => {
-      const fileName = `${buildExportBaseName()}.html`
-      const result = await saveHtmlToWorkspace(html, fileName)
-      rememberExport({ target: "html", label: "保存到项目", fileName: result.fileName, filePath: result.filePath })
-    })
-  }, [runExportTask, buildExportBaseName, rememberExport])
-
-  // 下载原始 HTML 文件，支持原生的“另存为到自定义目录”
-  const handleDownloadRawHtml = React.useCallback(() => {
-    const html = latestRef.current.generatedHtml
-    if (!html) return
-
-    void runExportTask("另存为 HTML", async () => {
-      const result = await saveTextAs(html, `${buildExportBaseName()}.html`, "text/html;charset=utf-8")
-      if (result.canceled) return false
-      rememberExport({ target: "html", label: "HTML", fileName: result.fileName, filePath: result.filePath })
-    })
-  }, [buildExportBaseName, rememberExport, runExportTask])
-
-  // Vercel 一键云端部署
-  const handleDeployToVercel = React.useCallback(async () => {
-    const html = latestRef.current.generatedHtml
-    if (!html) {
-      toast({ title: "请先生成页面内容", variant: "destructive" })
-      return
-    }
-
-    const savedToken = vercelToken.trim() || (typeof window !== "undefined" ? localStorage.getItem("lingmo_vercel_token") || "" : "")
-    if (!savedToken.trim()) {
-      setShowDeployModal(true)
-      return
-    }
-
-    setIsDeploying(true)
-    setDeployProgress("开始准备部署...")
-    setShowDeployModal(true)
-    setDeployedUrl("")
-
-    try {
-      const result = await deployToVercel(
-        html,
-        latestRef.current.title || "lingmo-share",
-        savedToken,
-        (msg) => {
-          setDeployProgress(msg)
-        }
-      )
-
-      if (result.status === "ready") {
-        setDeployedUrl(result.url)
-        setDeployProgress("网页已部署就绪，公网已开放访问！")
-        toast({ title: "云端部署成功！" })
-      } else {
-        setDeployedUrl(result.url)
-        setDeployProgress(`部署已转入后台。Vercel: ${result.statusMessage}`)
-      }
-    } catch (e) {
-      setDeployProgress(`部署失败: ${e instanceof Error ? e.message : String(e)}`)
-      toast({
-        title: "部署出错",
-        description: e instanceof Error ? e.message : String(e),
-        variant: "destructive"
-      })
-    } finally {
-      setIsDeploying(false)
-    }
-  }, [vercelToken])
+  const getLatest = React.useCallback((): OutputExportLatest => latestRef.current as OutputExportLatest, [])
+  const exportApi = useOutputExport({ getLatest, iframeRef, parsedDeckData })
 
   return {
     // 生成状态
@@ -1288,21 +835,9 @@ ${query}
     refineQuery,
     setRefineQuery,
 
-    // 导出状态
-    exportBusy,
-    exportProgressText,
-    lastExportRecord,
+    // 生成辅助状态
     buildStageId,
     mokaRenderMemory,
-
-    // 部署状态
-    vercelToken,
-    setVercelToken,
-    showDeployModal,
-    setShowDeployModal,
-    isDeploying,
-    deployProgress,
-    deployedUrl,
 
     // 核心方法
     resetGenerationState,
@@ -1313,21 +848,7 @@ ${query}
     handleMokaStyleEdit,
     handleMokaReorder,
 
-    // 导出方法
-    handleCopyWechatHtml,
-    handleCopyAsImage,
-    handleDownloadAsImage,
-    handleDownloadLongImage,
-    handleExportSlices,
-    handleExportSmartCards,
-    handleExportPDF,
-    handleExportPPTX,
-    handleExportZip,
-    handleCopyRawHtml,
-    handleCopyRawText,
-    handleDownloadMarkdown,
-    handleSaveToNotes,
-    handleDownloadRawHtml,
-    handleDeployToVercel,
+    // 导出/部署（由 use-output-export 提供）
+    ...exportApi,
   }
 }

@@ -1,0 +1,19 @@
+{
+  "name": "excalidraw-diagram-tools",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Shared tooling for the excalidraw-diagram skill: defaults filler + PNG renderer + SVG→native Excalidraw converter.",
+  "scripts": {
+    "build:svg-bundle": "node build-svg-bundle.mjs"
+  },
+  "dependencies": {
+    "puppeteer": "^23.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "gl-matrix": "^3.4.3",
+    "points-on-path": "^0.2.1",
+    "nanoid": "^5.0.0"
+  }
+}

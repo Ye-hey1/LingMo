@@ -7,7 +7,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Sparkles, Trash2, Database } from 'lucide-react'
-import { useSkillsV2Store } from '@/stores/skills-v2'
+import { useSkillsStore } from '@/stores/skills'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,7 +22,13 @@ import {
 
 export function SkillsV2List() {
   const t = useTranslations('settings.skills')
-  const { skills, fetchSkills, deleteSkill, setEnabled, loading } = useSkillsV2Store()
+  const {
+    installedSkills,
+    fetchSkills,
+    deleteInstalledSkill,
+    setInstalledSkillEnabled,
+    loading,
+  } = useSkillsStore()
 
   useEffect(() => {
     fetchSkills()
@@ -38,7 +44,7 @@ export function SkillsV2List() {
 
   return (
     <div className="space-y-2">
-      {skills.map(skill => (
+      {installedSkills.map(skill => (
         <Card key={skill.id} className="py-2">
           <CardContent className="py-2 px-4">
             <div className="flex items-center justify-between">
@@ -60,7 +66,7 @@ export function SkillsV2List() {
               <div className="flex items-center gap-2 shrink-0">
                 <Switch
                   checked={skill.enabled}
-                  onCheckedChange={(checked) => setEnabled(skill.id, checked)}
+                  onCheckedChange={(checked) => setInstalledSkillEnabled(skill.id, checked)}
                 />
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
@@ -75,7 +81,7 @@ export function SkillsV2List() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => deleteSkill(skill.id)}>{t('delete')}</AlertDialogAction>
+                      <AlertDialogAction onClick={() => deleteInstalledSkill(skill.id)}>{t('delete')}</AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
@@ -85,7 +91,7 @@ export function SkillsV2List() {
         </Card>
       ))}
 
-      {skills.length === 0 && (
+      {installedSkills.length === 0 && (
         <div className="text-center py-12 text-muted-foreground">
           <Sparkles className="mx-auto h-12 w-12 mb-4 opacity-50" />
           <p>{t('noSkillsV2')}</p>

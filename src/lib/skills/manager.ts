@@ -88,9 +88,6 @@ class SkillManager {
   async discoverSkills(): Promise<void> {
     // 加载工作区 Skills
     await this.discoverProjectSkills()
-
-    // 加载全局 Skills
-    await this.discoverGlobalSkills()
   }
 
   /**
@@ -562,7 +559,49 @@ class SkillManager {
    * 注册 Skill
    */
   registerSkill(skill: SkillContent): void {
+    const existing = this.skills.get(skill.metadata.id)
+    if (existing && !this.shouldReplaceSkill(existing, skill)) {
+      return
+    }
+
+    const nameDuplicate = this.getAllSkills().find(existingSkill =>
+      existingSkill.metadata.id !== skill.metadata.id &&
+      generateSkillId(existingSkill.metadata.name) === generateSkillId(skill.metadata.name)
+    )
+    if (nameDuplicate) {
+      if (!this.shouldReplaceSkill(nameDuplicate, skill)) {
+        return
+      }
+      this.unregisterSkill(nameDuplicate.metadata.id)
+    }
+
     this.skills.set(skill.metadata.id, skill)
+  }
+
+  private shouldReplaceSkill(existing: SkillContent, candidate: SkillContent): boolean {
+    if (existing.metadata.scope === 'project' && candidate.metadata.scope === 'global') {
+      return false
+    }
+    if (existing.metadata.scope === 'global' && candidate.metadata.scope === 'project') {
+      return true
+    }
+
+    const existingWeight = this.getSkillCompletenessWeight(existing)
+    const candidateWeight = this.getSkillCompletenessWeight(candidate)
+
+    if (candidateWeight !== existingWeight) {
+      return candidateWeight > existingWeight
+    }
+
+    return false
+  }
+
+  private getSkillCompletenessWeight(skill: SkillContent): number {
+    return (skill.metadata.runtimeProfile ? 4 : 0)
+      + (skill.metadata.allowedTools?.length || 0) * 3
+      + (skill.scripts?.length || 0) * 2
+      + (skill.references?.length || 0)
+      + (skill.assets?.length || 0)
   }
 
   /**

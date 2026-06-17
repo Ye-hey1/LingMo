@@ -1,7 +1,7 @@
 'use client'
 
 import { Editor } from '@tiptap/react'
-import { Network, Keyboard, Feather, Link2, GitBranch, FileText, ArrowRight, Sparkles, Loader2, Check } from 'lucide-react'
+import { Network, Keyboard, Feather, Link2, GitBranch, FileText, ArrowRight, Sparkles, Loader2, Check, CalendarClock, ShieldQuestion } from 'lucide-react'
 import { useState, useCallback, useMemo, useEffect } from 'react'
 import { WordCount } from './word-count'
 import { FileCreatedAt } from './file-created-at'
@@ -92,6 +92,20 @@ export function FooterBar({ editor }: FooterBarProps) {
               <BacklinksPanelContent />
             </PopoverContent>
           </Popover>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                title="笔记智能"
+                className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Sparkles className="size-3" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="end" sideOffset={6} className="w-80 max-h-[380px] overflow-y-auto p-0 rounded-lg">
+              <NoteIntelligencePanelContent />
+            </PopoverContent>
+          </Popover>
           <button
             type="button"
             className={cn(
@@ -159,6 +173,21 @@ export function FooterBar({ editor }: FooterBarProps) {
           </PopoverContent>
         </Popover>
 
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              title="笔记智能"
+              className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Sparkles className="size-3" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="end" sideOffset={6} className="w-80 max-h-[380px] overflow-y-auto p-0 rounded-lg">
+            <NoteIntelligencePanelContent />
+          </PopoverContent>
+        </Popover>
+
         <Separator />
 
         <button
@@ -208,6 +237,132 @@ function IconButton({ children, title, onClick }: { children: React.ReactNode; t
     >
       {children}
     </button>
+  )
+}
+
+function NoteIntelligencePanelContent() {
+  const activeFilePath = useArticleStore((s) => s.activeFilePath)
+  const [loading, setLoading] = useState<'counterpoint' | 'wake' | null>(null)
+  const [wakeText, setWakeText] = useState('三个月后评估这篇笔记')
+
+  const isMarkdown = Boolean(activeFilePath && /\.(md|markdown)$/i.test(activeFilePath))
+
+  const handleCounterpoint = useCallback(async () => {
+    if (!activeFilePath || !isMarkdown) return
+    setLoading('counterpoint')
+    try {
+      const store = useArticleStore.getState()
+      const content = store.currentArticle || ''
+      const { appendCounterpointToContent, generateCounterpointForNote } = await import('@/lib/note-intelligence')
+      const result = await generateCounterpointForNote(activeFilePath, content)
+      const updated = appendCounterpointToContent(content, result)
+      store.setCurrentArticle(updated)
+      await store.saveCurrentArticle(updated)
+      toast({
+        title: '已生成反观点',
+        description: '反观点已追加到当前笔记底部。',
+      })
+    } catch (error) {
+      toast({
+        title: '生成反观点失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    } finally {
+      setLoading(null)
+    }
+  }, [activeFilePath, isMarkdown])
+
+  const handleWake = useCallback(async () => {
+    if (!activeFilePath || !isMarkdown || !wakeText.trim()) return
+    setLoading('wake')
+    try {
+      const store = useArticleStore.getState()
+      const content = store.currentArticle || ''
+      const directive = `\n\n<!-- lingmo:wake after="${wakeText.trim()}" reason="回看并评估这篇笔记" -->\n`
+      const updated = `${content.replace(/\s+$/g, '')}${directive}`
+      store.setCurrentArticle(updated)
+      await store.saveCurrentArticle(updated)
+      const { syncWakeDirectivesForNote } = await import('@/lib/note-intelligence')
+      const created = await syncWakeDirectivesForNote(activeFilePath, updated)
+      toast({
+        title: created.length ? '已设置笔记唤醒' : '唤醒语法已写入',
+        description: created.length ? `${created[0].title}` : '保存后会在可解析时间到期时进入回顾。',
+      })
+    } catch (error) {
+      toast({
+        title: '设置唤醒失败',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    } finally {
+      setLoading(null)
+    }
+  }, [activeFilePath, isMarkdown, wakeText])
+
+  return (
+    <div>
+      <div className="flex items-center border-b px-3 py-2">
+        <span className="text-xs font-medium flex items-center gap-1.5">
+          <Sparkles className="size-3" />
+          笔记智能
+        </span>
+      </div>
+
+      <div className="space-y-3 p-3">
+        {!isMarkdown ? (
+          <div className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+            请先打开一篇 Markdown 笔记
+          </div>
+        ) : (
+          <>
+            <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <ShieldQuestion className="size-3.5 text-muted-foreground" />
+                <span className="text-xs font-medium">反观点生成器</span>
+              </div>
+              <p className="mb-3 text-[11px] leading-5 text-muted-foreground">
+                让 AI 以可信反方视角挑战当前笔记，帮助发现决策和论证盲区。
+              </p>
+              <button
+                type="button"
+                disabled={loading !== null}
+                className="inline-flex h-7 items-center rounded-md bg-foreground px-2.5 text-[11px] font-medium text-background hover:opacity-90 disabled:opacity-60"
+                onClick={handleCounterpoint}
+              >
+                {loading === 'counterpoint' ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : <ShieldQuestion className="mr-1.5 size-3" />}
+                挑战这个观点
+              </button>
+            </div>
+
+            <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <CalendarClock className="size-3.5 text-muted-foreground" />
+                <span className="text-xs font-medium">笔记主动调度</span>
+              </div>
+              <input
+                value={wakeText}
+                onChange={(event) => setWakeText(event.target.value)}
+                placeholder="例如：三个月后评估"
+                className="mb-2 h-8 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring"
+              />
+              <button
+                type="button"
+                disabled={loading !== null || !wakeText.trim()}
+                className="inline-flex h-7 items-center rounded-md border px-2.5 text-[11px] font-medium hover:bg-muted disabled:opacity-60"
+                onClick={handleWake}
+              >
+                {loading === 'wake' ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : <CalendarClock className="mr-1.5 size-3" />}
+                设置唤醒
+              </button>
+              <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                会写入隐藏唤醒标记，到期后出现在活动中心的笔记智能页。
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 

@@ -23,6 +23,16 @@ fn get_text_rank() -> TextRank {
     TextRank::default()
 }
 
+fn get_allowed_pos() -> Vec<String> {
+    vec![
+        String::from("n"),   // noun
+        String::from("ns"),  // place name
+        String::from("nr"),  // person name
+        String::from("nz"),  // other proper noun
+        String::from("eng"), // 英文字母（支持英文术语）
+    ]
+}
+
 /// 获取停用词集合
 /// 过滤掉没有实际检索意义的虚词、系动词等
 fn get_stop_words() -> HashSet<&'static str> {
@@ -169,20 +179,7 @@ pub fn rank_keywords(text: &str, top_k: usize, allowed_pos: Option<Vec<String>>)
     let jieba = get_jieba();
     let extractor = get_text_rank();
 
-    let pos_tags = allowed_pos.unwrap_or_else(|| {
-        vec![
-            String::from("n"),   // noun
-            String::from("ns"),  // place name
-            String::from("nr"),  // person name
-            String::from("nz"),  // other proper noun
-            String::from("v"),   // verb
-            String::from("vn"),  // verbal noun
-            String::from("a"),   // adjective
-            String::from("ad"),  // adjective as verb
-            String::from("an"),  // adjective as noun
-            String::from("eng"), // 英文字母（尝试支持英文）
-        ]
-    });
+    let pos_tags = allowed_pos.unwrap_or_else(get_allowed_pos);
 
     // 提取更多候选关键词（因为会被过滤掉一部分）
     let extract_k = top_k * 3;

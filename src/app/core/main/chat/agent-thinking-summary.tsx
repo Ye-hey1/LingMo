@@ -1,24 +1,16 @@
 "use client"
 
 import * as React from "react"
-import { Brain, ChevronDown } from "lucide-react"
+import { ChevronDown } from "lucide-react"
 import type { ToolCall } from "@/lib/agent"
 import { cn } from "@/lib/utils"
 import { CompactToolCalls } from "./compact-tool-calls"
+import { getClawStatusGlyph } from "./claw-stream-format"
 
 type AgentThinkingSummaryProps = {
   elapsedMs?: number
   thought?: string
   toolCalls?: ToolCall[]
-}
-
-function formatElapsed(ms?: number) {
-  if (!ms || ms <= 0) return ""
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  if (minutes <= 0) return `${seconds}s`
-  return `${minutes}m ${seconds}s`
 }
 
 function compactText(value?: string, maxLength = 180) {
@@ -31,6 +23,11 @@ function compactText(value?: string, maxLength = 180) {
   return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned
 }
 
+function formatThinkingElapsedSeconds(elapsedMs?: number) {
+  if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs)) return ""
+  return `${(Math.max(0, elapsedMs) / 1000).toFixed(1)}s`
+}
+
 export function AgentThinkingSummary({
   elapsedMs,
   thought,
@@ -38,10 +35,10 @@ export function AgentThinkingSummary({
 }: AgentThinkingSummaryProps) {
   const [expanded, setExpanded] = React.useState(false)
   const preview = compactText(thought)
-  const elapsed = formatElapsed(elapsedMs)
+  const elapsedLabel = formatThinkingElapsedSeconds(elapsedMs)
   const hasDetails = Boolean(preview || toolCalls.length > 0)
 
-  if (!hasDetails && !elapsed) return null
+  if (!hasDetails) return null
 
   return (
     <div className="w-full">
@@ -53,9 +50,15 @@ export function AgentThinkingSummary({
         )}
         onClick={() => hasDetails && setExpanded(value => !value)}
       >
-        <Brain className="size-3.5 shrink-0 text-muted-foreground/45" />
-        <span className="shrink-0">已思考</span>
-        {elapsed && <span className="shrink-0 tabular-nums">{elapsed}</span>}
+        <span className="w-4 shrink-0 font-mono text-xs text-emerald-600">
+          {getClawStatusGlyph("done", 0)}
+        </span>
+        <span className="shrink-0 font-mono">Done</span>
+        {elapsedLabel && (
+          <span className="shrink-0 font-mono text-muted-foreground/45">
+            {elapsedLabel}
+          </span>
+        )}
         {hasDetails && (
           <ChevronDown className={cn(
             "size-3.5 shrink-0 text-muted-foreground/45 transition-transform",

@@ -14,7 +14,7 @@ interface FlashcardDraft {
   tags?: string[]
 }
 
-const SUPPORTED_TYPES: FlashcardType[] = ['basic', 'basic-reversed', 'cloze', 'choice', 'short-answer']
+const SUPPORTED_TYPES: FlashcardType[] = ['basic', 'basic-reversed', 'cloze', 'choice', 'true-false', 'short-answer']
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number) {
   const parsed = Number(value)
@@ -69,6 +69,9 @@ function normalizeDrafts(parsed: unknown, maxCount: number): FlashcardDraft[] {
       }
       if (draft.type === 'choice') {
         return Boolean(draft.front && draft.back && draft.choices && draft.choices.length >= 2)
+      }
+      if (draft.type === 'true-false') {
+        return Boolean(draft.front && draft.back && /(答案|正确答案|参考答案)\s*[:：]\s*(正确|错误)/.test(draft.back))
       }
       return Boolean(draft.front || draft.back)
     })
@@ -133,12 +136,13 @@ async function generateDraftsFromNote(
     `请基于笔记内容生成 ${count} 张闪卡草稿。`,
     `难度要求：${getDifficultyGuide(difficulty)}`,
     '仅返回 JSON 数组，不要解释，不要 markdown 代码块。',
-    '数组元素格式：{"type":"basic|basic-reversed|cloze|choice|short-answer","front":"","back":"","clozeText":"","choices":[""],"tags":[""]}',
+    '数组元素格式：{"type":"basic|basic-reversed|cloze|choice|true-false|short-answer","front":"","back":"","clozeText":"","choices":[""],"tags":[""]}',
     '规则：',
     '1. cloze 类型必须使用 {{c1::答案}} 形式放在 clozeText。',
     '2. choice 类型至少 3 个选项，back 里写正确答案与一句解析。',
-    '3. tags 最多 4 个短词。',
-    '4. 不要重复题干，尽量覆盖不同知识点。',
+    '3. true-false 类型是判断题，front 写一条可判断真伪的陈述，back 必须以“答案：正确”或“答案：错误”开头。',
+    '4. tags 最多 4 个短词。',
+    '5. 不要重复题干，尽量覆盖不同知识点。',
     '',
     `来源文件：${safePath}`,
     '笔记内容：',

@@ -1,11 +1,13 @@
 import { createAgentRunId } from './run-id'
+import { approvalRequestFromEvent, reduceApprovalHistory } from './approval-service'
 import { buildContextPack } from './context-engine'
 import { AgentMiddlewareRuntime, createSkillMcpMiddleware } from './middleware'
 import { saveRunSnapshot } from './run-snapshot-store'
 import { executeHarnessTool } from './tool-runtime'
 import { writeAgentVfsText } from './vfs'
+import { reduceAgentSessionLogFromEvents, type AgentSessionLog } from './session-log'
 import type { AgentEvent } from '@/lib/agent/types'
-import type { AgentHarnessMiddleware, AgentRoute, AgentRunControl, AgentRunSnapshot, ContextPack, VfsRef } from './types'
+import type { AgentHarnessMiddleware, AgentRoute, AgentRunControl, AgentRunMetrics, AgentRunSnapshot, ContextPack, ToolExposureRecord, VfsRef } from './types'
 
 export interface AgentOrchestratorInput {
   userInput: string
@@ -29,11 +31,14 @@ export class AgentOrchestrator {
       draftRefs: [],
       observationRefs: [],
       approvalHistory: [],
+      metrics: createInitialRunMetrics(Date.now()),
       updatedAt: Date.now(),
     }
 
     await saveRunSnapshot(snapshot)
     let eventWriteQueue: Promise<void> = Promise.resolve()
+    const recordedEvents: AgentEvent[] = []
+    let latestSessionLog: AgentSessionLog | undefined
     const middlewareRuntime = new AgentMiddlewareRuntime(input.middlewares || [
       createSkillMcpMiddleware(),
     ])
@@ -48,6 +53,7 @@ export class AgentOrchestrator {
     }
 
     const recordEvent = (event: AgentEvent) => {
+      recordedEvents.push(event)
       eventWriteQueue = eventWriteQueue
         .then(() => this.recordEvent(runId, event, () => snapshot, (patch) => updateSnapshot(patch)))
         .catch((error) => {
@@ -106,7 +112,12 @@ export class AgentOrchestrator {
           JSON.stringify(pack, null, 2),
           `${pack.included.length} context items, ${pack.deferred.length} deferred refs`,
         )
-        await updateSnapshot({ contextPackRef })
+        await updateSnapshot({
+          contextPackRef,
+          metrics: updateRunMetrics(snapshot.metrics, {
+            contextTokenEstimate: pack.included.reduce((sum, item) => sum + item.tokenEstimate, 0),
+          }),
+        })
         return pack
       },
       writeDraft: async (path, content, summary) => {
@@ -114,11 +125,14 @@ export class AgentOrchestrator {
         await updateSnapshot({ draftRefs: [...snapshot.draftRefs, ref] })
         return ref
       },
+      setSessionLog: (log) => {
+        latestSessionLog = log
+      },
       getSnapshot: () => snapshot,
       getMiddlewareState: () => middlewareRuntime.getState(),
       setMiddlewareState: (patch) => middlewareRuntime.setState(patch),
       prepareModel: async (prepareInput) => {
-        return middlewareRuntime.beforeModel({
+        const prepared = await middlewareRuntime.beforeModel({
           runId,
           route: input.route,
           userInput: input.userInput,
@@ -131,6 +145,24 @@ export class AgentOrchestrator {
           intentPolicy: prepareInput.intentPolicy,
           webSearchEnabled: prepareInput.webSearchEnabled,
         })
+        const exposure = middlewareRuntime.getState().toolExposureReasons
+        if (exposure) {
+          const record: ToolExposureRecord = {
+            iteration: exposure.iteration,
+            visibleToolNames: Object.keys(exposure.visible),
+            visibleReasons: exposure.visible,
+            hiddenReasons: exposure.hidden,
+            maxVisibleTools: exposure.maxVisibleTools,
+            createdAt: Date.now(),
+          }
+          await updateSnapshot({
+            toolExposureHistory: [
+              ...(snapshot.toolExposureHistory || []),
+              record,
+            ].slice(-30),
+          })
+        }
+        return prepared
       },
       authorizeTool: async (authorizeInput) => {
         return middlewareRuntime.beforeTool({
@@ -169,9 +201,17 @@ export class AgentOrchestrator {
         : await input.agentExecutor?.(control) || ''
 
       await eventWriteQueue
+      const sessionLogRef = await this.persistSessionLog({
+        runId,
+        route: input.route,
+        userGoal: input.userInput,
+        events: recordedEvents,
+        sessionLog: latestSessionLog,
+      })
       await updateSnapshot({
         status: 'completed',
         finalAnswer: result,
+        sessionLogRef,
       })
       await this.runAfterRunMiddleware(middlewareRuntime, {
         runId,
@@ -191,11 +231,26 @@ export class AgentOrchestrator {
       await eventWriteQueue
       const message = error instanceof Error ? error.message : String(error)
       if (message === 'USER_STOPPED') {
-        await updateSnapshot({ status: 'paused' })
+        const sessionLogRef = await this.persistSessionLog({
+          runId,
+          route: input.route,
+          userGoal: input.userInput,
+          events: recordedEvents,
+          sessionLog: latestSessionLog,
+        })
+        await updateSnapshot({ status: 'paused', sessionLogRef })
       } else {
+        const sessionLogRef = await this.persistSessionLog({
+          runId,
+          route: input.route,
+          userGoal: input.userInput,
+          events: recordedEvents,
+          sessionLog: latestSessionLog,
+        })
         await updateSnapshot({
           status: 'failed',
           finalAnswer: message,
+          sessionLogRef,
         })
       }
       await this.runAfterRunMiddleware(middlewareRuntime, {
@@ -221,12 +276,31 @@ export class AgentOrchestrator {
     }
   }
 
+  private async persistSessionLog(input: {
+    runId: string
+    route: AgentRoute
+    userGoal: string
+    events: AgentEvent[]
+    sessionLog?: AgentSessionLog
+  }): Promise<VfsRef> {
+    const sessionLog = input.sessionLog || reduceAgentSessionLogFromEvents(input)
+    return writeAgentVfsText(
+      input.runId,
+      'context',
+      'session-log.json',
+      JSON.stringify(sessionLog, null, 2),
+      `${sessionLog.entries.length} durable agent session entries`,
+    )
+  }
+
   private async recordEvent(
     runId: string,
     event: AgentEvent,
     current: () => AgentRunSnapshot,
     save: (patch: Partial<AgentRunSnapshot>) => Promise<void>,
   ) {
+    await save({ metrics: reduceRunMetrics(current().metrics, event) })
+
     if (event.type === 'observation.created') {
       const content = typeof event.payload?.observation === 'string'
         ? event.payload.observation
@@ -277,33 +351,99 @@ export class AgentOrchestrator {
     }
 
     if (event.type === 'approval' || event.type === 'confirmation.waiting' || event.type === 'confirmation.resolved') {
-      const toolName = typeof event.payload?.toolName === 'string' ? event.payload.toolName : undefined
-      if (!toolName) return
-
-      const params = typeof event.payload?.params === 'object' && event.payload.params
-        ? event.payload.params as Record<string, unknown>
-        : {}
-      const status = event.payload?.status === 'confirmed'
-        ? 'approved'
-        : event.payload?.status === 'rejected'
-          ? 'rejected'
-          : 'requested'
-
+      const request = approvalRequestFromEvent(runId, event)
+      if (!request) return
+      const approvalState = reduceApprovalHistory(current().approvalHistory, request)
       await save({
-        approvalHistory: [...current().approvalHistory, {
-          id: event.id || `approval-${event.timestamp}`,
-          runId,
-          stepId: String(event.iteration || event.sequence || 'pending'),
-          toolName,
-          risk: status === 'requested' ? 'medium' : 'medium',
-          status,
-          reason: typeof event.payload?.reason === 'string' ? event.payload.reason : status,
-          params,
-          approvalScope: 'once',
-        }],
+        approvalHistory: approvalState.history,
+        pendingApproval: approvalState.pendingApproval,
       })
     }
   }
+}
+
+function createInitialRunMetrics(startedAt: number): AgentRunMetrics {
+  return {
+    startedAt,
+    updatedAt: startedAt,
+    durationMs: 0,
+    modelRequests: 0,
+    modelDurationMs: 0,
+    modelInputTokens: 0,
+    modelOutputTokens: 0,
+    toolCalls: 0,
+    successfulToolCalls: 0,
+    failedToolCalls: 0,
+    cachedToolCalls: 0,
+    blockedToolCalls: 0,
+    adjustedToolCalls: 0,
+    skippedToolCalls: 0,
+    toolDurationMs: 0,
+    contextTokenEstimate: 0,
+    policyAdjustments: 0,
+    finalAnswerRetries: 0,
+  }
+}
+
+function updateRunMetrics(
+  metrics: AgentRunMetrics | undefined,
+  patch: Partial<AgentRunMetrics>,
+): AgentRunMetrics {
+  const base = metrics || createInitialRunMetrics(Date.now())
+  const next = {
+    ...base,
+    ...patch,
+    updatedAt: patch.updatedAt || Date.now(),
+  }
+  return {
+    ...next,
+    durationMs: Math.max(0, next.updatedAt - next.startedAt),
+  }
+}
+
+function reduceRunMetrics(metrics: AgentRunMetrics | undefined, event: AgentEvent): AgentRunMetrics {
+  const payload = event.payload || {}
+  const next = updateRunMetrics(metrics, { updatedAt: event.timestamp })
+
+  if (event.type === 'model.request.started') {
+    next.modelRequests += 1
+    if (typeof payload.inputTokens === 'number') {
+      next.modelInputTokens += payload.inputTokens
+    }
+  }
+
+  if (event.type === 'model.response.received') {
+    if (typeof payload.outputTokens === 'number') {
+      next.modelOutputTokens += payload.outputTokens
+    }
+    if (typeof payload.durationMs === 'number') {
+      next.modelDurationMs += payload.durationMs
+    }
+  }
+
+  if (event.type === 'tool.execution.finished') {
+    const status = String(payload.status || '')
+    next.toolCalls += 1
+    if (typeof payload.durationMs === 'number') {
+      next.toolDurationMs += payload.durationMs
+    }
+    if (status === 'success' || payload.success === true) next.successfulToolCalls += 1
+    if (status === 'error' || payload.success === false) next.failedToolCalls += 1
+    if (status === 'cached' || payload.cached === true) next.cachedToolCalls += 1
+    if (status === 'blocked') next.blockedToolCalls += 1
+    if (status === 'adjusted') {
+      next.adjustedToolCalls += 1
+      next.policyAdjustments += 1
+    }
+    if (status === 'skipped') next.skippedToolCalls += 1
+  }
+
+  if (event.type === 'final.answer.rejected') {
+    next.finalAnswerRetries += 1
+  }
+
+  next.durationMs = Math.max(0, next.updatedAt - next.startedAt)
+  return next
 }
 
 function vfsRefFromUri(

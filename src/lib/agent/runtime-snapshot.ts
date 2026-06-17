@@ -66,6 +66,7 @@ export interface McpRuntimeSnapshot {
   connectedServerIds: string[]
   servers: McpRuntimeServerSnapshot[]
   toolNames: string[]
+  toolGeneration?: number
   warnings: RuntimeWarning[]
 }
 
@@ -198,6 +199,7 @@ export function buildToolExposureSnapshot(input: {
   tools: Tool[]
   visibleToolNames: string[]
   blockedToolNames?: Array<{ name: string; reason: string }>
+  exposureReasons?: Record<string, string[]>
   maxVisibleTools: number
 }): ToolExposureSnapshot {
   const visibleNames = new Set(input.visibleToolNames)
@@ -208,7 +210,7 @@ export function buildToolExposureSnapshot(input: {
     risk: tool.risk,
     visible: visibleNames.has(tool.name),
     blocked: blockedReasons.has(tool.name),
-    reason: blockedReasons.get(tool.name),
+    reason: input.exposureReasons?.[tool.name]?.join('; ') || blockedReasons.get(tool.name),
     authorizedBy: [],
   }))
 

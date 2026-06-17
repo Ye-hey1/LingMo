@@ -37,6 +37,95 @@ async function getStore(): Promise<Store> {
   return storeInstance
 }
 
+const VIRTUAL_WORKSPACE_TABS = {
+  'knowledge-graph': {
+    id: 'workspace-knowledge-graph',
+    path: 'lingmo://knowledge-graph',
+    name: '知识图谱',
+  },
+  'artifact-studio': {
+    id: 'workspace-artifact-studio',
+    path: 'lingmo://artifact-studio',
+    name: '智能排版',
+  },
+  flashcards: {
+    id: 'workspace-flashcards',
+    path: 'lingmo://flashcards',
+    name: '闪卡',
+  },
+  'memory-manager': {
+    id: 'workspace-memory-manager',
+    path: 'lingmo://memory-manager',
+    name: '记忆',
+  },
+  'github-stars': {
+    id: 'workspace-github-stars',
+    path: 'lingmo://github-stars',
+    name: 'GitHub 管理',
+  },
+} as const
+
+type VirtualWorkspaceTabSlug = keyof typeof VIRTUAL_WORKSPACE_TABS
+type OpenTabState = { id: string; path: string; name: string; isFolder: boolean }
+
+function normalizeVirtualWorkspacePath(path: string): string {
+  const trimmedPath = path.trim()
+  if (trimmedPath.startsWith('lingmo://')) {
+    return trimmedPath
+  }
+
+  const legacyMatch = trimmedPath.match(/^lingmo_[/_]+([^/?#]+)$/)
+  const legacySlug = legacyMatch?.[1]
+  if (legacySlug && legacySlug in VIRTUAL_WORKSPACE_TABS) {
+    return VIRTUAL_WORKSPACE_TABS[legacySlug as VirtualWorkspaceTabSlug].path
+  }
+
+  return path
+}
+
+function getVirtualWorkspaceTab(path: string) {
+  const normalizedPath = normalizeVirtualWorkspacePath(path)
+  if (!normalizedPath.startsWith('lingmo://')) {
+    return null
+  }
+
+  const slug = normalizedPath.slice('lingmo://'.length)
+  if (!(slug in VIRTUAL_WORKSPACE_TABS)) {
+    return null
+  }
+
+  return VIRTUAL_WORKSPACE_TABS[slug as VirtualWorkspaceTabSlug]
+}
+
+function normalizeOpenTab(tab: OpenTabState): OpenTabState {
+  const virtualTab = getVirtualWorkspaceTab(tab.path)
+  if (!virtualTab) {
+    return tab
+  }
+
+  return {
+    id: virtualTab.id,
+    path: virtualTab.path,
+    name: virtualTab.name,
+    isFolder: false,
+  }
+}
+
+function normalizeOpenTabs(tabs: OpenTabState[]): OpenTabState[] {
+  const dedupedTabs: OpenTabState[] = []
+  const seenPaths = new Set<string>()
+
+  for (const tab of tabs.map(normalizeOpenTab)) {
+    if (seenPaths.has(tab.path)) {
+      continue
+    }
+    seenPaths.add(tab.path)
+    dedupedTabs.push(tab)
+  }
+
+  return dedupedTabs
+}
+
 export type SortType = 'name' | 'created' | 'modified' | 'none'
 export type SortDirection = 'asc' | 'desc'
 
@@ -264,11 +353,11 @@ interface NoteState {
   setReadFilePath: (path: string) => void
 
   // Tabs for multi-file editing
-  openTabs: Array<{ id: string; path: string; name: string; isFolder: boolean }>
-  setOpenTabs: (tabs: Array<{ id: string; path: string; name: string; isFolder: boolean }>) => void
+  openTabs: OpenTabState[]
+  setOpenTabs: (tabs: OpenTabState[]) => void
   activeTabId: string
   setActiveTabId: (id: string) => void
-  addTab: (tab: { id: string; path: string; name: string; isFolder: boolean }) => void
+  addTab: (tab: OpenTabState) => void
   removeTab: (id: string) => void
   editorViewStates: Record<string, EditorViewState>
   setEditorViewState: (path: string, state: EditorViewState) => void
@@ -508,18 +597,27 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
   activeFilePath: '',
   setActiveFilePath: async (path: string) => {
+    const normalizedPath = normalizeVirtualWorkspacePath(path)
+    const safePath = normalizedPath.startsWith('lingmo://')
+      ? normalizedPath
+      : sanitizeFilePath(normalizedPath)
     // 切换文件时，先清空 currentArticle，避免内容覆盖
-    set({ currentArticle: '', activeFilePath: path })
+    set({ currentArticle: '', activeFilePath: safePath })
     const store = await getStore();
-    await store.set('activeFilePath', path)
+    await store.set('activeFilePath', safePath)
     // 触发事件，让推送队列重置计时器
-    emitter.emit('article-opened', { path })
+    emitter.emit('article-opened', { path: safePath })
+    if (safePath.endsWith('.md')) {
+      void import('@/db/note-intelligence')
+        .then(({ recordNoteUsageEvent }) => recordNoteUsageEvent(safePath, 'open'))
+        .catch(console.error)
+    }
 
     // 触发读取文件内容（包括远程拉取）
     // 需要确保是文件而不是文件夹
-    const fileName = path.split('/').pop() || ''
+    const fileName = safePath.split('/').pop() || ''
     if (fileName && fileName.includes('.')) {
-      get().readArticle(path)
+      get().readArticle(safePath)
     }
   },
 
@@ -528,13 +626,14 @@ const useArticleStore = create<NoteState>((set, get) => ({
   activeTabId: '',
   editorViewStates: {},
   setOpenTabs: async (tabs) => {
-    const keptPaths = new Set(tabs.map(tab => tab.path))
+    const normalizedTabs = normalizeOpenTabs(tabs)
+    const keptPaths = new Set(normalizedTabs.map(tab => tab.path))
     const nextEditorViewStates = Object.fromEntries(
       Object.entries(get().editorViewStates).filter(([path]) => keptPaths.has(path))
     )
-    set({ openTabs: tabs, editorViewStates: nextEditorViewStates })
+    set({ openTabs: normalizedTabs, editorViewStates: nextEditorViewStates })
     const store = await getStore();
-    await store.set('openTabs', tabs)
+    await store.set('openTabs', normalizedTabs)
   },
   setActiveTabId: async (id) => {
     set({ activeTabId: id })
@@ -542,16 +641,17 @@ const useArticleStore = create<NoteState>((set, get) => ({
     await store.set('activeTabId', id)
   },
   addTab: async (tab) => {
+    const normalizedTab = normalizeOpenTab(tab)
     const currentTabs = get().openTabs
     // Check if tab already exists
-    if (currentTabs.find(t => t.path === tab.path)) {
+    if (currentTabs.find(t => t.path === normalizedTab.path)) {
       return
     }
-    const newTabs = [...currentTabs, tab].slice(-10) // Limit to 10 tabs
-    set({ openTabs: newTabs, activeTabId: tab.id })
+    const newTabs = normalizeOpenTabs([...currentTabs, normalizedTab]).slice(-10) // Limit to 10 tabs
+    set({ openTabs: newTabs, activeTabId: normalizedTab.id })
     const store = await getStore();
     await store.set('openTabs', newTabs)
-    await store.set('activeTabId', tab.id)
+    await store.set('activeTabId', normalizedTab.id)
   },
   removeTab: async (id) => {
     const currentTabs = get().openTabs
@@ -717,9 +817,24 @@ const useArticleStore = create<NoteState>((set, get) => ({
   // Initialize open tabs from store
   initOpenTabs: async () => {
     const store = await getStore();
-    const tabs = await store.get<Array<{ id: string; path: string; name: string; isFolder: boolean }>>('openTabs')
+    const tabs = await store.get<OpenTabState[]>('openTabs')
     const activeTabId = await store.get<string>('activeTabId')
-    set({ openTabs: tabs || [], activeTabId: activeTabId || '' })
+    const activeFilePath = await store.get<string>('activeFilePath')
+    const normalizedTabs = normalizeOpenTabs(tabs || [])
+    const normalizedActiveFilePath = activeFilePath ? normalizeVirtualWorkspacePath(activeFilePath) : ''
+    const activeTabStillExists = activeTabId && normalizedTabs.some(tab => tab.id === activeTabId)
+    const nextActiveTabId = activeTabStillExists
+      ? activeTabId
+      : normalizedTabs.find(tab => tab.path === normalizedActiveFilePath)?.id || ''
+
+    set({
+      openTabs: normalizedTabs,
+      activeTabId: nextActiveTabId,
+      activeFilePath: normalizedActiveFilePath,
+    })
+    await store.set('openTabs', normalizedTabs)
+    await store.set('activeTabId', nextActiveTabId)
+    await store.set('activeFilePath', normalizedActiveFilePath)
   },
   setShowCloudFiles: async (show: boolean) => {
     set({ showCloudFiles: show })
@@ -1744,24 +1859,30 @@ const useArticleStore = create<NoteState>((set, get) => ({
     const store = await getStore();
     const res = await store.get<string[]>('collapsibleList')
     const activeFilePath = await store.get<string>('activeFilePath')
+    const normalizedActiveFilePath = activeFilePath ? normalizeVirtualWorkspacePath(activeFilePath) : ''
     set({
       collapsibleList: res ? uniq(res.filter(item => !item.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i))) : [],
       collapsibleListInitialized: true
     })
 
-    if (activeFilePath) {
-      set({ activeFilePath })
+    if (normalizedActiveFilePath) {
+      set({ activeFilePath: normalizedActiveFilePath })
+
+      if (getVirtualWorkspaceTab(normalizedActiveFilePath)) {
+        await store.set('activeFilePath', normalizedActiveFilePath)
+        return
+      }
 
       // 检查是否是文件夹（所有支持的文件扩展名都是文件，不是文件夹）
-      if (!activeFilePath.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)) {
+      if (!normalizedActiveFilePath.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)) {
         // 文件夹：确保展开并加载内容
-        if (!get().collapsibleList.includes(activeFilePath)) {
-          await get().setCollapsibleList(activeFilePath, true)
+        if (!get().collapsibleList.includes(normalizedActiveFilePath)) {
+          await get().setCollapsibleList(normalizedActiveFilePath, true)
         }
-        await get().loadCollapsibleFiles(activeFilePath)
+        await get().loadCollapsibleFiles(normalizedActiveFilePath)
       } else {
         // 文件：读取内容
-        get().readArticle(activeFilePath)
+        get().readArticle(normalizedActiveFilePath)
       }
     }
   },
@@ -1841,6 +1962,12 @@ const useArticleStore = create<NoteState>((set, get) => ({
   },
 
   readArticle: async (path: string, sha?: string, autoSync = true) => {
+    const virtualTab = getVirtualWorkspaceTab(path)
+    if (virtualTab) {
+      set({ currentArticle: '', loading: false, readFilePath: virtualTab.path })
+      return
+    }
+
     // 跳过图片等二进制文件
     if (/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i.test(path)) {
       set({ currentArticle: '', loading: false })
@@ -1860,7 +1987,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
     // 处理文件名兼容性问题
     let actualPath = path
-    const normalizedPath = sanitizeFilePath(path)
+    const normalizedPath = sanitizeFilePath(normalizeVirtualWorkspacePath(path))
     if (normalizedPath !== path) {
       actualPath = normalizedPath
       if (get().activeFilePath !== actualPath) {
@@ -2273,6 +2400,15 @@ const useArticleStore = create<NoteState>((set, get) => ({
           })
         } catch (error) {
           console.error('记录写作活动失败:', error)
+        }
+
+        if (savePath.endsWith('.md')) {
+          void import('@/db/note-intelligence')
+            .then(({ recordNoteUsageEvent }) => recordNoteUsageEvent(savePath, 'edit'))
+            .catch(console.error)
+          void import('@/lib/note-intelligence')
+            .then(({ syncWakeDirectivesForNote }) => syncWakeDirectivesForNote(savePath, saveContent))
+            .catch(console.error)
         }
 
         // 通知文件已保存，触发同步推送（除非设置了 skipSyncOnSave）

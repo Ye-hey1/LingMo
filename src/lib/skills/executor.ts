@@ -14,6 +14,7 @@ import type {
 } from './types'
 import { resolveSkillDirectory, resolveScriptRelativePath, buildShellCommand } from './path-utils'
 import { skillManager } from './manager'
+import { decodeSkillScriptOutput } from './output-decoder'
 
 // ============================================================================
 // SkillExecutor 类
@@ -245,15 +246,18 @@ export class SkillExecutor {
     try {
       // 根据脚本类型执行
       const result = await this.executeScriptByType(script, args, skill)
+      const decoded = decodeSkillScriptOutput(result.output)
 
       const executionTime = Date.now() - startTime
 
       return {
         success: true,
         scriptName,
-        output: result.output,
+        output: decoded.output,
         exitCode: result.exitCode,
         executionTime,
+        warnings: decoded.warnings,
+        outputEncoding: decoded.outputEncoding,
       }
     } catch (error) {
       const executionTime = Date.now() - startTime
@@ -275,7 +279,7 @@ export class SkillExecutor {
     script: SkillScript,
     args?: string[],
     skill?: SkillContent
-  ): Promise<{ output: string; exitCode: number }> {
+  ): Promise<{ output: string | Uint8Array; exitCode: number }> {
     // 注意：在 Tauri 环境中，脚本执行需要通过 Command API
 
     const { Command } = await import('@tauri-apps/plugin-shell')

@@ -25,12 +25,12 @@ import * as React from "react"
 import {
   ChevronDown,
   Database,
-  Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
 import type { ToolCall } from "@/lib/agent"
 import { getBaseAgentToolName, isSupportOnlyToolName } from "@/lib/agent/support-tools"
+import { getClawStatusGlyph } from "./claw-stream-format"
 
 // ---------------------------------------------------------------------------
 // 工具分类标签
@@ -136,6 +136,29 @@ function getBaseToolName(toolName: string) {
   return getBaseAgentToolName(toolName)
 }
 
+function getToolTone(status: ToolCall["status"]): "running" | "done" | "error" {
+  if (status === "error" || status === "blocked") return "error"
+  if (status === "running" || status === "pending") return "running"
+  return "done"
+}
+
+function useClawFrame(active: boolean) {
+  const [frameIndex, setFrameIndex] = React.useState(0)
+
+  React.useEffect(() => {
+    if (!active) {
+      setFrameIndex(0)
+      return
+    }
+    const timer = window.setInterval(() => {
+      setFrameIndex(value => value + 1)
+    }, 120)
+    return () => window.clearInterval(timer)
+  }, [active])
+
+  return frameIndex
+}
+
 function getToolDisplayName(toolName: string) {
   if (getBaseToolName(toolName).toLowerCase() === "select_skill") {
     return "Select skill"
@@ -162,6 +185,8 @@ function getHarnessResultMeta(result: ToolCall["result"]) {
     artifacts?: string[]
     retryable?: boolean
     errorKind?: string
+    warnings?: string[]
+    outputEncoding?: string
   }
 
   if (
@@ -169,7 +194,9 @@ function getHarnessResultMeta(result: ToolCall["result"]) {
     !record.dataRef &&
     !record.artifacts?.length &&
     !record.retryable &&
-    !record.errorKind
+    !record.errorKind &&
+    !record.warnings?.length &&
+    !record.outputEncoding
   ) {
     return null
   }
@@ -187,12 +214,14 @@ interface ToolCallRowProps {
   defaultExpanded?: boolean
 }
 
-function ToolCallRow({ toolCall, isStreaming: _isStreaming = false, defaultExpanded = false }: ToolCallRowProps) {
+function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }: ToolCallRowProps) {
   const [expanded, setExpanded] = React.useState(defaultExpanded)
   const paramSummary = extractParamSummary(toolCall.toolName, toolCall.params)
   const isRunning = toolCall.status === "running" || toolCall.status === "pending"
   const hasError = toolCall.status === "error"
   const harnessMeta = getHarnessResultMeta(toolCall.result)
+  const tone = getToolTone(toolCall.status)
+  const frameIndex = useClawFrame(isStreaming && tone === "running")
 
   // 结果摘要
   const resultSummary = React.useMemo(() => {
@@ -215,6 +244,12 @@ function ToolCallRow({ toolCall, isStreaming: _isStreaming = false, defaultExpan
       isRunning && "border-border/10 bg-muted/8",
       hasError && "border-destructive/15 bg-destructive/5",
     )}>
+      <span className={cn(
+        "mt-0.5 w-4 shrink-0 font-mono text-xs leading-none",
+        tone === "error" ? "text-destructive/70" : tone === "done" ? "text-emerald-600" : "text-muted-foreground/60",
+      )}>
+        {getClawStatusGlyph(tone, frameIndex)}
+      </span>
       <div className="flex-1 min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate font-mono text-[10px] text-muted-foreground/60">
@@ -256,6 +291,20 @@ function ToolCallRow({ toolCall, isStreaming: _isStreaming = false, defaultExpan
                 retryable
               </span>
             )}
+            {harnessMeta.outputEncoding === "utf8-replacement" && (
+              <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[9px] text-amber-600">
+                utf-8 repaired
+              </span>
+            )}
+            {harnessMeta.warnings?.slice(0, 1).map((warning, index) => (
+              <span
+                key={`${warning}-${index}`}
+                className="max-w-full truncate rounded bg-amber-500/10 px-1 py-0.5 text-[9px] text-amber-600"
+                title={warning}
+              >
+                warning
+              </span>
+            ))}
           </div>
         )}
 
@@ -349,10 +398,12 @@ interface GroupHeaderProps {
   expanded: boolean
 }
 
-function GroupHeader({ group, isStreaming: _isStreaming, onToggleExpand, expanded }: GroupHeaderProps) {
+function GroupHeader({ group, isStreaming, onToggleExpand, expanded }: GroupHeaderProps) {
   const hasRunning = group.calls.some(c => c.status === "running" || c.status === "pending")
   const hasError = group.calls.some(c => c.status === "error")
   const allDone = group.calls.every(c => c.status === "success" || c.status === "error")
+  const tone = hasError ? "error" : hasRunning ? "running" : "done"
+  const frameIndex = useClawFrame(Boolean(isStreaming && tone === "running"))
 
   // 合并参数摘要
   const summaries = group.calls.map(c => extractParamSummary(c.toolName, c.params)).filter(Boolean)
@@ -385,12 +436,18 @@ function GroupHeader({ group, isStreaming: _isStreaming, onToggleExpand, expande
       </div>
 
       {/* 状态指示 */}
-      <div className="flex items-center gap-1.5 shrink-0 text-[9px] tabular-nums">
+      <div className="flex items-center gap-1.5 shrink-0 font-mono text-[9px] tabular-nums">
+        <span className={cn(
+          "text-xs",
+          tone === "error" ? "text-destructive/70" : tone === "done" ? "text-emerald-600" : "text-muted-foreground/60",
+        )}>
+          {getClawStatusGlyph(tone, frameIndex)}
+        </span>
         <span className={cn(
           "text-muted-foreground/35",
           hasError && "text-destructive/60",
         )}>
-          {hasError ? "失败" : allDone ? "完成" : hasRunning ? "执行中" : ""}
+          {hasError ? "Failed" : allDone ? "Done" : hasRunning ? "Running" : ""}
         </span>
         <ChevronDown className={cn(
           "size-3 text-muted-foreground/30 transition-transform",
@@ -520,6 +577,7 @@ export function CompactThinking({
   maxCollapsedLines = 2,
 }: CompactThinkingProps) {
   const [expanded, setExpanded] = React.useState(isStreaming)
+  const frameIndex = useClawFrame(isStreaming)
 
   // 流式时自动展开
   React.useEffect(() => {
@@ -546,12 +604,13 @@ export function CompactThinking({
         className="flex items-center gap-1.5 w-full text-left"
         onClick={() => setExpanded(!expanded)}
       >
-        {isStreaming ? (
-          <Loader2 className="size-3 animate-spin text-muted-foreground/45 shrink-0" />
-        ) : (
-          <span className="size-1.5 rounded-full bg-muted-foreground/35 shrink-0" />
-        )}
-        <span className="text-[11px] text-muted-foreground/55">
+        <span className={cn(
+          "w-4 shrink-0 font-mono text-xs",
+          isStreaming ? "text-muted-foreground/60" : "text-emerald-600",
+        )}>
+          {getClawStatusGlyph(isStreaming ? "running" : "done", frameIndex)}
+        </span>
+        <span className="font-mono text-[11px] text-muted-foreground/55">
           {isStreaming ? "Thinking..." : "Thought"}
         </span>
         {needsTruncation && (

@@ -27,6 +27,11 @@ export function McpToolCallCard({ toolCall }: McpToolCallCardProps) {
         return <Loader2 className="size-3.5 animate-spin text-blue-500 shrink-0" />
       case 'success':
         return <CheckCircle2 className="size-3.5 text-green-500 shrink-0" />
+      case 'blocked':
+      case 'skipped':
+      case 'adjusted':
+      case 'cached':
+        return <CheckCircle2 className="size-3.5 text-amber-500 shrink-0" />
       case 'error':
         return <XCircle className="size-3.5 text-red-500 shrink-0" />
     }

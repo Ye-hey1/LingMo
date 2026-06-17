@@ -52,7 +52,7 @@ interface TitleBarProps {
 export function TitleBar({ onSearchClick, onActivityClick, activityOpen = false }: TitleBarProps) {
   const [currentPlatform, setCurrentPlatform] = useState<Platform>('unknown')
   const [isMobile, setIsMobile] = useState(true)
-  const pathname = usePathname()
+  const pathname = usePathname() || ''
   const router = useRouter()
   const {
     leftSidebarVisible,

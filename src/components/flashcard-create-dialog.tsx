@@ -38,6 +38,7 @@ interface Props {
 
 const cardTypes: { value: FlashcardType; label: string; description: string }[] = [
   { value: 'choice', label: '选择题', description: '适合概念辨析、易错项和考试训练' },
+  { value: 'true-false', label: '判断题', description: '适合事实核验、误区识别和快速自测' },
   { value: 'basic', label: '基础问答', description: '适合概念、定义和结论记忆' },
   { value: 'basic-reversed', label: '双向问答', description: '适合术语和对应关系双向回忆' },
   { value: 'cloze', label: '填空题', description: '适合句子、公式或关键片段挖空' },
@@ -55,6 +56,7 @@ function stripMarkdownJsonBlock(input: string) {
 
 function getCardTypeTitle(type: FlashcardType) {
   if (type === 'choice') return '新建选择题'
+  if (type === 'true-false') return '新建判断题'
   if (type === 'cloze') return '新建填空卡'
   if (type === 'short-answer') return '新建简答题'
   if (type === 'basic-reversed') return '新建双向卡'
@@ -119,12 +121,13 @@ export function FlashcardCreateDialog({
         '请基于下面的选中文本，生成 1 张最适合复习的闪卡草稿。',
         '要求：',
         '1. 只返回严格 JSON 对象，不要返回解释。',
-        '2. JSON 格式必须是 {"type":"choice|basic|basic-reversed|cloze|short-answer","front":"","back":"","clozeText":"","choices":[""],"tags":[""]}。',
-        '3. 如果适合选择题，使用 choice；适合问答卡，使用 basic；适合双向记忆，使用 basic-reversed；适合填空，使用 cloze；适合开放回答，使用 short-answer。',
+        '2. JSON 格式必须是 {"type":"choice|true-false|basic|basic-reversed|cloze|short-answer","front":"","back":"","clozeText":"","choices":[""],"tags":[""]}。',
+        '3. 如果适合选择题，使用 choice；适合判断真伪，使用 true-false；适合问答卡，使用 basic；适合双向记忆，使用 basic-reversed；适合填空，使用 cloze；适合开放回答，使用 short-answer。',
         '4. 如果 type 不是 cloze，则 clozeText 返回空字符串。',
         '5. 如果 type 是 cloze，则 front/back 返回空字符串，并用 {{c1::答案}} 形式生成 clozeText。',
         '6. 如果 type 是 choice，则 front 写题干，choices 返回 3-5 个选项，back 写正确答案和简短解析。',
-        '7. tags 最多返回 3 个简短标签。',
+        '7. 如果 type 是 true-false，则 front 写一条可判断真伪的陈述，back 必须以“答案：正确”或“答案：错误”开头，然后写一句解析。',
+        '8. tags 最多返回 3 个简短标签。',
         '',
         `来源：${sourceLabel}`,
         '选中文本：',
@@ -175,6 +178,11 @@ export function FlashcardCreateDialog({
 
     if (type === 'choice' && (!front.trim() || !back.trim() || choices.split('\n').filter(Boolean).length < 2)) {
       toast({ title: '请填写题干、至少两个选项和答案解析' })
+      return
+    }
+
+    if (type === 'true-false' && (!front.trim() || !back.trim() || !/(答案|正确答案|参考答案)\s*[:：]\s*(正确|错误)/.test(back))) {
+      toast({ title: '判断题答案需写成“答案：正确/错误”' })
       return
     }
 
@@ -313,6 +321,17 @@ export function FlashcardCreateDialog({
               <div className="space-y-2">
                 <div className="text-sm font-medium">答案解析</div>
                 <Textarea value={back} onChange={(e) => setBack(e.target.value)} placeholder="正确答案和简短解释" />
+              </div>
+            </>
+          ) : type === 'true-false' ? (
+            <>
+              <div className="space-y-2">
+                <div className="text-sm font-medium">判断陈述</div>
+                <Input value={front} onChange={(e) => setFront(e.target.value)} placeholder="写成一条可以判断正确或错误的陈述" />
+              </div>
+              <div className="space-y-2">
+                <div className="text-sm font-medium">答案解析</div>
+                <Textarea value={back} onChange={(e) => setBack(e.target.value)} placeholder="答案：正确。简短说明原因" />
               </div>
             </>
           ) : (

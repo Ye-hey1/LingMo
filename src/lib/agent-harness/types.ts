@@ -2,6 +2,7 @@ import type { AgentEvent, ReActStep, Tool, ToolExecutionContext, ToolResult } fr
 import type { AgentRuntimeSnapshot, McpRuntimeSnapshot, SkillRuntimeSnapshot, ToolExposureSnapshot } from '@/lib/agent/runtime-snapshot'
 import type { IntentPolicy } from '@/lib/agent/tool-policy'
 import type { SkillMatchSummary } from '@/lib/skills/types'
+import type { AgentSessionLog } from './session-log'
 
 export type AgentRoute = 'writer' | 'advisor' | 'chat' | 'agent' | 'workflow' | 'research'
 
@@ -16,10 +17,31 @@ export interface VfsRef {
 export interface ContextItem {
   id: string
   source: 'user' | 'quote' | 'file' | 'skill' | 'memory' | 'tool' | 'history'
+  layer?: ContextLayerId
   priority: number
   content: string
   tokenEstimate: number
   ref?: string
+}
+
+export type ContextLayerId =
+  | 'core'
+  | 'current-note'
+  | 'linked-files'
+  | 'rag'
+  | 'history'
+  | 'skill'
+  | 'tool-observation'
+  | 'other'
+
+export interface ContextLayerUsage {
+  id: ContextLayerId
+  label: string
+  tokenBudget: number
+  tokenUsed: number
+  includedItemIds: string[]
+  deferredRefs: VfsRef[]
+  droppedItemIds: string[]
 }
 
 export interface ContextPack {
@@ -27,6 +49,7 @@ export interface ContextPack {
   tokenBudget: number
   included: ContextItem[]
   deferred: VfsRef[]
+  layers?: ContextLayerUsage[]
   warnings: string[]
   checksum: string
 }
@@ -55,17 +78,53 @@ export interface ApprovalRequest {
   approvalScope: 'once' | 'session' | 'persistent'
 }
 
+export interface ToolExposureRecord {
+  iteration: number
+  visibleToolNames: string[]
+  visibleReasons: Record<string, string[]>
+  hiddenReasons: Record<string, string[]>
+  maxVisibleTools: number
+  createdAt: number
+}
+
+export interface AgentRunMetrics {
+  startedAt: number
+  updatedAt: number
+  durationMs: number
+  modelRequests: number
+  modelDurationMs: number
+  modelInputTokens: number
+  modelOutputTokens: number
+  toolCalls: number
+  successfulToolCalls: number
+  failedToolCalls: number
+  cachedToolCalls: number
+  blockedToolCalls: number
+  adjustedToolCalls: number
+  skippedToolCalls: number
+  toolDurationMs: number
+  contextTokenEstimate: number
+  policyAdjustments: number
+  finalAnswerRetries: number
+}
+
 export interface AgentRunSnapshot {
   runId: string
   status: 'running' | 'paused' | 'completed' | 'failed'
   userGoal: string
   route: AgentRoute
+  phase?: import('./turn-lifecycle').AgentHarnessPhase
+  sessionLogRef?: VfsRef
+  turnRefs?: VfsRef[]
   planRef?: VfsRef
   todoRef?: VfsRef
   contextPackRef?: VfsRef
   draftRefs: VfsRef[]
   observationRefs: VfsRef[]
   approvalHistory: ApprovalRequest[]
+  pendingApproval?: ApprovalRequest
+  toolExposureHistory?: ToolExposureRecord[]
+  metrics?: AgentRunMetrics
   finalAnswer?: string
   updatedAt: number
 }
@@ -91,6 +150,12 @@ export interface AgentRunMiddlewareState {
     warnings: string[]
   }
   visibleToolNames?: string[]
+  toolExposureReasons?: {
+    iteration: number
+    visible: Record<string, string[]>
+    hidden: Record<string, string[]>
+    maxVisibleTools: number
+  }
   promptSectionIds?: string[]
   persistedMemoryIds?: string[]
 }
@@ -208,6 +273,7 @@ export interface AgentRunControl {
     deferred?: VfsRef[]
   }) => Promise<ContextPack>
   writeDraft: (path: string, content: string, summary?: string) => Promise<VfsRef>
+  setSessionLog?: (log: AgentSessionLog) => void
   getSnapshot: () => AgentRunSnapshot
   getMiddlewareState: () => AgentRunMiddlewareState
   setMiddlewareState: (patch: Partial<AgentRunMiddlewareState>) => void

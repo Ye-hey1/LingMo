@@ -24,6 +24,9 @@ const CONCRETE_ARTIFACT_REQUEST_PATTERN =
 const CONCRETE_ARTIFACT_DIRECTIVE_PATTERN =
   /(?:生成|创建|制作|新建|导出|保存|绘制|画一|画个|画出|可视化).{0,30}(?:图表|思维导图|导图|流程图|架构图|白板|文件|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw)|(?:图表|思维导图|导图|流程图|架构图|白板|文件|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw).{0,30}(?:生成|创建|制作|新建|导出|保存|绘制)|\b(?:create|generate|export|save|visuali[sz]e).{0,40}(?:diagram|mind\s*map|mindmap|flowchart|file|presentation|pptx|pdf|docx|xlsx)\b/i
 
+const INFORMATION_QUERY_PATTERN =
+  /查看|查询|获取|检索|搜索|总结|汇总|梳理|分析|解读|列出|最新|热点|新闻|资讯|趋势|信息|内容|数据|find|search|fetch|get|retrieve|summari[sz]e|analy[sz]e|latest|news|trending|information/i
+
 const DIAGRAM_ARTIFACT_REQUEST_PATTERN =
   /绘制|画一|画个|画出|可视化|图表|思维导图|导图|流程图|架构图|白板|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e/i
 
@@ -41,6 +44,10 @@ export function shouldRecoverWithAutoFinalAnswer(thought: string): boolean {
 }
 
 export function isConcreteArtifactRequest(userInput: string, actionLikeRequest: boolean): boolean {
+  if (INFORMATION_QUERY_PATTERN.test(userInput) && !CONCRETE_ARTIFACT_DIRECTIVE_PATTERN.test(userInput)) {
+    return false
+  }
+
   return CONCRETE_ARTIFACT_DIRECTIVE_PATTERN.test(userInput) ||
     (actionLikeRequest && CONCRETE_ARTIFACT_REQUEST_PATTERN.test(userInput))
 }

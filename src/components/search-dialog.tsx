@@ -57,7 +57,7 @@ interface EnhancedSearchResult {
 export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
   const t = useTranslations()
   const router = useRouter()
-  const pathname = usePathname()
+  const pathname = usePathname() || ''
   const [searchValue, setSearchValue] = useState('')
   const [searchResult, setSearchResult] = useState<EnhancedSearchResult[]>([])
   const [searchFilter, setSearchFilter] = useState<SearchFilter>('all')

@@ -1,18 +1,13 @@
 "use client"
 
 import * as React from "react"
-import {
-  Brain,
-  CheckCircle2,
-  ChevronDown,
-  CircleAlert,
-  Loader2,
-} from "lucide-react"
+import { ChevronDown } from "lucide-react"
 import { CompactToolCalls } from "./compact-tool-calls"
 import { cn } from "@/lib/utils"
-import type { AgentActivity, AgentEvent, AgentState, AgentTurnTelemetry, ToolCall } from "@/lib/agent"
+import type { AgentActivity, AgentEvent, AgentState, AgentTurnTelemetry, ToolCall, AgentPartSnapshot } from "@/lib/agent"
 import { sanitizeVisibleAssistantContent } from "@/lib/agent/parse-action-input"
 import { isSupportOnlyObservationText, isSupportOnlyToolName } from "@/lib/agent/support-tools"
+import { formatClawStatusLabel, getClawStatusGlyph } from "./claw-stream-format"
 
 type AgentLiveStreamProps = {
   isRunning: boolean
@@ -26,6 +21,7 @@ type AgentLiveStreamProps = {
   telemetry?: AgentTurnTelemetry
   currentStepStartTime?: number
   taskPlan?: AgentState["taskPlan"]
+  partSnapshot?: AgentPartSnapshot
 }
 
 function getActionToolName(currentAction?: string) {
@@ -60,51 +56,18 @@ function compactText(value?: string, maxLength = 96) {
   return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned
 }
 
-function formatElapsed(ms: number) {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  if (minutes <= 0) return `${seconds}s`
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`
-}
-
-function useLiveElapsed({
-  isRunning,
-  telemetry,
-  currentStepStartTime,
-  activity,
-}: {
-  isRunning: boolean
-  telemetry?: AgentTurnTelemetry
-  currentStepStartTime?: number
-  activity?: AgentActivity
-}) {
-  const [now, setNow] = React.useState(() => Date.now())
-
-  React.useEffect(() => {
-    if (!isRunning) return
-    setNow(Date.now())
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [isRunning])
-
-  const startedAt = telemetry?.startedAt || currentStepStartTime || activity?.startedAt
-  if (!startedAt) {
-    return telemetry?.elapsedMs || 0
-  }
-
-  if (isRunning) {
-    return Math.max(0, now - startedAt)
-  }
-
-  return telemetry?.elapsedMs || Math.max(0, (telemetry?.updatedAt || now) - startedAt)
-}
-
 function getLatestVisibleTool(toolCalls: ToolCall[]) {
   return [...toolCalls]
     .reverse()
     .find(call => call.status === "running" || call.status === "pending") ||
-    [...toolCalls].reverse().find(call => call.status === "error" || call.status === "success")
+    [...toolCalls].reverse().find(call =>
+      call.status === "error" ||
+      call.status === "success" ||
+      call.status === "blocked" ||
+      call.status === "skipped" ||
+      call.status === "adjusted" ||
+      call.status === "cached"
+    )
 }
 
 function getLatestVisibleEvent(events: AgentEvent[]) {
@@ -137,11 +100,24 @@ function getStatus(input: {
   isRunning: boolean
   isThinking: boolean
   activity?: AgentActivity
+  partSnapshot?: AgentPartSnapshot
   currentAction?: string
   currentObservation?: string
   toolCalls: ToolCall[]
   agentEvents: AgentEvent[]
 }) {
+  if (input.partSnapshot?.visibleStatus) {
+    const status = input.partSnapshot.visibleStatus
+    const isInitialPreparingStatus = status.tone === "running" && status.label === "准备中"
+    if (isInitialPreparingStatus && input.isRunning && (input.isThinking || input.activity?.phase === "thinking")) {
+      return {
+        tone: "running" as const,
+        label: "思考中",
+        detail: "",
+      }
+    }
+    return input.partSnapshot.visibleStatus
+  }
   const visibleToolCalls = input.toolCalls.filter(call => !isSupportOnlyToolName(call.toolName))
   const latestTool = getLatestVisibleTool(visibleToolCalls)
   const latestEvent = getLatestVisibleEvent(input.agentEvents)
@@ -177,6 +153,26 @@ function getStatus(input: {
           label: "工具调用失败",
           detail: compactText(latestTool?.result?.error || latestTool?.result?.message) || observation,
         }
+  }
+
+  if (latestTool?.status === "blocked" || latestTool?.status === "skipped" || latestTool?.status === "adjusted") {
+    return {
+      tone: "running" as const,
+      label: latestTool.status === "blocked"
+        ? "工具被策略阻止"
+        : latestTool.status === "skipped"
+          ? "已跳过额外工具调用"
+          : "工具选择已调整",
+      detail: compactText(latestTool?.result?.message || latestTool?.result?.error) || observation,
+    }
+  }
+
+  if (latestTool?.status === "cached") {
+    return {
+      tone: "running" as const,
+      label: "使用缓存结果",
+      detail: compactText(latestTool?.result?.message) || observation,
+    }
   }
 
   if (latestEvent?.type === "confirmation.waiting") {
@@ -226,16 +222,70 @@ function getStatus(input: {
   }
 }
 
-function StatusIcon({ tone }: { tone: "running" | "done" | "error" }) {
-  if (tone === "error") {
-    return <CircleAlert className="size-3.5 shrink-0 text-destructive/70" />
-  }
+function useClawSpinnerFrame(active: boolean) {
+  const [frameIndex, setFrameIndex] = React.useState(0)
 
-  if (tone === "running") {
-    return <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/55" />
-  }
+  React.useEffect(() => {
+    if (!active) {
+      setFrameIndex(0)
+      return
+    }
+    const timer = window.setInterval(() => {
+      setFrameIndex(value => value + 1)
+    }, 120)
+    return () => window.clearInterval(timer)
+  }, [active])
 
-  return <CheckCircle2 className="size-3.5 shrink-0 text-muted-foreground/55" />
+  return frameIndex
+}
+
+function formatThinkingElapsedSeconds(elapsedMs?: number) {
+  if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs)) return ""
+  return `${(Math.max(0, elapsedMs) / 1000).toFixed(1)}s`
+}
+
+function useLiveElapsedMs(input: {
+  isRunning: boolean
+  telemetry?: AgentTurnTelemetry
+  currentStepStartTime?: number
+  activity?: AgentActivity
+}) {
+  const getElapsed = React.useCallback(() => {
+    const startedAt = input.telemetry?.startedAt || input.currentStepStartTime || input.activity?.startedAt
+    if (!startedAt) return input.telemetry?.elapsedMs
+    if (!input.isRunning) return input.telemetry?.elapsedMs ?? Math.max(0, Date.now() - startedAt)
+    return Math.max(0, Date.now() - startedAt)
+  }, [input.activity?.startedAt, input.currentStepStartTime, input.isRunning, input.telemetry?.elapsedMs, input.telemetry?.startedAt])
+
+  const [elapsedMs, setElapsedMs] = React.useState<number | undefined>(() => getElapsed())
+
+  React.useEffect(() => {
+    setElapsedMs(getElapsed())
+    if (!input.isRunning) return
+    const timer = window.setInterval(() => {
+      setElapsedMs(getElapsed())
+    }, 97)
+    return () => window.clearInterval(timer)
+  }, [getElapsed, input.isRunning])
+
+  return elapsedMs
+}
+
+function StatusGlyph({
+  tone,
+  frameIndex,
+}: {
+  tone: "running" | "done" | "error"
+  frameIndex: number
+}) {
+  return (
+    <span className={cn(
+      "w-4 shrink-0 font-mono text-xs leading-none",
+      tone === "error" ? "text-destructive/75" : tone === "done" ? "text-emerald-600" : "text-muted-foreground/70",
+    )}>
+      {getClawStatusGlyph(tone, frameIndex)}
+    </span>
+  )
 }
 
 export function AgentLiveStream({
@@ -249,6 +299,7 @@ export function AgentLiveStream({
   activity,
   telemetry,
   currentStepStartTime,
+  partSnapshot,
 }: AgentLiveStreamProps) {
   const [detailsExpanded, setDetailsExpanded] = React.useState(false)
   const visibleToolCalls = React.useMemo(
@@ -259,7 +310,10 @@ export function AgentLiveStream({
     const activeOrError = visibleToolCalls.filter(call =>
       call.status === "running" ||
       call.status === "pending" ||
-      call.status === "error"
+      call.status === "error" ||
+      call.status === "blocked" ||
+      call.status === "skipped" ||
+      call.status === "adjusted"
     )
     return (activeOrError.length > 0 ? activeOrError : visibleToolCalls.slice(-2)).slice(-4)
   }, [visibleToolCalls])
@@ -268,6 +322,7 @@ export function AgentLiveStream({
     isRunning,
     isThinking,
     activity,
+    partSnapshot,
     currentAction,
     currentObservation,
     toolCalls: visibleToolCalls,
@@ -276,7 +331,10 @@ export function AgentLiveStream({
 
   const thoughtPreview = compactText(currentThought, 180)
   const fullThought = cleanLiveText(currentThought)
-  const elapsedMs = useLiveElapsed({ isRunning, telemetry, currentStepStartTime, activity })
+  const spinnerFrame = useClawSpinnerFrame(status.tone === "running" && isRunning)
+  const statusLabel = formatClawStatusLabel(status.label)
+  const elapsedMs = useLiveElapsedMs({ isRunning, telemetry, currentStepStartTime, activity })
+  const elapsedLabel = formatThinkingElapsedSeconds(elapsedMs)
   const hasDetails = Boolean(fullThought || status.detail || recentToolCalls.length > 0)
 
   if (!isRunning && visibleToolCalls.length === 0 && !fullThought && status.tone !== "error") {
@@ -289,29 +347,26 @@ export function AgentLiveStream({
       isRunning
         ? "border border-border/20 bg-background/45"
         : "border border-transparent bg-transparent px-0 py-0",
-    )}>
+      )}>
       <div className="flex min-w-0 items-center gap-2">
-        <StatusIcon tone={status.tone} />
+        <StatusGlyph tone={status.tone} frameIndex={spinnerFrame} />
         <span className={cn(
-          "min-w-0 flex-1 truncate text-xs",
+          "min-w-0 flex-1 truncate font-mono text-xs",
           status.tone === "error" ? "text-destructive/80" : "text-muted-foreground",
         )}>
-          {status.label}
+          {statusLabel}
+          {elapsedLabel && (
+            <span className="ml-2 text-muted-foreground/45">
+              {elapsedLabel}
+            </span>
+          )}
         </span>
-        {elapsedMs > 0 && (
-          <span className={cn(
-            "shrink-0 text-[11px] tabular-nums text-muted-foreground/55",
-            status.tone === "running" && "rounded-sm bg-muted/25 px-1.5 py-0.5 text-[10px]",
-          )}>
-            {formatElapsed(elapsedMs)}
-          </span>
-        )}
         {hasDetails && (
           <button
             type="button"
             className="shrink-0 rounded p-0.5 text-muted-foreground/45 transition-colors hover:bg-muted/15"
             onClick={() => setDetailsExpanded(value => !value)}
-            aria-label={detailsExpanded ? "收起思考详情" : "展开思考详情"}
+            aria-label={detailsExpanded ? "Collapse details" : "Expand details"}
           >
             <ChevronDown className={cn(
               "size-3.5 transition-transform",
@@ -324,10 +379,9 @@ export function AgentLiveStream({
       {isRunning && (thoughtPreview || status.detail) && (
         <button
           type="button"
-          className="mt-1 flex w-full min-w-0 items-center gap-1.5 rounded-sm pl-5 pr-1 text-left text-[11px] leading-relaxed text-muted-foreground/55 hover:bg-muted/15"
+          className="mt-1 flex w-full min-w-0 items-center gap-1.5 rounded-sm pl-6 pr-1 text-left font-mono text-[11px] leading-relaxed text-muted-foreground/55 hover:bg-muted/15"
           onClick={() => hasDetails && setDetailsExpanded(value => !value)}
         >
-          {thoughtPreview ? <Brain className="size-3 shrink-0 text-muted-foreground/45" /> : null}
           <span className="min-w-0 flex-1 truncate">
             {thoughtPreview || status.detail}
           </span>

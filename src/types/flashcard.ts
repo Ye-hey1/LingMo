@@ -3,6 +3,7 @@ export type FlashcardType =
   | 'basic-reversed'
   | 'cloze'
   | 'choice'
+  | 'true-false'
   | 'short-answer'
 
 export type FlashcardReviewRating = 0 | 1 | 2 | 3

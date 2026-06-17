@@ -21,6 +21,7 @@ import {
   Brain,
   AlarmClock,
 } from "lucide-react"
+import { inferModelTypeFromId } from "@/lib/ai/model-type"
 
 const baseConfig = [
   {
@@ -177,6 +178,8 @@ export interface Model {
   owned_by: string
 }
 
+export { inferModelTypeFromId }
+
 // Define base AI configuration without translations
 const builtinProviderTemplates: AiConfig[] = [
   {
@@ -185,26 +188,12 @@ const builtinProviderTemplates: AiConfig[] = [
     baseURL: 'https://api.openai.com/v1',
     icon: 'https://s2.loli.net/2025/06/25/cVMf586WTBYAju4.png',
     apiKeyUrl: 'https://platform.openai.com/api-keys',
-    models: [
-      {
-        id: 'openai-whisper-1',
-        model: 'whisper-1',
-        modelType: 'stt',
-      },
-    ],
   },
   {
     key: 'siliconflow',
     title: 'SiliconFlow',
     baseURL: 'https://api.siliconflow.cn/v1',
     apiKeyUrl: 'https://cloud.siliconflow.cn/account/ak',
-    models: [
-      {
-        id: 'siliconflow-sensevoice-small',
-        model: 'FunAudioLLM/SenseVoiceSmall',
-        modelType: 'stt',
-      },
-    ],
   },
   {
     key: 'zhipu',
@@ -212,13 +201,6 @@ const builtinProviderTemplates: AiConfig[] = [
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
     icon: 'https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/zhipu-color.svg',
     apiKeyUrl: 'https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys',
-    models: [
-      {
-        id: 'zhipu-glm-asr-2512',
-        model: 'glm-asr-2512',
-        modelType: 'stt',
-      },
-    ],
   },
   {
     key: 'groq',
@@ -226,13 +208,6 @@ const builtinProviderTemplates: AiConfig[] = [
     baseURL: 'https://api.groq.com/openai/v1',
     icon: '/provider-icons/groq.svg',
     apiKeyUrl: 'https://console.groq.com/keys',
-    models: [
-      {
-        id: 'groq-whisper-large-v3-turbo',
-        model: 'whisper-large-v3-turbo',
-        modelType: 'stt',
-      },
-    ],
   },
   {
     key: 'gemini',
@@ -291,9 +266,66 @@ function cloneTemplateModel(model: ModelConfig, existingIds: Set<string>) {
   return { ...model, id }
 }
 
+function shouldAutoMergeTemplateModel(model: ModelConfig) {
+  return model.modelType !== 'stt' && model.modelType !== 'tts'
+}
+
+function getModelConfigKey(model: ModelConfig) {
+  return `${model.modelType || 'chat'}:${model.model.trim().toLowerCase()}`
+}
+
+function normalizeConfiguredModelType(model: ModelConfig): ModelConfig {
+  const inferredType = inferModelTypeFromId(model.model)
+  if (model.modelType === 'chat' && inferredType !== 'chat') {
+    return {
+      ...model,
+      modelType: inferredType,
+      contextWindow: undefined,
+    }
+  }
+
+  return model
+}
+
+export function cleanupConfiguredModels(config: AiConfig) {
+  if (!config.models?.length) {
+    return { config, changed: false }
+  }
+
+  const seen = new Set<string>()
+  const models = config.models.map(normalizeConfiguredModelType).filter((model) => {
+    if (!model.model?.trim()) {
+      return false
+    }
+
+    const key = getModelConfigKey(model)
+    if (seen.has(key)) {
+      return false
+    }
+
+    seen.add(key)
+    return true
+  })
+
+  const changed = models.length !== config.models.length ||
+    models.some((model, index) => JSON.stringify(model) !== JSON.stringify(config.models?.[index]))
+
+  if (!changed) {
+    return { config, changed: false }
+  }
+
+  return {
+    config: {
+      ...config,
+      models,
+    },
+    changed: true,
+  }
+}
+
 export function mergeProviderTemplateModels(config: AiConfig) {
   const template = getBuiltinProviderTemplateMatch(config)
-  const templateModels = template?.models?.filter((model) => model.model?.trim()) || []
+  const templateModels = template?.models?.filter((model) => model.model?.trim() && shouldAutoMergeTemplateModel(model)) || []
   if (templateModels.length === 0) {
     return { config, changed: false }
   }

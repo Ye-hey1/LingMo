@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Search, Download, Loader2, CheckCircle, FolderSearch } from 'lucide-react'
-import { useSkillsV2Store } from '@/stores/skills-v2'
+import { useSkillsStore } from '@/stores/skills'
 import { useToast } from '@/hooks/use-toast'
 
 const TOOL_LABELS: Record<string, string> = {
@@ -18,7 +18,7 @@ const TOOL_LABELS: Record<string, string> = {
 export function SkillScanner() {
   const t = useTranslations('settings.skills')
   const { toast } = useToast()
-  const { scan, discovered, importDiscovered, scanning } = useSkillsV2Store()
+  const { scan, discovered, importDiscovered, scanning } = useSkillsStore()
   const [scanResult, setScanResult] = useState<{ total: number; newCount: number } | null>(null)
 
   const handleScan = async () => {
@@ -123,7 +123,7 @@ export function SkillScanner() {
 
 function DiscoveredSkillItem({ item }: { item: { id: string; name_guess: string | null; imported: boolean } }) {
   const t = useTranslations('settings.skills')
-  const { importDiscovered } = useSkillsV2Store()
+  const { importDiscovered } = useSkillsStore()
   const [importing, setImporting] = useState(false)
   const [imported, setImported] = useState(item.imported)
 

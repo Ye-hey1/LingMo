@@ -3,6 +3,7 @@ import { resolvePreferredSpeechEngine } from '@/lib/speech/runtime.ts'
 import type { SpeechTask } from '@/lib/speech/types.ts'
 import { NO_TRANSCRIPTION_MESSAGE } from '@/lib/speech/transcription-fallback.ts'
 import { blobToBytes, invokeAiBinary, invokeAiMultipart } from '@/lib/ai/tauri-client'
+import { matchesConfiguredModelSelection } from '@/lib/ai/model-selection'
 
 /**
  * 使用浏览器原生语音合成API进行朗读
@@ -95,7 +96,11 @@ export async function fetchAudioSpeech(text: string, customVoice?: string, custo
     // 检查新的 models 数组结构
     if (config.models && config.models.length > 0) {
       const targetModel = config.models.find(model => 
-        model.id === audioModel && model.modelType === 'tts'
+        model.modelType === 'tts' && matchesConfiguredModelSelection({
+          configKey: config.key,
+          modelId: model.id,
+          selectionId: audioModel,
+        })
       )
       if (targetModel) {
         // 返回合并了模型配置的 AiConfig
@@ -458,8 +463,11 @@ function findSpeechModelConfig(
           return false
         }
 
-        const compositeId = `${config.key}-${model.id}`
-        return model.id === normalizedSelectedId || compositeId === normalizedSelectedId
+        return matchesConfiguredModelSelection({
+          configKey: config.key,
+          modelId: model.id,
+          selectionId: normalizedSelectedId,
+        })
       })
 
       if (targetModel) {
@@ -510,6 +518,11 @@ export async function fetchAudioTranscription(audioBlob: Blob, options?: {
     throw new Error('语音识别模型配置不完整')
   }
 
+  if (!sttConfig.model?.trim()) {
+    throw new Error('语音识别模型配置不完整')
+  }
+  const transcriptionModel = sttConfig.model.trim()
+
   try {
     const contentType = options?.contentType || audioBlob.type || 'audio/webm'
     const fileName = options?.fileName || `audio.${getAudioFileExtension(contentType)}`
@@ -523,7 +536,7 @@ export async function fetchAudioTranscription(audioBlob: Blob, options?: {
       path: endpoint.path,
       fileFieldName: 'file',
       fields: {
-        model: sttConfig.model || 'FunAudioLLM/SenseVoiceSmall'
+        model: transcriptionModel
       },
       file: {
         bytes: await blobToBytes(audioBlob),

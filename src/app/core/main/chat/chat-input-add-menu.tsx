@@ -35,7 +35,6 @@ import { cn } from "@/lib/utils"
 import { useMcpStore } from "@/stores/mcp"
 import usePromptStore from "@/stores/prompt"
 import { useSkillsStore } from "@/stores/skills"
-import { useSkillsV2Store } from "@/stores/skills-v2"
 import useVectorStore from "@/stores/vector"
 import type { SkillMetadata } from "@/lib/skills/types"
 import { checkEmbeddingModelAvailable } from "@/lib/rag"
@@ -133,11 +132,9 @@ export function ChatInputAddMenu({
     serverStates,
   } = useMcpStore()
   const {
-    skills: installedSkills,
+    installedSkills,
     fetchSkills,
     loading: skillsLoading,
-  } = useSkillsV2Store()
-  const {
     skills: runtimeSkills,
     initSkills,
   } = useSkillsStore()

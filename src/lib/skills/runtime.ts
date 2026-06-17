@@ -6,6 +6,7 @@ import { buildShellCommand, resolveSkillDirectory } from './path-utils'
 import { detectPythonCommand, ensureDependencyForCommand } from './dependency-installer'
 import { getFilePathOptions } from '@/lib/workspace'
 import { classifySkillScriptPath } from './runtime-paths'
+import { decodeSkillScriptOutputChunks } from './output-decoder'
 
 export interface SkillRuntimeContext {
   skillId: string
@@ -34,6 +35,8 @@ export interface SkillExecutionData {
   output_directory: string
   stdout: string
   stderr: string
+  warnings?: string[]
+  outputEncoding?: 'utf8' | 'utf8-replacement'
   dependency_installed?: string
   output_files?: string[]
   timeout?: boolean
@@ -63,7 +66,6 @@ const OUTPUT_FILE_EXTENSIONS = new Set([
 ])
 
 const SCRIPT_FILE_EXTENSIONS = new Set(['js', 'mjs', 'cjs', 'py', 'sh', 'bash'])
-const UTF8_DECODER = new TextDecoder('utf-8', { fatal: false })
 
 function getExtension(filePath: string): string {
   const fileName = filePath.split('/').pop() || filePath
@@ -93,11 +95,6 @@ function isSafeRelativePath(filePath: string): boolean {
 
 function toPosixPath(filePath: string): string {
   return filePath.replace(/\\/g, '/')
-}
-
-function decodeShellOutput(chunk?: string | Uint8Array | null): string {
-  if (!chunk) return ''
-  return typeof chunk === 'string' ? chunk : UTF8_DECODER.decode(chunk)
 }
 
 function sanitizeShellOutput(text: string): string {
@@ -480,10 +477,16 @@ export async function executeSkillRuntime(
     ? `cd "${workingDirectory}" && ${envPrefix} ${processedArgs.slice(1).join(' ')}`
     : `cd "${workingDirectory}" && ${envPrefix} ${buildShellCommand(workingDirectory, workingDirectory, normalizedCommand, processedArgs).replace(`cd "${workingDirectory}" && `, '')}`
 
-  const stdoutChunks: string[] = []
-  const stderrChunks: string[] = []
+  const stdoutChunks: Array<string | Uint8Array | ArrayBuffer | ArrayBufferView | number[]> = []
+  const stderrChunks: Array<string | Uint8Array | ArrayBuffer | ArrayBufferView | number[]> = []
 
-  async function runShellCommand(): Promise<{ code: number; stdout: string; stderr: string }> {
+  async function runShellCommand(): Promise<{
+    code: number
+    stdout: string
+    stderr: string
+    warnings: string[]
+    outputEncoding: 'utf8' | 'utf8-replacement'
+  }> {
     const process = Command.create('bash', ['-c', shellCommand], {
       encoding: 'raw',
       env: {
@@ -494,11 +497,11 @@ export async function executeSkillRuntime(
     })
 
     process.stdout.on('data', (line: Uint8Array) => {
-      stdoutChunks.push(decodeShellOutput(line))
+      stdoutChunks.push(line)
     })
 
     process.stderr.on('data', (line: Uint8Array) => {
-      stderrChunks.push(decodeShellOutput(line))
+      stderrChunks.push(line)
     })
 
     const execution = process.execute()
@@ -509,10 +512,19 @@ export async function executeSkillRuntime(
       ),
     ])
 
+    const stdoutDecoded = decodeSkillScriptOutputChunks(stdoutChunks.length > 0 ? stdoutChunks : [result.stdout])
+    const stderrDecoded = decodeSkillScriptOutputChunks(stderrChunks.length > 0 ? stderrChunks : [result.stderr])
+    const warnings = [...stdoutDecoded.warnings, ...stderrDecoded.warnings]
+    const outputEncoding = stdoutDecoded.outputEncoding === 'utf8-replacement' || stderrDecoded.outputEncoding === 'utf8-replacement'
+      ? 'utf8-replacement'
+      : 'utf8'
+
     return {
       code: result.code ?? -1,
-      stdout: sanitizeShellOutput(stdoutChunks.join('') || decodeShellOutput(result.stdout)),
-      stderr: sanitizeShellOutput(stderrChunks.join('') || decodeShellOutput(result.stderr)),
+      stdout: sanitizeShellOutput(stdoutDecoded.output),
+      stderr: sanitizeShellOutput(stderrDecoded.output),
+      warnings,
+      outputEncoding,
     }
   }
 
@@ -537,6 +549,9 @@ export async function executeSkillRuntime(
 
     const outputFiles = result.code === 0 ? await collectGeneratedOutputs(context, existingOutputs) : []
     const executionTime = Date.now() - startTime
+    const warningText = result.warnings.length > 0
+      ? `\n\nWarnings:\n${result.warnings.map(warning => `- ${warning}`).join('\n')}`
+      : ''
 
     return {
       success: result.code === 0,
@@ -549,16 +564,19 @@ export async function executeSkillRuntime(
         output_directory: context.outputDir,
         stdout: result.stdout,
         stderr: result.stderr,
+        warnings: result.warnings,
+        outputEncoding: result.outputEncoding,
         dependency_installed: installedDependency,
         output_files: outputFiles,
       },
       message: result.code === 0
-        ? `Command executed successfully (exit code: ${result.code}, time: ${executionTime}ms).${installedDependency ? `\n\nAuto-installed dependency: ${installedDependency}` : ''}${outputFiles.length > 0 ? `\n\nOutput files:\n${outputFiles.map(file => `- ${file}`).join('\n')}` : ''}\n\nOutput:\n${result.stdout || '(no output)'}`
-        : `Command failed with exit code ${result.code} (time: ${executionTime}ms).${installedDependency ? `\n\nAuto-installed dependency: ${installedDependency}` : ''}\n\n${result.stderr ? `Error:\n${result.stderr}` : 'No error message'}${result.stdout ? `\n\nOutput:\n${result.stdout}` : ''}`,
+        ? `Command executed successfully (exit code: ${result.code}, time: ${executionTime}ms).${installedDependency ? `\n\nAuto-installed dependency: ${installedDependency}` : ''}${outputFiles.length > 0 ? `\n\nOutput files:\n${outputFiles.map(file => `- ${file}`).join('\n')}` : ''}${warningText}\n\nOutput:\n${result.stdout || '(no output)'}`
+        : `Command failed with exit code ${result.code} (time: ${executionTime}ms).${installedDependency ? `\n\nAuto-installed dependency: ${installedDependency}` : ''}${warningText}\n\n${result.stderr ? `Error:\n${result.stderr}` : 'No error message'}${result.stdout ? `\n\nOutput:\n${result.stdout}` : ''}`,
     }
   } catch (error) {
     const executionTime = Date.now() - startTime
     const errorMessage = error instanceof Error ? error.message : String(error)
+    const decodedOutput = decodeSkillScriptOutputChunks([...stdoutChunks, ...stderrChunks])
 
     return {
       success: false,
@@ -570,8 +588,10 @@ export async function executeSkillRuntime(
         working_directory: workingDirectory,
         runtime_directory: context.runtimeDir,
         output_directory: context.outputDir,
-        stdout: stdoutChunks.join(''),
-        stderr: stderrChunks.join(''),
+        stdout: sanitizeShellOutput(decodedOutput.output),
+        stderr: '',
+        warnings: decodedOutput.warnings,
+        outputEncoding: decodedOutput.outputEncoding,
         timeout: errorMessage.includes('timed out'),
       },
     }

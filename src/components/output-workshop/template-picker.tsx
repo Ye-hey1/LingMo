@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import type { OutputTemplate, OutputMode } from "@/lib/output-workshop/templates"
+import { useWorkshopContext } from "./workshop-context"
 
 // 类别色彩使用设计系统 token，响应主题切换
 const MODE_META: Record<OutputMode, { label: string; tone: string }> = {
@@ -34,51 +35,30 @@ function getTemplateTags(template: OutputTemplate): string[] {
   return Array.from(new Set(tags.filter(Boolean))).slice(0, 2)
 }
 
-interface TemplatePickerProps {
-  selectedTemplate: OutputTemplate
-  selectedTemplateId: string
-  showTemplatePicker: boolean
-  setShowTemplatePicker: (show: boolean) => void
-  selectedCategory: string
-  setSelectedCategory: (category: string) => void
-  templateSearchQuery: string
-  setTemplateSearchQuery: (query: string) => void
-  filteredTemplates: OutputTemplate[]
-  templateCategories: Array<{ id: OutputMode; name: string; icon: string; description: string }>
-  loadingTemplates: boolean
-  hoveredTemplateId: string | null
-  setHoveredTemplateId: (id: string | null) => void
-  templatePreviewPosition: { top: number; left: number } | null
-  setTemplatePreviewPosition: (pos: { top: number; left: number } | null) => void
-  templatePreviewHtml: string
-  hoveredTemplate: OutputTemplate | null
-  onSelectTemplate: (id: string) => void
-  onTemplateHover: (e: React.MouseEvent<HTMLButtonElement>, id: string) => void
-  onOpenMarket: () => void
-  pickerRef: React.RefObject<HTMLDivElement>
-}
+// TemplatePicker 现通过 useWorkshopContext() 获取所有依赖，不再接受 props
 
-export function TemplatePicker({
-  selectedTemplate,
-  showTemplatePicker,
-  setShowTemplatePicker,
-  selectedCategory,
-  setSelectedCategory,
-  templateSearchQuery,
-  setTemplateSearchQuery,
-  filteredTemplates,
-  templateCategories,
-  loadingTemplates,
-  hoveredTemplateId,
-  setHoveredTemplateId,
-  templatePreviewPosition,
-  templatePreviewHtml,
-  hoveredTemplate,
-  onSelectTemplate,
-  onTemplateHover,
-  onOpenMarket,
-  pickerRef,
-}: TemplatePickerProps) {
+export function TemplatePicker() {
+  const ctx = useWorkshopContext()
+  const { selectedTemplate, onOpenMarket } = ctx
+  const {
+    showTemplatePicker,
+    setShowTemplatePicker,
+    selectedCategory,
+    setSelectedCategory,
+    templateSearchQuery,
+    setTemplateSearchQuery,
+    filteredTemplates,
+    templateCategories,
+    loadingTemplates,
+    hoveredTemplateId,
+    setHoveredTemplateId,
+    templatePreviewPosition,
+    templatePreviewHtml,
+    hoveredTemplate,
+    handleSelectTemplate: onSelectTemplate,
+    handleTemplateHover: onTemplateHover,
+    templatePickerRef: pickerRef,
+  } = ctx.templates
   return (
     <div className="relative min-w-0 shrink-0" ref={pickerRef}>
       <button

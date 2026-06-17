@@ -37,6 +37,10 @@ export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }:
   const t = useTranslations('settings.ai')
   const inferredContextWindow = inferModelContextWindow(modelConfig.model)
 
+  const handleModelChange = (model: string) => {
+    onUpdate(modelConfig.id, 'model', model)
+  }
+
   const handleContextWindowChange = (value: string) => {
     if (!value.trim()) {
       onUpdate(modelConfig.id, 'contextWindow', undefined)
@@ -67,7 +71,7 @@ export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }:
           <Label className="text-xs">{t('model')}</Label>
           <ModelSelect
             model={modelConfig.model}
-            setModel={(model) => onUpdate(modelConfig.id, 'model', model)}
+            setModel={handleModelChange}
             aiConfig={aiConfig}
           />
         </div>

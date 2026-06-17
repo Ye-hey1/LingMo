@@ -3,6 +3,7 @@ import { MERMAID_FILE_SUFFIXES, createDefaultMermaidContent } from '@/lib/mermai
 export const DIAGRAM_FILE_SUFFIXES = [
   '.drawio',
   '.drawio.xml',
+  '.excalidraw',
   '.excalidraw.json',
   '.diagram.json',
   ...MERMAID_FILE_SUFFIXES,
@@ -59,7 +60,7 @@ export function isDrawioPath(path: string): boolean {
 
 export function isExcalidrawPath(path: string): boolean {
   const normalized = path.toLowerCase()
-  return normalized.endsWith('.excalidraw.json') || normalized.endsWith('.diagram.json')
+  return normalized.endsWith('.excalidraw') || normalized.endsWith('.excalidraw.json') || normalized.endsWith('.diagram.json')
 }
 
 export function normalizeDiagramKind(kind: unknown): DiagramKind {

@@ -95,6 +95,7 @@ function getInterruptReasonText(reason?: string): string {
 
 import { Store } from '@tauri-apps/plugin-store'
 import type { AgentEvent, ReActStep, ToolCall } from './types'
+import type { AgentPart, AgentPartSnapshot } from './part-reducer'
 
 export interface AgentRunSummary {
   id: string
@@ -107,6 +108,8 @@ export interface AgentRunSummary {
   toolsUsed: Array<{ toolName: string; count: number; success: number; error: number }>
   filesTouched: string[]
   failures: Array<{ toolName: string; error: string }>
+  parts?: AgentPart[]
+  partSnapshot?: AgentPartSnapshot
 }
 
 const STORE_FILE = 'agent-run-summaries.json'
@@ -135,6 +138,7 @@ export function buildAgentRunSummary(input: {
   stopped?: boolean
   steps: ReActStep[]
   events: AgentEvent[]
+  partSnapshot?: AgentPartSnapshot
 }): AgentRunSummary {
   const toolCalls = getToolCallsFromEvents(input.events)
   const toolStats = new Map<string, { toolName: string; count: number; success: number; error: number }>()
@@ -170,6 +174,8 @@ export function buildAgentRunSummary(input: {
     toolsUsed: [...toolStats.values()].sort((a, b) => b.count - a.count),
     filesTouched: [...filesTouched].slice(0, 40),
     failures: failures.slice(0, 12),
+    parts: input.partSnapshot?.parts,
+    partSnapshot: input.partSnapshot,
   }
 }
 

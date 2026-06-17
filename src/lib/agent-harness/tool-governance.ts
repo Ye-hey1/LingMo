@@ -506,6 +506,60 @@ function makeObservationFromResult(tool: Tool, result: ToolResult, observation: 
   return text.length > 12000 ? `${text.slice(0, 12000)}\n\n[observation compressed]` : text
 }
 
+function isStaleMcpToolRegistryResult(execution: HarnessToolExecutionResult) {
+  const result = execution.result
+  const message = `${result.error || ''}\n${result.message || ''}\n${execution.observation.summary || ''}`
+  return !result.success && /STALE_MCP_TOOL_REGISTRY/i.test(message)
+}
+
+async function executeToolWithRuntimeRecovery(input: {
+  tool: Tool
+  params: Record<string, any>
+  context?: ToolExecutionContext
+  runControl?: AgentRunControl
+  onEvent?: ToolGovernanceInput['onEvent']
+}): Promise<HarnessToolExecutionResult> {
+  const executeOnce = () => input.runControl
+    ? input.runControl.executeTool({ tool: input.tool, params: input.params, context: input.context })
+    : executeHarnessTool(input.tool, input.params, input.context)
+
+  let execution = await executeOnce()
+  if (input.tool.category !== 'mcp' || !isStaleMcpToolRegistryResult(execution)) {
+    return execution
+  }
+
+  input.onEvent?.('tool.execution.started', {
+    toolName: input.tool.name,
+    params: input.params,
+    retry: {
+      reason: 'STALE_MCP_TOOL_REGISTRY',
+      recovery: 'refresh_mcp_tools',
+    },
+  })
+
+  try {
+    const { refreshMcpToolsForAgent } = await import('@/lib/mcp/agent-ready')
+    await refreshMcpToolsForAgent()
+  } catch {
+    const { reloadMcpTools } = await import('@/lib/agent/tools')
+    await reloadMcpTools()
+  }
+
+  execution = await executeOnce()
+  if (execution.result.success) {
+    return {
+      ...execution,
+      observation: {
+        ...execution.observation,
+        summary: `MCP 工具列表已刷新，重试成功。\n\n${execution.observation.summary}`,
+        retryable: false,
+      },
+    }
+  }
+
+  return execution
+}
+
 export async function executeGovernedHarnessTool(input: ToolGovernanceInput): Promise<{
   execution: HarnessToolExecutionResult
   params: Record<string, any>
@@ -604,29 +658,30 @@ export async function executeGovernedHarnessTool(input: ToolGovernanceInput): Pr
   })
   if (!policyCheck.allowed) {
     const message = getPolicyAdjustmentMessage(tool.name, policyCheck.reason || '已调整工具选择')
-    const success = Boolean(
+    const adjusted = Boolean(
       policyCheck.reason?.includes('完整内容已在上下文中') ||
       policyCheck.reason?.includes('safe_grep 结果已截断'),
     )
     return {
       execution: {
         result: {
-          success,
-          error: success ? undefined : `BLOCKED_BY_POLICY: ${policyCheck.reason}`,
+          success: adjusted,
+          status: adjusted ? 'adjusted' : 'blocked',
+          error: adjusted ? undefined : `BLOCKED_BY_POLICY: ${policyCheck.reason}`,
           message,
         },
         observation: {
           toolName: tool.name,
-          success,
+          success: adjusted,
           summary: message,
-          errorKind: success ? undefined : 'permission',
+          errorKind: adjusted ? undefined : 'permission',
           retryable: false,
         },
       },
       params,
       observationText: message,
       cached: false,
-      policyBlocked: !success,
+      policyBlocked: !adjusted,
       cancelled: false,
     }
   }
@@ -723,9 +778,13 @@ export async function executeGovernedHarnessTool(input: ToolGovernanceInput): Pr
     input.onEvent?.('confirmation.resolved', { status: 'confirmed', toolName: tool.name, params })
   }
 
-  const execution = input.runControl
-    ? await input.runControl.executeTool({ tool, params, context: input.context })
-    : await executeHarnessTool(tool, params, input.context)
+  const execution = await executeToolWithRuntimeRecovery({
+    tool,
+    params,
+    context: input.context,
+    runControl: input.runControl,
+    onEvent: input.onEvent,
+  })
 
   const observationText = makeObservationFromResult(tool, execution.result, execution.observation)
   if (execution.result.success) {

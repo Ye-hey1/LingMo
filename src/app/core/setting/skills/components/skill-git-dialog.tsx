@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Loader2, GitBranch, Download } from 'lucide-react'
-import { useSkillsV2Store } from '@/stores/skills-v2'
+import { useSkillsStore } from '@/stores/skills'
 import { useToast } from '@/hooks/use-toast'
 
 interface SkillGitDialogProps {
@@ -24,7 +24,7 @@ interface SkillGitDialogProps {
 export function SkillGitDialog({ open, onOpenChange }: SkillGitDialogProps) {
   const t = useTranslations('settings.skills')
   const { toast } = useToast()
-  const { previewGit, installFromGit, previewing, installing, previewSkills } = useSkillsV2Store()
+  const { previewGit, installFromGit, previewing, installing, previewSkills } = useSkillsStore()
   const [url, setUrl] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
 

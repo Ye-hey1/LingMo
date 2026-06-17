@@ -12,6 +12,7 @@ export type ErrorKind =
   | 'connect'
   | 'timeout'
   | 'unauthorized'
+  | 'billing'
   | 'rate_limit'
   | 'server'
   | 'validation'
@@ -47,6 +48,7 @@ export function classifyError(error: unknown): ErrorKind {
   if (/AI_TRANSPORT_ERROR|error sending request|Failed to fetch|NetworkError|connect/i.test(message)) return 'connect'
   if (/timeout|timed out|TIMEOUT/i.test(message)) return 'timeout'
   if (/status=401|401|Unauthorized|invalid.*api.*key/i.test(message)) return 'unauthorized'
+  if (/status=402|402|payment required|insufficient.*balance|balance.*insufficient|insufficient.*quota|quota.*insufficient|quota exceeded|billing|credits?.*(?:exhausted|insufficient)|(?:exhausted|insufficient).*credits?/i.test(message)) return 'billing'
   if (/status=429|429|rate limit|too many requests/i.test(message)) return 'rate_limit'
   if (/status=5\d\d| 5\d\d|server error|internal error/i.test(message)) return 'server'
   if (/validation|invalid.*parameter|bad request|400/i.test(message)) return 'validation'
@@ -83,6 +85,12 @@ const ERROR_MESSAGES: Record<ErrorKind, { title: string; message: string; retrya
     message: 'API Key 无效或已过期，请在设置中更新',
     retryable: false,
     action: '更新 API Key',
+  },
+  billing: {
+    title: '余额不足',
+    message: 'AI 服务账户余额或调用额度不足，请充值、切换模型或更换 API Key 后重试',
+    retryable: false,
+    action: '检查账户余额',
   },
   rate_limit: {
     title: '请求过于频繁',
@@ -247,6 +255,8 @@ export function getRecoverySuggestion(error: unknown): string {
       return '请尝试：\n1. 减少输入内容长度\n2. 稍后重试\n3. 检查网络稳定性'
     case 'unauthorized':
       return '请在设置中：\n1. 检查 API Key 是否正确\n2. 确认 API Key 是否已过期\n3. 验证账户余额是否充足'
+    case 'billing':
+      return '请在设置中：\n1. 检查当前 API 服务账户余额\n2. 切换到仍有额度的模型或服务商\n3. 更换可用的 API Key'
     case 'rate_limit':
       return '请等待一段时间后重试，或升级 API 配额'
     case 'server':

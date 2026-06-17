@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { useSkillsV2Store } from '@/stores/skills-v2'
 import { useSkillsStore } from '@/stores/skills'
 import type { SkillMetadata } from '@/lib/skills/types'
 import { cn } from '@/lib/utils'
@@ -56,11 +55,9 @@ export function SkillsPopover({
 }: SkillsPopoverProps) {
   const [open, setOpen] = useState(false)
   const {
-    skills: installedSkills,
+    installedSkills,
     fetchSkills,
     loading,
-  } = useSkillsV2Store()
-  const {
     skills: runtimeSkills,
     initSkills,
   } = useSkillsStore()

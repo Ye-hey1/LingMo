@@ -34,12 +34,14 @@ interface NoteIndexStore {
   getUnlinkedMentions: (path: string) => UnlinkedMention[]
 }
 
-// 从文件树中收集所有 .md 文件路径
+const NOTE_FILE_PATTERN = /\.(md|markdown|mdx|txt)$/i
+
+// 从文件树中收集所有 Markdown/文本笔记文件路径
 function collectMdPaths(tree: DirTree[], parent?: DirTree): Array<{ path: string; node: DirTree }> {
   const results: Array<{ path: string; node: DirTree }> = []
   for (const item of tree) {
     const path = computedParentPath({ ...item, parent })
-    if (item.isFile && item.name.endsWith('.md')) {
+    if (item.isFile && NOTE_FILE_PATTERN.test(item.name)) {
       results.push({ path, node: item })
     }
     if (item.children) {
@@ -55,7 +57,7 @@ function collectMdPaths(tree: DirTree[], parent?: DirTree): Array<{ path: string
 // 从路径中提取文件名（不含 .md 后缀）
 function pathToBaseName(path: string): string {
   const name = path.split('/').pop() || path
-  return name.replace(/\.md$/, '')
+  return name.replace(NOTE_FILE_PATTERN, '')
 }
 
 export const useNoteIndexStore = create<NoteIndexStore>((set, get) => ({
@@ -105,7 +107,7 @@ export const useNoteIndexStore = create<NoteIndexStore>((set, get) => ({
           }
           if (!targetPath) {
             // 如果找不到精确匹配，目标路径就是链接名本身
-            targetPath = link.target.endsWith('.md') ? link.target : `${link.target}.md`
+            targetPath = NOTE_FILE_PATTERN.test(link.target) ? link.target : `${link.target}.md`
           }
 
           if (!backlinksMap.has(targetPath)) {
@@ -197,7 +199,7 @@ export const useNoteIndexStore = create<NoteIndexStore>((set, get) => ({
     // 3. 从新内容中提取链接并添加反向引用
     const links = extractWikiLinksWithContext(content)
     for (const link of links) {
-      const targetPath = link.target.endsWith('.md') ? link.target : `${link.target}.md`
+      const targetPath = NOTE_FILE_PATTERN.test(link.target) ? link.target : `${link.target}.md`
 
       if (!backlinks.has(targetPath)) {
         backlinks.set(targetPath, [])

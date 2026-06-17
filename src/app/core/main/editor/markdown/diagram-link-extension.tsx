@@ -9,7 +9,7 @@ function normalizeDiagramSrc(src: string): string {
   return src.trim().replace(/^\.\//, '')
 }
 
-const DIAGRAM_LINK_PATTERN = /[^)]*(?:\.(?:excalidraw|diagram)\.json|\.drawio(?:\.xml)?)/
+const DIAGRAM_LINK_PATTERN = /[^)]*(?:\.excalidraw(?:\.json)?|\.diagram\.json|\.drawio(?:\.xml)?)/
 
 function DiagramLinkView({ node }: ReactNodeViewProps) {
   const src = node.attrs.src as string

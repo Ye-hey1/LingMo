@@ -175,6 +175,16 @@ function upsertConversation(conversations: Conversation[], conversation: Convers
   ])
 }
 
+function shouldShowChatInCurrentConversation(
+  currentConversationId: number | null,
+  chat: Pick<Chat, 'conversationId'>,
+): boolean {
+  if (chat.conversationId === undefined || chat.conversationId === null) {
+    return currentConversationId === null
+  }
+  return currentConversationId === chat.conversationId
+}
+
 export interface PendingQuote {
   quote: string
   fullContent: string
@@ -197,7 +207,7 @@ export interface McpToolCall {
   serverName: string
   params: Record<string, any>
   result: string
-  status: 'calling' | 'success' | 'error'
+  status: 'calling' | 'success' | 'error' | 'blocked' | 'skipped' | 'adjusted' | 'cached'
   timestamp: number
 }
 
@@ -322,6 +332,8 @@ interface ChatState {
   // 当前会话
   currentConversationId: number | null
   conversations: Conversation[]
+  conversationSelectionVersion: number
+  suppressConversationAutoRestore: boolean
 
   // 会话初始化和管理
   initConversations: () => Promise<void> // 初始化会话列表
@@ -578,6 +590,8 @@ const useChatStore = create<ChatState>((set, get) => ({
     ragSources: undefined,
     ragSourceDetails: undefined,
     agentContextSnapshot: undefined,
+    agentPartSnapshot: undefined,
+    agentParts: [],
     activity: undefined,
     telemetry: undefined,
     taskPlan: undefined,
@@ -614,6 +628,8 @@ const useChatStore = create<ChatState>((set, get) => ({
         ragSources: currentState.ragSources,
         ragSourceDetails: currentState.ragSourceDetails,
         agentContextSnapshot: undefined,
+        agentPartSnapshot: undefined,
+        agentParts: [],
         activity: undefined,
         telemetry: undefined,
         // 重置 Final Answer 模式
@@ -767,6 +783,7 @@ const useChatStore = create<ChatState>((set, get) => ({
   // 兼容旧代码：init 方法现在会初始化会话列表并切换到第一个会话
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   init: async (_tagId: number) => {
+    const initSelectionVersion = get().conversationSelectionVersion
     await initChatsDb()
     const store = await Store.load('store.json')
     const savedChatMode = await store.get<ChatMode>('chatMode')
@@ -779,11 +796,15 @@ const useChatStore = create<ChatState>((set, get) => ({
     // 先初始化会话列表
     await get().initConversations()
 
-    const { currentConversationId, conversations } = get()
+    if (initSelectionVersion !== get().conversationSelectionVersion) {
+      return
+    }
+
+    const { currentConversationId, conversations, suppressConversationAutoRestore } = get()
 
     // 如果没有当前会话
     if (!currentConversationId) {
-      if (conversations.length > 0) {
+      if (!suppressConversationAutoRestore && conversations.length > 0) {
         // 有历史会话，切换到第一个
         await get().switchConversation(conversations[0].id)
       }
@@ -791,7 +812,9 @@ const useChatStore = create<ChatState>((set, get) => ({
     } else {
       // 加载当前会话的聊天记录
       const data = await getChatsByConversation(currentConversationId)
-      set({ chats: data })
+      if (initSelectionVersion === get().conversationSelectionVersion && get().currentConversationId === currentConversationId) {
+        set({ chats: data })
+      }
     }
   },
   insert: async (chat) => {
@@ -804,8 +827,11 @@ const useChatStore = create<ChatState>((set, get) => ({
       const { createConversation } = await import('@/db/conversations')
       conversationId = await createConversation('新对话')
       const optimisticConversation = buildOptimisticConversation(conversationId)
+      const selectionVersion = get().conversationSelectionVersion + 1
       set({
         currentConversationId: conversationId,
+        suppressConversationAutoRestore: false,
+        conversationSelectionVersion: selectionVersion,
         conversations: upsertConversation(get().conversations, optimisticConversation),
       })
       void get().initConversations().catch(error => {
@@ -823,7 +849,8 @@ const useChatStore = create<ChatState>((set, get) => ({
         conversationId
       }
       const chats = get().chats
-      const newChats = [...chats, data]
+      const shouldUpdateCurrentChats = shouldShowChatInCurrentConversation(get().currentConversationId, data)
+      const newChats = shouldUpdateCurrentChats ? [...chats, data] : chats
       const now = Date.now()
       const existingConversation = get().conversations.find(item => item.id === conversationId)
       const shouldUseUserTitle = (existingConversation?.messageCount || 0) === 0 && chat.role === 'user' && chat.content
@@ -876,6 +903,9 @@ const useChatStore = create<ChatState>((set, get) => ({
     return null
   },
   updateChat: (chat) => {
+    if (!shouldShowChatInCurrentConversation(get().currentConversationId, chat)) {
+      return
+    }
     const chats = get().chats
     const newChats = chats.map(item => {
       if (item.id === chat.id) {
@@ -893,7 +923,9 @@ const useChatStore = create<ChatState>((set, get) => ({
     set({ chats: newChats })
   },
   saveChat: async (chat, isSave = false) => {
-    get().updateChat(chat)
+    if (shouldShowChatInCurrentConversation(get().currentConversationId, chat)) {
+      get().updateChat(chat)
+    }
     if (isSave) {
       await updateChat(chat)
     }
@@ -1051,6 +1083,8 @@ const useChatStore = create<ChatState>((set, get) => ({
   // === 新增：会话管理方法 ===
   currentConversationId: null,
   conversations: [],
+  conversationSelectionVersion: 0,
+  suppressConversationAutoRestore: false,
 
   initConversations: async () => {
     const { getAllConversations } = await import('@/db/conversations')
@@ -1065,10 +1099,13 @@ const useChatStore = create<ChatState>((set, get) => ({
     const { createConversation: createConv } = await import('@/db/conversations')
     const id = await createConv(title)
     const optimisticConversation = buildOptimisticConversation(id, title)
+    const selectionVersion = get().conversationSelectionVersion + 1
     set({
       currentConversationId: id,
       chats: [],
       pendingQuote: null,
+      suppressConversationAutoRestore: false,
+      conversationSelectionVersion: selectionVersion,
       chatSearchOpen: false,
       chatSearchQuery: '',
       chatSearchResults: [],
@@ -1086,8 +1123,17 @@ const useChatStore = create<ChatState>((set, get) => ({
     const id = await createConv(title)
     // 设置为当前会话并刷新会话列表
     const optimisticConversation = buildOptimisticConversation(id, title)
+    const selectionVersion = get().conversationSelectionVersion + 1
     set({
       currentConversationId: id,
+      chats: [],
+      pendingQuote: null,
+      suppressConversationAutoRestore: false,
+      conversationSelectionVersion: selectionVersion,
+      chatSearchOpen: false,
+      chatSearchQuery: '',
+      chatSearchResults: [],
+      chatSearchCurrentIndex: 0,
       conversations: upsertConversation(get().conversations, optimisticConversation),
     })
     void get().initConversations().catch(error => {
@@ -1097,15 +1143,41 @@ const useChatStore = create<ChatState>((set, get) => ({
   },
 
   switchConversation: async (id: number) => {
-    // 先同步消息数量，确保 messageCount 与实际消息数量一致
-    const { syncConversationMessageCount } = await import('@/db/conversations')
-    await syncConversationMessageCount(id)
-    // 然后加载消息
+    if (get().currentConversationId === id) {
+      return
+    }
+
+    const selectionVersion = get().conversationSelectionVersion + 1
+    set({
+      currentConversationId: id,
+      chats: [],
+      pendingQuote: null,
+      suppressConversationAutoRestore: false,
+      conversationSelectionVersion: selectionVersion,
+      chatSearchOpen: false,
+      chatSearchQuery: '',
+      chatSearchResults: [],
+      chatSearchCurrentIndex: 0,
+    })
+    get().resetAgentState()
+    get().clearMcpToolCalls()
+
     const { getChatsByConversation } = await import('@/db/chats')
     const data = await getChatsByConversation(id)
-    set({ currentConversationId: id, chats: data, pendingQuote: null, chatSearchOpen: false, chatSearchQuery: '', chatSearchResults: [], chatSearchCurrentIndex: 0 })
-    // 刷新会话列表以确保 UI 显示最新的会话状态
-    await get().initConversations()
+    if (get().conversationSelectionVersion !== selectionVersion || get().currentConversationId !== id) {
+      return
+    }
+    set({ chats: data })
+    // 后台同步消息数量和列表，避免阻塞历史切换的即时反馈。
+    void (async () => {
+      const { syncConversationMessageCount } = await import('@/db/conversations')
+      await syncConversationMessageCount(id)
+      if (get().conversationSelectionVersion === selectionVersion && get().currentConversationId === id) {
+        await get().initConversations()
+      }
+    })().catch(error => {
+      console.error('[ChatStore] Failed to refresh conversations after switching:', error)
+    })
   },
 
   updateConversationTitle: async (id: number, title: string) => {
@@ -1127,6 +1199,8 @@ const useChatStore = create<ChatState>((set, get) => ({
         currentConversationId: null,
         chats: [],
         pendingQuote: null,
+        suppressConversationAutoRestore: true,
+        conversationSelectionVersion: get().conversationSelectionVersion + 1,
         agentAutoApproveConversationId: null,
         agentAutoApproveRuntimeSkillId: null,
         chatSearchOpen: false,
@@ -1152,6 +1226,24 @@ const useChatStore = create<ChatState>((set, get) => ({
 
   startNewConversation: async () => {
     const { currentConversationId } = get()
+    const selectionVersion = get().conversationSelectionVersion + 1
+
+    // 先进入显式空白新会话状态，避免异步 DB/初始化任务晚到后把 UI 拉回历史会话。
+    set({
+      currentConversationId: null,
+      chats: [],
+      pendingQuote: null,
+      suppressConversationAutoRestore: true,
+      conversationSelectionVersion: selectionVersion,
+      agentAutoApproveConversationId: null,
+      agentAutoApproveRuntimeSkillId: null,
+      chatSearchOpen: false,
+      chatSearchQuery: '',
+      chatSearchResults: [],
+      chatSearchCurrentIndex: 0,
+    })
+    get().resetAgentState()
+    get().clearMcpToolCalls()
 
     // 如果当前会话无消息，删除它（从数据库查询最新状态）
     if (currentConversationId) {
@@ -1165,19 +1257,6 @@ const useChatStore = create<ChatState>((set, get) => ({
       // 刷新会话列表
       await get().initConversations()
     }
-
-    // 清空聊天，不立即创建新会话
-    // 等到用户发送第一条消息时才创建会话
-    set({
-      currentConversationId: null,
-      chats: [],
-      pendingQuote: null,
-      agentAutoApproveConversationId: null,
-      agentAutoApproveRuntimeSkillId: null
-    })
-    // 清空 Agent 状态
-    get().resetAgentState()
-    get().clearMcpToolCalls()
   },
 }))
 

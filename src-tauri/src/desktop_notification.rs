@@ -44,7 +44,10 @@ pub fn send_desktop_notification(
             .duration(Duration::Short)
             .sound(Some(Sound::Default));
 
-        if let Some(body) = body.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+        if let Some(body) = body
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
             let mut lines = body.lines().map(str::trim).filter(|line| !line.is_empty());
             if let Some(line) = lines.next() {
                 toast = toast.text1(line);

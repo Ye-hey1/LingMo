@@ -61,7 +61,7 @@ import {
 
 interface ChatSendProps {
   inputValue: string;
-  onSent?: () => void;
+  onSent?: (sentText?: string) => void;
   linkedResource?: LinkedResource | null;
   linkedResources?: LinkedResource[];
   linkedResourcePreviews?: Record<string, string | null>;
@@ -69,6 +69,9 @@ interface ChatSendProps {
   quoteData?: QuoteData | null;
   webSearchEnabled?: boolean;
   allowAutoCurrentFileContext?: boolean;
+  getLiveInputValue?: () => string;
+  onSubmitOverride?: (text: string) => boolean | void;
+  canSubmitOverride?: boolean;
   hideButton?: boolean;
   hideIdleButton?: boolean;
 }
@@ -379,6 +382,9 @@ export const ChatSend = forwardRef<{
   quoteData = null,
   webSearchEnabled = false,
   allowAutoCurrentFileContext = true,
+  getLiveInputValue,
+  onSubmitOverride,
+  canSubmitOverride = false,
   hideButton = false,
   hideIdleButton = false,
 }, ref) => {
@@ -889,8 +895,8 @@ export const ChatSend = forwardRef<{
       let writerInstruction = effectiveInstruction
       if (skillId) {
         try {
-          const { useSkillsStore } = await import('@/stores/skills')
-          await useSkillsStore.getState().initSkills()
+          const { ensureSkillsReadyForAgent } = await import('@/lib/skills/agent-ready')
+          await ensureSkillsReadyForAgent()
           const skill = skillManager.getSkill(skillId)
           if (skill) {
             writerInstruction = buildWriterSkillInstruction(skill, effectiveInstruction)
@@ -1737,8 +1743,12 @@ export const ChatSend = forwardRef<{
               // 清空 Final Answer 模式状态
               setAgentState({
                 activeChatId: undefined,
+                isRunning: false,
+                isThinking: false,
+                pendingConfirmation: undefined,
                 isFinalAnswerMode: false,
-                finalAnswerContent: undefined
+                finalAnswerContent: undefined,
+                currentStepStartTime: undefined,
               })
 
               // 清空 ref
@@ -1767,8 +1777,12 @@ export const ChatSend = forwardRef<{
               // 清空 Final Answer 模式状态
               setAgentState({
                 activeChatId: undefined,
+                isRunning: false,
+                isThinking: false,
+                pendingConfirmation: undefined,
                 isFinalAnswerMode: false,
-                finalAnswerContent: undefined
+                finalAnswerContent: undefined,
+                currentStepStartTime: undefined,
               })
 
               // 清空 ref
@@ -1875,15 +1889,16 @@ export const ChatSend = forwardRef<{
   async function handleSubmit(instructionOverride?: unknown, options?: ChatSendOptions) {
     const effectiveInstruction =
       typeof instructionOverride === 'string' ? instructionOverride : undefined
-    const requestText = effectiveInstruction ?? inputValue
-    const displayText = options?.displayText?.trim() || inputValue.trim()
+    const liveInputValue = getLiveInputValue?.() || inputValue
+    const requestText = effectiveInstruction ?? liveInputValue
+    const displayText = options?.displayText?.trim() || liveInputValue.trim()
 
     if (!requestText.trim() || !displayText) return
 
     const conversationTitle = displayText.replace(/\s+/g, ' ').slice(0, 30) || '新对话'
     await ensureCurrentConversation(conversationTitle)
 
-    onSent?.()
+    onSent?.(displayText)
 
     const imageUrls = attachedImages.map(img => img.url)
     const userMessage = await insert({
@@ -1959,15 +1974,20 @@ export const ChatSend = forwardRef<{
         variant={isRunning ? "destructive" : "ghost"}
         size="icon"
         icon={isRunning ? <Square className="size-4" /> : <Send className="size-4" />} 
-        disabled={!isRunning && (!primaryModel || !inputValue.trim())} 
+        disabled={!isRunning && (!primaryModel || (!inputValue.trim() && !canSubmitOverride))} 
         tooltipText={isRunning ? t('record.chat.input.stop') : t('record.chat.input.send')} 
         buttonClassName={isRunning
-          ? "h-7 w-7 rounded-md"
-          : "h-7 w-7 rounded-md bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground disabled:bg-muted/30 disabled:text-muted-foreground/60"
+          ? "h-8 w-8 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          : "h-8 w-8 rounded-lg bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 disabled:bg-muted/50 disabled:text-muted-foreground"
         }
         onClick={() => {
           if (isRunning) {
             void handleStop()
+            return
+          }
+
+          const liveInputValue = getLiveInputValue?.() || inputValue
+          if (onSubmitOverride?.(liveInputValue) === true) {
             return
           }
 

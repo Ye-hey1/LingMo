@@ -60,6 +60,7 @@ function getDraftPreview(draft: FlashcardBatchDraft) {
 
 function getDraftTypeLabel(type: FlashcardType) {
   if (type === 'choice') return '选择题'
+  if (type === 'true-false') return '判断题'
   if (type === 'short-answer') return '简答题'
   if (type === 'basic-reversed') return '双向问答'
   if (type === 'cloze') return '填空题'
@@ -193,7 +194,7 @@ function normalizeDrafts(parsed: unknown, count: number): FlashcardBatchDraft[] 
     .filter(Boolean)
     .map((item) => {
       const draft = item as Partial<FlashcardBatchDraft>
-      const type: FlashcardType = draft.type && ['choice', 'basic', 'basic-reversed', 'cloze', 'short-answer'].includes(draft.type)
+      const type: FlashcardType = draft.type && ['choice', 'true-false', 'basic', 'basic-reversed', 'cloze', 'short-answer'].includes(draft.type)
         ? draft.type
         : 'basic'
 
@@ -209,6 +210,7 @@ function normalizeDrafts(parsed: unknown, count: number): FlashcardBatchDraft[] 
     .filter(draft => {
       if (draft.type === 'cloze') return Boolean(draft.clozeText.trim())
       if (draft.type === 'choice') return Boolean(draft.front?.trim() && draft.back?.trim() && draft.choices && draft.choices.length >= 2)
+      if (draft.type === 'true-false') return Boolean(draft.front?.trim() && draft.back?.trim() && /(答案|正确答案|参考答案)\s*[:：]\s*(正确|错误)/.test(draft.back))
       return Boolean(draft.front?.trim() || draft.back?.trim())
     })
     .slice(0, count)
@@ -271,13 +273,14 @@ export function FlashcardBatchGenerateDialog({
         `请基于下面的笔记内容，生成 ${requestedCount} 张高质量闪卡。`,
         '要求：',
         '1. 只返回严格 JSON 数组，不要返回解释。',
-        '2. 每个数组元素格式必须是 {"type":"choice|basic|basic-reversed|cloze|short-answer","front":"","back":"","clozeText":"","choices":[""],"tags":[""]}。',
+        '2. 每个数组元素格式必须是 {"type":"choice|true-false|basic|basic-reversed|cloze|short-answer","front":"","back":"","clozeText":"","choices":[""],"tags":[""]}。',
         '3. 卡片内容要覆盖不同知识点，避免重复。',
-        '4. 如果适合选择题，使用 choice；适合问答卡，使用 basic；适合双向记忆，使用 basic-reversed；适合填空，使用 cloze；适合开放回答，使用 short-answer。',
+        '4. 如果适合选择题，使用 choice；适合判断真伪，使用 true-false；适合问答卡，使用 basic；适合双向记忆，使用 basic-reversed；适合填空，使用 cloze；适合开放回答，使用 short-answer。',
         '5. 如果 type 不是 cloze，则 clozeText 返回空字符串。',
         '6. 如果 type 是 cloze，则 front/back 返回空字符串，并用 {{c1::答案}} 形式生成 clozeText。',
         '7. 如果 type 是 choice，则 front 写题干，choices 返回 3-5 个选项，back 写正确答案和简短解析。',
-        '8. tags 最多返回 3 个简短标签。',
+        '8. 如果 type 是 true-false，则 front 写一条可判断真伪的陈述，back 必须以“答案：正确”或“答案：错误”开头，然后写一句解析。',
+        '9. tags 最多返回 3 个简短标签。',
         '',
         `来源文件：${noteTitle || notePath || '当前笔记'}`,
         '笔记内容：',

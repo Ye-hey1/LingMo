@@ -189,7 +189,7 @@ async function collectDiagramFiles(): Promise<DiagramFileEntry[]> {
 
 export const listDiagramFilesTool: Tool = {
   name: 'list_diagram_files',
-  description: 'List diagram files in the workspace. Supports .drawio, .drawio.xml, .excalidraw.json, and .diagram.json files.',
+  description: 'List diagram files in the workspace. Supports .drawio, .drawio.xml, .excalidraw, .excalidraw.json, and .diagram.json files.',
   category: 'note',
   requiresConfirmation: false,
   parameters: [],
@@ -219,7 +219,7 @@ export const readDiagramFileTool: Tool = {
     {
       name: 'filePath',
       type: 'string',
-      description: 'Workspace-relative diagram file path, e.g. "roadmap.drawio" or "sketch.excalidraw.json".',
+      description: 'Workspace-relative diagram file path, e.g. "roadmap.drawio", "sketch.excalidraw", or "sketch.excalidraw.json".',
       required: true,
     },
   ],
@@ -477,7 +477,7 @@ export const createDiagramFromOutlineTool: Tool = {
         const articleStore = useArticleStore.getState()
         const sourceNotePath = articleStore.activeFilePath
         if (sourceNotePath && sourceNotePath.endsWith('.md') && sourceNotePath !== filePath) {
-          const diagramName = filePath.split('/').pop()?.replace(/\.(drawio|drawio\.xml|excalidraw\.json|diagram\.json)$/i, '') || filePath
+          const diagramName = filePath.split('/').pop()?.replace(/\.(drawio|drawio\.xml|excalidraw|excalidraw\.json|diagram\.json)$/i, '') || filePath
           const sourceOpts = await getFilePathOptions(sourceNotePath)
           const sourceContent = sourceOpts.baseDir
             ? await readTextFile(sourceOpts.path, { baseDir: sourceOpts.baseDir })

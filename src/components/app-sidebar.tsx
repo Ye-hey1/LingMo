@@ -24,7 +24,7 @@ interface AppSidebarProps {
 }
 
 export function AppSidebar({ onSearchClick }: AppSidebarProps) {
-  const pathname = usePathname()
+  const pathname = usePathname() || ''
   const router = useRouter()
   const t = useTranslations()
   const { imageRepoUserInfo } = useImageStore()

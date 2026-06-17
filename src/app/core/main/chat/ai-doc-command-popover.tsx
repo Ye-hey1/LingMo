@@ -44,9 +44,14 @@ export function AiDocCommandPopover({
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void filterSlashCommands(query).then((result) => {
-      if (!cancelled) setCommands(result)
-    })
+    void filterSlashCommands(query)
+      .then((result) => {
+        if (!cancelled) setCommands(result)
+      })
+      .catch((error) => {
+        console.warn('[SlashPopover] Failed to load slash commands:', error)
+        if (!cancelled) setCommands([])
+      })
     return () => { cancelled = true }
   }, [open, query])
 

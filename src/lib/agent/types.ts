@@ -33,7 +33,19 @@ export interface ToolResult {
   data?: any
   error?: string
   message?: string
+  status?: ToolCallStatus
 }
+
+export type ToolCallStatus =
+  | 'pending'
+  | 'running'
+  | 'success'
+  | 'error'
+  | 'blocked'
+  | 'skipped'
+  | 'adjusted'
+  | 'cached'
+  | 'cancelled'
 
 export type AgentApprovalScope =
   | 'once'
@@ -47,7 +59,7 @@ export interface ToolCall {
   toolName: string
   params: Record<string, any>
   result?: ToolResult
-  status: 'pending' | 'running' | 'success' | 'error'
+  status: ToolCallStatus
   timestamp: number
 }
 
@@ -221,6 +233,8 @@ export interface AgentState {
   isFinalAnswerMode?: boolean
   finalAnswerContent?: string
   agentContextSnapshot?: AgentContextSnapshot
+  agentPartSnapshot?: import('./part-reducer').AgentPartSnapshot
+  agentParts?: import('./part-reducer').AgentPart[]
   activity?: AgentActivity
   telemetry?: AgentTurnTelemetry
   taskPlan?: {

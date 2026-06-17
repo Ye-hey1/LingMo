@@ -2,17 +2,11 @@ use crate::skills_v2::content_hash::hash_directory;
 use crate::skills_v2::db::{SkillRecord, SkillStore};
 use crate::skills_v2::error::{SkillError, SkillResult};
 use crate::skills_v2::git_fetcher;
+use crate::skills_v2::paths::workspace_skills_dir;
 use crate::skills_v2::skill_metadata::{is_skill_directory, parse_skill_md, sanitize_skill_name};
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
-
-/// Get the central skills directory under app data.
-fn central_skills_dir(app_data_dir: &Path) -> SkillResult<std::path::PathBuf> {
-    let dir = app_data_dir.join("skills");
-    fs::create_dir_all(&dir)?;
-    Ok(dir)
-}
 
 /// Install a skill from a local directory by copying it to the central store.
 pub fn install_from_local_dir(
@@ -45,7 +39,7 @@ pub fn install_from_local_dir(
         });
     let name = sanitize_skill_name(&raw_name);
 
-    let central = central_skills_dir(app_data_dir)?;
+    let central = workspace_skills_dir(app_data_dir)?;
     let target = central.join(&name);
 
     // If target exists, append suffix

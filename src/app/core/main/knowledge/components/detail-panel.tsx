@@ -7,24 +7,29 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import useArticleStore from '@/stores/article';
 import {
+  AlertTriangle,
   Check,
   Copy,
   ExternalLink,
   FileText,
   FolderGit2,
   Lightbulb,
+  Link2,
+  Network,
+  Sparkles,
   Tag,
   User,
   X,
 } from 'lucide-react';
 import { useGraphStore, type GraphNode, type GraphEdge } from '../store/graph-store';
+import { NODE_TYPE_COLORS } from '../constants';
 
 const NODE_TYPE_ICONS: Record<string, React.ReactNode> = {
-  note: <FileText className="h-3.5 w-3.5" />,
-  concept: <Lightbulb className="h-3.5 w-3.5" />,
-  person: <User className="h-3.5 w-3.5" />,
-  project: <FolderGit2 className="h-3.5 w-3.5" />,
-  tag: <Tag className="h-3.5 w-3.5" />,
+  note: <FileText className="h-4 w-4" />,
+  concept: <Lightbulb className="h-4 w-4" />,
+  person: <User className="h-4 w-4" />,
+  project: <FolderGit2 className="h-4 w-4" />,
+  tag: <Tag className="h-4 w-4" />,
 };
 
 const NODE_TYPE_LABELS: Record<string, string> = {
@@ -35,21 +40,16 @@ const NODE_TYPE_LABELS: Record<string, string> = {
   tag: '标签',
 };
 
-const NODE_TYPE_COLORS: Record<string, string> = {
-  note: '#2563eb',
-  concept: '#059669',
-  person: '#c2410c',
-  project: '#7c3aed',
-  tag: '#be185d',
-};
-
 const EDGE_STYLE_CONFIGS: Record<string, { label: string }> = {
   wikilink: { label: '双链' },
-  semantic: { label: '语义关联' },
+  semantic: { label: '语义' },
   references: { label: '引用' },
   contains: { label: '包含' },
   mentions: { label: '提及' },
   has_tag: { label: '标签' },
+  'topic-cooccurrence': { label: '共现' },
+  'topic-semantic': { label: '语义' },
+  'rag-vector': { label: 'RAG' },
 };
 
 export function DetailPanel() {
@@ -59,14 +59,25 @@ export function DetailPanel() {
     nodesMapping,
     selectedNode,
     selectedEdge,
-    toggleDetailPanel,
     selectNode,
+    selectEdge,
+    getNodeById,
   } = useGraphStore();
 
-  const node = selectedNode ? nodesMapping.get(selectedNode) : null;
-  const edge = selectedEdge ? edges.find(item => item.id === selectedEdge) : null;
+  const node = useMemo(() => {
+    if (!selectedNode) return null;
+    return getNodeById(selectedNode) || nodesMapping.get(selectedNode) || null;
+  }, [selectedNode, getNodeById, nodesMapping]);
+
+  const edge = selectedEdge ? edges.find(item => item.id === selectedEdge) || null : null;
   const isTopicNode = node?.nodeProperties?.mode === 'topic';
-  const nodePath = node && !isTopicNode ? String(node.nodeProperties?.path ?? node.id) : '';
+  const isUnresolvedNode = node?.nodeProperties?.isUnresolved === true;
+  const nodePath = node && !isTopicNode && !isUnresolvedNode ? String(node.nodeProperties?.path ?? node.id) : '';
+
+  const handleClose = () => {
+    selectNode(null);
+    selectEdge(null);
+  };
 
   const handleOpenNote = () => {
     if (!nodePath) return;
@@ -80,52 +91,60 @@ export function DetailPanel() {
     window.setTimeout(() => setCopied(false), 1400);
   };
 
-  if (!node && !edge) return null;
+  if (!node && !edge) {
+    return (
+      <div className="flex h-full flex-col bg-background/95">
+        <PanelHeader title="节点详情" onClose={handleClose} />
+        <div className="flex flex-1 items-center justify-center px-8 text-center text-sm text-muted-foreground">
+          点击任意节点后，这里会显示它的来源、关键词和关联关系。
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex h-full flex-col bg-background/95">
-      <div className="flex items-start justify-between gap-3 border-b border-border/80 p-4">
-        <div className="flex min-w-0 items-start gap-3">
-          {node ? (
-            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: getNodeColor(node) }} />
-            </div>
-          ) : (
-            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-              <ExternalLink className="h-3.5 w-3.5" />
-            </div>
-          )}
-          <div className="min-w-0">
-            <div className="text-xs text-muted-foreground">{isTopicNode ? '主题词详情' : node ? '节点详情' : '关系详情'}</div>
-            <h3 className="mt-1 truncate text-sm font-semibold">{node ? node.nodeLabel : edge?.label}</h3>
-          </div>
-        </div>
-        <Button type="button" variant="ghost" size="icon" onClick={toggleDetailPanel} className="h-8 w-8 shrink-0">
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
+    <div className="flex h-full flex-col bg-background/95 text-foreground">
+      <PanelHeader
+        title={node ? '节点详情' : '关系详情'}
+        onClose={handleClose}
+      />
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-4 p-4">
-          {node ? <NodeDetail node={node} edges={edges} nodesMapping={nodesMapping} selectNode={selectNode} /> : null}
+        <div className="space-y-5 p-4">
+          {node ? (
+            <NodeDetail node={node} edges={edges} nodesMapping={nodesMapping} selectNode={selectNode} />
+          ) : null}
           {edge ? <EdgeDetail edge={edge} nodesMapping={nodesMapping} selectNode={selectNode} /> : null}
         </div>
       </ScrollArea>
 
       {node && !isTopicNode ? (
-        <div className="border-t border-border/80 p-3">
+        <div className="border-t border-border/70 bg-background/90 p-3">
           <div className="grid grid-cols-2 gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={handleOpenNote} className="justify-center">
+            <Button type="button" variant="default" size="sm" onClick={handleOpenNote} className="h-8 justify-center">
               <ExternalLink className="h-3.5 w-3.5" />
               打开笔记
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => void handleCopyPath()} className="justify-center">
+            <Button type="button" variant="outline" size="sm" onClick={() => void handleCopyPath()} className="h-8 justify-center">
               {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
               {copied ? '已复制' : '复制路径'}
             </Button>
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function PanelHeader({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-background/95 px-4 py-2.5">
+      <div className="min-w-0">
+        <h3 className="truncate text-sm font-semibold">{title}</h3>
+      </div>
+      <Button type="button" variant="ghost" size="icon" onClick={onClose} className="h-8 w-8 shrink-0">
+        <X className="h-4 w-4" />
+      </Button>
     </div>
   );
 }
@@ -139,6 +158,8 @@ interface NodeDetailProps {
 
 function NodeDetail({ node, edges, nodesMapping, selectNode }: NodeDetailProps) {
   const isTopicNode = node.nodeProperties?.mode === 'topic';
+  const isOrphan = node.nodeProperties?.isOrphan === true;
+  const isUnresolved = node.nodeProperties?.isUnresolved === true;
   const relatedNotes = Array.isArray(node.nodeProperties?.notes)
     ? node.nodeProperties.notes as Array<{ path: string; title: string; weight: number }>
     : [];
@@ -151,62 +172,102 @@ function NodeDetail({ node, edges, nodesMapping, selectNode }: NodeDetailProps) 
     [edges, node.id],
   );
 
-  const connectedNodes = useMemo(() => {
-    const connectedNodeIds = new Set<string>();
-    for (const edge of relatedEdges) {
-      if (edge.source === node.id) connectedNodeIds.add(edge.target);
-      if (edge.target === node.id) connectedNodeIds.add(edge.source);
-    }
-    return Array.from(connectedNodeIds)
-      .map(id => nodesMapping.get(id))
-      .filter(Boolean) as GraphNode[];
-  }, [node.id, nodesMapping, relatedEdges]);
+  const relationRows = useMemo(() => relatedEdges
+    .map(edge => {
+      const relatedId = edge.source === node.id ? edge.target : edge.source;
+      const relatedNode = nodesMapping.get(relatedId);
+      return relatedNode ? { edge, relatedNode } : null;
+    })
+    .filter(Boolean) as Array<{ edge: GraphEdge; relatedNode: GraphNode }>,
+    [node.id, nodesMapping, relatedEdges],
+  );
+
+  const keywords = getKeywords(node);
+  const summary = getNodeSummary(node, samples);
+  const path = node.nodeProperties?.path ? String(node.nodeProperties.path) : '';
+  const nodeTypeLabel = isTopicNode
+    ? '主题'
+    : isOrphan
+      ? '孤立点'
+      : isUnresolved
+        ? '未创建引用'
+        : NODE_TYPE_LABELS[node.nodeType] || node.nodeType;
 
   return (
     <>
-      <SectionTitle>基本信息</SectionTitle>
-      <div className="space-y-2 rounded-md bg-muted/45 p-3">
-        <InfoRow label="类型">
-          <Badge variant="secondary" className="gap-1 rounded-md">
-            {NODE_TYPE_ICONS[node.nodeType]}
-            {isTopicNode ? '主题词' : NODE_TYPE_LABELS[node.nodeType] || node.nodeType}
-          </Badge>
-        </InfoRow>
-        <InfoRow label="连接数">
-          <span className="text-sm font-medium tabular-nums">{node.connections || 0}</span>
-        </InfoRow>
-        {isTopicNode ? (
-          <>
-            <InfoRow label="覆盖笔记">
-              <span className="text-sm font-medium tabular-nums">{Number(node.nodeProperties?.noteCount ?? 0)}</span>
-            </InfoRow>
-            <InfoRow label="RAG 切块">
-              <span className="text-sm font-medium tabular-nums">{Number(node.nodeProperties?.chunkCount ?? 0)}</span>
-            </InfoRow>
-            <InfoRow label="主题权重">
-              <span className="text-sm font-medium tabular-nums">{Number(node.nodeProperties?.topicWeight ?? 0).toFixed(2)}</span>
-            </InfoRow>
-            <InfoRow label="聚类">
-              <span className="truncate text-sm">{String(node.nodeProperties?.clusterLabel ?? '主题簇')}</span>
-            </InfoRow>
-          </>
-        ) : null}
-        {node.nodeProperties?.path ? (
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">路径</div>
-            <div className="break-all rounded-md bg-background px-2 py-1.5 text-xs leading-5 text-foreground">
-              {node.nodeProperties.path}
+      <section className="space-y-3">
+        <div className="flex items-start gap-3">
+          <div
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border/50 text-background shadow-sm"
+            style={{ backgroundColor: getNodeColor(node) }}
+          >
+            {NODE_TYPE_ICONS[node.nodeType] || <Network className="h-4 w-4" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="line-clamp-2 text-lg font-semibold leading-tight">
+              {isUnresolved ? '未创建引用' : node.nodeLabel}
+            </h2>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Badge variant="secondary" className="rounded-md">{nodeTypeLabel}</Badge>
+              {node.kind === 'hub' ? <Badge className="rounded-md bg-amber-500 text-white">核心节点</Badge> : null}
+              {isUnresolved ? <Badge variant="destructive" className="rounded-md">被引用但未建文件</Badge> : null}
             </div>
           </div>
-        ) : null}
-      </div>
+        </div>
 
-      {isTopicNode && relatedNotes.length > 0 ? (
-        <>
-          <Separator />
-          <SectionTitle>相关笔记 ({relatedNotes.length})</SectionTitle>
+        <div className="grid grid-cols-3 gap-2">
+          <Metric label="连接" value={node.connections || relatedEdges.length || 0} />
+          <Metric label="笔记" value={Number(node.nodeProperties?.noteCount ?? relatedNotes.length ?? 0)} />
+          <Metric
+            label={isTopicNode ? '权重' : '切块'}
+            value={isTopicNode ? Number(node.nodeProperties?.topicWeight ?? 0).toFixed(2) : Number(node.nodeProperties?.chunkCount ?? 0)}
+          />
+        </div>
+      </section>
+
+      {summary ? (
+        <InfoSection title="摘要">
+          <p className="text-sm leading-6 text-foreground/85">{summary}</p>
+        </InfoSection>
+      ) : null}
+
+      {(path || node.nodeMetadata?.source || node.nodeMetadata?.updatedAt) ? (
+        <InfoSection title="来源">
+          <div className="space-y-2 text-sm">
+            {path ? (
+              <div className="rounded-md border border-border/60 bg-muted/35 px-2.5 py-2 text-xs leading-5 text-muted-foreground">
+                <div className="mb-1 font-medium text-foreground">文件路径</div>
+                <div className="break-all">{path}</div>
+              </div>
+            ) : null}
+            <div className="grid grid-cols-2 gap-2">
+              {node.nodeMetadata?.source ? <PlainInfo label="来源" value={node.nodeMetadata.source} /> : null}
+              {node.nodeMetadata?.updatedAt ? <PlainInfo label="更新" value={formatDate(node.nodeMetadata.updatedAt)} /> : null}
+            </div>
+          </div>
+        </InfoSection>
+      ) : null}
+
+      {keywords.length > 0 ? (
+        <InfoSection title="关键词">
+          <div className="flex flex-wrap gap-1.5">
+            {keywords.slice(0, 12).map(keyword => (
+              <Badge key={keyword} variant="outline" className="rounded-md bg-background text-xs">
+                {keyword}
+              </Badge>
+            ))}
+          </div>
+        </InfoSection>
+      ) : null}
+
+      {(isOrphan || isUnresolved) ? (
+        <InsightActions node={node} isOrphan={isOrphan} isUnresolved={isUnresolved} />
+      ) : null}
+
+      {relatedNotes.length > 0 ? (
+        <InfoSection title={`相关笔记 ${relatedNotes.length}`}>
           <div className="space-y-1">
-            {relatedNotes.slice(0, 10).map(note => (
+            {relatedNotes.slice(0, 8).map(note => (
               <button
                 key={note.path}
                 type="button"
@@ -215,89 +276,121 @@ function NodeDetail({ node, edges, nodesMapping, selectNode }: NodeDetailProps) 
               >
                 <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate text-sm">{note.title}</span>
-                <span className="text-[11px] tabular-nums text-muted-foreground">{note.weight.toFixed(1)}</span>
+                <span className="text-[11px] tabular-nums text-muted-foreground">{Number(note.weight ?? 0).toFixed(1)}</span>
               </button>
             ))}
           </div>
-        </>
+        </InfoSection>
       ) : null}
 
-      {isTopicNode && samples.length > 0 ? (
-        <>
-          <Separator />
-          <SectionTitle>RAG 相关片段</SectionTitle>
+      {samples.length > 0 ? (
+        <InfoSection title="RAG 片段">
           <div className="space-y-2">
-            {samples.slice(0, 4).map((sample, index) => (
+            {samples.slice(0, 3).map((sample, index) => (
               <button
                 key={`${sample.filename}-${index}`}
                 type="button"
-                className="w-full rounded-md border border-border/70 bg-background px-2.5 py-2 text-left transition hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="w-full rounded-md border border-border/70 bg-background px-3 py-2 text-left transition hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={() => useArticleStore.getState().setActiveFilePath(sample.filename)}
               >
                 <div className="mb-1 flex items-center justify-between gap-2 text-xs">
                   <span className="truncate font-medium">{sample.title}</span>
-                  <span className="shrink-0 tabular-nums text-muted-foreground">{sample.score.toFixed(1)}</span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">{Number(sample.score ?? 0).toFixed(1)}</span>
                 </div>
                 <div className="line-clamp-3 text-xs leading-5 text-muted-foreground">{sample.content}</div>
               </button>
             ))}
           </div>
-        </>
+        </InfoSection>
       ) : null}
 
-      {connectedNodes.length > 0 ? (
-        <>
-          <Separator />
-          <SectionTitle>连接节点 ({connectedNodes.length})</SectionTitle>
+      {relationRows.length > 0 ? (
+        <InfoSection title={`关联节点 ${relationRows.length}`}>
           <div className="space-y-1">
-            {connectedNodes.slice(0, 12).map(connected => (
+            {relationRows.slice(0, 10).map(({ edge, relatedNode }) => (
               <button
-                key={connected.id}
+                key={`${edge.id}-${relatedNode.id}`}
                 type="button"
                 className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                onClick={() => selectNode(connected.id)}
+                onClick={() => selectNode(relatedNode.id)}
               >
-                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: getNodeColor(connected) }} />
-                <span className="min-w-0 flex-1 truncate text-sm">{connected.nodeLabel}</span>
-                <span className="text-[11px] tabular-nums text-muted-foreground">{connected.connections || 0}</span>
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: getNodeColor(relatedNode) }} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm">{relatedNode.nodeLabel}</span>
+                  <span className="text-[11px] text-muted-foreground">{getEdgeConfig(edge).label}</span>
+                </span>
+                <span className="text-[11px] tabular-nums text-muted-foreground">{relatedNode.connections || 0}</span>
               </button>
             ))}
-            {connectedNodes.length > 12 ? (
-              <div className="rounded-md bg-muted/45 px-2 py-1.5 text-center text-xs text-muted-foreground">
-                还有 {connectedNodes.length - 12} 个节点
+            {relationRows.length > 10 ? (
+              <div className="rounded-md bg-muted/40 px-2 py-1.5 text-center text-xs text-muted-foreground">
+                还有 {relationRows.length - 10} 个关联节点
               </div>
             ) : null}
           </div>
-        </>
-      ) : null}
-
-      {relatedEdges.length > 0 ? (
-        <>
-          <Separator />
-          <SectionTitle>关系 ({relatedEdges.length})</SectionTitle>
-          <div className="space-y-1.5">
-            {relatedEdges.slice(0, 12).map(edge => {
-              const sourceNode = nodesMapping.get(edge.source);
-              const targetNode = nodesMapping.get(edge.target);
-              const config = getEdgeConfig(edge);
-
-              return (
-                <div key={edge.id} className="rounded-md border border-border/70 bg-background px-2.5 py-2">
-                  <div className="flex min-w-0 items-center gap-1 text-xs">
-                    <span className="truncate">{sourceNode?.nodeLabel ?? edge.source}</span>
-                    <span className="text-muted-foreground">→</span>
-                    <span className="truncate">{targetNode?.nodeLabel ?? edge.target}</span>
-                  </div>
-                  <Badge variant="outline" className="mt-1.5 rounded-md text-[11px]">
-                    {config.label}
-                  </Badge>
-                </div>
-              );
-            })}
-          </div>
-        </>
+        </InfoSection>
       ) : null}
     </>
+  );
+}
+
+function InsightActions({ node, isOrphan, isUnresolved }: { node: GraphNode; isOrphan: boolean; isUnresolved: boolean }) {
+  const sourceNotes = (node.nodeProperties?.sourceNotes as Array<{ path: string; title: string }> ?? []);
+  const recommendations = (node.nodeProperties?.recommendations as Array<{ path: string; title: string; similarity: number }> ?? []);
+
+  return (
+    <InfoSection title="建议">
+      <div className="rounded-md border border-amber-200/70 bg-amber-50/80 p-3 text-amber-950 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-100">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+          {isUnresolved ? <AlertTriangle className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+          {isUnresolved ? '未创建引用' : '建议补充双链'}
+        </div>
+        <p className="text-xs leading-5 opacity-80">
+          {isUnresolved
+            ? '某篇笔记里有这条双链引用，但当前工作区还没有找到同名 Markdown 文件。'
+            : '这个节点当前连接较弱，可以从推荐笔记中补充链接。'}
+        </p>
+
+        {isUnresolved && node.nodeProperties?.originalReference ? (
+          <div className="mt-2 rounded border border-amber-200/50 bg-background/35 px-2 py-1.5 text-xs leading-5 opacity-85 dark:border-amber-500/15">
+            引用标题：{String(node.nodeProperties.originalReference)}
+          </div>
+        ) : null}
+
+        {isUnresolved && sourceNotes.length > 0 ? (
+          <div className="mt-2 space-y-1">
+            {sourceNotes.slice(0, 4).map(source => (
+              <button
+                key={source.path}
+                type="button"
+                onClick={() => useArticleStore.getState().setActiveFilePath(source.path)}
+                className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs transition hover:bg-background/50"
+              >
+                <FileText className="h-3 w-3 shrink-0" />
+                <span className="truncate">{source.title}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {isOrphan && recommendations.length > 0 ? (
+          <div className="mt-2 space-y-1">
+            {recommendations.slice(0, 4).map(rec => (
+              <button
+                key={rec.path}
+                type="button"
+                onClick={() => useArticleStore.getState().setActiveFilePath(rec.path)}
+                className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-xs transition hover:bg-background/50"
+              >
+                <Link2 className="h-3 w-3 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{rec.title}</span>
+                <span className="shrink-0 tabular-nums opacity-70">{(rec.similarity * 100).toFixed(0)}%</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </InfoSection>
   );
 }
 
@@ -314,58 +407,58 @@ function EdgeDetail({ edge, nodesMapping, selectNode }: EdgeDetailProps) {
 
   return (
     <>
-      <SectionTitle>关系信息</SectionTitle>
-      <div className="space-y-2 rounded-md bg-muted/45 p-3">
-        <InfoRow label="类型">
-          <Badge variant="secondary" className="rounded-md">{config.label}</Badge>
-        </InfoRow>
-        {edge.weight !== undefined ? (
-          <InfoRow label="权重">
-            <span className="text-sm tabular-nums">{(edge.weight * 100).toFixed(0)}%</span>
-          </InfoRow>
-        ) : null}
-        {edge.confidence !== undefined ? (
-          <InfoRow label="置信度">
-            <span className="text-sm tabular-nums">{(edge.confidence * 100).toFixed(1)}%</span>
-          </InfoRow>
-        ) : null}
-      </div>
+      <InfoSection title="关系">
+        <div className="space-y-3 rounded-md border border-border/70 bg-muted/25 p-3">
+          <PlainInfo label="类型" value={config.label} />
+          {edge.weight !== undefined ? <PlainInfo label="权重" value={`${(edge.weight * 100).toFixed(0)}%`} /> : null}
+          {edge.confidence !== undefined ? <PlainInfo label="置信度" value={`${(edge.confidence * 100).toFixed(1)}%`} /> : null}
+        </div>
+      </InfoSection>
 
-      <Separator />
-      <SectionTitle>关联节点</SectionTitle>
-      <div className="space-y-2">
-        {sourceNode ? <NodeLink node={sourceNode} caption="源节点" onClick={() => selectNode(sourceNode.id)} /> : null}
-        {targetNode ? <NodeLink node={targetNode} caption="目标节点" onClick={() => selectNode(targetNode.id)} /> : null}
-      </div>
+      <InfoSection title="端点">
+        <div className="space-y-2">
+          {sourceNode ? <NodeLink node={sourceNode} caption="源节点" onClick={() => selectNode(sourceNode.id)} /> : null}
+          {targetNode ? <NodeLink node={targetNode} caption="目标节点" onClick={() => selectNode(targetNode.id)} /> : null}
+        </div>
+      </InfoSection>
 
-      {edge.metadata ? (
-        <>
-          <Separator />
-          <SectionTitle>元数据</SectionTitle>
-          <div className="space-y-2 rounded-md bg-muted/45 p-3">
-            {edge.metadata.source ? <InfoRow label="来源"><span className="text-sm">{edge.metadata.source}</span></InfoRow> : null}
-            {edge.metadata.evidence ? (
-              <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">证据</div>
-                <div className="rounded-md bg-background px-2 py-1.5 text-xs leading-5">{edge.metadata.evidence}</div>
-              </div>
-            ) : null}
+      {edge.metadata?.evidence ? (
+        <InfoSection title="证据">
+          <div className="rounded-md border border-border/70 bg-background px-3 py-2 text-xs leading-5 text-muted-foreground">
+            {edge.metadata.evidence}
           </div>
-        </>
+        </InfoSection>
       ) : null}
     </>
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h4 className="text-xs font-medium text-muted-foreground">{children}</h4>;
+function InfoSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h4>
+        <Separator className="flex-1" />
+      </div>
+      {children}
+    </section>
+  );
 }
 
-function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <div className="min-w-0 text-right">{children}</div>
+    <div className="rounded-md border border-border/60 bg-muted/35 px-2.5 py-2">
+      <div className="text-lg font-semibold tabular-nums">{value}</div>
+      <div className="mt-0.5 text-[11px] text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+function PlainInfo({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium">{value}</span>
     </div>
   );
 }
@@ -384,6 +477,36 @@ function NodeLink({ node, caption, onClick }: { node: GraphNode; caption: string
       </span>
     </button>
   );
+}
+
+function getKeywords(node: GraphNode) {
+  const hidden = new Set(['topic', 'note', 'concept', 'undefined', 'null']);
+  const raw = [
+    node.nodeProperties?.keyword,
+    node.nodeProperties?.clusterLabel,
+    ...(Array.isArray(node.nodeProperties?.tags) ? node.nodeProperties.tags : []),
+  ];
+  return Array.from(new Set(raw
+    .map(item => String(item ?? '').trim())
+    .filter(item => item && !hidden.has(item.toLowerCase()))));
+}
+
+function getNodeSummary(node: GraphNode, samples: Array<{ content: string }>) {
+  const candidates = [
+    node.nodeProperties?.summary,
+    node.nodeProperties?.description,
+    node.nodeProperties?.content,
+    samples[0]?.content,
+  ];
+  const text = candidates.map(item => String(item ?? '').trim()).find(Boolean);
+  if (!text) return '';
+  return text.length > 180 ? `${text.slice(0, 180)}...` : text;
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString();
 }
 
 function getEdgeConfig(edge: GraphEdge) {

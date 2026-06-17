@@ -211,6 +211,7 @@ export async function initAllDatabases() {
   const { initFlashcardDb } = await import('./flashcards')
   const { initNoteTopicsDb } = await import('./note-topics')
   const { initNoteRelationsDb } = await import('./note-relations')
+  const { initNoteIntelligenceDb } = await import('./note-intelligence')
   const { initGithubStarsDb } = await import('./github-stars')
   const { initAiHotspotsDb } = await import('./ai-hotspots')
   const { initNoteHistoryDb } = await import('./history')
@@ -229,6 +230,7 @@ export async function initAllDatabases() {
   await initFlashcardDb()
   await initNoteTopicsDb()
   await initNoteRelationsDb()
+  await initNoteIntelligenceDb()
   await initGithubStarsDb()
   await initAiHotspotsDb()
 }

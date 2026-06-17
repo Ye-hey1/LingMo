@@ -350,13 +350,15 @@ export function EditorLayout() {
   // Get item type based on path
   const getItemType = useCallback((path: string): 'knowledgeGraph' | 'artifactStudio' | 'flashcards' | 'memory' | 'githubStars' | 'html' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'mermaid' | 'folder' | 'unknown' => {
     if (!path) return 'unknown'
+
+    // ⭐ 优先检查虚拟路由 - 必须在实际文件系统检查之前
     if (isKnowledgeGraphTabPath(path)) return 'knowledgeGraph'
     if (isArtifactStudioTabPath(path)) return 'artifactStudio'
     if (isFlashcardTabPath(path)) return 'flashcards'
     if (isMemoryTabPath(path)) return 'memory'
     if (isGithubStarsTabPath(path)) return 'githubStars'
 
-    // First check if it's a folder
+    // 然后检查是否是文件夹
     const folder = findFolderInTree(path, fileTree)
     if (folder) return 'folder'
 
@@ -510,60 +512,67 @@ export function EditorLayout() {
     }
 
     cleanupTabs()
-  }, [fileTree, tabs.length, isFolderInTree, isFileInTree, checkPathExists, setOpenTabs])
+  }, [fileTree, isFolderInTree, isFileInTree, checkPathExists, setOpenTabs])
 
   // Initialize and update tabs when active path changes
   useEffect(() => {
-    if (!activeFilePath) return
+    const initializeTabs = async () => {
+      if (!activeFilePath) return
 
-    const name = activeFilePath.split('/').pop() || activeFilePath
-    const isGraphTab = isKnowledgeGraphTabPath(activeFilePath)
-    const isArtifactStudioTab = isArtifactStudioTabPath(activeFilePath)
-    const isFlashcardsTab = isFlashcardTabPath(activeFilePath)
-    const isMemoryTab = isMemoryTabPath(activeFilePath)
-    const isGithubStarsTab = isGithubStarsTabPath(activeFilePath)
-    const isVirtualTab = isGraphTab || isArtifactStudioTab || isFlashcardsTab || isMemoryTab || isGithubStarsTab
-    const isFolder = isVirtualTab ? false : isFolderPath(activeFilePath)
+      const name = activeFilePath.split('/').pop() || activeFilePath
+      const isGraphTab = isKnowledgeGraphTabPath(activeFilePath)
+      const isArtifactStudioTab = isArtifactStudioTabPath(activeFilePath)
+      const isFlashcardsTab = isFlashcardTabPath(activeFilePath)
+      const isMemoryTab = isMemoryTabPath(activeFilePath)
+      const isGithubStarsTab = isGithubStarsTabPath(activeFilePath)
+      const isVirtualTab = isGraphTab || isArtifactStudioTab || isFlashcardsTab || isMemoryTab || isGithubStarsTab
+      const isFolder = isVirtualTab ? false : isFolderPath(activeFilePath)
 
-    // Check if tab already exists
-    const existingTab = tabsRef.current.find(tab => tab.path === activeFilePath)
+      // Check if tab already exists
+      const existingTab = tabsRef.current.find(tab => tab.path === activeFilePath)
 
-    if (existingTab) {
-      // Set as active
-      if (activeTabId !== existingTab.id) {
-        setActiveTabId(existingTab.id)
+      if (existingTab) {
+        // Set as active and wait for state to sync
+        if (activeTabId !== existingTab.id) {
+          await setActiveTabId(existingTab.id)
+          await new Promise(resolve => setTimeout(resolve, 50))
+        }
+      } else {
+        // Add new tab
+        const newTab: TabInfo = {
+          id: isGraphTab
+            ? KNOWLEDGE_GRAPH_TAB_ID
+            : isArtifactStudioTab
+              ? ARTIFACT_STUDIO_TAB_ID
+              : isFlashcardsTab
+                ? FLASHCARD_TAB_ID
+                : isMemoryTab
+                  ? MEMORY_TAB_ID
+                  : isGithubStarsTab
+                    ? GITHUB_STARS_TAB_ID
+                    : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+          path: activeFilePath,
+          name: isGraphTab
+            ? KNOWLEDGE_GRAPH_TAB_NAME
+            : isArtifactStudioTab
+              ? ARTIFACT_STUDIO_TAB_NAME
+              : isFlashcardsTab
+                ? FLASHCARD_TAB_NAME
+                : isMemoryTab
+                  ? MEMORY_TAB_NAME
+                  : isGithubStarsTab
+                    ? GITHUB_STARS_TAB_NAME
+                    : name,
+          isFolder: isFolder
+        }
+        await addTab(newTab)
+        // 等待tab添加完成，确保状态更新
+        await new Promise(resolve => setTimeout(resolve, 100))
       }
-    } else {
-      // Add new tab
-      const newTab: TabInfo = {
-        id: isGraphTab
-          ? KNOWLEDGE_GRAPH_TAB_ID
-          : isArtifactStudioTab
-            ? ARTIFACT_STUDIO_TAB_ID
-            : isFlashcardsTab
-              ? FLASHCARD_TAB_ID
-              : isMemoryTab
-                ? MEMORY_TAB_ID
-                : isGithubStarsTab
-                  ? GITHUB_STARS_TAB_ID
-                  : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
-        path: activeFilePath,
-        name: isGraphTab
-          ? KNOWLEDGE_GRAPH_TAB_NAME
-          : isArtifactStudioTab
-            ? ARTIFACT_STUDIO_TAB_NAME
-            : isFlashcardsTab
-              ? FLASHCARD_TAB_NAME
-              : isMemoryTab
-                ? MEMORY_TAB_NAME
-                : isGithubStarsTab
-                  ? GITHUB_STARS_TAB_NAME
-                  : name,
-        isFolder: isFolder
-      }
-      addTab(newTab)
     }
-  }, [activeFilePath, activeTabId, isFolderPath, addTab, setActiveTabId])
+
+    void initializeTabs()
+  }, [activeFilePath, isFolderPath, addTab, setActiveTabId])
 
   // Handle tab switch
   const handleTabSwitch = useCallback((path: string) => {

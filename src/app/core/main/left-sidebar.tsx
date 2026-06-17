@@ -119,31 +119,39 @@ export function LeftSidebarRail() {
   }
 
   const openKnowledgeGraph = async () => {
-    setActiveFilePath(KNOWLEDGE_GRAPH_TAB_PATH)
+    // 先确保中心面板可见
     if (!centerPanelVisible) {
       await toggleCenterPanel()
     }
+    // 然后设置文件路径，这样可以确保Tab创建逻辑正常执行
+    await setActiveFilePath(KNOWLEDGE_GRAPH_TAB_PATH)
   }
 
   const openFlashcards = async () => {
-    setActiveFilePath(FLASHCARD_TAB_PATH)
+    // 先确保中心面板可见
     if (!centerPanelVisible) {
       await toggleCenterPanel()
     }
+    // 然后设置文件路径
+    await setActiveFilePath(FLASHCARD_TAB_PATH)
   }
 
   const openMemoryManager = async () => {
-    setActiveFilePath(MEMORY_TAB_PATH)
+    // 先确保中心面板可见
     if (!centerPanelVisible) {
       await toggleCenterPanel()
     }
+    // 然后设置文件路径
+    await setActiveFilePath(MEMORY_TAB_PATH)
   }
 
   const openGithubStars = async () => {
-    setActiveFilePath(GITHUB_STARS_TAB_PATH)
+    // 先确保中心面板可见
     if (!centerPanelVisible) {
       await toggleCenterPanel()
     }
+    // 然后设置文件路径
+    await setActiveFilePath(GITHUB_STARS_TAB_PATH)
   }
 
   return (

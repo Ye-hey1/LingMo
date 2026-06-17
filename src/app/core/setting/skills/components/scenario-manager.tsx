@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Layers, Plus, Trash2, Loader2, ToggleLeft, ToggleRight } from 'lucide-react'
-import { useSkillsV2Store, ScenarioRecord } from '@/stores/skills-v2'
+import { useSkillsStore, type ScenarioRecord } from '@/stores/skills'
 import { useToast } from '@/hooks/use-toast'
 import {
   AlertDialog,
@@ -27,9 +27,9 @@ export function ScenarioManager() {
   const {
     scenarios, fetchScenarios, createScenario, deleteScenario,
     activeScenarioId, fetchActiveScenario, switchScenario,
-    scenarioSkills, skills,
+    scenarioSkills, installedSkills,
     addToScenario, removeFromScenario,
-  } = useSkillsV2Store()
+  } = useSkillsStore()
 
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
@@ -98,7 +98,7 @@ export function ScenarioManager() {
                 onActivate={() => handleActivate(scenario.id)}
                 onDelete={() => deleteScenario(scenario.id)}
                 skillsInScenario={activeScenarioId === scenario.id ? scenarioSkills : []}
-                allSkills={skills}
+                allSkills={installedSkills}
                 onAddSkill={(skillId) => addToScenario(scenario.id, skillId)}
                 onRemoveSkill={(skillId) => removeFromScenario(scenario.id, skillId)}
               />

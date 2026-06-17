@@ -26,10 +26,7 @@ pub fn parse_skill_md(dir: &Path) -> SkillResult<Option<SkillMeta>> {
 fn parse_frontmatter(content: &str) -> SkillMeta {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
-        return SkillMeta {
-            name: None,
-            description: None,
-        };
+        return parse_markdown_table_metadata(content);
     }
 
     let after_start = &trimmed[3..];
@@ -39,7 +36,7 @@ fn parse_frontmatter(content: &str) -> SkillMeta {
             return SkillMeta {
                 name: None,
                 description: None,
-            }
+            };
         }
     };
 
@@ -58,6 +55,66 @@ fn parse_frontmatter(content: &str) -> SkillMeta {
     }
 
     SkillMeta { name, description }
+}
+
+fn parse_markdown_table_metadata(content: &str) -> SkillMeta {
+    let mut name = None;
+    let mut description = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            if name.is_some() || description.is_some() {
+                break;
+            }
+            continue;
+        }
+
+        if trimmed.starts_with('#') && (name.is_some() || description.is_some()) {
+            break;
+        }
+
+        if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+            if name.is_some() || description.is_some() {
+                break;
+            }
+            continue;
+        }
+
+        let cells: Vec<String> = trimmed
+            .split('|')
+            .skip(1)
+            .take_while(|cell| !cell.is_empty())
+            .map(normalize_markdown_table_cell)
+            .collect();
+
+        if cells.len() < 2 || cells.iter().all(|cell| cell.chars().all(|ch| ch == '-')) {
+            continue;
+        }
+
+        let key = cells[0].to_ascii_lowercase();
+        let value = cells[1..].join(" | ").trim().to_string();
+        if value.is_empty() {
+            continue;
+        }
+
+        match key.as_str() {
+            "name" => name = Some(value),
+            "description" => description = Some(value),
+            _ => {}
+        }
+    }
+
+    SkillMeta { name, description }
+}
+
+fn normalize_markdown_table_cell(cell: &str) -> String {
+    cell.trim()
+        .trim_matches('*')
+        .trim_matches('`')
+        .trim()
+        .to_string()
 }
 
 pub fn sanitize_skill_name(name: &str) -> String {

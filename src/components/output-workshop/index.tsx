@@ -57,6 +57,7 @@ import { PreviewPanel } from "./preview-panel"
 import { DeployPanel } from "./deploy-panel"
 import { MarketModal } from "./market-modal"
 import { SmartCardDialog } from "./smart-card-dialog"
+import { WorkshopProvider, type WorkshopContextValue } from "./workshop-context"
 import type { MokaPanelMode, MokaPanelPlatform } from "./moka-design-panel"
 import {
   getMokaStyleId,
@@ -385,13 +386,84 @@ export function OutputWorkshopModal({
     }, 80)
   }
 
-
-  if (!open) return null
-
   const isBuilding = generation.status === "generating" || generation.status === "streaming"
   const hasGeneratedOutput = generatedHtml.trim().length > 0
 
+  // 阶段4 组件解耦：将核心 state / hooks / handler 聚合到 Context，
+  // 供 SourcePanel / PreviewPanel / TemplatePicker 通过 useWorkshopContext() 取用
+  const onMokaReferenceImageChange = React.useCallback((dataUrl: string, name: string) => {
+    setMokaReferenceImageDataUrl(dataUrl)
+    setMokaReferenceImageName(name)
+  }, [])
+
+  const onClearMokaReferenceImage = React.useCallback(() => {
+    setMokaReferenceImageDataUrl("")
+    setMokaReferenceImageName("")
+  }, [])
+
+  const onOpenMarket = React.useCallback(() => {
+    setShowMarketModal(true)
+  }, [])
+
+  const workshopValue: WorkshopContextValue = {
+    title,
+    sourceContent,
+    setSourceContent,
+    sourceLabel,
+    setSourceLabel,
+    customInstructions,
+    setCustomInstructions,
+    showAdvanced,
+    setShowAdvanced,
+    previewTab,
+    setPreviewTab,
+    sourceWorkspaceTab,
+    setSourceWorkspaceTab,
+    sourcePanelCollapsed,
+    viewMode,
+    setViewMode,
+    activeSlideIdx,
+    setActiveSlideIdx,
+    activeOutlineIndex,
+    templateOverrides,
+    setTemplateOverrides,
+    mokaMode,
+    setMokaMode,
+    mokaPlatform,
+    setMokaPlatform,
+    mokaStyleId,
+    setMokaStyleId,
+    mokaPaletteId,
+    setMokaPaletteId,
+    mokaReferenceImageDataUrl,
+    mokaReferenceImageName,
+    onMokaReferenceImageChange,
+    onClearMokaReferenceImage,
+    generatedHtml,
+    setGeneratedHtml,
+    selectedTemplate,
+    selectedTemplateId,
+    templateList,
+    isBuilding,
+    hasGeneratedOutput,
+    parsedDeckData,
+    sourceOutlineSections,
+    isCsvDetected,
+    templates,
+    history,
+    generation,
+    files,
+    toggleSourcePanel,
+    scrollToSlide,
+    handleSelectOutlineSection,
+    onOpenMarket,
+    iframeRef: iframeRef as React.RefObject<HTMLIFrameElement>,
+  }
+
+  if (!open) return null
+
   return (
+    <WorkshopProvider value={workshopValue}>
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 px-2 pb-2 pt-12 animate-in fade-in duration-200">
       <div className="relative flex h-[calc(100vh-3.5rem)] w-[99vw] max-w-none flex-col overflow-hidden rounded-lg border bg-background shadow-none select-none">
         <header className="relative z-40 flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-background px-3 py-2">
@@ -405,29 +477,7 @@ export function OutputWorkshopModal({
               </div>
             </div>
 
-            <TemplatePicker
-              selectedTemplate={selectedTemplate}
-              selectedTemplateId={selectedTemplateId}
-              showTemplatePicker={templates.showTemplatePicker}
-              setShowTemplatePicker={templates.setShowTemplatePicker}
-              selectedCategory={templates.selectedCategory}
-              setSelectedCategory={templates.setSelectedCategory}
-              templateSearchQuery={templates.templateSearchQuery}
-              setTemplateSearchQuery={templates.setTemplateSearchQuery}
-              filteredTemplates={templates.filteredTemplates}
-              templateCategories={templates.templateCategories}
-              loadingTemplates={templates.loadingTemplates}
-              hoveredTemplateId={templates.hoveredTemplateId}
-              setHoveredTemplateId={templates.setHoveredTemplateId}
-              templatePreviewPosition={templates.templatePreviewPosition}
-              setTemplatePreviewPosition={templates.setTemplatePreviewPosition}
-              templatePreviewHtml={templates.templatePreviewHtml}
-              hoveredTemplate={templates.hoveredTemplate}
-              onSelectTemplate={templates.handleSelectTemplate}
-              onTemplateHover={templates.handleTemplateHover}
-              onOpenMarket={() => setShowMarketModal(true)}
-              pickerRef={templates.templatePickerRef as React.RefObject<HTMLDivElement>}
-            />
+            <TemplatePicker />
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -552,132 +602,13 @@ export function OutputWorkshopModal({
             onExpand={() => setSourcePanelCollapsed(false)}
             className="min-w-0"
           >
-            <SourcePanel
-              sourceContent={sourceContent}
-              setSourceContent={setSourceContent}
-              sourceLabel={sourceLabel}
-              setSourceLabel={setSourceLabel}
-              title={title}
-              customInstructions={customInstructions}
-              setCustomInstructions={setCustomInstructions}
-              showAdvanced={showAdvanced}
-              setShowAdvanced={setShowAdvanced}
-              sourceWorkspaceTab={sourceWorkspaceTab}
-              setSourceWorkspaceTab={setSourceWorkspaceTab}
-              sourcePanelCollapsed={sourcePanelCollapsed}
-              toggleSourcePanel={toggleSourcePanel}
-              isBuilding={isBuilding}
-              exportBusy={generation.exportBusy}
-              status={generation.status}
-              isCsvDetected={isCsvDetected}
-              selectedTemplateId={selectedTemplateId}
-              templateOverrides={templateOverrides}
-              setTemplateOverrides={setTemplateOverrides}
-              onSelectTemplate={templates.handleSelectTemplate}
-              mokaMode={mokaMode}
-              setMokaMode={setMokaMode}
-              mokaPlatform={mokaPlatform}
-              setMokaPlatform={setMokaPlatform}
-              mokaStyleId={mokaStyleId}
-              setMokaStyleId={setMokaStyleId}
-              mokaPaletteId={mokaPaletteId}
-              setMokaPaletteId={setMokaPaletteId}
-              mokaReferenceImageDataUrl={mokaReferenceImageDataUrl}
-              mokaReferenceImageName={mokaReferenceImageName}
-              onMokaReferenceImageChange={(dataUrl, name) => {
-                setMokaReferenceImageDataUrl(dataUrl)
-                setMokaReferenceImageName(name)
-              }}
-              onClearMokaReferenceImage={() => {
-                setMokaReferenceImageDataUrl("")
-                setMokaReferenceImageName("")
-              }}
-              onGenerate={generation.handleGenerate}
-              onStop={generation.handleStop}
-              showFilePicker={files.showFilePicker}
-              setShowFilePicker={files.setShowFilePicker}
-              fileSearchQuery={files.fileSearchQuery}
-              setFileSearchQuery={files.setFileSearchQuery}
-              loadingFiles={files.loadingFiles}
-              filteredFiles={files.filteredFiles}
-              onSelectFile={async (f) => { await files.handleSelectFile(f) }}
-              onBrowseLocalFile={files.browseLocalMarkdownFile}
-              canLoadLinkedFile={files.canLoadLinkedFile}
-              onLoadLinkedFile={files.loadLinkedFile}
-              historyList={history.historyList}
-              templateList={templateList}
-              renamingSnapshotId={history.renamingSnapshotId}
-              renamingSnapshotTitle={history.renamingSnapshotTitle}
-              setRenamingSnapshotTitle={history.setRenamingSnapshotTitle}
-              onRestoreSnapshot={history.restoreSnapshot}
-              onStartRenameSnapshot={history.startRenameSnapshot}
-              onCancelRenameSnapshot={history.cancelRenameSnapshot}
-              onCommitRenameSnapshot={history.commitRenameSnapshot}
-              onDeleteSnapshot={history.deleteSnapshot}
-              formatSnapshotTime={history.formatSnapshotTime}
-              onClearAllSnapshots={history.clearAllSnapshots}
-              onExportSnapshotPack={history.exportSnapshotPack}
-              sourceOutlineSections={sourceOutlineSections}
-              activeOutlineIndex={activeOutlineIndex}
-              onSelectOutlineSection={handleSelectOutlineSection}
-              hasGeneratedOutput={hasGeneratedOutput}
-              refineQuery={generation.refineQuery}
-              setRefineQuery={generation.setRefineQuery}
-              handleRefine={generation.handleRefine}
-              refining={generation.refining}
-              selectedTemplateName={selectedTemplate.name}
-              generatedHtmlLength={generatedHtml.length}
-              exportProgressText={generation.exportProgressText}
-              isDeploying={generation.isDeploying}
-              deployProgress={generation.deployProgress}
-            />
+            <SourcePanel />
           </ResizablePanel>
 
           <ResizableHandle withHandle />
 
           <ResizablePanel id="output-workshop-preview" order={2} defaultSize={isMobile ? 54 : 72} minSize={isMobile ? 32 : 58} className="min-w-0">
-            <PreviewPanel
-              previewTab={previewTab}
-              setPreviewTab={setPreviewTab}
-              viewMode={viewMode}
-              setViewMode={setViewMode}
-              status={generation.status}
-              errorMessage={generation.errorMessage}
-              progressText={generation.progressText}
-              elapsed={generation.elapsed}
-              generatedHtml={generatedHtml}
-              setGeneratedHtml={setGeneratedHtml}
-              hasGeneratedOutput={hasGeneratedOutput}
-              selectedTemplatePreviewHtml={templates.selectedTemplatePreviewHtml}
-              title={title}
-              templateOverrides={templateOverrides}
-              setTemplateOverrides={setTemplateOverrides}
-              buildStageId={generation.buildStageId}
-              lastExportRecord={generation.lastExportRecord}
-              parsedDeckData={parsedDeckData}
-              activeSlideIdx={activeSlideIdx}
-              setActiveSlideIdx={setActiveSlideIdx}
-              scrollToSlide={scrollToSlide}
-              streamingHtml={generation.streamingHtml}
-              iframeRef={iframeRef as React.RefObject<HTMLIFrameElement>}
-              exportBusy={generation.exportBusy}
-              exportProgressText={generation.exportProgressText}
-              showDeployModal={generation.showDeployModal}
-              deployProgress={generation.deployProgress}
-              deployedUrl={generation.deployedUrl}
-              sourceLabel={sourceLabel}
-              sourceContent={sourceContent}
-              sourceWorkspaceTab={sourceWorkspaceTab}
-              sourcePanelCollapsed={sourcePanelCollapsed}
-              toggleSourcePanel={toggleSourcePanel}
-              refining={generation.refining}
-              handleStop={generation.handleStop}
-              handleGenerate={generation.handleGenerate}
-              mokaEditingEnabled={Boolean(generation.mokaRenderMemory) && !generation.refining && generation.status === "done"}
-              onMokaTextEdit={generation.handleMokaTextEdit}
-              onMokaStyleEdit={generation.handleMokaStyleEdit}
-              onMokaReorder={generation.handleMokaReorder}
-            />
+            <PreviewPanel />
           </ResizablePanel>
         </ResizablePanelGroup>
 
@@ -720,5 +651,6 @@ export function OutputWorkshopModal({
         onExport={generation.handleExportSmartCards}
       />
     </div>
+    </WorkshopProvider>
   )
 }

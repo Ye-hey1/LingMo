@@ -48,6 +48,74 @@ export const listAgentRunSummariesTool: Tool = {
   },
 }
 
+export const dreamMemoryCandidatesTool: Tool = {
+  name: 'dream_memory_candidates',
+  description: 'Analyze recent Agent run summaries, working memory, and saved memories to propose reviewable memory candidates. Manual review only; no automatic writes.',
+  category: 'system',
+  parameters: [
+    { name: 'limit', type: 'number', required: false, description: 'Maximum run summaries to inspect, default 20' },
+  ],
+  requiresConfirmation: false,
+  risk: 'low',
+  capabilities: ['read'],
+  execute: async (params) => {
+    const limit = Math.min(40, Math.max(1, Number(params.limit) || 20))
+    const [{ listAgentRunSummaries }, { loadWorkingMemory }, { getAllMemories }, { buildDreamCandidates }] = await Promise.all([
+      import('../resume'),
+      import('../working-memory'),
+      import('@/db/memories'),
+      import('../dream'),
+    ])
+    const [summaries, workingMemory, memories] = await Promise.all([
+      listAgentRunSummaries(limit),
+      loadWorkingMemory(),
+      getAllMemories(),
+    ])
+    const candidates = buildDreamCandidates({
+      summaries,
+      memories,
+      workingMemory,
+    })
+    return {
+      success: true,
+      message: candidates.length > 0
+        ? `Generated ${candidates.length} Dream candidate(s).`
+        : 'No Dream candidates found.',
+      data: candidates,
+    }
+  },
+}
+
+export const distillWorkflowRecommendationsTool: Tool = {
+  name: 'distill_workflow_recommendations',
+  description: 'Analyze repeated Agent run patterns and recommend reusable workflows, skills, or templates. Manual review only; no automatic creation.',
+  category: 'system',
+  parameters: [
+    { name: 'limit', type: 'number', required: false, description: 'Maximum run summaries to inspect, default 30' },
+  ],
+  requiresConfirmation: false,
+  risk: 'low',
+  capabilities: ['read'],
+  execute: async (params) => {
+    const limit = Math.min(60, Math.max(1, Number(params.limit) || 30))
+    const { listAgentRunSummaries } = await import('../resume')
+    const { buildDistillRecommendations } = await import('../dream')
+    const summaries = await listAgentRunSummaries(limit)
+    const recommendations = buildDistillRecommendations({
+      summaries,
+    })
+    return {
+      success: true,
+      message: recommendations.length > 0
+        ? `Generated ${recommendations.length} Distill recommendation(s).`
+        : 'No repeated workflows found yet.',
+      data: recommendations,
+    }
+  },
+}
+
 export const agentMemoryTools: Tool[] = [
   listAgentRunSummariesTool,
+  dreamMemoryCandidatesTool,
+  distillWorkflowRecommendationsTool,
 ]

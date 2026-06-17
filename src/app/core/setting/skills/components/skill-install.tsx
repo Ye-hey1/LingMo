@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Loader2, GitBranch, Archive, FolderOpen, Download, Eye } from 'lucide-react'
-import { useSkillsV2Store } from '@/stores/skills-v2'
+import { useSkillsStore } from '@/stores/skills'
 import { useToast } from '@/hooks/use-toast'
 import { SkillGitDialog } from './skill-git-dialog'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -13,7 +13,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 export function SkillInstall() {
   const t = useTranslations('settings.skills')
   const { toast } = useToast()
-  const { installFromArchive, installFromLocalDir, installing } = useSkillsV2Store()
+  const { installFromArchive, installFromLocalDir, installing } = useSkillsStore()
   const [gitDialogOpen, setGitDialogOpen] = useState(false)
 
   const handleSelectZip = async () => {

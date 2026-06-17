@@ -348,9 +348,16 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
   }, [chat.id, chat.role, chats])
   const isResponseStreaming = chat.role === 'system' && loading && (isActiveAgentMessage || isLatestSystemMessage)
   const isLiveAgentVisible = isActiveAgentMessage && (agentState.isRunning || agentState.isFinalAnswerMode)
+  const liveTextPartContent = useMemo(() => {
+    if (!isActiveAgentMessage) return ''
+    const textPart = [...(agentState.agentPartSnapshot?.parts || [])]
+      .reverse()
+      .find(part => part.type === 'text' && part.visibility === 'visible' && typeof part.text === 'string')
+    return textPart?.type === 'text' ? textPart.text : ''
+  }, [agentState.agentPartSnapshot?.parts, isActiveAgentMessage])
   const liveFinalAnswerContent = useMemo(
-    () => cleanAssistantGeneratedContent(agentState.finalAnswerContent || ''),
-    [agentState.finalAnswerContent]
+    () => cleanAssistantGeneratedContent(liveTextPartContent || agentState.finalAnswerContent || ''),
+    [agentState.finalAnswerContent, liveTextPartContent]
   )
   const visibleThinkingContent = useMemo(
     () => chat.role === 'system' ? cleanAssistantGeneratedContent(chat.thinking || '') : (chat.thinking || ''),
@@ -532,6 +539,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
                   <ChatPreview
                     text={liveFinalAnswerContent}
                     streaming={isResponseStreaming}
+                    clawFormat
                   />
                 )}
               </div>
@@ -574,7 +582,12 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
               <TaskPlanProgress view={visibleResearchProgress} content={content || ''} compact={false} className="max-w-2xl" />
             )}
             {(!visibleResearchProgress || (visibleResearchProgress && visibleResearchProgress.statusText === '研究完成，正在收尾' && displayContent?.trim())) && (
-              <ChatPreview text={displayContent || ''} streaming={isResponseStreaming} highlightQuery={searchQuery} />
+              <ChatPreview
+                text={displayContent || ''}
+                streaming={isResponseStreaming}
+                highlightQuery={searchQuery}
+                clawFormat={Boolean(storedAgentHistory)}
+              />
             )}
 
             {/* 6. 统一操作栏：标记、复制、翻译、朗读、重试、删除 */}

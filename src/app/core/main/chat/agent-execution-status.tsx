@@ -129,6 +129,7 @@ export function AgentExecutionStatus() {
         telemetry={agentState.telemetry}
         currentStepStartTime={agentState.currentStepStartTime}
         taskPlan={agentState.taskPlan}
+        partSnapshot={agentState.agentPartSnapshot}
       />
     )
   }

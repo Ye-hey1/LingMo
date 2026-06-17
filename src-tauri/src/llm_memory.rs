@@ -1,4 +1,4 @@
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -1365,11 +1365,12 @@ fn resolve_opencode_db_path(paths: &Option<LlmMemoryPathOverrides>) -> Result<Pa
 }
 
 fn default_opencode_candidates(home: &Path) -> Vec<PathBuf> {
-    let mut candidates = vec![home
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("opencode.db")];
+    let mut candidates = vec![
+        home.join(".local")
+            .join("share")
+            .join("opencode")
+            .join("opencode.db"),
+    ];
 
     #[cfg(windows)]
     {
@@ -1775,7 +1776,9 @@ fn open_lingmo_db(db_path: &Path) -> Result<rusqlite::Connection, String> {
         .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
         .map_err(|error| format!("Failed to enable LingMo WAL mode: {error}"))?;
     if !journal_mode.eq_ignore_ascii_case("wal") {
-        return Err(format!("Failed to enable LingMo WAL mode: got {journal_mode}"));
+        return Err(format!(
+            "Failed to enable LingMo WAL mode: got {journal_mode}"
+        ));
     }
     conn.pragma_update(None, "synchronous", "NORMAL")
         .map_err(|error| format!("Failed to set LingMo synchronous mode: {error}"))?;
@@ -1857,10 +1860,7 @@ fn get_lingmo_session_detail(
 ) -> Result<LlmMemorySessionDetail, String> {
     let db_path = resolve_lingmo_db_path(app, paths)?;
     if !db_path.exists() {
-        return Err(format!(
-            "LingMo database not found: {}",
-            db_path.display()
-        ));
+        return Err(format!("LingMo database not found: {}", db_path.display()));
     }
 
     let cache_key = build_session_detail_cache_key("lingmo", session_key, &db_path);
@@ -1957,10 +1957,7 @@ fn update_lingmo_message(
 ) -> Result<String, String> {
     let db_path = resolve_lingmo_db_path(app, paths)?;
     if !db_path.exists() {
-        return Err(format!(
-            "LingMo database not found: {}",
-            db_path.display()
-        ));
+        return Err(format!("LingMo database not found: {}", db_path.display()));
     }
 
     let conn = open_lingmo_db(&db_path)?;
@@ -2011,10 +2008,7 @@ fn delete_lingmo_message(
 ) -> Result<String, String> {
     let db_path = resolve_lingmo_db_path(app, paths)?;
     if !db_path.exists() {
-        return Err(format!(
-            "LingMo database not found: {}",
-            db_path.display()
-        ));
+        return Err(format!("LingMo database not found: {}", db_path.display()));
     }
 
     let conn = open_lingmo_db(&db_path)?;
@@ -2046,8 +2040,11 @@ fn delete_lingmo_message(
         .map_err(|error| format!("Chat not found: {error}"))?;
 
     if is_thinking {
-        conn.execute("UPDATE chats SET thinking = NULL WHERE id = ?1", params![chat_id])
-            .map_err(|error| format!("Failed to clear LingMo thinking: {error}"))?;
+        conn.execute(
+            "UPDATE chats SET thinking = NULL WHERE id = ?1",
+            params![chat_id],
+        )
+        .map_err(|error| format!("Failed to clear LingMo thinking: {error}"))?;
     } else {
         conn.execute("DELETE FROM chats WHERE id = ?1", params![chat_id])
             .map_err(|error| format!("Failed to delete LingMo chat: {error}"))?;
@@ -2063,10 +2060,7 @@ fn delete_lingmo_session(
 ) -> Result<String, String> {
     let db_path = resolve_lingmo_db_path(app, paths)?;
     if !db_path.exists() {
-        return Err(format!(
-            "LingMo database not found: {}",
-            db_path.display()
-        ));
+        return Err(format!("LingMo database not found: {}", db_path.display()));
     }
 
     let conn = open_lingmo_db(&db_path)?;

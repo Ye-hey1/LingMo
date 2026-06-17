@@ -387,6 +387,7 @@ function buildFileRenamePlan({
 function getDisplayFileName(fileName: string) {
   const displayName = fileName
     .replace(/\.drawio\.xml$/i, '')
+    .replace(/\.excalidraw$/i, '')
     .replace(/\.excalidraw\.json$/i, '')
     .replace(/\.diagram\.json$/i, '')
     .replace(/\.(md|markdown|pdf|drawio|json|txt)$/i, '')

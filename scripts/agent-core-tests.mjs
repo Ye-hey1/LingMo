@@ -143,6 +143,10 @@ try {
     isConcreteArtifactRequest,
   } = await importTsModule('src/lib/agent/final-answer.ts')
   const {
+    classifyError,
+    formatFriendlyError,
+  } = await importTsModule('src/lib/agent/friendly-errors.ts')
+  const {
     isSupportOnlyObservationText,
     isSupportOnlyToolName,
   } = await importTsModule('src/lib/agent/support-tools.ts')
@@ -169,8 +173,33 @@ try {
     skillRuntimeNeedsAgentMode,
   } = await importTsModule('src/lib/skills/runtime-profile.ts')
   const {
+    decodeSkillScriptOutput,
+    decodeSkillScriptOutputChunks,
+  } = await importTsModule('src/lib/skills/output-decoder.ts')
+  const {
     createAiStreamContentProcessor,
   } = await importTsModule('src/lib/ai/sanitize.ts')
+  const {
+    getConfiguredProviderDisplayTitle,
+  } = await importTsModule('src/lib/ai/provider-display.ts')
+  const {
+    classifyError: classifyAiError,
+    formatError: formatAiError,
+  } = await importTsModule('src/lib/ai/error-handler.ts')
+  const {
+    createConfiguredModelSelectionId,
+    matchesConfiguredModelSelection,
+    parseConfiguredModelSelectionId,
+  } = await importTsModule('src/lib/ai/model-selection.ts')
+  const {
+    inferModelTypeFromId,
+  } = await importTsModule('src/lib/ai/model-type.ts')
+  const {
+    CLAW_SPINNER_FRAMES,
+    getClawStatusGlyph,
+    getClawStreamVisibleMarkdown,
+    normalizeClawNestedFences,
+  } = await importTsModule('src/app/core/main/chat/claw-stream-format.ts')
   const {
     normalizeCallToolResult,
   } = await importTsModule('src/lib/mcp/result.ts')
@@ -188,6 +217,29 @@ try {
     createRuntimeWarning,
     mergeRuntimeWarnings,
   } = await importTsModule('src/lib/agent/runtime-snapshot.ts')
+  const {
+    createInitialAgentPartSnapshot,
+    reduceAgentPartSnapshot,
+  } = await importTsModule('src/lib/agent/part-reducer.ts')
+  const {
+    buildDistillRecommendations,
+    buildDreamCandidates,
+  } = await importTsModule('src/lib/agent/dream.ts')
+  const {
+    appendAgentSessionEntry,
+    createAgentSessionLog,
+    getAgentSessionBranch,
+    reduceAgentSessionLogFromEvents,
+  } = await importTsModule('src/lib/agent-harness/session-log.ts')
+  const {
+    AgentLifecycleController,
+    createAgentTurnState,
+  } = await importTsModule('src/lib/agent-harness/turn-lifecycle.ts')
+  const {
+    getMutationQueueSize,
+    getToolMutationTargets,
+    withMutationQueue,
+  } = await importTsModule('src/lib/agent-harness/mutation-queue.ts')
 
   assert.equal(deriveIntentPolicy('帮我完善当前图表').allowWrite, true)
   assert.equal(deriveIntentPolicy('AI 能进行操作吗？').allowWrite, false)
@@ -196,6 +248,56 @@ try {
   assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowWrite, true)
   assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowExecute, true)
   assert.equal(deriveIntentPolicy('不要执行脚本，只给命令建议').allowExecute, false)
+  assert.equal(classifyError('STALE_MCP_TOOL_REGISTRY'), 'mcp_registry')
+  assert.equal(classifyError('Final Answer 内容不能为空'), 'model_output')
+  assert.equal(classifyError('TypeError: Cannot read properties of undefined'), 'runtime')
+  assert.equal(classifyAiError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}'), 'billing')
+  const billingError = formatAiError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}')
+  assert.equal(billingError.title, '余额不足')
+  assert.equal(billingError.retryable, false)
+  assert.equal(createConfiguredModelSelectionId('provider-a', 'model-b'), 'provider-a:model-b')
+  assert.deepEqual(parseConfiguredModelSelectionId('provider-a:model-b'), {
+    configKey: 'provider-a',
+    modelId: 'model-b',
+  })
+  assert.equal(matchesConfiguredModelSelection({
+    configKey: 'provider-a',
+    modelId: 'model-b',
+    selectionId: 'provider-a:model-b',
+  }), true)
+  assert.equal(matchesConfiguredModelSelection({
+    configKey: 'provider-a',
+    modelId: 'model-b',
+    selectionId: 'model-b',
+  }), true)
+  assert.equal(matchesConfiguredModelSelection({
+    configKey: 'provider-a',
+    modelId: 'model-b',
+    selectionId: 'provider-a-model-b',
+  }), true)
+  assert.equal(matchesConfiguredModelSelection({
+    configKey: 'provider-a',
+    modelId: 'model-b',
+    selectionId: 'provider-c:model-b',
+  }), false)
+  assert.equal(getConfiguredProviderDisplayTitle({
+    key: 'groq-asr',
+    title: 'OpenAI',
+    baseURL: 'https://api.groq.com/openai/v1',
+  }), 'Groq')
+  assert.equal(getConfiguredProviderDisplayTitle({
+    key: 'siliconflow-asr',
+    title: '',
+    baseURL: 'https://api.siliconflow.cn/v1',
+  }), 'SiliconFlow')
+  assert.equal(inferModelTypeFromId('FunAudioLLM/SenseVoiceSmall'), 'stt')
+  assert.equal(inferModelTypeFromId('TeleAI/TeleSpeechASR'), 'stt')
+  assert.equal(inferModelTypeFromId('mimo-v2.5-asr'), 'stt')
+  assert.equal(inferModelTypeFromId('FunAudioLLM/CosyVoice2-0.5B'), 'tts')
+  const unknownFriendlyError = formatFriendlyError('low level failure: route planner crashed')
+  assert.equal(unknownFriendlyError.title, '执行异常')
+  assert.match(unknownFriendlyError.message, /route planner crashed/)
+  assert.doesNotMatch(unknownFriendlyError.message, /^遇到了意外错误。$/)
 
   const runtimeSnapshot = createInitialAgentRuntimeSnapshot('run-1')
   assert.equal(runtimeSnapshot.runId, 'run-1')
@@ -243,6 +345,39 @@ try {
     content: [],
     isError: false,
   })
+  const decodedSkillOutput = decodeSkillScriptOutput(new Uint8Array([0xff, 0x61]))
+  assert.equal(decodedSkillOutput.output.includes('a'), true)
+  assert.equal(decodedSkillOutput.outputEncoding, 'utf8-replacement')
+  assert.equal(decodedSkillOutput.warnings.length, 1)
+  const decodedSkillChunks = decodeSkillScriptOutputChunks([
+    new Uint8Array([0xff]),
+    'hello',
+  ])
+  assert.equal(decodedSkillChunks.output.includes('hello'), true)
+  assert.equal(decodedSkillChunks.outputEncoding, 'utf8-replacement')
+  assert.equal(decodedSkillChunks.warnings.length, 1)
+  const decodedArrayBuffer = decodeSkillScriptOutput(new Uint8Array([0x68, 0x69]).buffer)
+  assert.equal(decodedArrayBuffer.output, 'hi')
+  const decodedNumberArray = decodeSkillScriptOutput([0xe4, 0xbd, 0xa0, 0xe5, 0xa5, 0xbd])
+  assert.equal(decodedNumberArray.output, '你好')
+  assert.deepEqual(CLAW_SPINNER_FRAMES, ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+  assert.equal(getClawStatusGlyph('done', 0), '✔')
+  assert.equal(getClawStatusGlyph('error', 0), '✘')
+  assert.equal(getClawStreamVisibleMarkdown('# Heading', true), '')
+  assert.equal(getClawStreamVisibleMarkdown('# Heading\n\nParagraph\n\n', true), '# Heading\n\nParagraph\n\n')
+  assert.equal(getClawStreamVisibleMarkdown('```ts\nconst x = 1\n', true), '')
+  assert.equal(getClawStreamVisibleMarkdown('```ts\nconst x = 1\n```\n', true), '```ts\nconst x = 1\n```\n')
+  assert.match(normalizeClawNestedFences('```markdown\n```ts\nx\n```\n```'), /^````markdown/)
+  assert.equal(isConcreteArtifactRequest('使用 aihot 技能获取最新 AI 信息并直接输出文字', true), false)
+  assert.equal(
+    getConcreteToolCompletionBlockReason({
+      userInput: '使用 aihot 技能获取最新 AI 信息并直接输出文字',
+      actionLikeRequest: true,
+      hasConcreteSuccessfulAction: false,
+      hasOnlySupportProgress: false,
+    }),
+    null,
+  )
   const toolExposure = buildToolExposureSnapshot({
     tools: [
       { name: 'safe_read_file', category: 'filesystem', risk: 'low', description: '', parameters: [], requiresConfirmation: false, execute: async () => ({ success: true }) },
@@ -250,17 +385,396 @@ try {
     ],
     visibleToolNames: ['safe_read_file'],
     blockedToolNames: [{ name: 'web_fetch', reason: 'web disabled' }],
+    exposureReasons: { safe_read_file: ['base tool', 'read capability'] },
     maxVisibleTools: 1,
   })
   assert.deepEqual(toolExposure.visible.map(tool => tool.name), ['safe_read_file'])
+  assert.equal(toolExposure.visible[0].reason, 'base tool; read capability')
   assert.deepEqual(toolExposure.blocked.map(tool => tool.reason), ['web disabled'])
   const combinedRuntimeSnapshot = buildAgentRuntimeSnapshot({
     runId: 'run-2',
     skills: skillRuntimeSnapshot,
     tools: toolExposure,
+    mcp: {
+      selectedServerIds: ['server-1'],
+      connectedServerIds: ['server-1'],
+      servers: [],
+      toolNames: ['server-1__search'],
+      toolGeneration: 7,
+      warnings: [],
+    },
   })
   assert.deepEqual(combinedRuntimeSnapshot.visibleToolNames, ['safe_read_file'])
   assert.equal(combinedRuntimeSnapshot.skills.selectedSkillIds[0], 'daily-report')
+  assert.equal(combinedRuntimeSnapshot.mcp.toolGeneration, 7)
+
+  let sessionLog = createAgentSessionLog('session-run')
+  sessionLog = appendAgentSessionEntry(sessionLog, {
+    entry: {
+      type: 'run_started',
+      route: 'agent',
+      userGoal: '审计一次 agent 执行',
+      timestamp: 100,
+    },
+  })
+  const sessionRootId = sessionLog.leafId
+  sessionLog = appendAgentSessionEntry(sessionLog, {
+    entry: {
+      type: 'turn_started',
+      iteration: 1,
+      visibleToolNames: ['safe_read_file'],
+      timestamp: 110,
+    },
+  })
+  const firstTurnId = sessionLog.leafId
+  sessionLog = appendAgentSessionEntry(sessionLog, {
+    entry: {
+      type: 'custom',
+      customType: 'side-branch',
+      parentId: sessionRootId,
+      timestamp: 120,
+    },
+  })
+  assert.equal(sessionLog.entries.at(-1).parentId, sessionRootId)
+  assert.deepEqual(getAgentSessionBranch(sessionLog).map(entry => entry.id), [sessionRootId, sessionLog.leafId])
+  assert.deepEqual(getAgentSessionBranch(sessionLog, firstTurnId).map(entry => entry.type), ['run_started', 'turn_started'])
+
+  const reducedSessionLog = reduceAgentSessionLogFromEvents({
+    runId: 'event-run',
+    route: 'agent',
+    userGoal: '执行工具并回答',
+    events: [
+      {
+        type: 'iteration.started',
+        runId: 'event-run',
+        sequence: 1,
+        timestamp: 100,
+        iteration: 1,
+        payload: { visibleToolNames: ['safe_read_file'] },
+      },
+      {
+        type: 'tool.execution.started',
+        runId: 'event-run',
+        sequence: 2,
+        timestamp: 115,
+        iteration: 1,
+        payload: {
+          toolName: 'safe_read_file',
+          toolCallId: 'tool-1',
+          params: { filePath: 'daily.md' },
+        },
+      },
+      {
+        type: 'tool.execution.finished',
+        runId: 'event-run',
+        sequence: 3,
+        timestamp: 120,
+        iteration: 1,
+        payload: {
+          toolName: 'safe_read_file',
+          toolCallId: 'tool-1',
+          success: true,
+          status: 'completed',
+          message: '读取完成',
+          dataRef: 'agent://event-run/observation/file.txt',
+          retryable: false,
+        },
+      },
+      {
+        type: 'model.response.received',
+        runId: 'event-run',
+        sequence: 4,
+        timestamp: 130,
+        iteration: 1,
+        payload: { finishReason: 'stop', toolCallCount: 0 },
+      },
+      {
+        type: 'final.answer.rendered',
+        runId: 'event-run',
+        sequence: 5,
+        timestamp: 140,
+        iteration: 1,
+        payload: { content: '最终回答' },
+      },
+      {
+        type: 'agent.completed',
+        runId: 'event-run',
+        sequence: 6,
+        timestamp: 150,
+        payload: { result: '最终回答' },
+      },
+    ],
+  })
+  assert.deepEqual(
+    reducedSessionLog.entries.map(entry => entry.type),
+    ['run_started', 'turn_started', 'tool_call_started', 'tool_result', 'turn_finished', 'message', 'run_finished'],
+  )
+  assert.equal(reducedSessionLog.entries[2].paramsSummary, '{"filePath":"daily.md"}')
+  assert.equal(reducedSessionLog.entries[3].parentId, reducedSessionLog.entries[2].id)
+  assert.equal(reducedSessionLog.entries[3].dataRef, 'agent://event-run/observation/file.txt')
+  assert.equal(reducedSessionLog.entries.at(-1).status, 'completed')
+
+  const failedSessionLog = reduceAgentSessionLogFromEvents({
+    runId: 'failed-run',
+    route: 'agent',
+    userGoal: '失败路径',
+    events: [{
+      type: 'error',
+      runId: 'failed-run',
+      sequence: 1,
+      timestamp: 100,
+      level: 'error',
+      payload: { error: 'boom' },
+    }],
+  })
+  assert.equal(failedSessionLog.entries.at(-1).type, 'run_finished')
+  assert.equal(failedSessionLog.entries.at(-1).status, 'failed')
+  assert.equal(failedSessionLog.entries.at(-1).error, 'boom')
+
+  const pausedSessionLog = reduceAgentSessionLogFromEvents({
+    runId: 'paused-run',
+    route: 'agent',
+    userGoal: '暂停路径',
+    events: [{
+      type: 'agent.stopped',
+      runId: 'paused-run',
+      sequence: 1,
+      timestamp: 100,
+      payload: { reason: 'USER_STOPPED' },
+    }],
+  })
+  assert.equal(pausedSessionLog.entries.at(-1).status, 'paused')
+
+  const lifecycleTool = {
+    name: 'safe_read_file',
+    category: 'filesystem',
+    risk: 'low',
+    description: '',
+    parameters: [],
+    requiresConfirmation: false,
+    execute: async () => ({ success: true }),
+  }
+  const turnStateA = createAgentTurnState({
+    runId: 'life-run',
+    iteration: 1,
+    route: 'agent',
+    userGoal: '读取文件',
+    systemPrompt: 'system',
+    tools: [lifecycleTool],
+    runtimeSnapshot,
+  })
+  const turnStateB = createAgentTurnState({
+    runId: 'life-run',
+    iteration: 1,
+    route: 'agent',
+    userGoal: '读取文件',
+    systemPrompt: 'system',
+    tools: [lifecycleTool],
+    runtimeSnapshot,
+  })
+  assert.equal(turnStateA.checksum, turnStateB.checksum)
+  assert.deepEqual(turnStateA.visibleToolNames, ['safe_read_file'])
+
+  const lifecycle = new AgentLifecycleController('life-run')
+  lifecycle.startRun({ route: 'agent', userGoal: '读取文件' })
+  lifecycle.createTurn({
+    runId: 'life-run',
+    iteration: 1,
+    route: 'agent',
+    userGoal: '读取文件',
+    systemPrompt: 'system',
+    tools: [lifecycleTool],
+    runtimeSnapshot,
+  })
+  assert.equal(lifecycle.getSnapshot().phase, 'turn')
+  assert.equal(lifecycle.getSnapshot().pendingEntryCount, 1)
+  lifecycle.savePoint({ finishReason: 'tool_calls', toolCallCount: 1 })
+  assert.equal(lifecycle.getSnapshot().phase, 'save_point')
+  assert.equal(lifecycle.getSnapshot().pendingEntryCount, 0)
+  assert.deepEqual(
+    lifecycle.getSessionLog().entries.map(entry => entry.type),
+    ['run_started', 'turn_started', 'runtime_snapshot', 'turn_finished'],
+  )
+  lifecycle.enqueueEntry({
+    type: 'tool_result',
+    iteration: 1,
+    toolName: 'safe_read_file',
+    toolCallId: 'tool-1',
+    success: true,
+    status: 'success',
+    summary: '读取完成',
+    retryable: false,
+  })
+  lifecycle.savePoint({ finishReason: 'tool_calls', toolCallCount: 1 })
+  assert.deepEqual(
+    lifecycle.getSessionLog().entries.map(entry => entry.type),
+    ['run_started', 'turn_started', 'runtime_snapshot', 'turn_finished', 'tool_result'],
+  )
+  lifecycle.enterToolPhase()
+  assert.equal(lifecycle.getPhase(), 'tool')
+  lifecycle.createTurn({
+    runId: 'life-run',
+    iteration: 2,
+    route: 'agent',
+    userGoal: '读取文件',
+    systemPrompt: 'system v2',
+    tools: [lifecycleTool],
+  })
+  lifecycle.savePoint({ finishReason: 'stop', toolCallCount: 0 })
+  lifecycle.finish({ status: 'completed', finalAnswer: '完成' })
+  assert.equal(lifecycle.getPhase(), 'settled')
+  assert.equal(lifecycle.getSnapshot().savePointCount, 2)
+  assert.deepEqual(
+    lifecycle.getSessionLog().entries.map(entry => entry.type),
+    ['run_started', 'turn_started', 'runtime_snapshot', 'turn_finished', 'tool_result', 'turn_started', 'turn_finished', 'run_finished'],
+  )
+
+  assert.deepEqual(getToolMutationTargets('replace_editor_content', {}), ['editor:active'])
+  assert.deepEqual(getToolMutationTargets('create_file', {
+    folderPath: 'Notes/../Notes',
+    fileName: 'Daily.md',
+    path: '.\\Notes\\Archive\\..\\Summary.md',
+  }), ['notes', 'notes/summary.md', 'notes/daily.md'])
+  const mutationOrder = []
+  const delay = ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms))
+  const firstMutation = withMutationQueue(['Notes/Daily.md'], async () => {
+    mutationOrder.push('first-start')
+    await delay(25)
+    mutationOrder.push('first-end')
+    return 'first'
+  })
+  const secondMutation = withMutationQueue(['notes\\daily.md'], async () => {
+    mutationOrder.push('second-start')
+    mutationOrder.push('second-end')
+    return 'second'
+  })
+  assert.deepEqual(await Promise.all([firstMutation, secondMutation]), ['first', 'second'])
+  assert.deepEqual(mutationOrder, ['first-start', 'first-end', 'second-start', 'second-end'])
+  assert.equal(getMutationQueueSize(), 0)
+
+  let statusSnapshot = createInitialAgentPartSnapshot('status-run')
+  statusSnapshot = reduceAgentPartSnapshot(statusSnapshot, {
+    type: 'iteration.started',
+    runId: 'status-run',
+    sequence: 2,
+    timestamp: 120,
+    payload: {},
+  })
+  assert.equal(statusSnapshot.visibleStatus.label, '思考中')
+  statusSnapshot = reduceAgentPartSnapshot(statusSnapshot, {
+    type: 'agent.started',
+    runId: 'status-run',
+    sequence: 1,
+    timestamp: 100,
+    payload: { userInput: 'latest ai news' },
+  })
+  assert.equal(statusSnapshot.visibleStatus.label, '思考中')
+
+  let partSnapshot = createInitialAgentPartSnapshot('tool-run')
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'action.parsed',
+    runId: 'tool-run',
+    sequence: 1,
+    timestamp: 100,
+    payload: { tool: 'execute_skill_script', params: { skill_id: 'aihot' } },
+  })
+  assert.equal(partSnapshot.parts.length, 0)
+  assert.equal(partSnapshot.visibleStatus.label, '准备调用工具')
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'tool.updated',
+    runId: 'tool-run',
+    sequence: 2,
+    timestamp: 120,
+    payload: {
+      toolCall: {
+        id: 'tool-1',
+        toolName: 'execute_skill_script',
+        params: { skill_id: 'aihot' },
+        status: 'error',
+        timestamp: 120,
+        result: { success: false, error: 'invalid utf-8 sequence of 1 bytes' },
+      },
+    },
+  })
+  assert.equal(partSnapshot.status, 'running')
+  assert.equal(partSnapshot.visibleStatus.label, '工具步骤失败，正在恢复')
+  assert.equal(partSnapshot.recoverableErrors.length, 1)
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'tool.execution.finished',
+    runId: 'tool-run',
+    sequence: 4,
+    timestamp: 180,
+    payload: {
+      toolCall: {
+        id: 'tool-2',
+        toolName: 'safe_read_file',
+        params: { filePath: 'daily.md' },
+        status: 'skipped',
+        timestamp: 180,
+        result: {
+          success: false,
+          status: 'skipped',
+          error: 'SKIPPED_TOOL_CALL',
+          message: 'Skipped extra tool call',
+        },
+      },
+      status: 'skipped',
+      success: false,
+      message: 'Skipped extra tool call',
+      error: 'SKIPPED_TOOL_CALL',
+    },
+  })
+  assert.equal(partSnapshot.parts.at(-1)?.status, 'skipped')
+  assert.equal(partSnapshot.visibleStatus.label, '已跳过额外工具调用')
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'final.answer.rendered',
+    runId: 'tool-run',
+    sequence: 3,
+    timestamp: 160,
+    payload: { content: '日报正文', streaming: true },
+  })
+  assert.equal(partSnapshot.finalAnswerContent, '日报正文')
+  assert.equal(partSnapshot.visibleStatus.label, '正在写答案')
+  const finalTextPart = partSnapshot.parts.find(part => part.type === 'text')
+  assert.equal(finalTextPart?.text, '日报正文')
+  assert.equal(finalTextPart?.status, 'completed')
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'agent.started',
+    runId: 'tool-run',
+    sequence: 5,
+    timestamp: 200,
+    payload: { userInput: 'late duplicate start' },
+  })
+  assert.equal(partSnapshot.visibleStatus.label, '正在写答案')
+  const repeatedSummary = {
+    id: 'agent-run-1',
+    userGoal: '生成 AI 日报',
+    result: '已生成日报',
+    stopped: false,
+    completedAt: Date.now(),
+    iterations: 2,
+    toolsUsed: [{ toolName: 'execute_skill_script', count: 1, success: 1, error: 0 }],
+    filesTouched: ['daily.md'],
+    failures: [],
+  }
+  const dreamCandidates = buildDreamCandidates({
+    summaries: [repeatedSummary],
+    memories: [],
+    workingMemory: {
+      recentFiles: ['daily.md'],
+      recentFolders: [],
+      failedAttempts: [],
+      toolUsageStats: { execute_skill_script: 3 },
+      lastActiveAt: Date.now(),
+    },
+  })
+  assert.ok(dreamCandidates.some(candidate => candidate.kind === 'workflow'))
+  const distillRecommendations = buildDistillRecommendations({
+    summaries: [repeatedSummary, { ...repeatedSummary, id: 'agent-run-2' }],
+  })
+  assert.equal(distillRecommendations.length, 1)
+  assert.deepEqual(distillRecommendations[0].requiredTools, ['execute_skill_script'])
+
 
   assert.equal(getToolRiskLevel('read_markdown_file', 'note'), 'low')
   assert.equal(getToolRiskLevel('create_file', 'note'), 'medium')
@@ -601,6 +1115,12 @@ contextPolicy:
   assert.ok(parsedAihotSkill.metadata.allowedTools.includes('execute_skill_script'))
   assert.ok(parsedAihotSkill.metadata.allowedTools.includes('web_fetch'))
   assert.equal(parsedAihotSkill.metadata.runtimeProfile, 'agent')
+  const parsedAmapSkill = parseSkillFile(await readFile(join(repoRoot, 'skills/amap-jsapi-skill/SKILL.md'), 'utf8'))
+  assert.equal(parsedAmapSkill.metadata.name, 'amap-jsapi-skill')
+  assert.match(parsedAmapSkill.metadata.description, /高德地图 JSAPI/)
+  assert.equal(parsedAmapSkill.metadata.license, 'MIT')
+  assert.equal(parsedAmapSkill.metadata.version, '1.0.0')
+  assert.equal(validateSkillYamlMetadata(parsedAmapSkill.metadata).valid, true)
   assert.deepEqual(classifySkillScriptPath('skills/aihot/runtime/fetch_aihot.sh'), {
     kind: 'generated-runtime-script',
     normalizedArg: 'fetch_aihot.sh',
@@ -718,8 +1238,77 @@ contextPolicy:
   assert.match(slashBridgeSource, /skillRuntimeNeedsAgentMode\(runtime\.profile\)/)
   assert.match(slashBridgeSource, /skill\.metadata\.runtimeProfile/)
   assert.match(slashBridgeSource, /skill\.metadata\.capabilities/)
+  assert.match(slashBridgeSource, /useSkillsStore\.getState\(\)\.initSkills\(\)/)
+  assert.match(slashBridgeSource, /skillManager\.getUserInvocableSkills\(\)/)
   assert.doesNotMatch(slashBridgeSource, /function skillNeedsAgentMode/)
   assert.doesNotMatch(slashBridgeSource, /create\|modify\|edit\|update\|delete\|move\|rename\|copy\|save\|export\|execute\|run/)
+
+  const chatDictationSource = await readFile(join(repoRoot, 'src/app/core/main/chat/use-chat-dictation.ts'), 'utf8')
+  assert.match(chatDictationSource, /formatError\(error\)/)
+  assert.match(chatDictationSource, /EXPECTED_DICTATION_ERROR_KINDS/)
+  assert.match(chatDictationSource, /"billing"/)
+  assert.match(chatDictationSource, /console\.warn\("聊天语音识别未完成:"/)
+
+  const settingModelSelectSource = await readFile(join(repoRoot, 'src/app/core/setting/components/model-select.tsx'), 'utf8')
+  assert.match(settingModelSelectSource, /createConfiguredModelSelectionId/)
+  assert.match(settingModelSelectSource, /matchesConfiguredModelSelection/)
+  assert.match(settingModelSelectSource, /getConfiguredProviderDisplayTitle\(config\)/)
+  assert.match(settingModelSelectSource, /dedupeGroupedModels/)
+  assert.match(settingModelSelectSource, /getModelDedupKey/)
+  assert.doesNotMatch(settingModelSelectSource, /getCachedProviderTemplates/)
+
+  const settingConfigSource = await readFile(join(repoRoot, 'src/app/core/setting/config.tsx'), 'utf8')
+  assert.match(settingConfigSource, /shouldAutoMergeTemplateModel/)
+  assert.match(settingConfigSource, /model\.modelType !== 'stt'/)
+  assert.match(settingConfigSource, /model\.modelType !== 'tts'/)
+  assert.match(settingConfigSource, /cleanupConfiguredModels/)
+  assert.match(settingConfigSource, /inferModelTypeFromId/)
+  assert.match(settingConfigSource, /normalizeConfiguredModelType/)
+  assert.match(settingConfigSource, /model\.modelType === 'chat' && inferredType !== 'chat'/)
+  assert.match(settingConfigSource, /seen\.has\(key\)/)
+  assert.doesNotMatch(settingConfigSource, /LEGACY_TEMPLATE_AUDIO_MODEL_KEYS/)
+  assert.doesNotMatch(settingConfigSource, /model:\s*'glm-asr-2512'/)
+  assert.doesNotMatch(settingConfigSource, /model:\s*'FunAudioLLM\/SenseVoiceSmall'/)
+  assert.doesNotMatch(settingConfigSource, /model:\s*'whisper-1'/)
+
+  const audioSource = await readFile(join(repoRoot, 'src/lib/audio.ts'), 'utf8')
+  assert.match(audioSource, /transcriptionModel = sttConfig\.model\.trim\(\)/)
+  assert.doesNotMatch(audioSource, /model: sttConfig\.model \|\| 'FunAudioLLM\/SenseVoiceSmall'/)
+
+  const skillManagerSource = await readFile(join(repoRoot, 'src/lib/skills/manager.ts'), 'utf8')
+  assert.match(skillManagerSource, /await this\.discoverProjectSkills\(\)/)
+  assert.doesNotMatch(skillManagerSource, /await this\.discoverGlobalSkills\(\)/)
+  assert.match(skillManagerSource, /generateSkillId\(existingSkill\.metadata\.name\) === generateSkillId\(skill\.metadata\.name\)/)
+  assert.match(skillManagerSource, /this\.unregisterSkill\(nameDuplicate\.metadata\.id\)/)
+  assert.match(skillManagerSource, /getSkillCompletenessWeight/)
+  assert.match(skillManagerSource, /existing\.metadata\.scope === 'project' && candidate\.metadata\.scope === 'global'/)
+
+  const skillsV2PathsSource = await readFile(join(repoRoot, 'src-tauri/src/skills_v2/paths.rs'), 'utf8')
+  assert.match(skillsV2PathsSource, /workspacePath/)
+  assert.match(skillsV2PathsSource, /app_data_dir\.join\("article"\)/)
+  assert.match(skillsV2PathsSource, /workspace_dir\(app_data_dir\)\.join\("skills"\)/)
+  assert.match(skillsV2PathsSource, /app_data_dir\.join\("skills-v2"\)\.join\("skills"\)/)
+
+  const skillsV2InstallerSource = await readFile(join(repoRoot, 'src-tauri/src/skills_v2/installer.rs'), 'utf8')
+  assert.match(skillsV2InstallerSource, /workspace_skills_dir\(app_data_dir\)/)
+  assert.doesNotMatch(skillsV2InstallerSource, /app_data_dir\.join\("skills"\)/)
+
+  const skillsV2DbSource = await readFile(join(repoRoot, 'src-tauri/src/skills_v2/db.rs'), 'utf8')
+  assert.match(skillsV2DbSource, /workspace_skills_dir\(app_data_dir\)/)
+  assert.match(skillsV2DbSource, /migrate_installed_skill_roots/)
+  assert.match(skillsV2DbSource, /sync_workspace_skill_inventory/)
+  assert.match(skillsV2DbSource, /parse_skill_md\(&skill_dir\)/)
+  assert.match(skillsV2DbSource, /source_type: "workspace"\.into\(\)/)
+
+  const skillsV2CommandsSource = await readFile(join(repoRoot, 'src-tauri/src/skills_v2/commands.rs'), 'utf8')
+  assert.match(skillsV2CommandsSource, /sync_workspace_skill_inventory\(&app_data_dir\)/)
+
+  const skillsV2MetadataSource = await readFile(join(repoRoot, 'src-tauri/src/skills_v2/skill_metadata.rs'), 'utf8')
+  assert.match(skillsV2MetadataSource, /parse_markdown_table_metadata/)
+
+  const legacySkillImportSource = await readFile(join(repoRoot, 'src-tauri/src/skills.rs'), 'utf8')
+  assert.match(legacySkillImportSource, /workspace_skills_dir\(&app_data_dir\)/)
+  assert.doesNotMatch(legacySkillImportSource, /app_data_dir\.join\("skills"\)/)
 
   const writerExecutorSource = await readFile(join(repoRoot, 'src/lib/agent/writer-executor.ts'), 'utf8')
   assert.match(writerExecutorSource, /export async function runWriterSkill/)
@@ -728,6 +1317,10 @@ contextPolicy:
   const harnessTypesSource = await readFile(join(repoRoot, 'src/lib/agent-harness/types.ts'), 'utf8')
   assert.match(harnessTypesSource, /export interface AgentRunSnapshot/)
   assert.match(harnessTypesSource, /export interface ContextPack/)
+  assert.match(harnessTypesSource, /export type ContextLayerId/)
+  assert.match(harnessTypesSource, /export interface ContextLayerUsage/)
+  assert.match(harnessTypesSource, /export interface ToolExposureRecord/)
+  assert.match(harnessTypesSource, /export interface AgentRunMetrics/)
   assert.match(harnessTypesSource, /export interface ToolObservation/)
   assert.match(harnessTypesSource, /export interface ApprovalRequest/)
   assert.match(harnessTypesSource, /export interface AgentHarnessMiddleware/)
@@ -767,6 +1360,8 @@ contextPolicy:
   assert.match(toolRuntimeSource, /executeWithTimeout/)
   assert.match(toolRuntimeSource, /compressToolResult/)
   assert.match(toolRuntimeSource, /retryable/)
+  assert.match(toolRuntimeSource, /isResultMarkedRetryable/)
+  assert.match(toolRuntimeSource, /STALE_MCP_TOOL_REGISTRY/)
   assert.match(toolRuntimeSource, /MAX_INLINE_OBSERVATION_CHARS/)
   assert.match(toolRuntimeSource, /writeAgentVfsText/)
   assert.match(toolRuntimeSource, /dataRef/)
@@ -775,6 +1370,9 @@ contextPolicy:
   assert.equal(existsSync(join(repoRoot, 'src/lib/agent-harness/approval-gate.ts')), false)
   const contextEngineSource = await readFile(join(repoRoot, 'src/lib/agent-harness/context-engine.ts'), 'utf8')
   assert.match(contextEngineSource, /export function buildContextPack/)
+  assert.match(contextEngineSource, /CONTEXT_LAYER_ORDER/)
+  assert.match(contextEngineSource, /buildLayerBudgets/)
+  assert.match(contextEngineSource, /inferContextLayer/)
   assert.match(contextEngineSource, /priority/)
   assert.match(contextEngineSource, /deferred/)
   const snapshotSource = await readFile(join(repoRoot, 'src/lib/agent-harness/run-snapshot-store.ts'), 'utf8')
@@ -799,6 +1397,9 @@ contextPolicy:
   assert.match(orchestratorSource, /todos\.json/)
   assert.match(orchestratorSource, /observationRefs/)
   assert.match(orchestratorSource, /eventWriteQueue/)
+  assert.match(orchestratorSource, /setSessionLog:\s*\(log\)/)
+  assert.match(orchestratorSource, /latestSessionLog/)
+  assert.match(orchestratorSource, /input\.sessionLog \|\| reduceAgentSessionLogFromEvents/)
   assert.match(orchestratorSource, /runAfterRunMiddleware/)
   assert.match(orchestratorSource, /afterRun middleware failed/)
 
@@ -810,13 +1411,55 @@ contextPolicy:
   assert.match(harnessRunnerSource, /runControl\.prepareModel/)
   assert.match(harnessRunnerSource, /executeGovernedHarnessTool/)
   assert.match(harnessRunnerSource, /readOnlyBatch/)
-  assert.match(harnessRunnerSource, /writeAgentVfsText/)
+  assert.match(harnessRunnerSource, /setContextPack/)
+  assert.match(harnessRunnerSource, /flushLifecycleSessionLog/)
+  assert.match(harnessRunnerSource, /setSessionLog/)
   assert.match(harnessRunnerSource, /buildContextPack/)
+  assert.match(harnessRunnerSource, /contextPackRef/)
+  assert.match(harnessRunnerSource, /tool_call_started/)
+  assert.match(harnessRunnerSource, /tool_result/)
   assert.match(harnessRunnerSource, /getGlobalToolCache|cached/)
   assert.match(harnessRunnerSource, /buildSkippedToolResultMessage/)
   assert.match(harnessRunnerSource, /callsToSkip/)
   assert.match(harnessRunnerSource, /onAnswerDelta\?:/)
   assert.match(harnessRunnerSource, /this\.config\.onAnswerDelta\?\.\(content\)/)
+  assert.match(harnessRunnerSource, /streamAnswerDelta:\s*true/)
+  assert.match(harnessRunnerSource, /getFinalAnswerRejectionDisplayReason/)
+  assert.match(harnessRunnerSource, /buildFinalAnswerRecoveryPrompt/)
+  assert.match(harnessRunnerSource, /buildMaxIterationFallback/)
+  assert.match(harnessRunnerSource, /buildForcedFinalAnswerPrompt/)
+  assert.match(harnessRunnerSource, /synthesizeFinalAnswer/)
+  assert.match(harnessRunnerSource, /FINAL_ANSWER_RESERVE_ITERATIONS/)
+  assert.match(harnessRunnerSource, /REPEATED_TOOL_CALL_THRESHOLD/)
+  assert.match(harnessRunnerSource, /OUTPUT_LENGTH_CONTINUATION_LIMIT/)
+  assert.match(harnessRunnerSource, /INVALID_OUTPUT_CONTINUATION_LIMIT/)
+  assert.match(harnessRunnerSource, /MAX_DYNAMIC_REACT_ITERATIONS/)
+  assert.match(harnessRunnerSource, /BUDGET_EXHAUSTION_TEXT_PATTERN/)
+  assert.match(harnessRunnerSource, /resolveReActMaxIterations/)
+  assert.match(harnessRunnerSource, /buildReActBudgetPrompt/)
+  assert.match(harnessRunnerSource, /buildOutputLengthContinuationPrompt/)
+  assert.match(harnessRunnerSource, /stableStringify/)
+  assert.match(harnessRunnerSource, /countRecentMatchingToolSteps/)
+  assert.match(harnessRunnerSource, /sanitizeFinalAnswerContent/)
+  assert.match(harnessRunnerSource, /isReadOnlyHarnessTool/)
+  assert.match(harnessRunnerSource, /estimateInformationLookupDensity/)
+  assert.match(harnessRunnerSource, /countUsefulReadOnlySteps/)
+  assert.match(harnessRunnerSource, /resolveReadOnlyBatchLimit/)
+  assert.match(harnessRunnerSource, /DEFAULT_READ_ONLY_BATCH_LIMIT/)
+  assert.match(harnessRunnerSource, /MAX_READ_ONLY_BATCH_LIMIT/)
+  assert.match(harnessRunnerSource, /requestedToolCallCount/)
+  assert.match(harnessRunnerSource, /completedReadOnlySteps/)
+  assert.match(harnessRunnerSource, /remainingToolIterations/)
+  assert.match(harnessRunnerSource, /maxToolIterations/)
+  assert.doesNotMatch(harnessRunnerSource, /CRITICAL - MAXIMUM AGENT STEPS REACHED/)
+  assert.match(harnessRunnerSource, /REPEATED_TOOL_CALL/)
+  assert.match(harnessRunnerSource, /tools:\s*\[\]/)
+  assert.match(harnessRunnerSource, /delete requestParams\.tools/)
+  assert.doesNotMatch(harnessRunnerSource, /isRoutePlanningRequest/)
+  assert.doesNotMatch(harnessRunnerSource, /model requested \$\{response\.toolCalls\.length\} more tool call\(s\) at the tool budget limit/)
+  assert.doesNotMatch(harnessRunnerSource, /已达到最大迭代次数，任务可能未完全完成。/)
+  assert.doesNotMatch(harnessRunnerSource, /此段因工具调用次数耗尽未能逐段驾车规划/)
+  assert.doesNotMatch(harnessRunnerSource, /candidate \|\| validation\.reason/)
   assert.doesNotMatch(harnessRunnerSource, /this\.config\.onThought\?\(content\)/)
   assert.doesNotMatch(harnessRunnerSource, /emitEvent\('thought\.updated', \{ content, streaming: true \}\)/)
   assert.doesNotMatch(harnessRunnerSource, /parseStructuredActionJson/)
@@ -833,6 +1476,9 @@ contextPolicy:
   assert.match(toolGovernanceSource, /requestConfirmation/)
   assert.match(toolGovernanceSource, /formatToolObservation/)
   assert.match(toolGovernanceSource, /normalizeHarnessToolParams/)
+  assert.match(toolGovernanceSource, /executeToolWithRuntimeRecovery/)
+  assert.match(toolGovernanceSource, /refreshMcpToolsForAgent/)
+  assert.match(toolGovernanceSource, /STALE_MCP_TOOL_REGISTRY/)
   assert.match(toolGovernanceSource, /WEB_ACCESS_DISABLED/)
   assert.ok(
     toolGovernanceSource.indexOf('WEB_ACCESS_DISABLED') < toolGovernanceSource.indexOf('const cache = getGlobalToolCache()'),
@@ -883,7 +1529,8 @@ contextPolicy:
 
   const agentHandlerSource = await readFile(join(repoRoot, 'src/lib/agent/agent-handler.ts'), 'utf8')
   assert.match(agentHandlerSource, /runControl\?: AgentRunControl/)
-  assert.match(agentHandlerSource, /agentRunId:\s*runControl\?\.runId/)
+  assert.match(agentHandlerSource, /createAgentRunId\('agent'\)/)
+  assert.match(agentHandlerSource, /agentRunId:\s*runId/)
   assert.match(agentHandlerSource, /getMiddlewareState/)
   assert.match(agentHandlerSource, /loadLegacyRuntimeState/)
   assert.match(agentHandlerSource, /HarnessAgentRunner/)
@@ -891,6 +1538,15 @@ contextPolicy:
   assert.match(agentHandlerSource, /onAnswerDelta/)
   assert.match(agentHandlerSource, /currentAction:\s*undefined/)
   assert.match(agentHandlerSource, /currentObservation:\s*undefined/)
+  assert.match(agentHandlerSource, /isFinalAnswerMode:\s*false/)
+  assert.match(agentHandlerSource, /finalAnswerContent:\s*undefined/)
+  assert.match(agentHandlerSource, /finishWithErrorState/)
+  assert.match(agentHandlerSource, /pendingConfirmation:\s*undefined/)
+  assert.match(agentHandlerSource, /await this\.config\.onError/)
+  assert.ok(
+    agentHandlerSource.indexOf('await this.config.onError?.(errorMessage)') < agentHandlerSource.indexOf('throw error'),
+    'agent handler must publish the user-visible error and stop UI state before rethrowing to orchestrator'
+  )
   assert.doesNotMatch(agentHandlerSource, /onThought\?\(finalAnswerContent \|\| visibleThought\)/)
   assert.doesNotMatch(agentHandlerSource, /new ReActAgent/)
   assert.doesNotMatch(agentHandlerSource, /ReActConfig/)
@@ -945,6 +1601,10 @@ contextPolicy:
   assert.match(chatSendSource, /function formatEmptyAiResponseMessage/)
   assert.match(chatSendSource, /没有返回可展示正文/)
   assert.match(chatSendSource, /createAgentEventBus/)
+  assert.match(chatSendSource, /onError:\s*async \(error\)/)
+  assert.match(chatSendSource, /isRunning:\s*false/)
+  assert.match(chatSendSource, /isThinking:\s*false/)
+  assert.match(chatSendSource, /pendingConfirmation:\s*undefined/)
   assert.match(chatSendSource, /startResearchRun/)
   assert.match(chatSendSource, /updateResearchProgressView/)
   assert.match(chatSendSource, /finishResearchRun/)
@@ -965,6 +1625,7 @@ contextPolicy:
   assert.match(chatContentSource, /import \{ AgentThinkingSummary \}/)
   assert.match(chatContentSource, /storedThinkingSummary/)
   assert.match(chatContentSource, /<AgentThinkingSummary/)
+  assert.match(chatContentSource, /clawFormat/)
   assert.match(chatContentSource, /researchRun\.progressView/)
   assert.match(chatContentSource, /visibleResearchProgress/)
   assert.doesNotMatch(chatContentSource, /<AgentRunView/)
@@ -973,29 +1634,70 @@ contextPolicy:
   assert.match(chatStoreSource, /ResearchRuntimeState/)
   assert.match(chatStoreSource, /recordResearchEvent/)
   assert.match(chatStoreSource, /updateResearchProgressView/)
+  assert.match(chatStoreSource, /conversationSelectionVersion/)
+  assert.match(chatStoreSource, /suppressConversationAutoRestore/)
+  assert.match(chatStoreSource, /initSelectionVersion !== get\(\)\.conversationSelectionVersion/)
+  assert.match(chatStoreSource, /!suppressConversationAutoRestore && conversations\.length > 0/)
+  assert.match(chatStoreSource, /shouldShowChatInCurrentConversation/)
+  assert.match(chatStoreSource, /void \(async \(\) => \{\s*const \{ syncConversationMessageCount \}/)
 
   const taskPlanProgressSource = await readFile(join(repoRoot, 'src/app/core/main/chat/task-plan-progress.tsx'), 'utf8')
   assert.match(taskPlanProgressSource, /view\?: ResearchProgressView/)
   assert.match(taskPlanProgressSource, /cacheHits/)
 
   const agentLiveStreamSource = await readFile(join(repoRoot, 'src/app/core/main/chat/agent-live-stream.tsx'), 'utf8')
-  assert.match(agentLiveStreamSource, /已思考/)
+  assert.match(agentLiveStreamSource, /formatClawStatusLabel/)
+  assert.match(agentLiveStreamSource, /getClawStatusGlyph/)
+  assert.match(agentLiveStreamSource, /formatThinkingElapsedSeconds/)
+  assert.match(agentLiveStreamSource, /useLiveElapsedMs/)
+  assert.match(agentLiveStreamSource, /\.toFixed\(1\)\}s/)
   assert.match(agentLiveStreamSource, /activity\?\.phase === "answering"/)
   assert.match(agentLiveStreamSource, /tone:\s*"done" as const/)
   assert.doesNotMatch(agentLiveStreamSource, /正在输出回答/)
-  assert.match(agentLiveStreamSource, /收起思考详情/)
+  assert.match(agentLiveStreamSource, /Collapse details/)
+  assert.doesNotMatch(agentLiveStreamSource, /收起思考详情|展开思考详情/)
   assert.doesNotMatch(agentLiveStreamSource, /Agent 正在执行|执行时间线|任务清单/)
 
   const agentThinkingSummarySource = await readFile(join(repoRoot, 'src/app/core/main/chat/agent-thinking-summary.tsx'), 'utf8')
   assert.match(agentThinkingSummarySource, /export function AgentThinkingSummary/)
-  assert.match(agentThinkingSummarySource, /已思考/)
+  assert.match(agentThinkingSummarySource, /getClawStatusGlyph/)
+  assert.match(agentThinkingSummarySource, /formatThinkingElapsedSeconds/)
+  assert.match(agentThinkingSummarySource, /\.toFixed\(1\)\}s/)
+  assert.match(agentThinkingSummarySource, /Done/)
+  assert.doesNotMatch(agentThinkingSummarySource, /已思考/)
   assert.match(agentThinkingSummarySource, /CompactToolCalls/)
 
   const compactToolCallsSource = await readFile(join(repoRoot, 'src/app/core/main/chat/compact-tool-calls.tsx'), 'utf8')
+  assert.match(compactToolCallsSource, /getClawStatusGlyph/)
   assert.match(compactToolCallsSource, /getHarnessResultMeta/)
   assert.match(compactToolCallsSource, /dataRef/)
   assert.match(compactToolCallsSource, /retryable/)
   assert.match(compactToolCallsSource, /errorKind/)
+
+  const harnessToolRuntimeSource = await readFile(join(repoRoot, 'src/lib/agent-harness/tool-runtime.ts'), 'utf8')
+  assert.match(harnessToolRuntimeSource, /invalid\[_\\s-\]\?api/)
+  assert.match(harnessToolRuntimeSource, /return false/)
+
+  const agentPartReducerSource = await readFile(join(repoRoot, 'src/lib/agent/part-reducer.ts'), 'utf8')
+  assert.match(agentPartReducerSource, /invalid\[_\\s-\]\?api/)
+  assert.doesNotMatch(agentPartReducerSource, /truncated\|firecrawl\|web_fetch\|stale/)
+
+  const safeListFilesSource = await readFile(join(repoRoot, 'src/lib/agent/tools/safe-tools.ts'), 'utf8')
+  assert.match(safeListFilesSource, /isMissingDirectoryError/)
+  assert.match(safeListFilesSource, /missingFolder/)
+  assert.match(safeListFilesSource, /does not exist\. Listed 0 entries/)
+
+  const chatPreviewSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-preview.tsx'), 'utf8')
+  assert.match(chatPreviewSource, /clawFormat/)
+  assert.match(chatPreviewSource, /getClawStreamVisibleMarkdown/)
+  assert.match(chatPreviewSource, /normalizeClawNestedFences/)
+  assert.match(chatPreviewSource, /claw-code-block/)
+  assert.match(chatPreviewSource, /claw_table_format/)
+
+  const clawStreamFormatSource = await readFile(join(repoRoot, 'src/app/core/main/chat/claw-stream-format.ts'), 'utf8')
+  assert.match(clawStreamFormatSource, /CLAW_SPINNER_FRAMES/)
+  assert.match(clawStreamFormatSource, /findClawStreamSafeBoundary/)
+  assert.match(clawStreamFormatSource, /claw-code\/rust\/crates\/rusty-claude-cli\/src\/render\.rs/)
 
   const chatSource = await readFile(join(repoRoot, 'src/lib/ai/chat.ts'), 'utf8')
   assert.match(chatSource, /createAiStreamContentProcessor/)

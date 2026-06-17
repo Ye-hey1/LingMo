@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { X, FileText, Hash, ExternalLink, Copy, Brain } from 'lucide-react';
+import { Brain, Copy, ExternalLink, FileText, Hash, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -20,8 +20,8 @@ interface NodeDetailPopupProps {
 const NODE_TYPE_ICONS: Record<string, React.ReactNode> = {
   note: <FileText className="h-4 w-4" />,
   concept: <Brain className="h-4 w-4" />,
-  person: <span className="text-sm">👤</span>,
-  project: <span className="text-sm">📁</span>,
+  person: <span className="text-sm">P</span>,
+  project: <span className="text-sm">D</span>,
   tag: <Hash className="h-4 w-4" />,
 };
 
@@ -52,13 +52,12 @@ export function NodeDetailPopup({
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
-    // Animate in
     requestAnimationFrame(() => setIsVisible(true));
   }, []);
 
   const handleClose = useCallback(() => {
     setIsVisible(false);
-    setTimeout(onClose, 200); // Wait for animation
+    window.setTimeout(onClose, 160);
   }, [onClose]);
 
   const nodeType = node.nodeType || 'note';
@@ -69,88 +68,81 @@ export function NodeDetailPopup({
   return (
     <div
       className={cn(
-        'fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm transition-opacity duration-200',
-        isVisible ? 'opacity-100' : 'opacity-0'
+        'fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-4 backdrop-blur-sm transition-opacity duration-150',
+        isVisible ? 'opacity-100' : 'opacity-0',
       )}
       onClick={handleClose}
     >
       <div
         className={cn(
-          'relative w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-2xl transition-all duration-200',
-          isVisible ? 'scale-100 translate-y-0' : 'scale-95 translate-y-4'
+          'relative w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-2xl transition-transform duration-150',
+          isVisible ? 'translate-y-0 scale-100' : 'translate-y-3 scale-[0.98]',
         )}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className={cn('flex h-10 w-10 items-center justify-center rounded-lg', NODE_TYPE_COLORS[nodeType])}>
-              {NODE_TYPE_ICONS[nodeType]}
+          <div className="flex min-w-0 items-center gap-3">
+            <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg', NODE_TYPE_COLORS[nodeType])}>
+              {NODE_TYPE_ICONS[nodeType] || NODE_TYPE_ICONS.note}
             </div>
-            <div>
-              <h3 className="text-lg font-semibold leading-tight">{node.nodeLabel}</h3>
-              <div className="mt-1 flex items-center gap-2">
+            <div className="min-w-0">
+              <h3 className="truncate text-lg font-semibold leading-tight">{node.nodeLabel}</h3>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
                 <Badge variant="secondary" className="text-xs">
-                  {NODE_TYPE_LABELS[nodeType]}
+                  {NODE_TYPE_LABELS[nodeType] || nodeType}
                 </Badge>
-                {nodeKind === 'hub' && (
-                  <Badge variant="default" className="text-xs bg-amber-500">
+                {nodeKind === 'hub' ? (
+                  <Badge className="bg-amber-500 text-xs">
                     核心节点
                   </Badge>
-                )}
+                ) : null}
               </div>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onClick={handleClose}
-          >
+          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={handleClose}>
             <X className="h-4 w-4" />
           </Button>
         </div>
 
         <Separator className="my-4" />
 
-        {/* Stats */}
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-lg bg-muted/50 p-3 text-center">
             <div className="text-2xl font-bold">{connections}</div>
             <div className="text-xs text-muted-foreground">连接数</div>
           </div>
           <div className="rounded-lg bg-muted/50 p-3 text-center">
-            <div className="text-2xl font-bold">{node.nodeProperties?.noteCount ?? 0}</div>
+            <div className="text-2xl font-bold">{Number(node.nodeProperties?.noteCount ?? 0)}</div>
             <div className="text-xs text-muted-foreground">关联笔记</div>
           </div>
           <div className="rounded-lg bg-muted/50 p-3 text-center">
-            <div className="text-2xl font-bold">{node.nodeProperties?.chunkCount ?? 0}</div>
+            <div className="text-2xl font-bold">{Number(node.nodeProperties?.chunkCount ?? 0)}</div>
             <div className="text-xs text-muted-foreground">RAG切块</div>
           </div>
         </div>
 
-        {/* Keywords */}
-        {node.nodeProperties?.keyword && (
+        {node.nodeProperties?.keyword || node.nodeProperties?.clusterLabel ? (
           <>
             <Separator className="my-4" />
             <div>
               <h4 className="mb-2 text-sm font-medium text-muted-foreground">关键词</h4>
               <div className="flex flex-wrap gap-1.5">
-                <Badge variant="outline" className="text-xs">
-                  {node.nodeProperties.keyword}
-                </Badge>
-                {node.nodeProperties?.clusterLabel && (
-                  <Badge variant="secondary" className="text-xs">
-                    {node.nodeProperties.clusterLabel}
+                {node.nodeProperties.keyword ? (
+                  <Badge variant="outline" className="text-xs">
+                    {String(node.nodeProperties.keyword)}
                   </Badge>
-                )}
+                ) : null}
+                {node.nodeProperties.clusterLabel ? (
+                  <Badge variant="secondary" className="text-xs">
+                    {String(node.nodeProperties.clusterLabel)}
+                  </Badge>
+                ) : null}
               </div>
             </div>
           </>
-        )}
+        ) : null}
 
-        {/* Related Nodes */}
-        {relatedNodes.length > 0 && (
+        {relatedNodes.length > 0 ? (
           <>
             <Separator className="my-4" />
             <div>
@@ -169,7 +161,7 @@ export function NodeDetailPopup({
                       className="h-2.5 w-2.5 shrink-0 rounded-full"
                       style={{ backgroundColor: relatedNode.nodeColor || '#64748b' }}
                     />
-                    <span className="flex-1 truncate text-sm">{relatedNode.nodeLabel}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm">{relatedNode.nodeLabel}</span>
                     <Badge variant="outline" className="shrink-0 text-[10px]">
                       {edgeLabel}
                     </Badge>
@@ -178,37 +170,22 @@ export function NodeDetailPopup({
               </div>
             </div>
           </>
-        )}
+        ) : null}
 
-        {/* Actions */}
         <Separator className="my-4" />
         <div className="flex gap-2">
-          {path && (
+          {path ? (
             <>
-              <Button
-                variant="default"
-                size="sm"
-                className="flex-1"
-                onClick={() => onOpenNote(path)}
-              >
+              <Button variant="default" size="sm" className="flex-1" onClick={() => onOpenNote(String(path))}>
                 <ExternalLink className="mr-2 h-3.5 w-3.5" />
                 打开笔记
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onCopyPath(path)}
-              >
+              <Button variant="outline" size="sm" onClick={() => onCopyPath(String(path))}>
                 <Copy className="h-3.5 w-3.5" />
               </Button>
             </>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="flex-1"
-            onClick={handleClose}
-          >
+          ) : null}
+          <Button variant="outline" size="sm" className="flex-1" onClick={handleClose}>
             关闭
           </Button>
         </div>

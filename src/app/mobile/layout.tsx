@@ -31,7 +31,7 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const pathname = usePathname()
+  const pathname = usePathname() || ''
   const { initSettingData, customThemeColors } = useSettingStore()
   const { initMainHosting } = useImageStore()
   const { currentLocale } = useI18n()

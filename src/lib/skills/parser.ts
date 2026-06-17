@@ -28,11 +28,9 @@ import {
 export function parseSkillFile(content: string): ParsedSkillFile {
   // 检查是否包含 YAML 前置
   if (!content.startsWith('---')) {
+    const tableMetadata = parseMarkdownTableMetadata(content)
     return {
-      metadata: {
-        name: '',
-        description: '',
-      },
+      metadata: tableMetadata,
       content: content.trim(),
       rawContent: content,
     }
@@ -249,6 +247,105 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
   }
 
   return metadata
+}
+
+function parseMarkdownTableMetadata(content: string): SkillYamlMetadata {
+  const metadata: SkillYamlMetadata = {
+    name: '',
+    description: '',
+  }
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim()
+
+    if (!trimmed) {
+      if (metadata.name || metadata.description) {
+        break
+      }
+      continue
+    }
+
+    if (trimmed.startsWith('#') && (metadata.name || metadata.description)) {
+      break
+    }
+
+    if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) {
+      if (metadata.name || metadata.description) {
+        break
+      }
+      continue
+    }
+
+    const cells = trimmed
+      .split('|')
+      .slice(1, -1)
+      .map(cell => normalizeMarkdownTableCell(cell))
+
+    if (cells.length < 2 || cells.every(cell => /^-+$/.test(cell))) {
+      continue
+    }
+
+    const key = cells[0].toLowerCase()
+    const value = cells.slice(1).join(' | ').trim()
+    if (!key || !value) {
+      continue
+    }
+
+    switch (key) {
+      case 'name':
+        metadata.name = value
+        break
+      case 'description':
+        metadata.description = value
+        break
+      case 'license':
+        metadata.license = value
+        break
+      case 'compatibility':
+        metadata.compatibility = value
+        break
+      case 'version':
+        metadata.version = value
+        metadata.metadata = {
+          ...metadata.metadata,
+          version: value,
+        }
+        break
+      case 'author':
+        metadata.author = value
+        metadata.metadata = {
+          ...metadata.metadata,
+          author: value,
+        }
+        break
+      case 'allowed-tools':
+      case 'allowedtools':
+        metadata.allowedTools = parseAllowedTools(value)
+        break
+      case 'runtimeprofile':
+      case 'runtime-profile':
+        metadata.runtimeProfile = value as SkillRuntimeProfile
+        break
+      case 'capabilities':
+        metadata.capabilities = parseStringArray(value)
+        break
+      case 'userinvocable':
+      case 'user-invocable':
+        metadata.userInvocable = parseBoolean(value)
+        break
+    }
+  }
+
+  return metadata
+}
+
+function normalizeMarkdownTableCell(value: string): string {
+  return value
+    .trim()
+    .replace(/^\*\*(.*)\*\*$/, '$1')
+    .replace(/^__(.*)__$/, '$1')
+    .replace(/^`(.*)`$/, '$1')
+    .trim()
 }
 
 /**

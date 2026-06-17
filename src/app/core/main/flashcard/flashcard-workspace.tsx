@@ -9,7 +9,9 @@ import {
   BookOpenCheck,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleAlert,
   Download,
   FilePlus2,
@@ -19,7 +21,6 @@ import {
   MousePointer2,
   Plus,
   RefreshCw,
-  SlidersHorizontal,
   Sparkles,
   Star,
   Target,
@@ -33,7 +34,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { FlashcardCreateDialog } from '@/components/flashcard-create-dialog'
 import {
   createFlashcardDeck,
@@ -41,6 +41,9 @@ import {
   deleteFlashcard,
   deleteFlashcardDeck,
   ensureDefaultFlashcardDeck,
+  addFlashcardTagsBulk,
+  getFlashcardSearchHistory,
+  getFlashcardTagStats,
   getDueFlashcards,
   getFlashcardDeckById,
   getFlashcardDeckSummaries,
@@ -48,9 +51,14 @@ import {
   getFlashcardsByDeckId,
   getWeakFlashcards,
   moveFlashcardToDeck,
+  resetFlashcardProgress,
+  removeFlashcardTagsBulk,
+  saveFlashcardSearchHistory,
+  searchFlashcards,
   updateFlashcardDeck,
   updateFlashcardReview,
   updateFlashcardTags,
+  updateFlashcardStatus,
   getDailyReviewStats,
   getStreakDays,
   getTotalCardStatusCounts,
@@ -74,6 +82,7 @@ import type {
   FlashcardReviewRating,
   FlashcardType,
 } from '@/types/flashcard'
+import type { FlashcardSearchHistoryItem, FlashcardTagStat } from '@/db/flashcards'
 
 interface FlashcardWorkspaceProps {
   sourcePath?: string | null
@@ -81,13 +90,14 @@ interface FlashcardWorkspaceProps {
 
 type FlashcardWorkspaceView =
   | { name: 'home' }
+  | { name: 'library' }
   | { name: 'decks' }
   | { name: 'weak' }
   | { name: 'stats' }
   | { name: 'review'; deckId?: number; mode?: 'due' | 'weak' }
 
 type GenerateMode = 'memory' | 'exam' | 'concept'
-type GenerateQuestionType = Extract<FlashcardType, 'choice' | 'cloze' | 'short-answer' | 'basic'>
+type GenerateQuestionType = Extract<FlashcardType, 'choice' | 'cloze' | 'short-answer' | 'true-false'>
 
 interface SourceNote {
   id: string
@@ -104,8 +114,15 @@ interface GeneratedDraft {
   back?: string
   clozeText?: string
   choices?: string[]
+  choiceMode?: ChoiceMode
+  correctChoices?: string[]
   tags?: string[]
   sourcePath?: string
+  difficulty?: 'basic' | 'understanding' | 'application' | 'confusable'
+  sourceSummary?: string
+  qualityNote?: string
+  atomicityIssue?: string
+  duplicateHint?: string
   selected: boolean
 }
 
@@ -115,16 +132,21 @@ interface ReviewContent {
   promptLabel: string
   answerLabel: string
   choices?: string[]
+  choiceMode?: ChoiceMode
+  correctIndexes?: number[]
 }
 
 type ReviewCardStatus = 'correct' | 'wrong' | 'skipped'
+type ChoiceMode = 'single' | 'multiple'
 
 interface ReviewCardState {
   status?: ReviewCardStatus
   answer?: string
   choiceIndex?: number | null
+  choiceIndexes?: number[]
   showAnswer?: boolean
   recorded?: boolean
+  nextDueAt?: number
 }
 
 const defaultStats: FlashcardLearningStats = {
@@ -144,7 +166,7 @@ const questionTypeOptions: Array<{ value: GenerateQuestionType; label: string }>
   { value: 'choice', label: '选择题' },
   { value: 'cloze', label: '填空题' },
   { value: 'short-answer', label: '简答题' },
-  { value: 'basic', label: '问答卡' },
+  { value: 'true-false', label: '判断题' },
 ]
 
 const ratingOptions: Array<{
@@ -256,14 +278,73 @@ function parseChoiceOptions(card: Flashcard | GeneratedDraft) {
   return []
 }
 
+function parseChoiceMeta(card: Flashcard | GeneratedDraft): { choices: string[]; mode: ChoiceMode; correctIndexes: number[] } {
+  const raw = 'clozeText' in card ? card.clozeText : undefined
+  const fallbackChoices = parseChoiceOptions(card)
+  const answer = 'back' in card ? card.back || '' : ''
+  if (!raw) return { choices: fallbackChoices, mode: 'single', correctIndexes: [] }
+
+  try {
+    const parsed = JSON.parse(raw) as {
+      choices?: unknown
+      mode?: unknown
+      choiceMode?: unknown
+      correctIndexes?: unknown
+      correctChoices?: unknown
+    }
+    const choices = Array.isArray(parsed.choices) ? parsed.choices.map(String).filter(Boolean) : fallbackChoices
+    const rawMode = parsed.choiceMode || parsed.mode
+    const mode: ChoiceMode = rawMode === 'multiple' ? 'multiple' : 'single'
+    const correctIndexes = Array.isArray(parsed.correctIndexes)
+      ? parsed.correctIndexes
+          .map(value => Number(value))
+          .filter(value => Number.isInteger(value) && value >= 0 && value < choices.length)
+      : Array.isArray(parsed.correctChoices)
+        ? parsed.correctChoices
+            .map(String)
+            .map(value => {
+              const upper = value.trim().toUpperCase()
+              if (/^[A-E]$/.test(upper)) return upper.charCodeAt(0) - 65
+              return choices.findIndex(choice => normalizeAnswerText(choice) === normalizeAnswerText(value))
+            })
+            .filter(value => value >= 0)
+        : getChoiceCorrectIndexes(answer, choices)
+
+    return {
+      choices,
+      mode: correctIndexes.length > 1 ? 'multiple' : mode,
+      correctIndexes: Array.from(new Set(correctIndexes)),
+    }
+  } catch {
+    return { choices: fallbackChoices, mode: 'single', correctIndexes: [] }
+  }
+}
+
 function getReviewContent(card: Flashcard): ReviewContent {
   if (card.type === 'choice') {
+    const choiceMeta = parseChoiceMeta(card)
     return {
       prompt: card.front || '未填写题目',
       answer: card.back || '暂无答案内容',
-      promptLabel: '选择题',
+      promptLabel: choiceMeta.mode === 'multiple' ? '多选题' : '单选题',
       answerLabel: '答案解析',
-      choices: parseChoiceOptions(card),
+      choices: choiceMeta.choices,
+      choiceMode: choiceMeta.mode,
+      correctIndexes: choiceMeta.correctIndexes,
+    }
+  }
+
+  if (card.type === 'true-false') {
+    const choices = ['正确', '错误']
+    const correctIndexes = getChoiceCorrectIndexes(card.back || '', choices)
+    return {
+      prompt: card.front || '未填写判断题',
+      answer: card.back || '暂无答案解析',
+      promptLabel: '判断题',
+      answerLabel: '答案解析',
+      choices,
+      choiceMode: 'single',
+      correctIndexes,
     }
   }
 
@@ -304,7 +385,7 @@ function getReviewContent(card: Flashcard): ReviewContent {
 }
 
 function getCardPreview(card: Flashcard | GeneratedDraft) {
-  if (card.type === 'choice' || card.type === 'short-answer' || card.type === 'basic' || card.type === 'basic-reversed') {
+  if (card.type === 'choice' || card.type === 'short-answer' || card.type === 'true-false' || card.type === 'basic' || card.type === 'basic-reversed') {
     return card.front || card.back || '未填写内容'
   }
   return parseClozeText(card.clozeText).prompt
@@ -320,6 +401,7 @@ function getDifficultyLevel(ease: number, interval: number): { label: string; to
 function getCardTypeLabel(type: FlashcardType) {
   if (type === 'choice') return '选择'
   if (type === 'short-answer') return '简答'
+  if (type === 'true-false') return '判断'
   if (type === 'basic-reversed') return '双向'
   if (type === 'cloze') return '填空'
   return '问答'
@@ -344,6 +426,42 @@ function serializeTags(tags: string[]) {
   return JSON.stringify(tags.map(item => item.trim()).filter(Boolean))
 }
 
+function extractCardText(card: Flashcard) {
+  return [
+    card.front || '',
+    card.back || '',
+    card.clozeText || '',
+    card.notePath || '',
+    parseTags(card.tags).join(' '),
+    card.type,
+    card.status,
+  ].join(' ').toLowerCase()
+}
+
+function formatNextReviewTime(timestamp?: number | null) {
+  if (!timestamp) return '下次复习时间待计算'
+
+  const diff = timestamp - Date.now()
+  if (diff <= 0) return '现在可再次复习'
+
+  const minute = 60 * 1000
+  const hour = 60 * minute
+  const day = 24 * hour
+
+  if (diff < hour) return `${Math.max(1, Math.round(diff / minute))} 分钟后再次出现`
+  if (diff < day) return `${Math.round(diff / hour)} 小时后再次出现`
+  if (diff < 7 * day) return `${Math.round(diff / day)} 天后再次出现`
+
+  const date = new Date(timestamp)
+  return `${date.getMonth() + 1}月${date.getDate()}日再次出现`
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  const tagName = target.tagName.toLowerCase()
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable
+}
+
 function extractJsonArray(input: string) {
   let clean = input.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim()
   const match = clean.match(/\[[\s\S]*\]/)
@@ -351,15 +469,40 @@ function extractJsonArray(input: string) {
   return clean
 }
 
+async function parseGeneratedDraftJson(raw: string) {
+  const extracted = extractJsonArray(raw)
+  try {
+    return JSON.parse(extracted)
+  } catch (firstError) {
+    const repairPrompt = [
+      '下面是一段不合法的 JSON 数组，它应该表示闪卡草稿。',
+      '请只返回修复后的严格 JSON 数组，不要解释，不要 Markdown 代码块。',
+      '要求：保留原有字段和内容；补齐缺失逗号；修复未转义引号；删除 JSON 不允许的尾随逗号或注释。',
+      '如果某个字段内容无法修复，可以将该字段改为空字符串，但不要删除数组元素。',
+      '',
+      extracted,
+    ].join('\n')
+
+    const repaired = extractJsonArray(await fetchAi(repairPrompt))
+    try {
+      return JSON.parse(repaired)
+    } catch {
+      throw firstError
+    }
+  }
+}
+
 function normalizeDrafts(input: unknown, limit: number, allowedTypes: GenerateQuestionType[], sources: SourceNote[]): GeneratedDraft[] {
   if (!Array.isArray(input)) return []
   const sourcePaths = new Set(sources.map(source => source.path))
+  const difficultyValues = new Set(['basic', 'understanding', 'application', 'confusable'])
+  const choiceModeValues = new Set(['single', 'multiple'])
 
   return input
     .map(item => item as Partial<GeneratedDraft>)
     .filter(Boolean)
     .map((item) => {
-      const type = item.type && allowedTypes.includes(item.type) ? item.type : allowedTypes[0] || 'basic'
+      const type = item.type && allowedTypes.includes(item.type) ? item.type : allowedTypes[0] || 'short-answer'
       const choices = Array.isArray(item.choices) ? item.choices.map(String).filter(Boolean) : []
       return {
         type,
@@ -367,17 +510,72 @@ function normalizeDrafts(input: unknown, limit: number, allowedTypes: GenerateQu
         back: item.back || '',
         clozeText: item.clozeText || '',
         choices,
+        choiceMode: item.choiceMode && choiceModeValues.has(item.choiceMode) ? item.choiceMode : item.type === 'choice' && Math.random() < 0.3 ? 'multiple' : 'single',
+        correctChoices: Array.isArray(item.correctChoices) ? item.correctChoices.map(String).filter(Boolean).slice(0, 4) : [],
         tags: Array.isArray(item.tags) ? item.tags.map(String).filter(Boolean).slice(0, 4) : [],
         sourcePath: item.sourcePath && sourcePaths.has(item.sourcePath) ? item.sourcePath : sources[0]?.path,
+        difficulty: item.difficulty && difficultyValues.has(item.difficulty) ? item.difficulty : undefined,
+        sourceSummary: typeof item.sourceSummary === 'string' ? item.sourceSummary.slice(0, 160) : undefined,
+        qualityNote: typeof item.qualityNote === 'string' ? item.qualityNote.slice(0, 180) : undefined,
+        atomicityIssue: typeof item.atomicityIssue === 'string' ? item.atomicityIssue.slice(0, 160) : undefined,
+        duplicateHint: typeof item.duplicateHint === 'string' ? item.duplicateHint.slice(0, 160) : undefined,
         selected: true,
       }
     })
     .filter(draft => {
       if (draft.type === 'cloze') return Boolean(draft.clozeText?.trim())
       if (draft.type === 'choice') return Boolean(draft.front?.trim() && draft.back?.trim() && draft.choices && draft.choices.length >= 2)
+      if (draft.type === 'true-false') return Boolean(draft.front?.trim() && draft.back?.trim() && getChoiceCorrectIndexes(draft.back || '', ['正确', '错误']).length > 0)
       return Boolean(draft.front?.trim() && draft.back?.trim())
     })
     .slice(0, limit)
+}
+
+function getDraftQuestionText(draft: GeneratedDraft) {
+  return draft.type === 'cloze'
+    ? parseClozeText(draft.clozeText).prompt
+    : draft.front || draft.clozeText || draft.back || ''
+}
+
+function getDraftDifficultyLabel(difficulty?: GeneratedDraft['difficulty']) {
+  if (difficulty === 'basic') return '基础'
+  if (difficulty === 'understanding') return '理解'
+  if (difficulty === 'application') return '应用'
+  if (difficulty === 'confusable') return '易混淆'
+  return '未标注'
+}
+
+function getChoiceModeLabel(mode?: ChoiceMode) {
+  return mode === 'multiple' ? '多选' : '单选'
+}
+
+function enrichDraftQuality(drafts: GeneratedDraft[]) {
+  const seen = new Map<string, number>()
+
+  return drafts.map((draft, index) => {
+    const questionText = getDraftQuestionText(draft)
+    const normalizedQuestion = questionText.toLowerCase().replace(/\s+/g, '').slice(0, 80)
+    const duplicateIndex = normalizedQuestion ? seen.get(normalizedQuestion) : undefined
+    if (normalizedQuestion && duplicateIndex === undefined) {
+      seen.set(normalizedQuestion, index)
+    }
+
+    const hasMultipleSignals = /[；;]\s*|以及|同时|分别|列举|比较/.test(questionText)
+    const atomicityIssue = draft.atomicityIssue || (hasMultipleSignals ? '题面可能包含多个考点，建议拆成更小的卡片。' : '')
+    const duplicateHint = draft.duplicateHint || (duplicateIndex !== undefined ? `可能与第 ${duplicateIndex + 1} 张草稿重复。` : '')
+    const qualityNote = draft.qualityNote
+      || (atomicityIssue
+        ? '保留前建议先拆分，确保一次只考一个知识点。'
+        : '题面与答案结构清晰，适合进入复习队列。')
+
+    return {
+      ...draft,
+      atomicityIssue,
+      duplicateHint,
+      qualityNote,
+      difficulty: draft.difficulty || 'understanding',
+    }
+  })
 }
 
 function getDraftIdentity(draft: GeneratedDraft) {
@@ -418,6 +616,11 @@ function normalizeAnswerText(value?: string | null) {
  */
 function isChoiceLikelyCorrect(answer: string, choice: string, index: number): boolean {
   if (!answer || !choice) return false
+
+  const trueFalseMatch = answer.match(/(?:正确答案|参考答案|答案)\s*[:：]\s*(正确|错误)/)
+  if (trueFalseMatch) {
+    return normalizeAnswerText(trueFalseMatch[1]) === normalizeAnswerText(choice)
+  }
 
   // 策略1: 字母标识匹配
   const letter = String.fromCharCode(65 + index)
@@ -471,15 +674,64 @@ function isChoiceLikelyCorrect(answer: string, choice: string, index: number): b
   return false
 }
 
-function getReviewAnswerDisplay(answer: string, isChoiceCard: boolean, result: 'correct' | 'wrong' | null) {
-  if (!isChoiceCard || result !== 'correct') return answer
+function getChoiceCorrectIndexes(answer: string, choices: string[]) {
+  const explicitTrueFalseMatch = answer.match(/(?:正确答案|参考答案|答案)\s*[:：]\s*(正确|错误)/)
+  if (explicitTrueFalseMatch?.[1]) {
+    const normalizedAnswer = normalizeAnswerText(explicitTrueFalseMatch[1])
+    const index = choices.findIndex(choice => normalizeAnswerText(choice) === normalizedAnswer)
+    if (index >= 0) return [index]
+  }
+
+  const explicitListMatch = answer.match(/(?:正确答案|参考答案|答案)\s*[:：]\s*([A-E](?:\s*[,，、/和及]\s*[A-E])*)/i)
+  if (explicitListMatch?.[1]) {
+    const indexes = explicitListMatch[1]
+      .split(/[\s,，、/和及]+/)
+      .map(letter => letter.trim().toUpperCase())
+      .map(letter => letter.charCodeAt(0) - 65)
+      .filter(index => index >= 0 && index < choices.length)
+    if (indexes.length > 0) return Array.from(new Set(indexes))
+  }
+
+  const explicitIndexes = Array.from(answer.matchAll(/(?:正确答案|参考答案|答案)\s*[:：]\s*([A-E])/gi))
+    .map(match => match[1].toUpperCase().charCodeAt(0) - 65)
+    .filter(index => index >= 0 && index < choices.length)
+
+  if (explicitIndexes.length > 0) return Array.from(new Set(explicitIndexes))
+
+  return choices
+    .map((choice, choiceIndex) => (isChoiceLikelyCorrect(answer, choice, choiceIndex) ? choiceIndex : -1))
+    .filter(index => index >= 0)
+}
+
+function getReviewAnswerDisplay(answer: string, isChoiceCard: boolean, choices: string[], correctIndexes: number[] = []) {
+  if (!isChoiceCard) return answer
 
   const explanationMatch = answer.match(/(?:解析|解释|说明)\s*[:：]\s*([\s\S]+)$/)
-  if (explanationMatch?.[1]?.trim()) return explanationMatch[1].trim()
+  const inferredIndexes = correctIndexes.length > 0 ? correctIndexes : getChoiceCorrectIndexes(answer, choices)
+  if (inferredIndexes.length === 0) return answer
 
-  return answer
-    .replace(/^正确答案\s*[:：][\s\S]*?(?:解析|解释|说明)\s*[:：]\s*/, '')
-    .trim() || answer
+  const answerItems = inferredIndexes.map(index => ({
+    letter: String.fromCharCode(65 + index),
+    text: choices[index],
+  }))
+  const letters = answerItems.map(item => item.letter)
+  const isTrueFalse = choices.length === 2
+    && normalizeAnswerText(choices[0]) === normalizeAnswerText('正确')
+    && normalizeAnswerText(choices[1]) === normalizeAnswerText('错误')
+  const choiceText = isTrueFalse
+    ? answerItems.map(item => item.text).join('、')
+    : answerItems.map(item => `${item.letter}：${item.text}`).join('；')
+  const explanation = explanationMatch?.[1]?.trim()
+    || answer
+      .replace(/^(?:正确答案|参考答案|答案)\s*[:：]\s*(?:[A-E]|正确|错误)?[.、:：\s）)]*/i, '')
+      .replace(/^(?:[A-E]\s*[:：]\s*)+/i, '')
+      .replace(/^[。.,，、\s]+/, '')
+      .trim()
+
+  return [
+    isTrueFalse ? `答案：${choiceText}` : `答案 ${letters.join('、')}：${choiceText}`,
+    explanation ? `解析：${explanation}` : '',
+  ].filter(Boolean).join('\n\n')
 }
 
 function draftToCreateInput(draft: GeneratedDraft, deckId: number): CreateFlashcardInput {
@@ -489,7 +741,11 @@ function draftToCreateInput(draft: GeneratedDraft, deckId: number): CreateFlashc
     front: draft.type === 'cloze' ? undefined : draft.front,
     back: draft.type === 'cloze' ? undefined : draft.back,
     clozeText: draft.type === 'choice'
-      ? JSON.stringify({ choices: draft.choices || [] })
+      ? JSON.stringify({
+          choices: draft.choices || [],
+          choiceMode: draft.choiceMode || 'single',
+          correctChoices: draft.correctChoices || [],
+        })
       : draft.type === 'cloze'
         ? draft.clozeText
         : undefined,
@@ -537,9 +793,9 @@ function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'ne
   return (
     <span
       className={cn(
-        'inline-flex h-[22px] shrink-0 items-center rounded-md px-2 text-[11px] font-semibold tracking-wide',
+        'inline-flex h-[22px] shrink-0 items-center rounded-md px-2 text-[11px] font-medium',
         tone === 'neutral' && 'bg-muted text-muted-foreground',
-        tone === 'dark' && 'bg-foreground text-foreground',
+        tone === 'dark' && 'bg-foreground text-background',
         tone === 'amber' && 'bg-amber-50 text-amber-600 ring-1 ring-amber-200/50',
         tone === 'green' && 'bg-emerald-50 text-emerald-600 ring-1 ring-emerald-200/50',
         tone === 'rose' && 'bg-rose-50 text-rose-600 ring-1 ring-rose-200/50',
@@ -568,10 +824,10 @@ function IconButton({
     <button
       type="button"
       className={cn(
-        'inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium transition active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40',
+        'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40',
         active
-          ? 'bg-primary text-primary-foreground shadow-sm'
-          : 'bg-card text-muted-foreground hover:bg-muted/50 hover:text-foreground ring-1 ring-border',
+          ? 'bg-primary text-primary-foreground'
+          : 'bg-card text-muted-foreground hover:bg-muted hover:text-foreground ring-1 ring-border',
       )}
       onClick={onClick}
       disabled={disabled}
@@ -645,8 +901,8 @@ function SourceDropZone({
     <div
       ref={dropZoneRef}
       className={cn(
-        'relative flex min-h-[172px] flex-col overflow-hidden rounded-2xl border bg-card p-4 transition',
-        isDragging ? 'border-primary bg-amber-50/30 dark:bg-amber-950/20 shadow-[inset_0_0_0_1px_rgba(23,23,23,0.08)]' : 'border-border shadow-sm',
+        'flashcard-panel relative flex min-h-[220px] flex-1 flex-col overflow-hidden p-4 transition-[background-color,border-color,transform] duration-200',
+        isDragging ? 'border-primary bg-muted/70' : 'border-border bg-card',
       )}
       onDrop={onDrop}
       onDragOver={onDragOver}
@@ -655,7 +911,7 @@ function SourceDropZone({
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
               <FilePlus2 className="size-3.5" />
             </span>
             <span className="whitespace-nowrap">{t('sourceTitle')}</span>
@@ -677,7 +933,7 @@ function SourceDropZone({
         </div>
         <div className="flex items-center gap-2">
           {sourcePath ? (
-            <Button size="sm" className="h-7 shrink-0 rounded-md bg-primary text-[12px] font-medium text-primary-foreground shadow-sm hover:bg-primary/90" onClick={onUseCurrent}>
+            <Button size="sm" className="h-7 shrink-0 rounded-md bg-primary text-[12px] font-medium text-primary-foreground hover:bg-primary/90" onClick={onUseCurrent}>
               <FileText className="mr-1 size-3" />
               {getFileName(sourcePath)}
             </Button>
@@ -692,15 +948,18 @@ function SourceDropZone({
 
       <div className="relative mt-3 flex min-h-0 flex-1 flex-col gap-2 overflow-auto">
         {sources.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-border bg-muted/30 px-4 text-center">
+          <div className="flashcard-drop-target flex flex-1 items-center justify-center rounded-lg border border-dashed border-border bg-muted/30 px-4 text-center">
             <div>
-              <div className="text-[13px] font-medium text-foreground/70">{t('addSource')}</div>
+              <div className="mx-auto mb-3 flex size-9 items-center justify-center rounded-md bg-card text-muted-foreground ring-1 ring-border">
+                <Upload className="size-4" />
+              </div>
+              <div className="text-[13px] font-medium text-foreground">{t('addSource')}</div>
               <div className="mt-1 text-[11px] text-muted-foreground">{t('addSourceDesc')}</div>
             </div>
           </div>
         ) : (
           sources.map(source => (
-            <div key={source.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2">
+            <div key={source.id} className="flashcard-source-row flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2">
               <div className="flex min-w-0 items-center gap-2">
                 {source.status === 'loading' ? (
                   <LoaderCircle className="size-4 shrink-0 animate-spin text-muted-foreground" />
@@ -749,9 +1008,15 @@ function GenerateSettings({
   onToggleType: (type: GenerateQuestionType) => void
 }) {
   const activeMode = modeOptions.find(item => item.value === mode)
+  const normalizedCount = Math.min(30, Math.max(1, Number(count) || 8))
+
+  function stepCount(direction: 1 | -1) {
+    const next = Math.min(30, Math.max(1, normalizedCount + direction * 2))
+    onCountChange(String(next))
+  }
 
   return (
-    <div className="rounded-xl p-4">
+    <div className="flashcard-panel p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-[13px] font-semibold text-foreground">生成配置</div>
@@ -762,14 +1027,14 @@ function GenerateSettings({
       <div className="mt-3 space-y-3">
         <div className="space-y-2">
           <div className="text-[11px] font-medium text-muted-foreground">模式</div>
-          <div className="grid grid-cols-3 rounded-lg bg-muted p-1">
+          <div className="grid grid-cols-3 rounded-md bg-muted p-1">
             {modeOptions.map(item => (
               <button
                 key={item.value}
                 type="button"
                 className={cn(
-                  'rounded-md px-2 py-2 text-center text-[12px] font-medium transition active:scale-[0.98]',
-                  mode === item.value ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                  'rounded-md px-2 py-2 text-center text-[12px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[0.98]',
+                  mode === item.value ? 'bg-card text-foreground ring-1 ring-border' : 'text-muted-foreground hover:text-foreground',
                 )}
                 onClick={() => onModeChange(item.value)}
               >
@@ -789,8 +1054,8 @@ function GenerateSettings({
                   key={item.value}
                   type="button"
                   className={cn(
-                    'inline-flex h-8 items-center rounded-lg border px-3 text-[12px] font-medium transition active:scale-[0.98]',
-                    active ? 'border-primary bg-primary text-primary-foreground' : 'bg-card text-muted-foreground hover:bg-muted/50 hover:text-foreground border-border',
+                    'inline-flex h-8 items-center rounded-md border px-3 text-[12px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[0.98]',
+                    active ? 'border-primary bg-primary text-primary-foreground' : 'bg-card text-muted-foreground hover:bg-muted hover:text-foreground border-border',
                   )}
                   onClick={() => onToggleType(item.value)}
                 >
@@ -806,7 +1071,7 @@ function GenerateSettings({
           <div className="space-y-2">
             <div className="text-xs font-medium text-muted-foreground">保存到</div>
             <Select value={deckId} onValueChange={onDeckChange}>
-              <SelectTrigger className="h-9 rounded-lg bg-background">
+              <SelectTrigger className="h-9 rounded-md bg-background">
                 <SelectValue placeholder="选择牌组" />
               </SelectTrigger>
               <SelectContent>
@@ -820,7 +1085,34 @@ function GenerateSettings({
           </div>
           <div className="space-y-2">
             <div className="text-[11px] font-medium text-muted-foreground">数量</div>
-            <Input className="h-9 rounded-lg text-center" value={count} onChange={(event) => onCountChange(event.target.value)} />
+            <div className="flex h-9 overflow-hidden rounded-md border border-input bg-background">
+              <Input
+                className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent px-2 text-center shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                inputMode="numeric"
+                value={count}
+                onChange={(event) => onCountChange(event.target.value)}
+              />
+              <div className="flex w-7 shrink-0 flex-col border-l border-border/70">
+                <button
+                  type="button"
+                  className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground transition hover:bg-muted hover:text-foreground active:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-35"
+                  onClick={() => stepCount(1)}
+                  disabled={normalizedCount >= 30}
+                  aria-label="数量增加 2"
+                >
+                  <ChevronUp className="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  className="flex min-h-0 flex-1 items-center justify-center border-t border-border/70 text-muted-foreground transition hover:bg-muted hover:text-foreground active:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-35"
+                  onClick={() => stepCount(-1)}
+                  disabled={normalizedCount <= 1}
+                  aria-label="数量减少 2"
+                >
+                  <ChevronDown className="size-3.5" />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -845,19 +1137,19 @@ function DraftList({
   const selectedCount = drafts.filter(draft => draft.selected).length
 
   return (
-    <div className="rounded-2xl border border-border bg-card shadow-sm">
+    <div className="flashcard-panel flex min-h-[320px] flex-1 flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-border/50 px-4 py-3">
         <div>
           <div className="text-[13px] font-semibold text-foreground">卡片草稿</div>
           <div className="text-[11px] text-muted-foreground">{drafts.length === 0 ? '生成后在这里筛选、删除和保存。' : `${selectedCount}/${drafts.length} 张准备保存`}</div>
         </div>
-        <Button size="sm" className="h-7 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground shadow-sm hover:bg-primary/90" onClick={onSave} disabled={selectedCount === 0 || saving}>
+        <Button size="sm" className="h-7 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground hover:bg-primary/90" onClick={onSave} disabled={selectedCount === 0 || saving}>
           {saving ? '保存中...' : '保存选中'}
         </Button>
       </div>
-      <div className="max-h-[300px] overflow-auto p-3">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto p-3">
         {drafts.length === 0 ? (
-          <div className="flex min-h-36 items-center justify-center rounded-xl border border-dashed border-border bg-muted/30 text-center">
+          <div className="flashcard-drop-target flex min-h-36 flex-1 items-center justify-center rounded-lg border border-dashed border-border bg-muted/30 text-center">
             <div>
               <div className="mx-auto flex size-12 items-center justify-center rounded-xl bg-muted text-muted-foreground">
                 <WalletCards className="size-5" />
@@ -869,7 +1161,7 @@ function DraftList({
         ) : (
           <div className="grid gap-2 xl:grid-cols-2">
             {drafts.map((draft, index) => (
-              <div key={`${draft.type}-${index}`} className={cn('rounded-xl border p-3 transition', draft.selected ? 'border-border bg-card shadow-sm' : 'border-border/50 bg-muted/30 opacity-60')}>
+              <div key={`${draft.type}-${index}`} className={cn('flashcard-draft-item p-3 transition', draft.selected ? 'opacity-100' : 'opacity-55')}>
                 <div className="flex items-start justify-between gap-3">
                   <button type="button" className="flex min-w-0 flex-1 items-start gap-3 text-left" onClick={() => onToggleDraft(index)}>
                     <span className={cn('mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border transition', draft.selected && 'border-primary bg-primary text-primary-foreground')}>
@@ -878,12 +1170,20 @@ function DraftList({
                     <span className="min-w-0">
                       <span className="flex flex-wrap items-center gap-1.5">
                         <Badge tone="dark">{getCardTypeLabel(draft.type)}</Badge>
+                        {draft.type === 'choice' ? <Badge tone="neutral">{getChoiceModeLabel(draft.choiceMode)}</Badge> : null}
+                        <Badge tone={draft.difficulty === 'confusable' ? 'amber' : 'neutral'}>{getDraftDifficultyLabel(draft.difficulty)}</Badge>
                         {draft.tags?.slice(0, 3).map(tag => <Badge key={tag}>{tag}</Badge>)}
                       </span>
                       <span className="mt-2 block line-clamp-2 text-[13px] font-medium leading-6 text-foreground">{getCardPreview(draft)}</span>
                       {draft.type === 'choice' && draft.choices && draft.choices.length > 0 ? (
                         <span className="mt-1.5 block text-[11px] text-muted-foreground">{draft.choices.join(' / ')}</span>
                       ) : null}
+                      <span className="mt-2 block rounded-md bg-muted/40 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground">
+                        {draft.qualityNote}
+                        {draft.atomicityIssue ? <span className="mt-1 block text-amber-600">{draft.atomicityIssue}</span> : null}
+                        {draft.duplicateHint ? <span className="mt-1 block text-rose-600">{draft.duplicateHint}</span> : null}
+                        {draft.sourceSummary ? <span className="mt-1 block">来源：{draft.sourceSummary}</span> : null}
+                      </span>
                     </span>
                   </button>
                   <button type="button" className="rounded-lg p-1 text-muted-foreground hover:bg-muted hover:text-foreground/80 transition" onClick={() => onRemoveDraft(index)}>
@@ -920,22 +1220,35 @@ function DeckQueue({
 }) {
   const t = useTranslations('flashcard')
   return (
-    <div className="rounded-2xl border border-border bg-card shadow-sm xl:sticky xl:top-4">
-      <div className="flex items-center justify-between gap-3 border-b border-border/50 px-4 py-3">
-        <div>
-          <div className="text-[13px] font-semibold text-foreground">复习队列</div>
-          <div className="text-[11px] text-muted-foreground">{loading ? '读取中...' : `${dueCount} 待复习 · ${stats.weakCount} 薄弱 · ${stats.todayReviewedCount} 今日完成`}</div>
+    <div className="flashcard-panel overflow-hidden">
+      <div className="border-b border-border/50 px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[13px] font-semibold text-foreground">复习队列</div>
+            <div className="text-[11px] text-muted-foreground">{loading ? '读取中...' : `${dueCount} 待复习 · ${stats.weakCount} 薄弱 · ${stats.todayReviewedCount} 今日完成`}</div>
+          </div>
+          <Button size="sm" className="h-7 rounded-md bg-primary text-[12px] font-medium text-primary-foreground hover:bg-primary/90" onClick={onReviewAll} disabled={dueCount === 0}>{t('review')}</Button>
         </div>
-        <div className="flex gap-1.5">
-          <Button variant="outline" size="sm" className="h-7 rounded-md text-[12px]" onClick={onWeakCards}>{t('weakCards')}</Button>
-          <Button size="sm" className="h-7 rounded-md bg-primary text-[12px] font-medium text-primary-foreground shadow-sm hover:bg-primary/90" onClick={onReviewAll} disabled={dueCount === 0}>{t('review')}</Button>
+        <div className="mt-3 grid grid-cols-3 gap-1.5">
+          <button type="button" className="rounded-md bg-muted/55 px-2 py-2 text-left" onClick={onReviewAll}>
+            <div className="text-[10px] text-muted-foreground">待复习</div>
+            <div className="mt-0.5 text-base font-semibold text-foreground">{loading ? '--' : dueCount}</div>
+          </button>
+          <button type="button" className="rounded-md bg-muted/55 px-2 py-2 text-left" onClick={onWeakCards}>
+            <div className="text-[10px] text-muted-foreground">薄弱</div>
+            <div className="mt-0.5 text-base font-semibold text-foreground">{loading ? '--' : stats.weakCount}</div>
+          </button>
+          <button type="button" className="rounded-md bg-muted/55 px-2 py-2 text-left" onClick={onManageDecks}>
+            <div className="text-[10px] text-muted-foreground">今日</div>
+            <div className="mt-0.5 text-base font-semibold text-foreground">{loading ? '--' : stats.todayReviewedCount}</div>
+          </button>
         </div>
       </div>
       <div className="max-h-[250px] overflow-auto p-2">
         {decks.length === 0 ? (
-          <div className="flex min-h-24 items-center justify-center rounded-xl bg-muted/30 p-4 text-center">
+          <div className="flex min-h-24 items-center justify-center rounded-lg bg-muted/30 p-4 text-center">
             <div>
-              <div className="mx-auto flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+              <div className="mx-auto flex size-10 items-center justify-center rounded-md bg-muted text-muted-foreground">
                 <Layers3 className="size-5" />
               </div>
               <div className="mt-2 text-[13px] font-medium text-foreground/70">还没有牌组</div>
@@ -950,7 +1263,7 @@ function DeckQueue({
               <button
                 key={deck.id}
                 type="button"
-                className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-muted/50 active:scale-[0.99]"
+                className="flashcard-deck-row flex w-full items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left transition-[background-color,transform] duration-150 hover:bg-muted/65 active:scale-[0.99]"
                 onClick={() => onReviewDeck(deck.id)}
                 disabled={cardCount === 0}
               >
@@ -965,7 +1278,7 @@ function DeckQueue({
         )}
       </div>
       <div className="border-t border-border/50 p-2">
-        <Button variant="ghost" size="sm" className="h-8 w-full justify-start rounded-xl text-[12px] text-muted-foreground hover:text-foreground" onClick={onManageDecks}>
+        <Button variant="ghost" size="sm" className="h-8 w-full justify-start rounded-md text-[12px] text-muted-foreground hover:text-foreground" onClick={onManageDecks}>
           <Layers3 className="mr-2 size-3.5" />
           {t('manageDecks')}
         </Button>
@@ -1008,6 +1321,7 @@ function FlashcardHome({
   onCreateCard,
   onReviewAll,
   onReviewDeck,
+  onLibrary,
   onManageDecks,
   onWeakCards,
   onStats,
@@ -1045,6 +1359,7 @@ function FlashcardHome({
   onCreateCard: () => void
   onReviewAll: () => void
   onReviewDeck: (deckId: number) => void
+  onLibrary: () => void
   onManageDecks: () => void
   onWeakCards: () => void
   onStats: () => void
@@ -1053,17 +1368,18 @@ function FlashcardHome({
   const canGenerate = readySourceCount > 0 && selectedTypes.length > 0 && Boolean(deckId)
   const t = useTranslations('flashcard')
   const tReview = useTranslations('flashcard.reviewPanel')
+  const activeMode = modeOptions.find(item => item.value === mode)
 
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/30"
+      className="flashcard-shell flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/30"
       onDrop={onDrop}
       onDragOver={onDragOver}
     >
       {pointerDragPreview ? (
         <div
           className={cn(
-            'pointer-events-none fixed left-0 top-0 z-[9999] flex max-w-[260px] items-center gap-2 rounded-2xl border bg-card/95 px-3 py-2 text-xs font-medium text-foreground shadow-lg backdrop-blur transition-colors',
+            'pointer-events-none fixed left-0 top-0 z-50 flex max-w-[260px] items-center gap-2 rounded-md border bg-card px-3 py-2 text-xs font-medium text-foreground ring-1 ring-border transition-colors',
             pointerDragPreview.overDropZone ? 'border-primary' : 'border-border',
           )}
           style={{ transform: `translate3d(${pointerDragPreview.x + 6}px, ${pointerDragPreview.y + 6}px, 0)` }}
@@ -1073,86 +1389,51 @@ function FlashcardHome({
         </div>
       ) : null}
       <div className="border-b border-border bg-card">
-        {/* 标题栏 */}
-        <div className="flex items-center justify-between px-5 pt-4 pb-2">
-          <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
               <WalletCards className="size-5" />
             </div>
-            <div>
-              <div className="text-lg font-bold tracking-tight text-foreground">{t('workspaceTitle')}</div>
-              <div className="text-[12px] text-muted-foreground">{t('workspaceDesc')}</div>
+            <div className="min-w-0">
+              <div className="truncate text-[17px] font-semibold text-foreground">{t('workspaceTitle')}</div>
+              <div className="truncate text-[12px] text-muted-foreground">{readySourceCount > 0 ? `${readySourceCount} 篇材料就绪 · ${activeMode?.label || '生成配置'}` : t('workspaceDesc')}</div>
             </div>
           </div>
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-foreground/70 transition hover:bg-muted/50 hover:text-foreground ring-1 ring-border active:scale-[0.97]"
-                aria-label={t('config')}
-              >
-                <SlidersHorizontal className="size-3.5" />
-                {t('config')}
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="end" sideOffset={8} className="w-[360px] rounded-xl p-0">
-              <GenerateSettings
-                decks={decks}
-                deckId={deckId}
-                count={count}
-                mode={mode}
-                selectedTypes={selectedTypes}
-                onDeckChange={onDeckChange}
-                onCountChange={onCountChange}
-                onModeChange={onModeChange}
-                onToggleType={onToggleType}
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-
-        {/* 统计指标条 */}
-        <div className="flex items-center gap-2 px-5 pb-3">
-          <div className={cn(
-            'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-semibold',
-            dueCount > 0 ? 'bg-amber-50 text-amber-600 ring-1 ring-amber-200/50' : 'bg-emerald-50 text-emerald-600 ring-1 ring-emerald-200/50',
-          )}>
-            <BookOpenCheck className="size-3" />
-            {loading ? '--' : dueCount} {tReview('dueCount')}
-          </div>
-          <div className={cn(
-            'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-semibold',
-            stats.weakCount > 0 ? 'bg-rose-50 text-rose-600 ring-1 ring-rose-200/50' : 'bg-muted text-muted-foreground',
-          )}>
-            <Target className="size-3" />
-            {loading ? '--' : stats.weakCount} {tReview('weakCount')}
-          </div>
-          <div className="flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 text-[12px] font-semibold text-muted-foreground">
-            <CheckCircle2 className="size-3" />
-            {loading ? '--' : stats.todayReviewedCount} {tReview('todayDone')}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="hidden items-center gap-1.5 rounded-md bg-muted px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground sm:flex">
+              <BookOpenCheck className="size-3" />
+              {loading ? '--' : dueCount} {tReview('dueCount')}
+            </div>
+            <div className="hidden items-center gap-1.5 rounded-md bg-muted px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground sm:flex">
+              <Target className="size-3" />
+              {loading ? '--' : stats.weakCount} {tReview('weakCount')}
+            </div>
+            <div className="hidden items-center gap-1.5 rounded-md bg-muted px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground md:flex">
+              <CheckCircle2 className="size-3" />
+              {loading ? '--' : stats.todayReviewedCount} {tReview('todayDone')}
+            </div>
+            <Button
+              className="h-8 gap-1.5 rounded-md bg-primary px-3 text-[13px] font-medium text-primary-foreground hover:bg-primary/90 active:scale-[0.98]"
+              onClick={onGenerate}
+              disabled={!canGenerate || generating}
+            >
+              {generating ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+              {generating ? t('generating') : t('generate')}
+            </Button>
           </div>
         </div>
-
-        {/* 操作栏 */}
-        <div className="flex flex-wrap items-center gap-2 border-t border-border/50 px-5 py-2.5">
-          <Button
-            className="h-8 gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.97]"
-            onClick={onGenerate}
-            disabled={!canGenerate || generating}
-          >
-            {generating ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-            {generating ? t('generating') : t('generate')}
-          </Button>
-          <div className="mx-1 h-4 w-px bg-muted" />
+        <div className="flex flex-wrap items-center gap-2 border-t border-border/50 px-5 py-2">
           <IconButton icon={Plus} onClick={onCreateCard}>{t('create')}</IconButton>
+          <IconButton icon={WalletCards} onClick={onLibrary}>闪卡库</IconButton>
           <IconButton icon={Target} onClick={onWeakCards}>{t('weakCards')}</IconButton>
           <IconButton icon={BarChart3} onClick={onStats}>{t('stats')}</IconButton>
+          <IconButton icon={Layers3} onClick={onManageDecks}>{t('manageDecks')}</IconButton>
         </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        <div className="mx-auto grid max-w-6xl items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="space-y-4">
+        <div className="mx-auto grid max-w-7xl items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="flex min-h-0 flex-col gap-4">
             <SourceDropZone
               dropZoneRef={dropZoneRef}
               sources={sources}
@@ -1174,16 +1455,29 @@ function FlashcardHome({
               onSave={onSaveDrafts}
             />
           </div>
-          <DeckQueue
-            decks={decks}
-            dueCount={dueCount}
-            stats={stats}
-            loading={loading}
-            onReviewAll={onReviewAll}
-            onReviewDeck={onReviewDeck}
-            onManageDecks={onManageDecks}
-            onWeakCards={onWeakCards}
-          />
+          <aside className="flex h-full flex-col gap-4 xl:sticky xl:top-4">
+            <GenerateSettings
+              decks={decks}
+              deckId={deckId}
+              count={count}
+              mode={mode}
+              selectedTypes={selectedTypes}
+              onDeckChange={onDeckChange}
+              onCountChange={onCountChange}
+              onModeChange={onModeChange}
+              onToggleType={onToggleType}
+            />
+            <DeckQueue
+              decks={decks}
+              dueCount={dueCount}
+              stats={stats}
+              loading={loading}
+              onReviewAll={onReviewAll}
+              onReviewDeck={onReviewDeck}
+              onManageDecks={onManageDecks}
+              onWeakCards={onWeakCards}
+            />
+          </aside>
         </div>
       </div>
     </div>
@@ -1209,6 +1503,10 @@ function FlashcardDeckManager({
   const [editingDeckId, setEditingDeckId] = useState<number | null>(null)
   const [editName, setEditName] = useState('')
   const [editDescription, setEditDescription] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | Flashcard['status']>('all')
+  const [tagFilter, setTagFilter] = useState('')
+  const [selectedCardIds, setSelectedCardIds] = useState<Record<number, Set<number>>>({})
 
   const loadDeckCards = useCallback(async (targetDeckId: number) => {
     const cards = await getFlashcardsByDeckId(targetDeckId)
@@ -1274,7 +1572,98 @@ function FlashcardDeckManager({
   async function handleDeleteCard(targetDeckId: number, cardId: number) {
     await deleteFlashcard(cardId)
     await Promise.all([onRefresh(), loadDeckCards(targetDeckId)])
+    setSelectedCardIds(prev => {
+      const next = new Set(prev[targetDeckId] || [])
+      next.delete(cardId)
+      return { ...prev, [targetDeckId]: next }
+    })
   }
+
+  function getFilteredCards(cards: Flashcard[]) {
+    const query = searchQuery.trim().toLowerCase()
+    const tags = tagFilter.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean)
+
+    return cards.filter(card => {
+      if (statusFilter !== 'all' && card.status !== statusFilter) return false
+      if (query && !extractCardText(card).includes(query)) return false
+      if (tags.length > 0) {
+        const cardTags = parseTags(card.tags).map(tag => tag.toLowerCase())
+        if (!tags.some(tag => cardTags.includes(tag))) return false
+      }
+      return true
+    })
+  }
+
+  function toggleCardSelected(deckId: number, cardId: number) {
+    setSelectedCardIds(prev => {
+      const next = new Set(prev[deckId] || [])
+      if (next.has(cardId)) next.delete(cardId)
+      else next.add(cardId)
+      return { ...prev, [deckId]: next }
+    })
+  }
+
+  function clearSelectedCards(deckId: number) {
+    setSelectedCardIds(prev => ({ ...prev, [deckId]: new Set() }))
+  }
+
+  async function handleBatchMove(deckId: number, targetDeckId: number, cardIds: number[]) {
+    if (cardIds.length === 0 || deckId === targetDeckId) return
+    for (const cardId of cardIds) {
+      await moveFlashcardToDeck(cardId, targetDeckId)
+    }
+    clearSelectedCards(deckId)
+    await Promise.all([onRefresh(), loadDeckCards(deckId), loadDeckCards(targetDeckId)])
+  }
+
+  async function handleBatchStatus(deckId: number, cardIds: number[], status: Flashcard['status']) {
+    if (cardIds.length === 0) return
+    for (const cardId of cardIds) {
+      await updateFlashcardStatus(cardId, status)
+    }
+    clearSelectedCards(deckId)
+    await Promise.all([onRefresh(), loadDeckCards(deckId)])
+  }
+
+  async function handleBatchReset(deckId: number, cardIds: number[]) {
+    if (cardIds.length === 0) return
+    for (const cardId of cardIds) {
+      await resetFlashcardProgress(cardId)
+    }
+    clearSelectedCards(deckId)
+    await Promise.all([onRefresh(), loadDeckCards(deckId)])
+  }
+
+  async function handleBatchDelete(deckId: number, cardIds: number[]) {
+    if (cardIds.length === 0) return
+    for (const cardId of cardIds) {
+      await deleteFlashcard(cardId)
+    }
+    clearSelectedCards(deckId)
+    await Promise.all([onRefresh(), loadDeckCards(deckId)])
+  }
+
+  useEffect(() => {
+    setSelectedCardIds(prev => {
+      const next: Record<number, Set<number>> = {}
+      let changed = false
+      for (const deck of decks) {
+        const selected = prev[deck.id]
+        if (selected) {
+          next[deck.id] = selected
+        }
+      }
+      const prevKeys = Object.keys(prev)
+      if (prevKeys.length !== Object.keys(next).length) changed = true
+      for (const key of prevKeys) {
+        if (!next[Number(key)]) {
+          changed = true
+          break
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [decks])
 
   async function handleExport(format: 'csv' | 'anki') {
     try {
@@ -1320,23 +1709,24 @@ function FlashcardDeckManager({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-muted/30">
       <WorkspaceHeader title="牌组管理" description="整理卡片、移动牌组、清理无效题目。" onBack={onBack} />
-      <div className="mx-auto w-full max-w-5xl flex-1 overflow-auto p-4">
-        <div className="mb-4 grid gap-2 rounded-2xl border border-border bg-card p-4 shadow-sm lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-          <Input value={newDeckName} onChange={(event) => setNewDeckName(event.target.value)} placeholder="牌组名称" className="h-9 text-[13px]" />
-          <Input value={newDeckDescription} onChange={(event) => setNewDeckDescription(event.target.value)} placeholder="描述，可选" className="h-9 text-[13px]" />
-          <Button className="h-9 bg-primary text-[13px] font-medium text-primary-foreground shadow-sm hover:bg-primary/90" onClick={() => void handleCreateDeck()} disabled={creating}>{creating ? '创建中...' : '创建牌组'}</Button>
+      <div className="mx-auto w-full max-w-6xl flex-1 overflow-auto p-4">
+        <div className="flashcard-panel mb-4 grid gap-2 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+          <Input value={newDeckName} onChange={(event) => setNewDeckName(event.target.value)} placeholder="牌组名称" className="h-9 rounded-md text-[13px]" />
+          <Input value={newDeckDescription} onChange={(event) => setNewDeckDescription(event.target.value)} placeholder="描述，可选" className="h-9 rounded-md text-[13px]" />
+          <Button className="h-9 rounded-md bg-primary text-[13px] font-medium text-primary-foreground hover:bg-primary/90" onClick={() => void handleCreateDeck()} disabled={creating}>{creating ? '创建中...' : '创建牌组'}</Button>
         </div>
 
-        <div className="mb-4 flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" className="h-7 gap-1.5 text-[12px]" onClick={() => void handleImport('csv')}>\n            <Upload className="size-3" /> 导入 CSV
+        <div className="mb-4 flex flex-wrap gap-2 rounded-lg border border-border bg-card/70 p-2">
+          <Button variant="outline" size="sm" className="h-7 rounded-md gap-1.5 text-[12px]" onClick={() => void handleImport('csv')}>
+            <Upload className="size-3" /> 导入 CSV
           </Button>
-          <Button variant="outline" size="sm" className="h-7 gap-1.5 text-[12px]" onClick={() => void handleImport('anki')}>
+          <Button variant="outline" size="sm" className="h-7 rounded-md gap-1.5 text-[12px]" onClick={() => void handleImport('anki')}>
             <Upload className="size-3" /> 导入 Anki
           </Button>
-          <Button variant="outline" size="sm" className="h-7 gap-1.5 text-[12px]" onClick={() => void handleExport('csv')}>
+          <Button variant="outline" size="sm" className="h-7 rounded-md gap-1.5 text-[12px]" onClick={() => void handleExport('csv')}>
             <Download className="size-3" /> 导出 CSV
           </Button>
-          <Button variant="outline" size="sm" className="h-7 gap-1.5 text-[12px]" onClick={() => void handleExport('anki')}>
+          <Button variant="outline" size="sm" className="h-7 rounded-md gap-1.5 text-[12px]" onClick={() => void handleExport('anki')}>
             <Download className="size-3" /> 导出 Anki
           </Button>
         </div>
@@ -1346,15 +1736,19 @@ function FlashcardDeckManager({
             const isExpanded = expandedDeckId === deck.id
             const isEditing = editingDeckId === deck.id
             const cards = cardsByDeckId[deck.id] || []
+            const filteredCards = getFilteredCards(cards)
+            const selectedIds = selectedCardIds[deck.id] || new Set<number>()
+            const selectedVisibleIds = filteredCards.filter(card => selectedIds.has(card.id)).map(card => card.id)
+            const selectedCount = selectedIds.size
             return (
-              <div key={deck.id} className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
+              <div key={deck.id} className="flashcard-panel overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-2 p-4">
                   {isEditing ? (
                     <div className="grid w-full gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]">
-                      <Input value={editName} onChange={(event) => setEditName(event.target.value)} className="h-9 text-[13px]" />
-                      <Input value={editDescription} onChange={(event) => setEditDescription(event.target.value)} className="h-9 text-[13px]" />
-                      <Button className="h-9 bg-primary text-[13px] text-primary-foreground" onClick={() => void handleSaveDeck(deck.id)}>保存</Button>
-                      <Button variant="outline" className="h-9 text-[13px]" onClick={() => setEditingDeckId(null)}>取消</Button>
+                      <Input value={editName} onChange={(event) => setEditName(event.target.value)} className="h-9 rounded-md text-[13px]" />
+                      <Input value={editDescription} onChange={(event) => setEditDescription(event.target.value)} className="h-9 rounded-md text-[13px]" />
+                      <Button className="h-9 rounded-md bg-primary text-[13px] text-primary-foreground" onClick={() => void handleSaveDeck(deck.id)}>保存</Button>
+                      <Button variant="outline" className="h-9 rounded-md text-[13px]" onClick={() => setEditingDeckId(null)}>取消</Button>
                     </div>
                   ) : (
                     <>
@@ -1374,15 +1768,15 @@ function FlashcardDeckManager({
                         </span>
                       </button>
                       <div className="flex items-center gap-1.5">
-                        <Button variant="outline" size="sm" className="h-7 rounded-lg text-[12px]" onClick={() => onReviewDeck(deck.id)}>复习</Button>
-                        <Button variant="ghost" size="sm" className="h-7 rounded-lg text-[12px] text-muted-foreground" onClick={() => {
+                        <Button variant="outline" size="sm" className="h-7 rounded-md text-[12px]" onClick={() => onReviewDeck(deck.id)}>复习</Button>
+                        <Button variant="ghost" size="sm" className="h-7 rounded-md text-[12px] text-muted-foreground" onClick={() => {
                           setEditingDeckId(deck.id)
                           setEditName(deck.name)
                           setEditDescription(deck.description || '')
                         }}>编辑</Button>
                         <button
                           type="button"
-                          className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-rose-50 hover:text-rose-500 transition"
+                          className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-rose-50 hover:text-rose-500"
                           onClick={() => void handleDeleteDeck(deck)}
                         >
                           <Trash2 className="size-3.5" />
@@ -1393,14 +1787,93 @@ function FlashcardDeckManager({
                 </div>
                 {isExpanded ? (
                   <div className="border-t border-border/50 p-2">
+                    <div className="mb-2 grid gap-2 rounded-lg bg-muted/30 p-2 lg:grid-cols-[minmax(0,1fr)_140px_minmax(140px,180px)]">
+                      <Input
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        placeholder="搜索题面、答案、标签或来源"
+                        className="h-8 rounded-md bg-card text-[12px]"
+                      />
+                      <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as typeof statusFilter)}>
+                        <SelectTrigger className="h-8 rounded-md bg-card text-[12px]"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">全部状态</SelectItem>
+                          <SelectItem value="new">新卡</SelectItem>
+                          <SelectItem value="learning">学习中</SelectItem>
+                          <SelectItem value="review">复习中</SelectItem>
+                          <SelectItem value="suspended">已暂停</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={tagFilter}
+                        onChange={(event) => setTagFilter(event.target.value)}
+                        placeholder="标签，逗号分隔"
+                        className="h-8 rounded-md bg-card text-[12px]"
+                      />
+                    </div>
+                    {cards.length > 0 ? (
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-card px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            className="rounded-md border border-border px-2.5 py-1 text-[11px] font-medium text-foreground transition hover:bg-muted"
+                            onClick={() => {
+                              const allVisibleSelected = filteredCards.length > 0 && selectedVisibleIds.length === filteredCards.length
+                              setSelectedCardIds(prev => {
+                                const next = new Set(prev[deck.id] || [])
+                                for (const card of filteredCards) {
+                                  if (allVisibleSelected) next.delete(card.id)
+                                  else next.add(card.id)
+                                }
+                                return { ...prev, [deck.id]: next }
+                              })
+                            }}
+                          >
+                            {filteredCards.length > 0 && selectedVisibleIds.length === filteredCards.length ? '取消当前结果' : '选择当前结果'}
+                          </button>
+                          <span className="text-[11px] text-muted-foreground">
+                            显示 {filteredCards.length}/{cards.length} 张 · 已选 {selectedCount} 张
+                          </span>
+                        </div>
+                        {selectedCount > 0 ? (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Select onValueChange={(value) => void handleBatchMove(deck.id, Number(value), Array.from(selectedIds))}>
+                              <SelectTrigger className="h-7 w-28 rounded-md text-[11px]"><SelectValue placeholder="移动到" /></SelectTrigger>
+                              <SelectContent>
+                                {decks.filter(item => item.id !== deck.id).map(item => <SelectItem key={item.id} value={String(item.id)}>{item.name}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                            <Button variant="outline" size="sm" className="h-7 rounded-md text-[11px]" onClick={() => void handleBatchStatus(deck.id, Array.from(selectedIds), 'suspended')}>暂停</Button>
+                            <Button variant="outline" size="sm" className="h-7 rounded-md text-[11px]" onClick={() => void handleBatchStatus(deck.id, Array.from(selectedIds), 'review')}>恢复</Button>
+                            <Button variant="outline" size="sm" className="h-7 rounded-md text-[11px]" onClick={() => void handleBatchReset(deck.id, Array.from(selectedIds))}>重置</Button>
+                            <Button variant="ghost" size="sm" className="h-7 rounded-md text-[11px] text-rose-500 hover:bg-rose-50" onClick={() => void handleBatchDelete(deck.id, Array.from(selectedIds))}>删除</Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {cards.length === 0 ? (
-                      <div className="rounded-xl bg-muted/30 p-3 text-[13px] text-muted-foreground">这个牌组暂无卡片。</div>
+                      <div className="rounded-lg bg-muted/30 p-3 text-[13px] text-muted-foreground">这个牌组暂无卡片。</div>
+                    ) : filteredCards.length === 0 ? (
+                      <div className="rounded-lg bg-muted/30 p-3 text-[13px] text-muted-foreground">没有符合筛选条件的卡片。</div>
                     ) : (
-                      cards.map(card => (
-                        <div key={card.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2.5 hover:bg-muted/50 transition">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5">
+                      filteredCards.map(card => (
+                        <div key={card.id} className="flashcard-library-row flex flex-wrap items-center justify-between gap-2 rounded-md px-3 py-2.5">
+                          <div className="flex min-w-0 flex-1 items-start gap-2">
+                            <button
+                              type="button"
+                              className={cn(
+                                'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border transition',
+                                selectedIds.has(card.id) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-transparent hover:text-muted-foreground',
+                              )}
+                              onClick={() => toggleCardSelected(deck.id, card.id)}
+                              aria-label={selectedIds.has(card.id) ? '取消选择卡片' : '选择卡片'}
+                            >
+                              <Check className="size-3" />
+                            </button>
+                            <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 items-center gap-1.5">
                               <Badge>{getCardTypeLabel(card.type)}</Badge>
+                              {card.status === 'suspended' ? <Badge tone="neutral">暂停</Badge> : null}
                               <span className="truncate text-[13px] font-medium text-foreground/80">{getCardPreview(card)}</span>
                             </div>
                             <div className="mt-1 truncate text-[11px] text-muted-foreground">
@@ -1408,17 +1881,18 @@ function FlashcardDeckManager({
                               {card.notePath && parseTags(card.tags).length > 0 ? ' · ' : ''}
                               {parseTags(card.tags).join(' / ') || ''}
                             </div>
+                            </div>
                           </div>
                           <div className="flex items-center gap-2">
                             <Select value={String(card.deckId)} onValueChange={(value) => void handleMoveCard(card, Number(value))}>
-                              <SelectTrigger className="h-7 w-28 rounded-lg text-[11px]"><SelectValue /></SelectTrigger>
+                              <SelectTrigger className="h-7 w-28 rounded-md text-[11px]"><SelectValue /></SelectTrigger>
                               <SelectContent>
                                 {decks.map(item => <SelectItem key={item.id} value={String(item.id)}>{item.name}</SelectItem>)}
                               </SelectContent>
                             </Select>
                             <button
                               type="button"
-                              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-rose-50 hover:text-rose-500 transition"
+                              className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-rose-50 hover:text-rose-500"
                               onClick={() => void handleDeleteCard(deck.id, card.id)}
                             >
                               <Trash2 className="size-3.5" />
@@ -1441,6 +1915,7 @@ function FlashcardDeckManager({
 function WeakCardsPanel({ onBack, onReviewWeak }: { onBack: () => void; onReviewWeak: () => void }) {
   const [cards, setCards] = useState<Flashcard[]>([])
   const [loading, setLoading] = useState(true)
+  const importantCount = cards.filter(card => parseTags(card.tags).includes('重点')).length
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -1461,41 +1936,426 @@ function WeakCardsPanel({ onBack, onReviewWeak }: { onBack: () => void; onReview
         title="错题与重点"
         description="不会、困难和标记重点的卡片会在这里集中管理。"
         onBack={onBack}
-        action={<Button size="sm" className="h-8 rounded-lg bg-primary text-[12px] font-medium text-primary-foreground shadow-sm hover:bg-primary/90" onClick={onReviewWeak} disabled={cards.length === 0}>复习错题</Button>}
+        action={<Button size="sm" className="h-8 rounded-md bg-primary text-[12px] font-medium text-primary-foreground hover:bg-primary/90" onClick={onReviewWeak} disabled={cards.length === 0}>复习错题</Button>}
       />
-      <div className="mx-auto w-full max-w-4xl flex-1 overflow-auto p-4">
+      <div className="mx-auto w-full max-w-5xl flex-1 overflow-auto p-4">
         {loading ? (
-          <div className="rounded-2xl border border-border bg-card p-4 shadow-sm text-[13px] text-muted-foreground">正在整理错题...</div>
+          <div className="flashcard-panel p-4 text-[13px] text-muted-foreground">正在整理错题...</div>
         ) : cards.length === 0 ? (
-          <div className="flex min-h-48 items-center justify-center rounded-2xl border border-border bg-card shadow-sm p-8 text-center">
+          <div className="flashcard-panel flex min-h-48 items-center justify-center p-8 text-center">
             <div>
-              <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
+              <div className="mx-auto flex size-12 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                 <BookOpenCheck className="size-7" />
               </div>
               <div className="mt-4 text-base font-semibold text-foreground">暂无错题</div>
-              <div className="mt-2 text-[13px] text-muted-foreground">复习时点击“不会”的卡片会自动进入这里，\n方便你针对性巩固薄弱知识点。</div>
+              <div className="mt-2 text-[13px] text-muted-foreground">复习时点击“不会”的卡片会自动进入这里，方便你集中巩固薄弱知识点。</div>
             </div>
           </div>
         ) : (
           <div className="space-y-3">
-            {cards.map(card => (
-              <div key={card.id} className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge tone="rose">薄弱</Badge>
-                  <Badge>{getCardTypeLabel(card.type)}</Badge>
-                  {parseTags(card.tags).slice(0, 3).map(tag => <Badge key={tag}>{tag}</Badge>)}
-                </div>
-                <div className="mt-2 text-[13px] font-medium text-foreground">{getCardPreview(card)}</div>
-                {card.notePath && (
-                  <div className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <FileText className="size-3" />
-                    <span className="truncate">{getFileName(card.notePath)}</span>
-                  </div>
-                )}
+            <div className="flashcard-panel grid gap-2 p-3 sm:grid-cols-3">
+              <div className="rounded-md bg-muted/50 px-3 py-2">
+                <div className="text-[11px] text-muted-foreground">薄弱卡片</div>
+                <div className="mt-1 text-lg font-semibold text-foreground">{cards.length}</div>
               </div>
-            ))}
+              <div className="rounded-md bg-muted/50 px-3 py-2">
+                <div className="text-[11px] text-muted-foreground">重点标记</div>
+                <div className="mt-1 text-lg font-semibold text-foreground">{importantCount}</div>
+              </div>
+              <div className="rounded-md bg-muted/50 px-3 py-2">
+                <div className="text-[11px] text-muted-foreground">建议动作</div>
+                <div className="mt-1 text-[13px] font-medium text-foreground">先复习错题</div>
+              </div>
+            </div>
+            <div className="flashcard-panel overflow-hidden">
+              <div className="flex items-center justify-between border-b border-border/50 px-4 py-3">
+                <div>
+                  <div className="text-[13px] font-semibold text-foreground">错题清单</div>
+                  <div className="text-[11px] text-muted-foreground">按最近薄弱记录排序，适合短时间集中回收。</div>
+                </div>
+                <Button variant="outline" size="sm" className="h-7 rounded-md text-[12px]" onClick={() => void refresh()}>刷新</Button>
+              </div>
+              <div className="divide-y divide-border/50">
+                {cards.map(card => (
+                  <div key={card.id} className="flashcard-library-row px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge tone="rose">薄弱</Badge>
+                      <Badge>{getCardTypeLabel(card.type)}</Badge>
+                      {parseTags(card.tags).slice(0, 3).map(tag => <Badge key={tag}>{tag}</Badge>)}
+                    </div>
+                    <div className="mt-2 text-[13px] font-medium leading-6 text-foreground">{getCardPreview(card)}</div>
+                    {card.notePath && (
+                      <div className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <FileText className="size-3" />
+                        <span className="truncate">{getFileName(card.notePath)}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function FlashcardLibraryPanel({
+  decks,
+  onBack,
+  onRefresh,
+}: {
+  decks: FlashcardDeckSummary[]
+  onBack: () => void
+  onRefresh: () => Promise<void>
+}) {
+  const [query, setQuery] = useState('')
+  const [deckFilter, setDeckFilter] = useState('all')
+  const [statusFilters, setStatusFilters] = useState<Flashcard['status'][]>([])
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [specialFilters, setSpecialFilters] = useState<Array<'due' | 'overdue' | 'weak' | 'important'>>([])
+  const [cards, setCards] = useState<Flashcard[]>([])
+  const [total, setTotal] = useState(0)
+  const [tagStats, setTagStats] = useState<FlashcardTagStat[]>([])
+  const [history, setHistory] = useState<FlashcardSearchHistoryItem[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [tagEditValue, setTagEditValue] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  const selectedDeckId = deckFilter === 'all' ? null : Number(deckFilter)
+  const selectedCount = selectedIds.size
+  const selectedIdList = useMemo(() => Array.from(selectedIds), [selectedIds])
+
+  const loadLibrary = useCallback(async (persistHistory = false) => {
+    setLoading(true)
+    try {
+      const filters = {
+        query,
+        deckId: selectedDeckId,
+        statuses: statusFilters,
+        tags: selectedTags,
+        dueOnly: specialFilters.includes('due'),
+        overdueOnly: specialFilters.includes('overdue'),
+        weakOnly: specialFilters.includes('weak'),
+        importantOnly: specialFilters.includes('important'),
+        limit: 120,
+      }
+      const [result, tags, searches] = await Promise.all([
+        searchFlashcards(filters),
+        getFlashcardTagStats(60),
+        getFlashcardSearchHistory(),
+      ])
+      setCards(result.cards)
+      setTotal(result.total)
+      setTagStats(tags)
+      setHistory(searches)
+      setSelectedIds(prev => new Set(result.cards.filter(card => prev.has(card.id)).map(card => card.id)))
+
+      if (persistHistory && query.trim()) {
+        await saveFlashcardSearchHistory(query, {
+          deckId: selectedDeckId,
+          statuses: statusFilters,
+          tags: selectedTags,
+          special: specialFilters,
+        })
+        setHistory(await getFlashcardSearchHistory())
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [query, selectedDeckId, selectedTags, specialFilters, statusFilters])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadLibrary(false)
+    }, 160)
+    return () => window.clearTimeout(timer)
+  }, [loadLibrary])
+
+  function toggleStatus(status: Flashcard['status']) {
+    setStatusFilters(prev => prev.includes(status) ? prev.filter(item => item !== status) : [...prev, status])
+  }
+
+  function toggleTag(tag: string) {
+    setSelectedTags(prev => prev.includes(tag) ? prev.filter(item => item !== tag) : [...prev, tag])
+  }
+
+  function toggleSpecial(filter: 'due' | 'overdue' | 'weak' | 'important') {
+    setSpecialFilters(prev => prev.includes(filter) ? prev.filter(item => item !== filter) : [...prev, filter])
+  }
+
+  function toggleSelected(cardId: number) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(cardId)) next.delete(cardId)
+      else next.add(cardId)
+      return next
+    })
+  }
+
+  async function runBatch(action: () => Promise<void>, message: string) {
+    if (selectedIdList.length === 0) return
+    await action()
+    setSelectedIds(new Set())
+    await Promise.all([loadLibrary(false), onRefresh()])
+    toast({ title: message })
+  }
+
+  async function handleBatchMove(targetDeckId: number) {
+    await runBatch(async () => {
+      for (const cardId of selectedIdList) {
+        await moveFlashcardToDeck(cardId, targetDeckId)
+      }
+    }, `已移动 ${selectedIdList.length} 张卡片`)
+  }
+
+  async function handleBatchStatus(status: Flashcard['status']) {
+    await runBatch(async () => {
+      for (const cardId of selectedIdList) {
+        await updateFlashcardStatus(cardId, status)
+      }
+    }, status === 'suspended' ? '已暂停所选卡片' : '已恢复所选卡片')
+  }
+
+  async function handleBatchReset() {
+    await runBatch(async () => {
+      for (const cardId of selectedIdList) {
+        await resetFlashcardProgress(cardId)
+      }
+    }, '已重置所选卡片进度')
+  }
+
+  async function handleBatchDelete() {
+    await runBatch(async () => {
+      for (const cardId of selectedIdList) {
+        await deleteFlashcard(cardId)
+      }
+    }, '已删除所选卡片')
+  }
+
+  async function handleBatchAddTags() {
+    const tags = tagEditValue.split(',').map(item => item.trim()).filter(Boolean)
+    if (tags.length === 0) return
+    await runBatch(async () => {
+      await addFlashcardTagsBulk(selectedIdList, tags)
+    }, '已添加标签')
+    setTagEditValue('')
+  }
+
+  async function handleBatchRemoveTags() {
+    const tags = tagEditValue.split(',').map(item => item.trim()).filter(Boolean)
+    if (tags.length === 0) return
+    await runBatch(async () => {
+      await removeFlashcardTagsBulk(selectedIdList, tags)
+    }, '已移除标签')
+    setTagEditValue('')
+  }
+
+  const allVisibleSelected = cards.length > 0 && cards.every(card => selectedIds.has(card.id))
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col bg-muted/30">
+      <WorkspaceHeader title="闪卡库" description="搜索、按标签导航，并批量整理所有卡片。" onBack={onBack} />
+      <div className="mx-auto grid h-full w-full max-w-7xl flex-1 gap-4 overflow-hidden p-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="sticky top-4 h-fit space-y-3 self-start">
+          <div className="flashcard-panel p-3">
+            <div className="text-[13px] font-semibold text-foreground">检索</div>
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void loadLibrary(true)
+              }}
+              placeholder="搜索题面、答案、标签、来源、牌组"
+              className="mt-3 h-9 rounded-md bg-card text-[13px]"
+            />
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {history.slice(0, 6).map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  onClick={() => setQuery(item.query)}
+                >
+                  {item.query}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flashcard-panel p-3">
+            <div className="text-[13px] font-semibold text-foreground">高级过滤</div>
+            <Select value={deckFilter} onValueChange={setDeckFilter}>
+              <SelectTrigger className="mt-3 h-8 rounded-md bg-card text-[12px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部牌组</SelectItem>
+                {decks.map(deck => <SelectItem key={deck.id} value={String(deck.id)}>{deck.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {[
+                ['new', '新卡'],
+                ['learning', '学习中'],
+                ['review', '已掌握'],
+                ['suspended', '已暂停'],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={cn('rounded-md border px-2 py-1 text-[11px] font-medium transition', statusFilters.includes(value as Flashcard['status']) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground')}
+                  onClick={() => toggleStatus(value as Flashcard['status'])}
+                >
+                  {label}
+                </button>
+              ))}
+              {[
+                ['due', '今日到期'],
+                ['overdue', '逾期'],
+                ['weak', '薄弱'],
+                ['important', '重点'],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={cn('rounded-md border px-2 py-1 text-[11px] font-medium transition', specialFilters.includes(value as 'due') ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground')}
+                  onClick={() => toggleSpecial(value as 'due' | 'overdue' | 'weak' | 'important')}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flashcard-panel p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[13px] font-semibold text-foreground">标签云</div>
+              {selectedTags.length > 0 ? (
+                <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setSelectedTags([])}>清空</button>
+              ) : null}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {tagStats.length === 0 ? (
+                <div className="text-[12px] text-muted-foreground">暂无标签。</div>
+              ) : tagStats.map(item => (
+                <button
+                  key={item.tag}
+                  type="button"
+                  className={cn('rounded-md border px-2 py-1 text-[11px] transition', selectedTags.includes(item.tag) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground')}
+                  onClick={() => toggleTag(item.tag)}
+                >
+                  {item.tag} <span className="opacity-70">{item.total}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </aside>
+
+        <main className="flex min-h-0 flex-col gap-3 overflow-hidden">
+          <div className="flashcard-panel flex flex-wrap items-center justify-between gap-3 p-3">
+            <div>
+              <div className="text-[13px] font-semibold text-foreground">{loading ? '检索中...' : `找到 ${total} 张卡片`}</div>
+              <div className="text-[11px] text-muted-foreground">当前显示 {cards.length} 张 · 已选 {selectedCount} 张</div>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-md text-[12px]"
+                onClick={() => {
+                  setSelectedIds(prev => {
+                    const next = new Set(prev)
+                    for (const card of cards) {
+                      if (allVisibleSelected) next.delete(card.id)
+                      else next.add(card.id)
+                    }
+                    return next
+                  })
+                }}
+              >
+                {allVisibleSelected ? '取消当前结果' : '选择当前结果'}
+              </Button>
+              <Button variant="outline" size="sm" className="h-8 rounded-md text-[12px]" onClick={() => void loadLibrary(true)}>保存搜索</Button>
+            </div>
+          </div>
+
+          {selectedCount > 0 ? (
+            <div className="flashcard-panel flex flex-wrap items-center gap-2 p-3">
+              <Select onValueChange={(value) => void handleBatchMove(Number(value))}>
+                <SelectTrigger className="h-8 w-32 rounded-md bg-card text-[12px]"><SelectValue placeholder="移动到" /></SelectTrigger>
+                <SelectContent>
+                  {decks.map(deck => <SelectItem key={deck.id} value={String(deck.id)}>{deck.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Input
+                value={tagEditValue}
+                onChange={(event) => setTagEditValue(event.target.value)}
+                placeholder="标签，逗号分隔"
+                className="h-8 w-44 rounded-md bg-card text-[12px]"
+              />
+              <Button variant="outline" size="sm" className="h-8 rounded-md text-[12px]" onClick={() => void handleBatchAddTags()}>加标签</Button>
+              <Button variant="outline" size="sm" className="h-8 rounded-md text-[12px]" onClick={() => void handleBatchRemoveTags()}>删标签</Button>
+              <Button variant="outline" size="sm" className="h-8 rounded-md text-[12px]" onClick={() => void handleBatchStatus('suspended')}>暂停</Button>
+              <Button variant="outline" size="sm" className="h-8 rounded-md text-[12px]" onClick={() => void handleBatchStatus('review')}>恢复</Button>
+              <Button variant="outline" size="sm" className="h-8 rounded-md text-[12px]" onClick={() => void handleBatchReset()}>重置</Button>
+              <Button variant="ghost" size="sm" className="h-8 rounded-md text-[12px] text-rose-500 hover:bg-rose-50" onClick={() => void handleBatchDelete()}>删除</Button>
+            </div>
+          ) : null}
+
+          <div className="flashcard-panel min-h-0 flex-1 overflow-hidden">
+            {loading ? (
+              <div className="p-4 text-[13px] text-muted-foreground">正在检索闪卡库...</div>
+            ) : cards.length === 0 ? (
+              <div className="flex min-h-48 items-center justify-center p-8 text-center text-[13px] text-muted-foreground">
+                没有符合条件的卡片。
+              </div>
+            ) : (
+              <div className="max-h-full overflow-auto divide-y divide-border/50">
+                {cards.map(card => {
+                  const deck = decks.find(item => item.id === card.deckId)
+                  const tags = parseTags(card.tags)
+                  return (
+                    <div key={card.id} className="flashcard-library-row flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+                      <div className="flex min-w-0 flex-1 items-start gap-3">
+                        <button
+                          type="button"
+                          className={cn(
+                            'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border transition',
+                            selectedIds.has(card.id) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-transparent hover:text-muted-foreground',
+                          )}
+                          onClick={() => toggleSelected(card.id)}
+                          aria-label={selectedIds.has(card.id) ? '取消选择卡片' : '选择卡片'}
+                        >
+                          <Check className="size-3" />
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge>{getCardTypeLabel(card.type)}</Badge>
+                            <Badge tone={card.status === 'learning' ? 'amber' : card.status === 'suspended' ? 'neutral' : 'green'}>
+                              {card.status === 'new' ? '新卡' : card.status === 'learning' ? '学习中' : card.status === 'suspended' ? '暂停' : '已掌握'}
+                            </Badge>
+                            {deck ? <Badge tone="neutral">{deck.name}</Badge> : null}
+                            {tags.slice(0, 4).map(tag => <Badge key={tag}>{tag}</Badge>)}
+                          </div>
+                          <div className="mt-2 text-[13px] font-medium leading-6 text-foreground">{getCardPreview(card)}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                            {card.notePath ? (
+                              <span className="inline-flex min-w-0 items-center gap-1">
+                                <FileText className="size-3" />
+                                <span className="truncate">{getFileName(card.notePath)}</span>
+                              </span>
+                            ) : null}
+                            <span>{formatNextReviewTime(card.dueAt)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </main>
       </div>
     </div>
   )
@@ -1927,37 +2787,45 @@ function FlashcardReviewPanel({
   const [showAnswer, setShowAnswer] = useState(false)
   const [userAnswer, setUserAnswer] = useState('')
   const [selectedChoiceIndex, setSelectedChoiceIndex] = useState<number | null>(null)
+  const [selectedChoiceIndexes, setSelectedChoiceIndexes] = useState<number[]>([])
   const [submittedAnswer, setSubmittedAnswer] = useState('')
   const [choiceResult, setChoiceResult] = useState<'correct' | 'wrong' | null>(null)
   const [reviewRecorded, setReviewRecorded] = useState(false)
   const [reviewSaving, setReviewSaving] = useState(false)
+  const [nextDueAt, setNextDueAt] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [deckName, setDeckName] = useState<string | null>(null)
   const [sessionTotal, setSessionTotal] = useState(0)
   const [ratingCounts, setRatingCounts] = useState<Record<FlashcardReviewRating, number>>(createRatingCounts())
   const [reviewStates, setReviewStates] = useState<Record<number, ReviewCardState>>({})
+  const [focusMode, setFocusMode] = useState(false)
 
   const resetAnswerState = useCallback(() => {
     setShowAnswer(false)
     setUserAnswer('')
     setSelectedChoiceIndex(null)
+    setSelectedChoiceIndexes([])
     setSubmittedAnswer('')
     setChoiceResult(null)
     setReviewRecorded(false)
     setReviewSaving(false)
+    setNextDueAt(null)
   }, [])
 
   const restoreAnswerState = useCallback((card: Flashcard | undefined, states: Record<number, ReviewCardState>) => {
     const state = card ? states[card.id] : undefined
     const choiceIndex = typeof state?.choiceIndex === 'number' ? state.choiceIndex : null
+    const choiceIndexes = Array.isArray(state?.choiceIndexes) ? state.choiceIndexes : (choiceIndex === null ? [] : [choiceIndex])
 
     setShowAnswer(Boolean(state?.showAnswer))
     setUserAnswer(choiceIndex === null ? state?.answer || '' : '')
     setSelectedChoiceIndex(choiceIndex)
+    setSelectedChoiceIndexes(choiceIndexes)
     setSubmittedAnswer(state?.answer || '')
     setChoiceResult(state?.status === 'correct' ? 'correct' : state?.status === 'wrong' ? 'wrong' : null)
     setReviewRecorded(Boolean(state?.recorded))
     setReviewSaving(false)
+    setNextDueAt(state?.nextDueAt ?? null)
   }, [])
 
   const load = useCallback(async () => {
@@ -1990,11 +2858,18 @@ function FlashcardReviewPanel({
   const difficulty = current ? getDifficultyLevel(current.ease, current.interval) : null
   const choices = reviewContent?.choices || []
   const isChoiceCard = choices.length > 0
+  const choiceMode = reviewContent?.choiceMode || 'single'
+  const isMultiChoice = isChoiceCard && choiceMode === 'multiple'
+  const correctChoiceIndexes = useMemo(
+    () => reviewContent ? Array.from(new Set([...(reviewContent.correctIndexes || []), ...getChoiceCorrectIndexes(reviewContent.answer, choices)])).filter(choiceIndex => choiceIndex >= 0 && choiceIndex < choices.length) : [],
+    [choices, reviewContent],
+  )
   const selectedChoice = selectedChoiceIndex === null ? '' : choices[selectedChoiceIndex] || ''
-  const canSubmitAnswer = isChoiceCard ? selectedChoiceIndex !== null : userAnswer.trim().length > 0
+  const selectedChoices = selectedChoiceIndexes.map(choiceIndex => choices[choiceIndex]).filter(Boolean)
+  const canSubmitAnswer = isChoiceCard ? (isMultiChoice ? selectedChoiceIndexes.length > 0 : selectedChoiceIndex !== null) : userAnswer.trim().length > 0
   const progress = sessionTotal > 0 ? Math.round(((index + 1) / sessionTotal) * 100) : 0
   const answerDisplay = reviewContent
-    ? getReviewAnswerDisplay(reviewContent.answer, isChoiceCard, choiceResult)
+    ? getReviewAnswerDisplay(reviewContent.answer, isChoiceCard, choices, correctChoiceIndexes)
     : ''
   const completedCount = useMemo(
     () => cards.filter(card => reviewStates[card.id]?.recorded).length,
@@ -2030,25 +2905,28 @@ function FlashcardReviewPanel({
 
     setReviewSaving(true)
     try {
-      await updateFlashcardReview(current.id, rating)
+      const result = await updateFlashcardReview(current.id, rating)
       setRatingCounts(prev => ({ ...prev, [rating]: prev[rating] + 1 }))
       const status: ReviewCardStatus = rating >= 2 ? 'correct' : 'wrong'
       setReviewStates(prev => ({
         ...prev,
         [current.id]: {
           ...prev[current.id],
-          answer: submittedAnswer || userAnswer.trim(),
+          answer: submittedAnswer || (isChoiceCard ? selectedChoices.join(' / ') : userAnswer.trim()),
           choiceIndex: selectedChoiceIndex,
+          choiceIndexes: selectedChoiceIndexes,
           showAnswer: true,
           recorded: true,
           status,
+          nextDueAt: result.nextDueAt,
         },
       }))
       setReviewRecorded(true)
+      setNextDueAt(result.nextDueAt)
     } finally {
       setReviewSaving(false)
     }
-  }, [current, reviewSaving, reviewStates, selectedChoiceIndex, submittedAnswer, userAnswer])
+  }, [current, isChoiceCard, reviewSaving, reviewStates, selectedChoiceIndex, selectedChoiceIndexes, selectedChoices, submittedAnswer, userAnswer])
 
   const handleChoiceAnswer = useCallback(async (choiceIndex: number) => {
     if (!current || !reviewContent || showAnswer || reviewSaving) return
@@ -2056,17 +2934,26 @@ function FlashcardReviewPanel({
     const choice = choices[choiceIndex]
     if (!choice) return
 
-    const correct = isChoiceLikelyCorrect(reviewContent.answer, choice, choiceIndex)
+    if (isMultiChoice) {
+      setSelectedChoiceIndexes(prev => {
+        const next = prev.includes(choiceIndex) ? prev.filter(item => item !== choiceIndex) : [...prev, choiceIndex]
+        return next.sort((a, b) => a - b)
+      })
+      return
+    }
+
+    const correct = correctChoiceIndexes.includes(choiceIndex)
     const rating: FlashcardReviewRating = correct ? 3 : 0
 
     setSelectedChoiceIndex(choiceIndex)
+    setSelectedChoiceIndexes([choiceIndex])
     setSubmittedAnswer(choice)
     setChoiceResult(correct ? 'correct' : 'wrong')
     setShowAnswer(true)
     setReviewSaving(true)
 
     try {
-      await updateFlashcardReview(current.id, rating)
+      const result = await updateFlashcardReview(current.id, rating)
       setRatingCounts(prev => ({ ...prev, [rating]: prev[rating] + 1 }))
       setReviewStates(prev => ({
         ...prev,
@@ -2074,12 +2961,15 @@ function FlashcardReviewPanel({
           ...prev[current.id],
           answer: choice,
           choiceIndex,
+          choiceIndexes: [choiceIndex],
           showAnswer: true,
           recorded: true,
           status: correct ? 'correct' : 'wrong',
+          nextDueAt: result.nextDueAt,
         },
       }))
       setReviewRecorded(true)
+      setNextDueAt(result.nextDueAt)
     } catch (error) {
       toast({
         title: '记录复习结果失败',
@@ -2089,13 +2979,20 @@ function FlashcardReviewPanel({
     } finally {
       setReviewSaving(false)
     }
-  }, [choices, current, reviewContent, reviewSaving, showAnswer])
+  }, [choices, correctChoiceIndexes, current, isMultiChoice, reviewContent, reviewSaving, showAnswer])
 
   const handleSubmitAnswer = useCallback(() => {
     if (!reviewContent || !canSubmitAnswer) return
-    const answer = isChoiceCard ? selectedChoice : userAnswer.trim()
+    const answer = isChoiceCard ? (isMultiChoice ? selectedChoices.join(' / ') : selectedChoice) : userAnswer.trim()
+    const multiChoiceCorrect = isMultiChoice
+      && selectedChoiceIndexes.length === correctChoiceIndexes.length
+      && selectedChoiceIndexes.every(choiceIndex => correctChoiceIndexes.includes(choiceIndex))
+
     setSubmittedAnswer(answer)
     setShowAnswer(true)
+    if (isMultiChoice) {
+      setChoiceResult(multiChoiceCorrect ? 'correct' : 'wrong')
+    }
     if (current) {
       setReviewStates(prev => ({
         ...prev,
@@ -2103,11 +3000,16 @@ function FlashcardReviewPanel({
           ...prev[current.id],
           answer,
           choiceIndex: selectedChoiceIndex,
+          choiceIndexes: selectedChoiceIndexes,
           showAnswer: true,
+          status: isMultiChoice ? (multiChoiceCorrect ? 'correct' : 'wrong') : prev[current.id]?.status,
         },
       }))
     }
-  }, [canSubmitAnswer, current, isChoiceCard, reviewContent, selectedChoice, selectedChoiceIndex, userAnswer])
+    if (isMultiChoice) {
+      void handleRating(multiChoiceCorrect ? 3 : 0)
+    }
+  }, [canSubmitAnswer, correctChoiceIndexes, current, handleRating, isChoiceCard, isMultiChoice, reviewContent, selectedChoice, selectedChoiceIndex, selectedChoiceIndexes, selectedChoices, userAnswer])
 
   const handleRevealAnswer = useCallback(() => {
     setSubmittedAnswer('')
@@ -2147,12 +3049,68 @@ function FlashcardReviewPanel({
     await goToNext(nextStates)
   }, [current, goToNext, reviewStates])
 
-  async function toggleImportant() {
+  const toggleImportant = useCallback(async () => {
     if (!current) return
     const nextTags = isImportant ? currentTags.filter(tag => tag !== '重点') : [...currentTags, '重点']
     await updateFlashcardTags(current.id, nextTags)
     setCards(prev => prev.map(card => card.id === current.id ? { ...card, tags: serializeTags(nextTags) } : card))
-  }
+  }, [current, currentTags, isImportant])
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!current || reviewSaving || isTypingTarget(event.target)) return
+
+      if (event.key === ' ') {
+        event.preventDefault()
+        if (!showAnswer) handleRevealAnswer()
+        return
+      }
+
+      if (event.key === 'ArrowLeft' && index > 0) {
+        event.preventDefault()
+        goToIndex(index - 1)
+        return
+      }
+
+      if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        void goToNext()
+        return
+      }
+
+      if (event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        if (!reviewRecorded) void handleSkip()
+        return
+      }
+
+      if (event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        void toggleImportant()
+        return
+      }
+
+      if (showAnswer && !reviewRecorded && ['1', '2', '3', '4'].includes(event.key)) {
+        event.preventDefault()
+        void handleRating((Number(event.key) - 1) as FlashcardReviewRating)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [
+    current,
+    goToIndex,
+    goToNext,
+    handleRating,
+    handleRevealAnswer,
+    handleSkip,
+    index,
+    reviewRecorded,
+    reviewSaving,
+    showAnswer,
+    toggleImportant,
+  ])
 
   if (loading) {
     return (
@@ -2168,58 +3126,80 @@ function FlashcardReviewPanel({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-muted/30">
+    <div className={cn('flex min-h-0 flex-1 flex-col bg-muted/30', focusMode && 'flashcard-focus-shell bg-background')}>
       <WorkspaceHeader
         title={mode === 'weak' ? '错题复习' : '闪卡复习'}
-        description={deckName || '全部牌组'}
+        description={focusMode ? '专注模式' : deckName || '全部牌组'}
         onBack={onBack}
-        action={<Button variant="ghost" size="sm" className="h-8 rounded-lg text-[12px]" onClick={() => void load()}><RefreshCw className="mr-2 size-3.5" />重载</Button>}
+        action={(
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant={focusMode ? 'default' : 'outline'}
+              size="sm"
+              className={cn('h-8 rounded-md text-[12px]', focusMode && 'bg-foreground text-background hover:bg-foreground/90')}
+              onClick={() => setFocusMode(prev => !prev)}
+            >
+              <Target className="mr-2 size-3.5" />
+              {focusMode ? '退出专注' : '专注复习'}
+            </Button>
+            <Button variant="ghost" size="sm" className="h-8 rounded-md text-[12px]" onClick={() => void load()}>
+              <RefreshCw className="mr-2 size-3.5" />
+              重载
+            </Button>
+          </div>
+        )}
       />
-      <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-          <div className="rounded-2xl border border-border bg-card p-3 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Badge tone="dark">{index + 1}/{sessionTotal}</Badge>
-                <Badge>{reviewContent?.promptLabel}</Badge>
-                {difficulty ? <Badge tone={difficulty.tone}>{difficulty.label}</Badge> : null}
-                {isImportant ? <Badge tone="amber">重点</Badge> : null}
-              </div>
-              <Button variant="ghost" size="sm" className="h-8 rounded-lg text-[12px]" onClick={() => void toggleImportant()}>
-                <Star className={cn('mr-2 size-3.5', isImportant && 'fill-amber-400 text-amber-500')} />
-                {isImportant ? '取消重点' : '标重点'}
-              </Button>
-            </div>
-              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted flashcard-progress-bar" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
-                <div className="h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
-              </div>
-              {current?.notePath && (
-                <div className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
-                  <FileText className="size-3" />
-                  <span className="truncate">{getFileName(current.notePath)}</span>
+      <div className={cn('min-h-0 flex-1 overflow-auto px-5 py-5', focusMode && 'px-4 py-3 sm:px-6 sm:py-5')}>
+        <div className={cn('mx-auto w-full max-w-6xl', focusMode && 'max-w-6xl')}>
+          <div className={cn('grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]', focusMode && 'xl:grid-cols-[minmax(0,1fr)_300px]')}>
+            <section className={cn('flashcard-panel overflow-hidden', focusMode && 'flashcard-focus-card min-h-[min(68vh,620px)]')}>
+              <div className="border-b border-border/50 px-5 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <Badge tone="dark">{index + 1}/{sessionTotal}</Badge>
+                    <Badge>{reviewContent?.promptLabel}</Badge>
+                    {difficulty ? <Badge tone={difficulty.tone}>{difficulty.label}</Badge> : null}
+                    {isImportant ? <Badge tone="amber">重点</Badge> : null}
+                  </div>
+                  <Button variant="ghost" size="sm" className="h-8 rounded-md text-[12px]" onClick={() => void toggleImportant()}>
+                    <Star className={cn('mr-2 size-3.5', isImportant && 'fill-amber-400 text-amber-500')} />
+                    {isImportant ? '取消重点' : '标重点'}
+                  </Button>
                 </div>
-              )}
-            </div>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted flashcard-progress-bar" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+                  <div className="h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
+                </div>
+                {current?.notePath ? (
+                  <div className="mt-2 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+                    <FileText className="size-3 shrink-0" />
+                    <span className="truncate">{getFileName(current.notePath)}</span>
+                  </div>
+                ) : null}
+              </div>
 
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-            <section className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{reviewContent?.promptLabel}</div>
-              <SimpleMarkdown content={reviewContent?.prompt || ''} className="mt-4 text-2xl font-bold leading-relaxed text-foreground" />
+              <div className={cn('p-5 sm:p-7', focusMode && 'flex min-h-[calc(min(68vh,620px)-92px)] flex-col justify-center py-8')}>
+                <SimpleMarkdown
+                  content={reviewContent?.prompt || ''}
+                  className={cn(
+                    'text-[24px] font-semibold leading-relaxed text-foreground',
+                    focusMode && 'mx-auto mt-0 max-w-3xl text-center text-[28px] leading-relaxed sm:text-[32px]',
+                  )}
+                />
 
               {isChoiceCard ? (
-                <div className="mt-5 grid gap-2">
+                <div className={cn('mt-7 grid gap-2.5', focusMode && 'mx-auto mt-8 w-full max-w-2xl')}>
                   {choices.map((choice, choiceIndex) => {
-                    const selected = selectedChoiceIndex === choiceIndex
-                    const likelyCorrect = showAnswer && isChoiceLikelyCorrect(reviewContent?.answer || '', choice, choiceIndex)
-                    const selectedWrong = selected && choiceResult === 'wrong'
+                    const selected = isMultiChoice ? selectedChoiceIndexes.includes(choiceIndex) : selectedChoiceIndex === choiceIndex
+                    const likelyCorrect = showAnswer && correctChoiceIndexes.includes(choiceIndex)
+                    const selectedWrong = selected && showAnswer && choiceResult === 'wrong' && !likelyCorrect
                     return (
                       <button
                         key={`${choice}-${choiceIndex}`}
                         type="button"
                         className={cn(
-                          'flashcard-choice-option flex items-start gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2.5 text-left text-[13px] transition',
+                          'flashcard-choice-option flex min-h-12 items-center gap-3 rounded-lg border border-border bg-muted/30 px-3.5 py-2.5 text-left text-[14px] transition-[background-color,border-color,transform] duration-150',
                           !showAnswer && 'hover:border-foreground/30 hover:bg-card',
-                          selected && !showAnswer && 'border-primary bg-card shadow-sm',
+                          selected && !showAnswer && 'border-primary bg-card',
                           likelyCorrect && 'border-primary bg-primary text-primary-foreground',
                           selectedWrong && 'border-border bg-muted text-muted-foreground',
                         )}
@@ -2240,25 +3220,25 @@ function FlashcardReviewPanel({
                   })}
                 </div>
               ) : (
-                <div className="mt-5 space-y-2">
+                <div className={cn('mt-7 space-y-2', focusMode && 'mx-auto mt-8 w-full max-w-2xl')}>
                   <div className="text-[11px] font-medium text-muted-foreground">作答区</div>
                   <Textarea
                     value={userAnswer}
                     onChange={(event) => setUserAnswer(event.target.value)}
                     disabled={showAnswer}
                     placeholder={current.type === 'cloze' ? '输入填空答案...' : '先写下自己的答案，再查看参考答案。'}
-                    className="min-h-28 resize-none rounded-xl bg-muted/30 text-[13px] shadow-none border-border"
+                    className="min-h-28 resize-none rounded-lg bg-muted/30 text-[13px] shadow-none border-border"
                   />
                 </div>
               )}
 
               {showAnswer ? (
-                <div className="mt-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  <div className="rounded-xl border border-border bg-muted/30 p-3">
+                <div className={cn('mt-7 animate-in fade-in slide-in-from-bottom-1 duration-200', focusMode && 'mx-auto mt-8 w-full max-w-2xl')}>
+                  <div className="rounded-lg border border-border bg-muted/30 p-3">
                     <div className="text-[11px] font-semibold text-muted-foreground">{isChoiceCard ? '答案解析' : reviewContent?.answerLabel}</div>
                     {isChoiceCard && choiceResult ? (
                       <div className={cn(
-                        'mt-2 inline-flex animate-in zoom-in-50 duration-200 rounded-full px-2 py-1 text-xs font-semibold',
+                        'mt-2 inline-flex animate-in fade-in duration-150 rounded-md px-2 py-1 text-xs font-semibold',
                         choiceResult === 'correct'
                           ? 'bg-emerald-50 text-emerald-700'
                           : 'bg-rose-50 text-rose-700',
@@ -2270,21 +3250,22 @@ function FlashcardReviewPanel({
                   </div>
                 </div>
               ) : null}
+              </div>
             </section>
 
             <aside className="space-y-3 xl:sticky xl:top-4 xl:self-start">
               {/* 移动端底部快速操作栏 */}
-              <div className="xl:hidden rounded-2xl border border-border bg-card p-3 shadow-sm">
+              <div className="flashcard-panel p-3 xl:hidden">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[11px] text-muted-foreground">{index + 1}/{sessionTotal}</div>
                   <div className="flex gap-1.5">
-                    <Button variant="outline" size="sm" className="h-7 rounded-lg text-[12px]" disabled={index === 0 || reviewSaving} onClick={() => goToIndex(index - 1)}>
+                    <Button variant="outline" size="sm" className="h-7 rounded-md text-[12px]" disabled={index === 0 || reviewSaving} onClick={() => goToIndex(index - 1)}>
                       上一题
                     </Button>
-                    <Button variant="outline" size="sm" className="h-7 rounded-lg text-[12px]" disabled={reviewSaving || reviewRecorded} onClick={() => void handleSkip()}>
+                    <Button variant="outline" size="sm" className="h-7 rounded-md text-[12px]" disabled={reviewSaving || reviewRecorded} onClick={() => void handleSkip()}>
                       跳过
                     </Button>
-                    <Button size="sm" className="h-7 rounded-lg bg-primary text-[12px] font-medium text-primary-foreground shadow-sm hover:bg-primary/90" disabled={reviewSaving} onClick={() => void goToNext()}>
+                    <Button size="sm" className="h-7 rounded-md bg-primary text-[12px] font-medium text-primary-foreground hover:bg-primary/90" disabled={reviewSaving} onClick={() => void goToNext()}>
                       {index >= cards.length - 1 ? '完成' : '下一题'}
                     </Button>
                   </div>
@@ -2293,123 +3274,138 @@ function FlashcardReviewPanel({
 
               {/* 桌面端完整侧栏 */}
               <div className="hidden xl:block space-y-3">
-              <div className="rounded-2xl border border-border bg-card p-3 shadow-sm">
-                <div className="text-[13px] font-semibold text-foreground">本轮进度</div>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-[13px]">
-                  <div className="rounded-xl bg-muted/50 p-2">
-                    <div className="text-[11px] text-muted-foreground">当前</div>
-                    <div className="mt-1 font-semibold text-foreground">{index + 1}/{sessionTotal}</div>
+                <div className="flashcard-panel p-3">
+                  <div className="text-[13px] font-semibold text-foreground">本轮进度</div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[13px]">
+                    <div className="rounded-md bg-muted/50 p-2">
+                      <div className="text-[11px] text-muted-foreground">当前</div>
+                      <div className="mt-1 font-semibold text-foreground">{index + 1}/{sessionTotal}</div>
+                    </div>
+                    <div className="rounded-md bg-muted/50 p-2">
+                      <div className="text-[11px] text-muted-foreground">已答</div>
+                      <div className="mt-1 font-semibold text-foreground">{completedCount}/{sessionTotal}</div>
+                    </div>
                   </div>
-                  <div className="rounded-xl bg-muted/50 p-2">
-                    <div className="text-[11px] text-muted-foreground">已答</div>
-                    <div className="mt-1 font-semibold text-foreground">{completedCount}/{sessionTotal}</div>
-                  </div>
-                </div>
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  <Button variant="outline" className="h-8 rounded-lg text-[12px]" disabled={index === 0 || reviewSaving} onClick={() => goToIndex(index - 1)}>
-                    上一题
-                  </Button>
-                  <Button variant="outline" className="h-8 rounded-lg text-[12px]" disabled={reviewSaving || reviewRecorded} onClick={() => void handleSkip()}>
-                    跳过
-                  </Button>
-                  <Button className="h-8 rounded-lg bg-primary text-[12px] font-medium text-primary-foreground shadow-sm hover:bg-primary/90" disabled={reviewSaving} onClick={() => void goToNext()}>
-                    {index >= cards.length - 1 ? '完成' : '下一题'}
-                  </Button>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-border bg-card p-3 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-[13px] font-semibold text-foreground">答题卡</div>
-                  <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                    <span className="inline-flex items-center gap-1"><span className="size-2 rounded-sm bg-emerald-500" />对</span>
-                    <span className="inline-flex items-center gap-1"><span className="size-2 rounded-sm bg-rose-500" />错</span>
-                  </div>
-                </div>
-                <div className="mt-3 grid grid-cols-8 gap-1.5">
-                  {cards.map((card, cardIndex) => {
-                    const state = reviewStates[card.id]
-                    return (
-                      <button
-                        key={card.id}
-                        type="button"
-                        className={cn(
-                          'flex aspect-square items-center justify-center rounded-md border text-[10px] font-bold transition',
-                          state?.status === 'correct' && 'border-emerald-500 bg-emerald-500 text-white',
-                          state?.status === 'wrong' && 'border-rose-500 bg-rose-500 text-white',
-                          state?.status === 'skipped' && 'border-border bg-muted text-muted-foreground',
-                          !state?.status && 'border-border bg-card text-muted-foreground hover:bg-muted/50',
-                          cardIndex === index && 'ring-2 ring-primary ring-offset-1',
-                        )}
-                        onClick={() => goToIndex(cardIndex)}
-                      >
-                        {cardIndex + 1}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-border bg-card p-3 shadow-sm">
-                <div className="text-[13px] font-semibold text-foreground">
-                  {showAnswer && reviewRecorded ? '本题结果' : showAnswer ? '自评掌握度' : '先作答'}
-                </div>
-                <div className="mt-3 grid gap-2">
-                  {showAnswer && reviewRecorded ? (
+                  {focusMode ? (
                     <>
-                      <div className="rounded-xl border border-border bg-muted/50 p-3 text-[13px]">
-                        <div className="font-semibold text-foreground">
-                          {choiceResult === 'correct' ? '回答正确' : choiceResult === 'wrong' ? '回答错误' : '已记录'}
-                        </div>
-                        <div className="mt-1 text-[11px] text-muted-foreground">
-                          {choiceResult === 'correct'
-                            ? '已降低下次出现频率。'
-                            : choiceResult === 'wrong'
-                              ? '已加入薄弱复习，会更快再次出现。'
-                              : '已保存本题复习结果。'}
-                        </div>
+                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted flashcard-progress-bar" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+                        <div className="h-full rounded-full bg-foreground transition-all duration-300" style={{ width: `${progress}%` }} />
+                      </div>
+                      <div className="mt-3 rounded-md bg-muted/40 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground">
+                        Space 显示答案 · 1/2/3/4 评分 · ←/→ 切换 · S 跳过 · F 标重点
                       </div>
                     </>
-                  ) : !showAnswer ? (
-                    <>
-                      {isChoiceCard ? (
-                        <div className="rounded-xl bg-muted/50 p-3 text-[11px] leading-5 text-muted-foreground">
-                          点击选项后会立即判断对错，并自动调整下次复习频率。
-                        </div>
-                      ) : (
-                        <Button className="h-9 rounded-lg bg-primary text-[13px] font-medium text-primary-foreground shadow-sm hover:bg-primary/90" onClick={handleSubmitAnswer} disabled={!canSubmitAnswer}>
-                          提交答案
-                        </Button>
-                      )}
-                      <Button variant="outline" className="h-9 rounded-lg text-[13px]" onClick={handleRevealAnswer}>
-                        直接看答案
-                      </Button>
-                      <Button variant="ghost" className="h-9 rounded-lg text-[13px] text-muted-foreground" onClick={() => void handleSkip()}>
-                        跳过本题
-                      </Button>
-                    </>
-                  ) : (
-                    ratingOptions.map(option => {
-                      const Icon = option.icon
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={cn('flashcard-rating-btn flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition hover:-translate-y-0.5', option.className)}
-                          disabled={reviewSaving}
-                          onClick={() => void handleRating(option.value)}
-                        >
-                          <Icon className="size-4 shrink-0" />
-                          <span>
-                            <div className="font-semibold">{option.label}</div>
-                            <div className="text-xs opacity-75">{option.hint}</div>
-                          </span>
-                        </button>
-                      )
-                    })
-                  )}
+                  ) : null}
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <Button variant="outline" className="h-9 rounded-md text-[12px]" disabled={index === 0 || reviewSaving} onClick={() => goToIndex(index - 1)}>
+                      上一题
+                    </Button>
+                    <Button variant="outline" className="h-9 rounded-md text-[12px]" disabled={reviewSaving || reviewRecorded} onClick={() => void handleSkip()}>
+                      跳过
+                    </Button>
+                    <Button className="h-9 rounded-md bg-primary text-[12px] font-medium text-primary-foreground hover:bg-primary/90" disabled={reviewSaving} onClick={() => void goToNext()}>
+                      {index >= cards.length - 1 ? '完成' : '下一题'}
+                    </Button>
+                  </div>
                 </div>
-              </div>
+
+                {!focusMode ? (
+                  <div className="flashcard-panel p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-[13px] font-semibold text-foreground">答题卡</div>
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                        <span className="inline-flex items-center gap-1"><span className="size-2 rounded-sm bg-emerald-500" />对</span>
+                        <span className="inline-flex items-center gap-1"><span className="size-2 rounded-sm bg-rose-500" />错</span>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-7 gap-1.5">
+                      {cards.map((card, cardIndex) => {
+                        const state = reviewStates[card.id]
+                        return (
+                          <button
+                            key={card.id}
+                            type="button"
+                            className={cn(
+                              'flex aspect-square items-center justify-center rounded-md border text-[10px] font-bold transition',
+                              state?.status === 'correct' && 'border-emerald-500 bg-emerald-500 text-white',
+                              state?.status === 'wrong' && 'border-rose-500 bg-rose-500 text-white',
+                              state?.status === 'skipped' && 'border-border bg-muted text-muted-foreground',
+                              !state?.status && 'border-border bg-card text-muted-foreground hover:bg-muted/50',
+                              cardIndex === index && 'ring-2 ring-primary ring-offset-1',
+                            )}
+                            onClick={() => goToIndex(cardIndex)}
+                          >
+                            {cardIndex + 1}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="flashcard-panel p-3">
+                  <div className="text-[13px] font-semibold text-foreground">
+                    {showAnswer && reviewRecorded ? '本题结果' : showAnswer ? '自评掌握度' : '先作答'}
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-2">
+                    {showAnswer && reviewRecorded ? (
+                      <>
+                        <div className="rounded-lg border border-border bg-muted/50 p-3 text-[13px] sm:col-span-2">
+                          <div className="font-semibold text-foreground">
+                            {choiceResult === 'correct' ? '回答正确' : choiceResult === 'wrong' ? '回答错误' : '已记录'}
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            {choiceResult === 'correct'
+                              ? '已降低下次出现频率。'
+                              : choiceResult === 'wrong'
+                                ? '已加入薄弱复习，会更快再次出现。'
+                                : '已保存本题复习结果。'}
+                          </div>
+                          <div className="mt-2 rounded-md bg-card px-2.5 py-2 text-[11px] font-medium text-foreground ring-1 ring-border">
+                            {formatNextReviewTime(nextDueAt)}
+                          </div>
+                        </div>
+                      </>
+                    ) : !showAnswer ? (
+                      <>
+                        {!isChoiceCard ? (
+                          <Button className="h-10 rounded-md bg-primary text-[13px] font-medium text-primary-foreground hover:bg-primary/90 sm:col-span-2" onClick={handleSubmitAnswer} disabled={!canSubmitAnswer}>
+                            提交答案
+                          </Button>
+                        ) : isMultiChoice ? (
+                          <Button className="h-10 rounded-md bg-primary text-[13px] font-medium text-primary-foreground hover:bg-primary/90 sm:col-span-2" onClick={handleSubmitAnswer} disabled={!canSubmitAnswer || reviewSaving}>
+                            提交选择
+                          </Button>
+                        ) : null}
+                        <Button variant="outline" className={cn('h-10 rounded-md border-border bg-card text-[13px] font-medium hover:bg-muted', !isChoiceCard && 'sm:col-span-1')} onClick={handleRevealAnswer}>
+                          查看答案
+                        </Button>
+                        <Button variant="ghost" className="h-10 rounded-md text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => void handleSkip()}>
+                          跳过本题
+                        </Button>
+                      </>
+                    ) : (
+                      ratingOptions.map(option => {
+                        const Icon = option.icon
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={cn('flashcard-rating-btn flex min-h-[72px] items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition hover:-translate-y-0.5', option.className)}
+                            disabled={reviewSaving}
+                            onClick={() => void handleRating(option.value)}
+                          >
+                            <Icon className="size-4 shrink-0" />
+                            <span>
+                              <div className="font-semibold">{option.label}</div>
+                              <div className="text-xs opacity-75">{option.hint}</div>
+                            </span>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
               </div>
             </aside>
           </div>
@@ -2431,7 +3427,7 @@ export function FlashcardWorkspace({ sourcePath }: FlashcardWorkspaceProps) {
   const [deckId, setDeckId] = useState('')
   const [count, setCount] = useState('8')
   const [mode, setMode] = useState<GenerateMode>('memory')
-  const [selectedTypes, setSelectedTypes] = useState<GenerateQuestionType[]>(['choice', 'cloze', 'short-answer'])
+  const [selectedTypes, setSelectedTypes] = useState<GenerateQuestionType[]>(['choice', 'cloze', 'short-answer', 'true-false'])
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
@@ -2664,15 +3660,27 @@ export function FlashcardWorkspace({ sourcePath }: FlashcardWorkspaceProps) {
         `允许题型：${typeLabels}`,
         '只返回严格 JSON 数组，不要返回解释，不要使用 Markdown 代码块。',
         '每个元素格式：',
-        '{"type":"choice|cloze|short-answer|basic","front":"","back":"","clozeText":"","choices":[""],"tags":[""],"sourcePath":""}',
+        '{"type":"choice|cloze|short-answer|true-false","front":"","back":"","clozeText":"","choices":[""],"choiceMode":"single|multiple","correctChoices":["A"],"tags":[""],"sourcePath":"","difficulty":"basic|understanding|application|confusable","sourceSummary":"","qualityNote":"","atomicityIssue":"","duplicateHint":""}',
         '规则：',
         '1. choice 是选择题，front 写题干，choices 给 3-5 个选项，back 写正确答案和简短解析。',
+        '1.1 choiceMode 为 single 时只保留一个正确项，choiceMode 为 multiple 时保留 2-3 个正确项。',
+        '1.2 correctChoices 用 A/B/C/D/E 标注正确选项，可以是单个或多个。',
+        '1.3 多选题的 back 中应明确写出多个正确答案和一小段解析，不要只写一个字母。',
         '2. cloze 是填空题，只写 clozeText，必须使用 {{c1::答案}} 格式。',
         '3. short-answer 是简答题，front 写问题，back 写参考答案或评分要点。',
-        '4. basic 是普通问答卡，front 写问题，back 写答案。',
+        '4. true-false 是判断题，front 写一条可判断真伪的陈述，back 必须以“答案：正确”或“答案：错误”开头，然后写一句解析。',
         '5. sourcePath 必须从来源 path 中选择。',
         '6. tags 最多 4 个，短词即可。',
-        '7. 不要重复已有题干；如果来源内容较少，可以从同一知识点拆成不同题型补齐。',
+        '7. 每张卡必须只考一个知识点；如果题面包含多个考点，在 atomicityIssue 中说明。',
+        '8. difficulty 必须四选一：basic=基础事实，understanding=概念理解，application=应用迁移，confusable=易混淆辨析。',
+        '8.1 选择题要随机混合单选和多选，优先从文章中提取多个并列事实、分类关系、对照关系生成多选题。',
+        '9. sourceSummary 用一句话概括来源片段，方便复习时回到原文。',
+        '10. qualityNote 说明为什么这张卡值得保留，或保存前应该如何拆分。',
+        '11. duplicateHint 标注与已生成题干或来源内相似题的重复风险，没有则留空。',
+        '12. 不要重复已有题干；如果来源内容较少，可以从同一知识点拆成不同题型补齐。',
+        '13. 所有字符串字段必须是单行短句，不能包含换行符，不能包含未转义的英文双引号。',
+        '14. sourceSummary、qualityNote、atomicityIssue、duplicateHint 每项不超过 40 个汉字。',
+        '15. 无内容的可选字段必须写成空字符串，不要写 null、undefined 或省略字段。',
         existingDrafts.length > 0
           ? `已生成题干，继续补齐时请避开：\n${existingDrafts.map(draft => `- ${getCardPreview(draft)}`).join('\n')}`
           : '',
@@ -2684,9 +3692,9 @@ export function FlashcardWorkspace({ sourcePath }: FlashcardWorkspaceProps) {
       for (let attempt = 0; attempt < 3 && normalized.length < requestedCount; attempt += 1) {
         const remaining = requestedCount - normalized.length
         const result = await fetchAi(buildPrompt(remaining, normalized))
-        const parsed = JSON.parse(extractJsonArray(result))
+        const parsed = await parseGeneratedDraftJson(result)
         const nextDrafts = normalizeDrafts(parsed, remaining, selectedTypes, readySources)
-        normalized = mergeUniqueDrafts([...normalized, ...nextDrafts], requestedCount)
+        normalized = enrichDraftQuality(mergeUniqueDrafts([...normalized, ...nextDrafts], requestedCount))
       }
 
       if (normalized.length === 0) {
@@ -2740,6 +3748,10 @@ export function FlashcardWorkspace({ sourcePath }: FlashcardWorkspaceProps) {
 
   if (view.name === 'decks') {
     return <FlashcardDeckManager decks={decks} onBack={() => setView({ name: 'home' })} onRefresh={refresh} onReviewDeck={(nextDeckId) => setView({ name: 'review', deckId: nextDeckId })} />
+  }
+
+  if (view.name === 'library') {
+    return <FlashcardLibraryPanel decks={decks} onBack={() => setView({ name: 'home' })} onRefresh={refresh} />
   }
 
   if (view.name === 'weak') {
@@ -2799,6 +3811,7 @@ export function FlashcardWorkspace({ sourcePath }: FlashcardWorkspaceProps) {
         onCreateCard={() => setCreateOpen(true)}
         onReviewAll={() => setView({ name: 'review' })}
         onReviewDeck={(nextDeckId) => setView({ name: 'review', deckId: nextDeckId })}
+        onLibrary={() => setView({ name: 'library' })}
         onManageDecks={() => setView({ name: 'decks' })}
         onWeakCards={() => setView({ name: 'weak' })}
         onStats={() => setView({ name: 'stats' })}

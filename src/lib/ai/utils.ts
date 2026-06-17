@@ -6,6 +6,7 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import { platform } from "@tauri-apps/plugin-os";
 import { createTauriOpenAIClient, type OpenAICompatibleClient } from "./tauri-client";
 import { buildXiaoMoChatSystemPrompt } from "./xiaomo-prompt";
+import { matchesConfiguredModelSelection } from "./model-selection";
 
 const MERMAID_OUTPUT_GUIDE = `When a process, architecture, relationship, decision tree, timeline, or comparison is better expressed visually, include a valid Mermaid fenced code block in the answer:
 \`\`\`mermaid
@@ -64,16 +65,11 @@ export async function getAISettings(modelType?: string): Promise<AiConfig | unde
     // 检查新的 models 数组结构
     if (config.models && config.models.length > 0) {
       // 首先尝试直接匹配模型ID
-      let targetModel = config.models.find(model => model.id === modelId)
-
-      // 如果没找到，尝试匹配组合键格式 ${config.key}-${model.id}
-      if (!targetModel && typeof modelId === 'string' && modelId.includes('-')) {
-        const expectedPrefix = `${config.key}-`
-        if (modelId.startsWith(expectedPrefix)) {
-          const originalModelId = modelId.substring(expectedPrefix.length)
-          targetModel = config.models.find(model => model.id === originalModelId)
-        }
-      }
+      const targetModel = config.models.find(model => matchesConfiguredModelSelection({
+        configKey: config.key,
+        modelId: model.id,
+        selectionId: typeof modelId === 'string' ? modelId : undefined,
+      }))
 
       if (targetModel) {
         const result = {

@@ -1,4 +1,4 @@
-use tauri::{path::BaseDirectory, AppHandle, Manager};
+use tauri::{AppHandle, Manager, path::BaseDirectory};
 use xcap::Window;
 
 #[cfg(target_os = "macos")]

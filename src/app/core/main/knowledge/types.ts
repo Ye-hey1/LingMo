@@ -90,6 +90,7 @@ export interface GraphFilters {
   };
   minConnections?: number;
   maxConnections?: number;
+  includeNoisyTopics?: boolean;
 }
 
 /** 搜索结果 */
@@ -156,6 +157,21 @@ export interface SearchDialogProps {
 
 // ==================== Store 类型 ====================
 
+/** 物理引擎配置 */
+export interface PhysicsConfig {
+  repulsion: number;  // 节点斥力
+  gravity: number;    // 中心引力
+  edgeLength: number; // 连线长度
+  friction: number;   // 摩擦力/阻尼
+}
+
+/** 自定义染色规则 */
+export interface ColorGroup {
+  id: string;
+  query: string;
+  color: string;
+}
+
 /** 图谱状态 */
 export interface GraphState {
   // 数据
@@ -186,6 +202,14 @@ export interface GraphState {
   showExportDialog: boolean;
   isLoading: boolean;
   error: string | null;
+
+  // 物理与染色状态
+  physics: PhysicsConfig;
+  colorGroups: ColorGroup[];
+
+  // 局部图谱状态
+  graphMode: 'global' | 'local';
+  graphView: 'topic' | 'note';
 }
 
 /** 图谱 Actions */
@@ -207,11 +231,22 @@ export interface GraphActions {
   selectNode: (nodeId: string | null) => void;
   selectEdge: (edgeId: string | null) => void;
   setHoveredNode: (nodeId: string | null) => void;
+  getNodeById: (nodeId: string | null) => GraphNode | undefined;
   
   // 视图控制
   setZoom: (zoom: number) => void;
   setPan: (x: number, y: number) => void;
   fitView: () => void;
+  
+  // 物理与染色控制
+  setPhysics: (physics: Partial<PhysicsConfig>) => void;
+  addColorGroup: (query: string, color: string) => void;
+  removeColorGroup: (id: string) => void;
+  updateColorGroup: (id: string, updates: Partial<Omit<ColorGroup, 'id'>>) => void;
+  
+  // 局部图谱控制
+  setGraphMode: (mode: 'global' | 'local') => void;
+  setGraphView: (view: 'topic' | 'note') => void;
   
   // 筛选和搜索
   setFilters: (filters: Partial<GraphFilters>) => void;
