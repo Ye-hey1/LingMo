@@ -7,9 +7,15 @@ import {
   CheckCircle2,
   ChevronDown,
   Circle,
+  Code2,
   Clock3,
   FileText,
+  GitCompareArrows,
+  Globe2,
+  Image,
   ListChecks,
+  Route,
+  Table2,
   Wrench,
 } from "lucide-react"
 import { CompactToolCalls } from "./compact-tool-calls"
@@ -44,11 +50,21 @@ type TimelineItem = {
   timestamp: number
 }
 
+type ReasoningSummaryItem = {
+  id: string
+  tone: TimelineTone
+  label: string
+  detail?: string
+}
+
+type ArtifactRendererKind = "file" | "diff" | "table" | "chart" | "image" | "web" | "data"
+
 type ArtifactRef = {
   id: string
   label: string
   path: string
   kind: "artifact" | "data"
+  renderer: ArtifactRendererKind
 }
 
 function getActionToolName(currentAction?: string) {
@@ -255,6 +271,16 @@ function getPathLabel(path: string) {
   return normalized.split("/").filter(Boolean).slice(-2).join("/") || normalized
 }
 
+function getArtifactRenderer(path: string, kind: ArtifactRef["kind"]): ArtifactRendererKind {
+  if (kind === "data") return "data"
+  if (/^https?:\/\//i.test(path)) return "web"
+  if (/\.(?:diff|patch)$/i.test(path)) return "diff"
+  if (/\.(?:csv|tsv|xlsx?|json|jsonl)$/i.test(path)) return "table"
+  if (/\.(?:mmd|mermaid|svg|html?)$/i.test(path)) return "chart"
+  if (/\.(?:png|jpe?g|webp|gif|bmp|avif)$/i.test(path)) return "image"
+  return "file"
+}
+
 function addArtifactRef(map: Map<string, ArtifactRef>, path: unknown, kind: ArtifactRef["kind"]) {
   if (typeof path !== "string" || !path.trim()) return
   const trimmed = path.trim()
@@ -263,6 +289,7 @@ function addArtifactRef(map: Map<string, ArtifactRef>, path: unknown, kind: Arti
     kind,
     path: trimmed,
     label: getPathLabel(trimmed),
+    renderer: getArtifactRenderer(trimmed, kind),
   })
 }
 
@@ -297,6 +324,7 @@ function extractArtifactRefs(partSnapshot: AgentPartSnapshot | undefined, toolCa
 function getRecoveryHint(message?: string) {
   const text = message || ""
   if (/rate.?limit|429|限流|too many requests/i.test(text)) return "已识别限流，稍后重试或切换模型更稳。"
+  if (/insufficient.*balance|余额不足|402|payment required|billing/i.test(text)) return "账户余额或额度不足，请充值、切换模型或更换 API Key。"
   if (/api.?key|unauthorized|401|forbidden|permission/i.test(text)) return "需要检查模型凭据或权限配置。"
   if (/WEB_ACCESS_DISABLED|联网|web access/i.test(text)) return "需要开启联网搜索或改用本地资料路径。"
   if (/messages\.content\.type|image_url|图片|vision/i.test(text)) return "图片输入会自动降级为 Vision Bridge 文本描述。"
@@ -304,6 +332,97 @@ function getRecoveryHint(message?: string) {
   if (/timeout|timed out|network|connect/i.test(text)) return "网络或服务端暂时不可用，可以重试。"
   if (/skipped|blocked|policy/i.test(text)) return "策略已保护当前操作，Agent 会尝试换路径完成。"
   return text ? "已捕获异常，Agent 会优先尝试恢复或给出可执行结果。" : ""
+}
+
+function getRecoveryAction(message?: string) {
+  const text = message || ""
+  if (/rate.?limit|429|限流|too many requests/i.test(text)) return "稍后重试 / 降低上下文"
+  if (/insufficient.*balance|余额不足|402|payment required|billing/i.test(text)) return "检查余额 / 切换 Key"
+  if (/api.?key|unauthorized|401|forbidden|permission/i.test(text)) return "检查凭据 / 权限"
+  if (/messages\.content\.type|image_url|图片|vision/i.test(text)) return "启用视觉模型 / 文本化图片"
+  if (/status=5\d\d|upstream error|do_request_failed|上游服务异常|server error|service unavailable|bad gateway/i.test(text)) return "重试 / 切换模型"
+  if (/timeout|timed out|network|connect/i.test(text)) return "重试 / 检查网络"
+  if (/skipped|blocked|policy/i.test(text)) return "换安全路径"
+  return ""
+}
+
+function getReasoningStage(item: TimelineItem): ReasoningSummaryItem | null {
+  const label = item.label
+  const detail = item.detail
+
+  if (label === "启动任务") return { id: item.id, tone: item.tone, label: "理解需求", detail }
+  if (label === "整理上下文") return { id: item.id, tone: item.tone, label: "整理上下文", detail }
+  if (label === "规划步骤") return { id: item.id, tone: item.tone, label: "规划步骤", detail }
+  if (label.startsWith("第 ") || label === "请求模型" || label === "模型返回") {
+    return { id: item.id, tone: item.tone, label: "分析路径", detail }
+  }
+  if (label.startsWith("准备 ")) {
+    return { id: item.id, tone: item.tone, label: label.replace(/^准备\s+/, "准备调用 "), detail }
+  }
+  if (label.startsWith("运行 ")) {
+    return { id: item.id, tone: item.tone, label: label.replace(/^运行\s+/, "调用 "), detail }
+  }
+  if (label.startsWith("完成 ")) {
+    return { id: item.id, tone: item.tone, label: label.replace(/^完成\s+/, "读取结果 "), detail }
+  }
+  if (label.startsWith("失败 ")) {
+    return { id: item.id, tone: "error", label: label.replace(/^失败\s+/, "恢复 "), detail }
+  }
+  if (label === "等待确认") return { id: item.id, tone: item.tone, label: "等待确认", detail }
+  if (label === "写最终答案") return { id: item.id, tone: item.tone, label: "整理输出", detail }
+  if (label === "任务完成") return { id: item.id, tone: item.tone, label: "完成答复", detail }
+  if (label === "执行异常") return { id: item.id, tone: "error", label: "准备恢复", detail }
+
+  return null
+}
+
+function buildReasoningSummaryItems(input: {
+  timelineItems: TimelineItem[]
+  statusLabel: string
+  statusTone: TimelineTone
+  detail?: string
+  hasArtifacts: boolean
+  hasTools: boolean
+  isRunning: boolean
+}) {
+  const stages = input.timelineItems
+    .map(getReasoningStage)
+    .filter((item): item is ReasoningSummaryItem => Boolean(item))
+
+  if (input.hasTools && !stages.some(item => item.label.includes("调用"))) {
+    stages.push({
+      id: "tools",
+      tone: input.isRunning ? "running" : "done",
+      label: "调用工具",
+    })
+  }
+  if (input.hasArtifacts && !stages.some(item => item.label.includes("产物") || item.label.includes("输出"))) {
+    stages.push({
+      id: "artifacts",
+      tone: "done",
+      label: "生成产物",
+    })
+  }
+  if (stages.length === 0 && input.statusLabel) {
+    stages.push({
+      id: "status",
+      tone: input.statusTone,
+      label: input.statusLabel,
+      detail: input.detail,
+    })
+  }
+
+  const deduped = stages.reduce<ReasoningSummaryItem[]>((acc, item) => {
+    const previous = acc.at(-1)
+    if (previous?.label === item.label && previous.tone === item.tone) {
+      acc[acc.length - 1] = { ...item, detail: item.detail || previous.detail }
+      return acc
+    }
+    acc.push(item)
+    return acc
+  }, [])
+
+  return deduped.slice(-6)
 }
 
 function getStatus(input: {
@@ -523,6 +642,34 @@ function TimelineGlyph({ tone }: { tone: TimelineTone }) {
   return <Circle className="size-2.5 text-muted-foreground/35" />
 }
 
+function ArtifactIcon({ renderer }: { renderer: ArtifactRendererKind }) {
+  if (renderer === "diff") return <GitCompareArrows className="size-3 shrink-0 text-muted-foreground/45" />
+  if (renderer === "table" || renderer === "data") return <Table2 className="size-3 shrink-0 text-muted-foreground/45" />
+  if (renderer === "chart") return <Code2 className="size-3 shrink-0 text-muted-foreground/45" />
+  if (renderer === "image") return <Image className="size-3 shrink-0 text-muted-foreground/45" />
+  if (renderer === "web") return <Globe2 className="size-3 shrink-0 text-muted-foreground/45" />
+  return <FileText className="size-3 shrink-0 text-muted-foreground/45" />
+}
+
+function ArtifactRendererLabel({ renderer }: { renderer: ArtifactRendererKind }) {
+  switch (renderer) {
+    case "diff":
+      return "Diff"
+    case "table":
+      return "表格"
+    case "chart":
+      return "图表"
+    case "image":
+      return "图片"
+    case "web":
+      return "网页"
+    case "data":
+      return "数据"
+    default:
+      return "文件"
+  }
+}
+
 function StatusChip({
   label,
   value,
@@ -581,6 +728,85 @@ function EventTimeline({ items }: { items: TimelineItem[] }) {
   )
 }
 
+function ReasoningSummary({
+  items,
+  statusLabel,
+}: {
+  items: ReasoningSummaryItem[]
+  statusLabel: string
+}) {
+  const [expanded, setExpanded] = React.useState(false)
+  if (items.length === 0) return null
+
+  const previewItems = items.slice(-4)
+  const activeItem = items.at(-1)
+
+  return (
+    <div className="rounded-md border border-border/10 bg-background/25">
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-center gap-1.5 px-2 py-1 text-left text-[10px] text-muted-foreground/55 transition-colors hover:bg-muted/10"
+        onClick={() => setExpanded(value => !value)}
+        aria-label={expanded ? "Collapse reasoning summary / 收起推理摘要" : "Expand reasoning summary / 展开推理摘要"}
+      >
+        <Route className="size-3 shrink-0 text-muted-foreground/45" />
+        <span className="shrink-0">推理摘要</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground/45">
+          {activeItem?.label || statusLabel}
+        </span>
+        <StatusChip label="阶段" value={items.length} tone={activeItem?.tone === "error" ? "error" : activeItem?.tone === "running" ? "running" : "muted"} />
+        <ChevronDown className={cn(
+          "size-3 shrink-0 text-muted-foreground/30 transition-transform",
+          expanded && "rotate-180",
+        )} />
+      </button>
+
+      <div className="border-t border-border/10 px-2 py-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-1 text-[10px] text-muted-foreground/50">
+          {previewItems.map((item, index) => (
+            <React.Fragment key={item.id}>
+              {index > 0 && <span className="text-muted-foreground/25">-&gt;</span>}
+              <span className={cn(
+                "inline-flex max-w-[150px] items-center gap-1 truncate rounded bg-muted/10 px-1.5 py-0.5",
+                item.tone === "error" && "bg-destructive/5 text-destructive/75",
+                item.tone === "done" && "text-emerald-700 dark:text-emerald-400",
+              )}>
+                <TimelineGlyph tone={item.tone} />
+                <span className="truncate">{item.label}</span>
+              </span>
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="space-y-1 border-t border-border/10 px-2 py-1.5">
+          {items.map((item) => (
+            <div key={item.id} className="grid grid-cols-[14px_1fr] gap-1.5">
+              <div className="mt-0.5 flex justify-center">
+                <TimelineGlyph tone={item.tone} />
+              </div>
+              <div className="min-w-0">
+                <div className={cn(
+                  "truncate font-mono text-[10px]",
+                  item.tone === "error" ? "text-destructive/75" : "text-muted-foreground/70",
+                )}>
+                  {item.label}
+                </div>
+                {item.detail && (
+                  <div className="truncate text-[10px] text-muted-foreground/40">
+                    {item.detail}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ArtifactStrip({ artifacts }: { artifacts: ArtifactRef[] }) {
   if (artifacts.length === 0) return null
 
@@ -597,9 +823,9 @@ function ArtifactStrip({ artifacts }: { artifacts: ArtifactRef[] }) {
             className="inline-flex max-w-full items-center gap-1 rounded border border-border/20 bg-background/35 px-1.5 py-0.5 text-[10px] text-muted-foreground/65"
             title={artifact.path}
           >
-            <FileText className="size-3 shrink-0 text-muted-foreground/45" />
+            <ArtifactIcon renderer={artifact.renderer} />
             <span className="shrink-0 text-muted-foreground/35">
-              {artifact.kind === "data" ? "数据" : "文件"}
+              <ArtifactRendererLabel renderer={artifact.renderer} />
             </span>
             <span className="truncate">{artifact.label}</span>
           </span>
@@ -611,12 +837,20 @@ function ArtifactStrip({ artifacts }: { artifacts: ArtifactRef[] }) {
 
 function RecoveryNotice({ message }: { message?: string }) {
   if (!message) return null
+  const action = getRecoveryAction(message)
 
   return (
     <div className="rounded-md border border-amber-500/15 bg-amber-500/5 px-2 py-1.5 text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
       <div className="flex items-start gap-1.5">
         <AlertTriangle className="mt-0.5 size-3 shrink-0" />
-        <span>{message}</span>
+        <div className="min-w-0 flex-1">
+          <div>{message}</div>
+          {action && (
+            <div className="mt-0.5 font-mono text-amber-700/70 dark:text-amber-300/70">
+              恢复动作：{action}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -730,7 +964,6 @@ export function AgentLiveStream({
     agentEvents,
   })
 
-  const thoughtPreview = compactText(currentThought, 180)
   const fullThought = cleanLiveText(currentThought)
   const spinnerFrame = useClawSpinnerFrame(status.tone === "running" && isRunning)
   const statusLabel = formatClawStatusLabel(status.label)
@@ -740,8 +973,24 @@ export function AgentLiveStream({
     ? status.detail
     : partSnapshot?.recoverableErrors.at(-1) || visibleToolCalls.find(call => call.status === "error")?.result?.error
   const recoveryHint = getRecoveryHint(latestErrorMessage)
+  const reasoningSummaryItems = React.useMemo(
+    () => buildReasoningSummaryItems({
+      timelineItems,
+      statusLabel,
+      statusTone: status.tone,
+      detail: status.detail,
+      hasArtifacts: artifactRefs.length > 0,
+      hasTools: recentToolCalls.length > 0,
+      isRunning,
+    }),
+    [artifactRefs.length, isRunning, recentToolCalls.length, status.detail, status.tone, statusLabel, timelineItems],
+  )
+  const activeReasoningItem = reasoningSummaryItems.at(-1)
+  const reasoningPreview = activeReasoningItem
+    ? [activeReasoningItem.label, activeReasoningItem.detail].filter(Boolean).join(" · ")
+    : status.detail
   const hasDetails = Boolean(
-    fullThought ||
+    reasoningSummaryItems.length > 0 ||
     status.detail ||
     recentToolCalls.length > 0 ||
     timelineItems.length > 0 ||
@@ -799,14 +1048,14 @@ export function AgentLiveStream({
         )}
       </div>
 
-      {isRunning && (thoughtPreview || status.detail) && (
+      {isRunning && reasoningPreview && (
         <button
           type="button"
           className="mt-1 flex w-full min-w-0 items-center gap-1.5 rounded-sm pl-6 pr-1 text-left font-mono text-[11px] leading-relaxed text-muted-foreground/55 hover:bg-muted/15"
           onClick={() => hasDetails && setDetailsExpanded(value => !value)}
         >
           <span className="min-w-0 flex-1 truncate">
-            {thoughtPreview || status.detail}
+            {reasoningPreview}
           </span>
           {hasDetails && (
             <ChevronDown className={cn(
@@ -831,16 +1080,21 @@ export function AgentLiveStream({
 
           <RecoveryNotice message={recoveryHint} />
 
-          {(fullThought || status.detail) && (
+          <ReasoningSummary
+            items={reasoningSummaryItems}
+            statusLabel={statusLabel}
+          />
+
+          {(status.detail && !recoveryHint) && (
             <div className={cn(
               "whitespace-pre-wrap break-words rounded-md border border-border/10 bg-background/30 px-2 py-1.5 font-mono text-[10px]",
-              recoveryHint && "mt-2",
+              reasoningSummaryItems.length > 0 && "mt-2",
             )}>
-              {fullThought || status.detail}
+              {status.detail}
             </div>
           )}
 
-          <div className={(fullThought || status.detail || recoveryHint) ? "mt-2 space-y-2" : "space-y-2"}>
+          <div className={(reasoningSummaryItems.length > 0 || status.detail || recoveryHint) ? "mt-2 space-y-2" : "space-y-2"}>
             <EventTimeline items={timelineItems} />
             <ArtifactStrip artifacts={artifactRefs} />
             <ToolSummaryStrip

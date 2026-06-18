@@ -17,8 +17,10 @@ import { Button } from '@/components/ui/button'
 import { McpToolCallCard } from './mcp-tool-call'
 import { AgentExecutionStatus } from './agent-execution-status'
 import { AgentThinkingSummary } from './agent-thinking-summary'
+import { MessageCitations } from './message-citations'
 import { TaskPlanProgress, ResearchResumeCard } from './task-plan-progress'
 import { ChatImages } from "./chat-images"
+import type { AgentEvent, ReActStep } from '@/lib/agent'
 import { cleanAssistantGeneratedContent } from '@/lib/ai/assistant-content'
 import {
   extractWebCitationDetails,
@@ -409,7 +411,8 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
   const storedThinkingSummary = useMemo(() => {
     if (!storedAgentHistory) return null
     const history = storedAgentHistory as typeof storedAgentHistory & {
-      steps?: Array<{ thought?: string; duration?: number }>
+      steps?: ReActStep[]
+      events?: AgentEvent[]
     }
     const steps = history.steps || []
     const lastThought = [...steps].reverse().find(step => step.thought)?.thought
@@ -420,7 +423,9 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     return {
       thought: lastThought,
       elapsedMs,
+      steps,
       toolCalls: storedAgentHistory.toolCalls || [],
+      events: history.events || [],
     }
   }, [storedAgentHistory])
 
@@ -561,7 +566,9 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
                   <AgentThinkingSummary
                     thought={storedThinkingSummary.thought}
                     elapsedMs={storedThinkingSummary.elapsedMs}
+                    steps={storedThinkingSummary.steps}
                     toolCalls={storedThinkingSummary.toolCalls}
+                    events={storedThinkingSummary.events}
                   />
                 ) : (
                   <ChatThinking
@@ -587,6 +594,14 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
                 streaming={isResponseStreaming}
                 highlightQuery={searchQuery}
                 clawFormat={Boolean(storedAgentHistory)}
+              />
+            )}
+
+            {citationDetails.length > 0 && !isLiveAgentVisible && (
+              <MessageCitations
+                details={citationDetails}
+                content={displayContent || ''}
+                embedded
               />
             )}
 

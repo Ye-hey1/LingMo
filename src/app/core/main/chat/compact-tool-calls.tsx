@@ -23,8 +23,10 @@
 
 import * as React from "react"
 import {
+  AlertTriangle,
   ChevronDown,
   Database,
+  Timer,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
@@ -204,6 +206,66 @@ function getHarnessResultMeta(result: ToolCall["result"]) {
   return record
 }
 
+function formatDurationMs(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return ""
+  return value < 1000 ? `${Math.max(0, Math.round(value))}ms` : `${(Math.max(0, value) / 1000).toFixed(1)}s`
+}
+
+function getResultDataRecord(result: ToolCall["result"]) {
+  const data = result?.data
+  return data && typeof data === "object" && !Array.isArray(data)
+    ? data as Record<string, any>
+    : undefined
+}
+
+function getToolDurationLabel(toolCall: ToolCall) {
+  const data = getResultDataRecord(toolCall.result)
+  return formatDurationMs(data?.durationMs ?? data?.elapsedMs ?? data?.latencyMs)
+}
+
+function getToolRecoveryHint(toolCall: ToolCall) {
+  const text = [
+    toolCall.result?.error,
+    toolCall.result?.message,
+    getResultDataRecord(toolCall.result)?.errorKind,
+  ].filter(Boolean).join("\n")
+
+  if (!text) return ""
+  if (/rate.?limit|429|限流|too many requests/i.test(text)) return "稍后重试，或降低上下文和请求频率。"
+  if (/insufficient.*balance|余额不足|402|payment required|billing/i.test(text)) return "检查账户余额，或切换模型/API Key。"
+  if (/api.?key|unauthorized|401|forbidden|permission/i.test(text)) return "检查凭据和工具权限。"
+  if (/status=5\d\d|upstream error|do_request_failed|server error|service unavailable|bad gateway/i.test(text)) return "上游暂时不可用，可以重试或切换模型。"
+  if (/timeout|timed out|network|connect/i.test(text)) return "网络或服务超时，可以重试。"
+  if (/blocked|policy|not allowed/i.test(text)) return "当前操作被策略保护，需要换安全路径。"
+  if (toolCall.status === "error" || toolCall.result?.success === false) return "Agent 会优先使用已有结果恢复，必要时换工具。"
+  return ""
+}
+
+function getToolStatusLabel(status: ToolCall["status"]) {
+  switch (status) {
+    case "pending":
+      return "Pending"
+    case "running":
+      return "Running"
+    case "success":
+      return "Done"
+    case "error":
+      return "Failed"
+    case "blocked":
+      return "Blocked"
+    case "skipped":
+      return "Skipped"
+    case "adjusted":
+      return "Adjusted"
+    case "cached":
+      return "Cached"
+    case "cancelled":
+      return "Cancelled"
+    default:
+      return status
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 工具调用行组件
 // ---------------------------------------------------------------------------
@@ -222,6 +284,8 @@ function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }:
   const harnessMeta = getHarnessResultMeta(toolCall.result)
   const tone = getToolTone(toolCall.status)
   const frameIndex = useClawFrame(isStreaming && tone === "running")
+  const durationLabel = getToolDurationLabel(toolCall)
+  const recoveryHint = getToolRecoveryHint(toolCall)
 
   // 结果摘要
   const resultSummary = React.useMemo(() => {
@@ -239,7 +303,7 @@ function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }:
 
   return (
     <div className={cn(
-      "group flex items-start gap-1.5 rounded-md border border-transparent px-2 py-1 transition-colors",
+      "group flex items-start gap-1.5 rounded-md border border-transparent px-2 py-1.5 transition-colors",
       "hover:bg-muted/10",
       isRunning && "border-border/10 bg-muted/8",
       hasError && "border-destructive/15 bg-destructive/5",
@@ -255,6 +319,20 @@ function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }:
           <span className="truncate font-mono text-[10px] text-muted-foreground/60">
             {getToolDisplayName(toolCall.toolName)}
           </span>
+          <span className={cn(
+            "shrink-0 rounded border px-1 py-0 font-mono text-[9px]",
+            tone === "error" && "border-destructive/20 bg-destructive/5 text-destructive/75",
+            tone === "done" && "border-emerald-500/15 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400",
+            tone === "running" && "border-border/20 bg-muted/10 text-muted-foreground/60",
+          )}>
+            {getToolStatusLabel(toolCall.status)}
+          </span>
+          {durationLabel && (
+            <span className="inline-flex shrink-0 items-center gap-0.5 font-mono text-[9px] text-muted-foreground/35">
+              <Timer className="size-2.5" />
+              {durationLabel}
+            </span>
+          )}
           {paramSummary && (
             <span className="truncate text-[10px] text-muted-foreground/35">
               {paramSummary}
@@ -308,6 +386,13 @@ function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }:
           </div>
         )}
 
+        {recoveryHint && (
+          <div className="mt-1 flex items-start gap-1 rounded border border-amber-500/15 bg-amber-500/5 px-1.5 py-1 text-[9px] leading-relaxed text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="mt-0.5 size-2.5 shrink-0" />
+            <span>{recoveryHint}</span>
+          </div>
+        )}
+
         {/* 展开的详细内容 */}
         <AnimatePresence initial={false}>
           {expanded && (
@@ -321,22 +406,28 @@ function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }:
               <div className="mt-1 space-y-1">
                 {/* 参数 */}
                 {Object.keys(toolCall.params).length > 0 && (
-                  <pre className="max-h-24 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded border border-border/15 bg-muted/8 px-2 py-1 text-[10px] text-muted-foreground/45">
-                    {JSON.stringify(toolCall.params, null, 2)}
-                  </pre>
+                  <div className="space-y-0.5">
+                    <div className="font-mono text-[9px] text-muted-foreground/35">Input</div>
+                    <pre className="max-h-24 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded border border-border/15 bg-muted/8 px-2 py-1 text-[10px] text-muted-foreground/45">
+                      {JSON.stringify(toolCall.params, null, 2)}
+                    </pre>
+                  </div>
                 )}
                 {/* 结果 */}
                 {toolCall.result && (
-                  <pre className={cn(
-                    "max-h-32 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded border border-border/15 bg-muted/8 px-2 py-1 text-[10px]",
-                    toolCall.result.success ? "text-muted-foreground/45" : "text-destructive/65",
-                  )}>
-                    {toolCall.result.success
-                      ? (typeof toolCall.result.data === "string"
-                          ? toolCall.result.data
-                          : JSON.stringify(harnessMeta?.preview || toolCall.result.data || toolCall.result.message, null, 2))
-                      : toolCall.result.error || "Unknown error"}
-                  </pre>
+                  <div className="space-y-0.5">
+                    <div className="font-mono text-[9px] text-muted-foreground/35">Output</div>
+                    <pre className={cn(
+                      "max-h-32 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded border border-border/15 bg-muted/8 px-2 py-1 text-[10px]",
+                      toolCall.result.success ? "text-muted-foreground/45" : "text-destructive/65",
+                    )}>
+                      {toolCall.result.success
+                        ? (typeof toolCall.result.data === "string"
+                            ? toolCall.result.data
+                            : JSON.stringify(harnessMeta?.preview || toolCall.result.data || toolCall.result.message, null, 2))
+                        : toolCall.result.error || "Unknown error"}
+                    </pre>
+                  </div>
                 )}
               </div>
             </motion.div>
