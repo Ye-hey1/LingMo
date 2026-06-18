@@ -26,7 +26,7 @@ import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFold
 import emitter from "@/lib/emitter"
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { ImageAttachment } from "./image-attachments"
-import { Loader2, Mic, MousePointer2, Square, WandSparkles, X } from "lucide-react"
+import { Loader2, Mic, MousePointer2, Square, WandSparkles } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
 import type { PendingQuote } from "@/stores/chat"
 import { convertFileSrc } from "@tauri-apps/api/core"
@@ -273,11 +273,53 @@ function buildSlashHighlightSegments(input: string, command: SlashCommandItem | 
   if (!invocation) return [{ text: input, isCommand: false }]
 
   const { from, to } = invocation.range
+  const label = command.title.trim() || input.slice(from, to)
   return [
     { text: input.slice(0, from), isCommand: false },
-    { text: input.slice(from, to), isCommand: true },
+    { text: input.slice(from, to), label, isCommand: true },
     { text: input.slice(to), isCommand: false },
   ].filter(segment => segment.text.length > 0)
+}
+
+function getSlashCaretBoundary(
+  input: string,
+  command: SlashCommandItem | null,
+  cursor: number,
+  preference: 'start' | 'end' | 'nearest' = 'nearest',
+) {
+  if (!command) return null
+
+  const invocation = getSlashCommandInvocation(input, command)
+  if (!invocation) return null
+
+  const { from, to } = invocation.range
+  if (cursor <= from || cursor >= to) return null
+
+  if (preference === 'start') return from
+  if (preference === 'end') return to
+  return cursor - from < to - cursor ? from : to
+}
+
+function getAtomicSlashArrowBoundary(
+  input: string,
+  command: SlashCommandItem | null,
+  key: string,
+  selectionStart: number,
+  selectionEnd: number,
+) {
+  if (!command || (key !== 'ArrowLeft' && key !== 'ArrowRight') || selectionStart !== selectionEnd) {
+    return null
+  }
+
+  const invocation = getSlashCommandInvocation(input, command)
+  if (!invocation) return null
+
+  const { from, to } = invocation.range
+  const cursor = selectionStart
+  if (key === 'ArrowLeft' && cursor > from && cursor <= to) return from
+  if (key === 'ArrowRight' && cursor >= from && cursor < to) return to
+
+  return null
 }
 
 function getAtomicSlashDeleteRange(
@@ -537,6 +579,25 @@ export const ChatInput = React.memo(function ChatInput() {
     highlight.scrollLeft = textarea.scrollLeft
   }, [])
 
+  const keepSlashCommandCaretAtomic = useCallback((
+    textarea: HTMLTextAreaElement,
+    preference: 'start' | 'end' | 'nearest' = 'nearest',
+  ) => {
+    if (textarea.selectionStart !== textarea.selectionEnd) return false
+
+    const boundary = getSlashCaretBoundary(
+      textarea.value,
+      selectedSlashCommand,
+      textarea.selectionStart,
+      preference,
+    )
+    if (boundary === null) return false
+
+    textarea.setSelectionRange(boundary, boundary)
+    updateSlashTriggerFromTextarea(textarea)
+    return true
+  }, [selectedSlashCommand, updateSlashTriggerFromTextarea])
+
   const slashQuery = selectedSlashCommand ? null : slashTrigger?.commandToken ?? null
   const slashOpen = slashQuery !== null
 
@@ -605,35 +666,6 @@ export const ChatInput = React.memo(function ChatInput() {
     textarea.style.height = `${newHeight}px`
     syncSlashHighlightScroll(textarea)
   }, [selectedSlashCommand, syncSlashHighlightScroll, updateSlashTriggerFromTextarea, updateSuggestedModeFromText])
-
-  const removeSelectedSlashCommandToken = useCallback(() => {
-    if (!selectedSlashCommand) return
-
-    const invocation = getSlashCommandInvocation(text, selectedSlashCommand)
-    if (!invocation) {
-      pendingCommandRef.current = null
-      setSelectedSlashCommand(null)
-      setSlashTrigger(null)
-      requestAnimationFrame(() => textareaRef.current?.focus())
-      return
-    }
-
-    const next = removeTextRange(text, invocation.range.from, invocation.range.to)
-    pendingCommandRef.current = null
-    setSelectedSlashCommand(null)
-    setSlashTrigger(null)
-    setText(next.text)
-
-    requestAnimationFrame(() => {
-      const textarea = textareaRef.current
-      if (!textarea) return
-      textarea.focus()
-      textarea.setSelectionRange(next.cursor, next.cursor)
-      textarea.style.height = 'auto'
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`
-      syncSlashHighlightScroll(textarea)
-    })
-  }, [selectedSlashCommand, syncSlashHighlightScroll, text])
 
   // ---- 阶段 1：选中命令，仅填入输入框 ----
   const selectSlashCommand = useCallback(async (commandId: string) => {
@@ -2191,25 +2223,9 @@ ${exec.prompt}`
                 segment.isCommand ? (
                   <span
                     key={`${index}-${segment.text}`}
-                    className="inline-flex h-5 max-w-[min(260px,70vw)] translate-y-[2px] items-center gap-1 rounded-md border border-sky-300/70 bg-sky-500/10 px-1.5 align-baseline text-[12px] font-medium leading-none text-sky-700 shadow-sm shadow-sky-500/5 dark:border-sky-500/35 dark:bg-sky-500/15 dark:text-sky-200"
+                    className="inline font-medium text-sky-600 dark:text-sky-300"
                   >
-                    <span className="min-w-0 truncate">{segment.text}</span>
-                    <button
-                      type="button"
-                      className="pointer-events-auto -mr-0.5 flex size-4 shrink-0 items-center justify-center rounded-sm text-sky-700/65 hover:bg-sky-500/15 hover:text-sky-900 dark:text-sky-100/70 dark:hover:bg-sky-300/15 dark:hover:text-white"
-                      aria-label="删除技能"
-                      onMouseDown={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                      }}
-                      onClick={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        removeSelectedSlashCommandToken()
-                      }}
-                    >
-                      <X className="size-3" />
-                    </button>
+                    {segment.label}
                   </span>
                 ) : (
                   <span key={`${index}-${segment.text}`}>
@@ -2227,9 +2243,21 @@ ${exec.prompt}`
               onChange={(e) => {
                 updateTextFromTextarea(e.target)
               }}
-              onClick={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
-              onKeyUp={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
-              onSelect={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
+              onClick={(e) => {
+                if (!keepSlashCommandCaretAtomic(e.currentTarget)) {
+                  updateSlashTriggerFromTextarea(e.currentTarget)
+                }
+              }}
+              onKeyUp={(e) => {
+                if (!keepSlashCommandCaretAtomic(e.currentTarget)) {
+                  updateSlashTriggerFromTextarea(e.currentTarget)
+                }
+              }}
+              onSelect={(e) => {
+                if (!keepSlashCommandCaretAtomic(e.currentTarget)) {
+                  updateSlashTriggerFromTextarea(e.currentTarget)
+                }
+              }}
               onScroll={(e) => syncSlashHighlightScroll(e.currentTarget)}
               placeholder={effectivePlaceholder}
               onKeyDown={(e) => {
@@ -2246,6 +2274,15 @@ ${exec.prompt}`
                 textarea.selectionStart,
                 textarea.selectionEnd,
               )
+              const atomicArrowBoundary = !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey
+                ? getAtomicSlashArrowBoundary(
+                  textarea.value,
+                  selectedSlashCommand,
+                  e.key,
+                  textarea.selectionStart,
+                  textarea.selectionEnd,
+                )
+                : null
 
               if (atomicDeleteRange && !keyIsComposing) {
                 e.preventDefault()
@@ -2262,6 +2299,13 @@ ${exec.prompt}`
                   textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`
                   syncSlashHighlightScroll(textarea)
                 })
+                return
+              }
+
+              if (atomicArrowBoundary !== null && !keyIsComposing) {
+                e.preventDefault()
+                textarea.setSelectionRange(atomicArrowBoundary, atomicArrowBoundary)
+                updateSlashTriggerFromTextarea(textarea)
                 return
               }
 
