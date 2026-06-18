@@ -26,7 +26,7 @@ import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFold
 import emitter from "@/lib/emitter"
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { ImageAttachment } from "./image-attachments"
-import { Loader2, Mic, MousePointer2, Square, WandSparkles } from "lucide-react"
+import { Loader2, Mic, MousePointer2, Square, WandSparkles, X } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
 import type { PendingQuote } from "@/stores/chat"
 import { convertFileSrc } from "@tauri-apps/api/core"
@@ -197,6 +197,19 @@ function replaceTextRange(input: string, from: number, to: number, replacement: 
   return `${input.slice(0, from)}${replacement}${input.slice(to)}`
 }
 
+function removeTextRange(input: string, from: number, to: number) {
+  const safeFrom = Math.max(0, Math.min(from, input.length))
+  const safeTo = Math.max(safeFrom, Math.min(to, input.length))
+  const removeTo = safeFrom > 0 && /\s/.test(input[safeFrom - 1] || '') && /\s/.test(input[safeTo] || '')
+    ? safeTo + 1
+    : safeTo
+
+  return {
+    text: `${input.slice(0, safeFrom)}${input.slice(removeTo)}`,
+    cursor: safeFrom,
+  }
+}
+
 function getSlashReplacementRange(
   input: string,
   trigger: SlashTrigger,
@@ -265,6 +278,46 @@ function buildSlashHighlightSegments(input: string, command: SlashCommandItem | 
     { text: input.slice(from, to), isCommand: true },
     { text: input.slice(to), isCommand: false },
   ].filter(segment => segment.text.length > 0)
+}
+
+function getAtomicSlashDeleteRange(
+  input: string,
+  command: SlashCommandItem | null,
+  key: string,
+  selectionStart: number,
+  selectionEnd: number,
+) {
+  if (!command || (key !== 'Backspace' && key !== 'Delete')) return null
+
+  const invocation = getSlashCommandInvocation(input, command)
+  if (!invocation) return null
+
+  const { from, to } = invocation.range
+  const start = Math.min(selectionStart, selectionEnd)
+  const end = Math.max(selectionStart, selectionEnd)
+
+  if (start !== end) {
+    const overlapsCommand = start < to && end > from
+    return overlapsCommand
+      ? { from: Math.min(start, from), to: Math.max(end, to) }
+      : null
+  }
+
+  if (
+    key === 'Backspace'
+    && (start > from && start <= to || (start === to + 1 && /\s/.test(input[to] || '')))
+  ) {
+    return { from, to }
+  }
+
+  if (
+    key === 'Delete'
+    && (start >= from && start < to || (start === from - 1 && /\s/.test(input[start] || '')))
+  ) {
+    return { from, to }
+  }
+
+  return null
 }
 
 const SENSITIVE_KEYWORDS = [
@@ -552,6 +605,35 @@ export const ChatInput = React.memo(function ChatInput() {
     textarea.style.height = `${newHeight}px`
     syncSlashHighlightScroll(textarea)
   }, [selectedSlashCommand, syncSlashHighlightScroll, updateSlashTriggerFromTextarea, updateSuggestedModeFromText])
+
+  const removeSelectedSlashCommandToken = useCallback(() => {
+    if (!selectedSlashCommand) return
+
+    const invocation = getSlashCommandInvocation(text, selectedSlashCommand)
+    if (!invocation) {
+      pendingCommandRef.current = null
+      setSelectedSlashCommand(null)
+      setSlashTrigger(null)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+      return
+    }
+
+    const next = removeTextRange(text, invocation.range.from, invocation.range.to)
+    pendingCommandRef.current = null
+    setSelectedSlashCommand(null)
+    setSlashTrigger(null)
+    setText(next.text)
+
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (!textarea) return
+      textarea.focus()
+      textarea.setSelectionRange(next.cursor, next.cursor)
+      textarea.style.height = 'auto'
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`
+      syncSlashHighlightScroll(textarea)
+    })
+  }, [selectedSlashCommand, syncSlashHighlightScroll, text])
 
   // ---- 阶段 1：选中命令，仅填入输入框 ----
   const selectSlashCommand = useCallback(async (commandId: string) => {
@@ -2106,12 +2188,34 @@ ${exec.prompt}`
               className="pointer-events-none absolute inset-0 min-h-[44px] max-h-[240px] overflow-hidden whitespace-pre-wrap break-words px-3 py-2.5 text-sm leading-6 text-foreground"
             >
               {text ? slashHighlightSegments.map((segment, index) => (
-                <span
-                  key={`${index}-${segment.text}`}
-                  className={segment.isCommand ? 'font-medium text-sky-600 dark:text-sky-300' : undefined}
-                >
-                  {segment.text}
-                </span>
+                segment.isCommand ? (
+                  <span
+                    key={`${index}-${segment.text}`}
+                    className="inline-flex h-5 max-w-[min(260px,70vw)] translate-y-[2px] items-center gap-1 rounded-md border border-sky-300/70 bg-sky-500/10 px-1.5 align-baseline text-[12px] font-medium leading-none text-sky-700 shadow-sm shadow-sky-500/5 dark:border-sky-500/35 dark:bg-sky-500/15 dark:text-sky-200"
+                  >
+                    <span className="min-w-0 truncate">{segment.text}</span>
+                    <button
+                      type="button"
+                      className="pointer-events-auto -mr-0.5 flex size-4 shrink-0 items-center justify-center rounded-sm text-sky-700/65 hover:bg-sky-500/15 hover:text-sky-900 dark:text-sky-100/70 dark:hover:bg-sky-300/15 dark:hover:text-white"
+                      aria-label="删除技能"
+                      onMouseDown={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                      }}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        removeSelectedSlashCommandToken()
+                      }}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ) : (
+                  <span key={`${index}-${segment.text}`}>
+                    {segment.text}
+                  </span>
+                )
               )) : null}
             </div>
             <Textarea
@@ -2135,6 +2239,31 @@ ${exec.prompt}`
               const isAtEnd = cursorPosition === text.length
               const keyIsComposing = isKeyboardEventComposing(e) || (isComposing && e.key !== 'Enter')
               const isSendEnter = isSendEnterKey(e)
+              const atomicDeleteRange = getAtomicSlashDeleteRange(
+                textarea.value,
+                selectedSlashCommand,
+                e.key,
+                textarea.selectionStart,
+                textarea.selectionEnd,
+              )
+
+              if (atomicDeleteRange && !keyIsComposing) {
+                e.preventDefault()
+                const next = removeTextRange(textarea.value, atomicDeleteRange.from, atomicDeleteRange.to)
+                pendingCommandRef.current = null
+                setSelectedSlashCommand(null)
+                setSlashTrigger(null)
+                setText(next.text)
+                updateSuggestedModeFromText(next.text)
+                requestAnimationFrame(() => {
+                  textarea.focus()
+                  textarea.setSelectionRange(next.cursor, next.cursor)
+                  textarea.style.height = 'auto'
+                  textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`
+                  syncSlashHighlightScroll(textarea)
+                })
+                return
+              }
 
               // @ 文件联想面板按键拦截
               if (atOpen && !keyIsComposing) {
