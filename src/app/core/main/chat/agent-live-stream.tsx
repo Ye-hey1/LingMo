@@ -11,6 +11,7 @@ type AgentLiveStreamProps = {
   currentThought?: string
   currentAction?: string
   currentObservation?: string
+  visibleOutput?: string
   toolCalls?: ToolCall[]
   agentEvents?: AgentEvent[]
   activity?: AgentActivity
@@ -49,6 +50,7 @@ function useLiveElapsedMs(input: {
 
 export function AgentLiveStream({
   isRunning,
+  visibleOutput,
   toolCalls = [],
   agentEvents = [],
   activity,
@@ -67,6 +69,7 @@ export function AgentLiveStream({
     <AgentRunSummary
       elapsedMs={elapsedMs}
       telemetry={telemetry}
+      visibleOutput={visibleOutput}
       toolCalls={visibleToolCalls}
       events={agentEvents}
       live

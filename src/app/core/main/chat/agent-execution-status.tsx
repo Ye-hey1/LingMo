@@ -121,6 +121,7 @@ export function AgentExecutionStatus() {
       return (
         <AgentRunSummary
           telemetry={agentState.telemetry}
+          visibleOutput={agentState.finalAnswerContent}
           steps={agentState.completedSteps}
           toolCalls={agentState.toolCalls}
           events={agentState.agentEvents}
@@ -135,6 +136,7 @@ export function AgentExecutionStatus() {
         currentThought={agentState.currentThought}
         currentAction={agentState.currentAction}
         currentObservation={agentState.currentObservation}
+        visibleOutput={agentState.finalAnswerContent}
         toolCalls={agentState.toolCalls}
         agentEvents={agentState.agentEvents}
         activity={agentState.activity}

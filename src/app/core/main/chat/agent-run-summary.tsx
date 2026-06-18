@@ -21,11 +21,13 @@ import {
 import type { AgentEvent, AgentTurnTelemetry, ReActStep, ToolCall } from "@/lib/agent"
 import { isSupportOnlyToolName } from "@/lib/agent/support-tools"
 import { cn } from "@/lib/utils"
+import { estimateTokens } from "@/lib/ai/token-counter"
 import { CompactToolCalls } from "./compact-tool-calls"
 
 type AgentRunSummaryProps = {
   elapsedMs?: number
   telemetry?: AgentTurnTelemetry
+  visibleOutput?: string
   steps?: ReActStep[]
   toolCalls?: ToolCall[]
   events?: AgentEvent[]
@@ -673,15 +675,23 @@ function getStepIconClassName(step: RunStep) {
   return "text-emerald-600/75"
 }
 
-function getTotalTokens(telemetry?: AgentTurnTelemetry) {
-  const inputTokens = telemetry?.inputTokens || 0
-  const outputTokens = telemetry?.outputTokens || 0
-  return inputTokens + outputTokens
+function getVisibleOutputTokens(input: {
+  telemetry?: AgentTurnTelemetry
+  visibleOutput?: string
+  live: boolean
+}) {
+  const visibleOutput = input.visibleOutput?.trim() || ""
+  if (visibleOutput) return estimateTokens(visibleOutput)
+  if (typeof input.telemetry?.outputTokens === "number" && input.telemetry.outputTokens > 0) {
+    return input.telemetry.outputTokens
+  }
+  return 0
 }
 
 export function AgentRunSummary({
   elapsedMs,
   telemetry,
+  visibleOutput,
   steps = [],
   toolCalls = [],
   events = [],
@@ -690,7 +700,7 @@ export function AgentRunSummary({
   const [expanded, setExpanded] = React.useState(false)
   const effectiveElapsedMs = elapsedMs ?? telemetry?.elapsedMs
   const elapsedLabel = formatElapsed(effectiveElapsedMs)
-  const tokenLabel = formatTokenCount(getTotalTokens(telemetry))
+  const tokenLabel = formatTokenCount(getVisibleOutputTokens({ telemetry, visibleOutput, live }))
   const visibleToolCalls = React.useMemo(
     () => toolCalls.filter(call => call.toolName && !isSupportOnlyToolName(call.toolName)),
     [toolCalls],

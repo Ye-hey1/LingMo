@@ -552,6 +552,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
               <AgentRunSummary
                 elapsedMs={storedRunSummary.elapsedMs}
                 telemetry={storedRunSummary.telemetry}
+                visibleOutput={displayContent || ''}
                 steps={storedRunSummary.steps}
                 toolCalls={storedRunSummary.toolCalls}
                 events={storedRunSummary.events}
