@@ -26,7 +26,9 @@ import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFold
 import emitter from "@/lib/emitter"
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { ImageAttachment } from "./image-attachments"
-import { Loader2, Mic, MousePointer2, Square, WandSparkles, X } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Loader2, Mic, MousePointer2, Square, WandSparkles, X, Wrench } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
 import type { PendingQuote } from "@/stores/chat"
 import { convertFileSrc } from "@tauri-apps/api/core"
@@ -50,7 +52,7 @@ import {
 import { buildTypingFrames } from './onboarding-typing'
 import type { AiConfig, ModelConfig } from '@/app/core/setting/config'
 import { AiDocCommandPopover } from './ai-doc-command-popover'
-import { filterSlashCommands, findSlashCommand, getAllSlashCommands, type SlashCommandItem } from '@/lib/ai-doc-commands/slash-bridge'
+import { filterSlashCommands, findSlashCommand, type SlashCommandItem } from '@/lib/ai-doc-commands/slash-bridge'
 import { findAiDocCommand, type AiDocCommandId } from '@/lib/ai-doc-commands'
 import { skillExecutor } from '@/lib/skills'
 import { loadActivityCalendarData, loadCachedActivityCalendarData } from '@/lib/activity'
@@ -94,6 +96,24 @@ function normalizeSlashCommandToken(value: string) {
   return value.trim().replace(/^\/+/, '').toLowerCase()
 }
 
+function getSlashCommandAliases(command: SlashCommandItem) {
+  return [command.title, ...command.searchTerms]
+    .map((term) => term.trim())
+    .filter(Boolean)
+    .filter((term, index, list) => list.findIndex((item) => item.toLowerCase() === term.toLowerCase()) === index)
+    .sort((a, b) => normalizeSlashCommandToken(b).length - normalizeSlashCommandToken(a).length)
+}
+
+function getSlashCommandInsertToken(command: SlashCommandItem) {
+  const title = command.title.trim()
+  if (title && !/\s/.test(title)) return title
+
+  const inlineAlias = command.searchTerms
+    .map((term) => term.trim())
+    .find((term) => term && !/\s/.test(term) && term.length <= 48)
+  return inlineAlias || title.replace(/\s+/g, '-')
+}
+
 function parseSlashInput(input: string) {
   const trimmed = input.trim()
   if (!trimmed.startsWith('/')) return null
@@ -122,41 +142,117 @@ function parseSlashInput(input: string) {
   }
 }
 
-function isExactSlashCommandInput(input: string, command: SlashCommandItem) {
-  const parsed = parseSlashInput(input)
-  const normalizedInput = normalizeSlashCommandToken(parsed?.commandToken || input)
-  if (!normalizedInput) {
-    return false
-  }
-
-  return [command.title, ...command.searchTerms].some(
-    (term) => normalizeSlashCommandToken(term) === normalizedInput,
-  )
+type SlashTrigger = {
+  commandToken: string
+  from: number
+  to: number
 }
 
-function getSlashCommandInvocation(input: string, command: SlashCommandItem) {
-  const parsed = parseSlashInput(input)
-  if (!parsed?.commandToken) return null
+function findSlashCommandAliasMatch(command: SlashCommandItem, token: string) {
+  const normalizedToken = normalizeSlashCommandToken(token)
+  if (!normalizedToken) return null
 
-  const normalizedToken = normalizeSlashCommandToken(parsed.commandToken)
-  const aliases = [command.title, ...command.searchTerms]
-    .map(normalizeSlashCommandToken)
-    .filter(Boolean)
-  if (!aliases.some(alias => alias === normalizedToken)) {
-    return null
+  for (const alias of getSlashCommandAliases(command)) {
+    if (/\s/.test(alias)) continue
+
+    const normalizedAlias = normalizeSlashCommandToken(alias)
+    if (!normalizedAlias) continue
+
+    if (normalizedToken === normalizedAlias) {
+      return {
+        alias,
+        length: token.length,
+        isExact: true,
+      }
+    }
+
+    if (normalizedToken.startsWith(normalizedAlias)) {
+      return {
+        alias,
+        length: alias.length,
+        isExact: false,
+      }
+    }
+  }
+
+  return null
+}
+
+function findSlashTriggerAtCursor(input: string, cursor: number): SlashTrigger | null {
+  const safeCursor = Math.max(0, Math.min(cursor, input.length))
+  const prefix = input.slice(0, safeCursor)
+  const lineStart = Math.max(prefix.lastIndexOf('\n') + 1, 0)
+  const currentLinePrefix = prefix.slice(lineStart)
+  const match = /\/([^\s/]*)$/.exec(currentLinePrefix)
+  if (!match) return null
+
+  const slashOffsetInLine = currentLinePrefix.length - match[0].length
+  const from = lineStart + slashOffsetInLine
+  return {
+    commandToken: match[1] || '',
+    from,
+    to: safeCursor,
+  }
+}
+
+function replaceTextRange(input: string, from: number, to: number, replacement: string) {
+  return `${input.slice(0, from)}${replacement}${input.slice(to)}`
+}
+
+function getSlashReplacementRange(
+  input: string,
+  trigger: SlashTrigger,
+  command: SlashCommandItem,
+) {
+  const token = input.slice(trigger.from + 1, trigger.to)
+  const aliasMatch = findSlashCommandAliasMatch(command, token)
+
+  if (aliasMatch && aliasMatch.length < token.length) {
+    return {
+      from: trigger.from,
+      to: trigger.from + 1 + aliasMatch.length,
+    }
   }
 
   return {
-    command,
-    userRequest: parsed.userRequest,
+    from: trigger.from,
+    to: trigger.to,
   }
 }
 
-function findSlashCommandInvocation(input: string, commands: SlashCommandItem[]) {
-  return commands
-    .map(command => getSlashCommandInvocation(input, command))
-    .filter((match): match is { command: SlashCommandItem; userRequest: string } => !!match)
-    .sort((a, b) => b.command.title.length - a.command.title.length)[0] || null
+function isExactSlashCommandInput(input: string, command: SlashCommandItem, trigger?: SlashTrigger | null) {
+  const token = trigger?.commandToken ?? parseSlashInput(input)?.commandToken ?? input
+  const aliasMatch = findSlashCommandAliasMatch(command, token)
+  return Boolean(aliasMatch?.isExact)
+}
+
+function getSlashCommandInvocation(input: string, command: SlashCommandItem) {
+  const slashPattern = /\/([^\s/，。！？；：、,.!?;:]+)/g
+  let match: RegExpExecArray | null
+  while ((match = slashPattern.exec(input)) !== null) {
+    const aliasMatch = findSlashCommandAliasMatch(command, match[1] || '')
+    if (!aliasMatch) {
+      continue
+    }
+
+    const from = match.index
+    const to = from + 1 + aliasMatch.length
+    const userRequest = replaceTextRange(input, from, to, ' ')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim()
+
+    return {
+      command,
+      userRequest,
+      range: { from, to },
+    }
+  }
+
+  return null
+}
+
+function getSlashToolLabel(command: SlashCommandItem) {
+  return `/${getSlashCommandInsertToken(command)}`
 }
 
 const SENSITIVE_KEYWORDS = [
@@ -345,6 +441,10 @@ export const ChatInput = React.memo(function ChatInput() {
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<SlashCommandItem | null>(null)
   const isModelRunning = loading || researchRunning
   const isResearchActive = researchRunning || (loading && chatMode === 'research')
+  const SelectedSlashCommandIcon = selectedSlashCommand?.icon ?? Wrench
+  const selectedSlashCommandLabel = selectedSlashCommand
+    ? getSlashToolLabel(selectedSlashCommand)
+    : ''
   const effectivePlaceholder = isResearchActive
     ? '研究运行中,预计 3-6 分钟完成。你可以点击停止按钮中断。'
     : selectedSlashCommand
@@ -356,15 +456,15 @@ export const ChatInput = React.memo(function ChatInput() {
   const slashCommandsCountRef = useRef(0)
   // 已选中但尚未提交的命令：选择后仅填入输入框，按 Enter 才真正执行
   const pendingCommandRef = useRef<SlashCommandItem | null>(null)
+  const [slashTrigger, setSlashTrigger] = useState<SlashTrigger | null>(null)
 
-  // 当输入以 / 开头时显示命令面板
-  const slashQuery = useMemo(() => {
-    // 已选中命令后不弹出面板
-    if (selectedSlashCommand) return null
-    if (!text.startsWith('/')) return null
-    if (text.includes('\n')) return null
-    return parseSlashInput(text)?.commandToken ?? ''
-  }, [selectedSlashCommand, text])
+  const updateSlashTriggerFromTextarea = useCallback((textarea?: HTMLTextAreaElement | null, nextValue?: string) => {
+    const value = nextValue ?? textarea?.value ?? text
+    const cursor = textarea?.selectionStart ?? value.length
+    setSlashTrigger(findSlashTriggerAtCursor(value, cursor))
+  }, [text])
+
+  const slashQuery = selectedSlashCommand ? null : slashTrigger?.commandToken ?? null
   const slashOpen = slashQuery !== null
 
   // 异步加载命令列表（包含 Skills）
@@ -389,6 +489,73 @@ export const ChatInput = React.memo(function ChatInput() {
     })
   }, [slashFilteredCommands])
 
+  const handleSlashDismiss = useCallback(() => {
+    const invocation = selectedSlashCommand
+      ? getSlashCommandInvocation(text, selectedSlashCommand)
+      : null
+
+    if (invocation) {
+      const nextText = replaceTextRange(text, invocation.range.from, invocation.range.to, ' ')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim()
+      setText(nextText)
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current
+        if (!textarea) return
+        textarea.style.height = 'auto'
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`
+      })
+    }
+
+    pendingCommandRef.current = null
+    setSelectedSlashCommand(null)
+    setSlashTrigger(null)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [selectedSlashCommand, text])
+
+  const updateSuggestedModeFromText = useCallback((val: string) => {
+    if (chatMode === 'chat' && isSensitiveInstruction(val)) {
+      setSuggestedMode({
+        mode: 'agent',
+        title: '建议切换到 Agent',
+        description: '这看起来需要编辑文件、运行工具或处理本地资源。',
+      })
+    } else if (chatMode === 'chat' && isResearchInstruction(val)) {
+      setSuggestedMode({
+        mode: 'research',
+        title: '建议切换到 Research',
+        description: '这看起来需要持续检索、分析资料或生成研究报告。',
+      })
+    } else {
+      setSuggestedMode(null)
+    }
+  }, [chatMode])
+
+  const updateTextFromTextarea = useCallback((textarea: HTMLTextAreaElement) => {
+    const val = textarea.value
+    const selectedInvocation = selectedSlashCommand
+      ? getSlashCommandInvocation(val, selectedSlashCommand)
+      : null
+    const pendingInvocation = pendingCommandRef.current
+      ? getSlashCommandInvocation(val, pendingCommandRef.current)
+      : null
+
+    if (selectedSlashCommand && !selectedInvocation) {
+      pendingCommandRef.current = null
+      setSelectedSlashCommand(null)
+    } else if (!selectedSlashCommand && pendingCommandRef.current && !pendingInvocation) {
+      pendingCommandRef.current = null
+    }
+
+    setText(val)
+    updateSuggestedModeFromText(val)
+    updateSlashTriggerFromTextarea(textarea, val)
+
+    textarea.style.height = 'auto'
+    const newHeight = Math.min(textarea.scrollHeight, 240)
+    textarea.style.height = `${newHeight}px`
+  }, [selectedSlashCommand, updateSlashTriggerFromTextarea, updateSuggestedModeFromText])
+
   // ---- 阶段 1：选中命令，仅填入输入框 ----
   const selectSlashCommand = useCallback(async (commandId: string) => {
     const slashCommand = await findSlashCommand(commandId)
@@ -403,19 +570,31 @@ export const ChatInput = React.memo(function ChatInput() {
       return
     }
 
-    // 填入命令名，关闭 popover
-    const currentSlashInput = parseSlashInput(text)
-    const preservedRequest = currentSlashInput?.commandToken
-      ? ''
-      : currentSlashInput?.userRequest.trim()
+    const trigger = slashTrigger || findSlashTriggerAtCursor(text, textareaRef.current?.selectionStart ?? text.length)
+    const replacement = getSlashToolLabel(slashCommand)
+    const replacementRange = trigger
+      ? getSlashReplacementRange(text, trigger, slashCommand)
+      : null
+    const nextText = replacementRange
+      ? replaceTextRange(text, replacementRange.from, replacementRange.to, replacement)
+      : text.trim()
+        ? `${text} ${replacement}`
+        : `${replacement} `
+    const cursor = replacementRange ? replacementRange.from + replacement.length : nextText.length
     pendingCommandRef.current = slashCommand
     setSelectedSlashCommand(slashCommand)
-    setText(preservedRequest || '')
+    setSlashTrigger(null)
+    setText(nextText)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
-      setTimeout(() => textareaRef.current?.focus(), 0)
+      window.requestAnimationFrame(() => {
+        const textarea = textareaRef.current
+        if (!textarea) return
+        textarea.focus()
+        textarea.setSelectionRange(cursor, cursor)
+      })
     }
-  }, [chatMode, text])
+  }, [chatMode, slashTrigger, text])
 
   // ---- 阶段 2：按 Enter 后真正执行 ----
   const executeSlashCommand = useCallback(async (slashCommand: SlashCommandItem, userRequest?: string) => {
@@ -433,6 +612,7 @@ export const ChatInput = React.memo(function ChatInput() {
 
       pendingCommandRef.current = null
       setSelectedSlashCommand(null)
+      setSlashTrigger(null)
       setText('')
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
@@ -494,6 +674,7 @@ export const ChatInput = React.memo(function ChatInput() {
     // 清空输入框
     pendingCommandRef.current = null
     setSelectedSlashCommand(null)
+    setSlashTrigger(null)
     setText('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
@@ -628,7 +809,9 @@ ${exec.prompt}`
     const value = currentInput ?? text
     const selectedCommand = selectedSlashCommand || pendingCommandRef.current
     if (selectedCommand) {
-      void executeSlashCommand(selectedCommand, value.trim())
+      const invocation = getSlashCommandInvocation(value, selectedCommand)
+      const commandRequest = invocation?.userRequest || parseSlashInput(value)?.userRequest || value.trim()
+      void executeSlashCommand(selectedCommand, commandRequest)
       return
     }
     sendCurrentChat(value)
@@ -1319,6 +1502,9 @@ ${exec.prompt}`
     }
     addToHistory(sentText || text)
     setText('')
+    pendingCommandRef.current = null
+    setSelectedSlashCommand(null)
+    setSlashTrigger(null)
     setHistoryIndex(-1)
     setAttachedImages([])
     clearPendingQuote()
@@ -1886,7 +2072,7 @@ ${exec.prompt}`
             <span>拖到这里附加为上下文</span>
           </div>
         ) : null}
-        <div className="relative flex w-full items-start rounded-lg bg-muted/15 transition-colors group-focus-within:bg-muted/10">
+        <div className="relative flex w-full flex-col rounded-lg bg-muted/15 transition-colors group-focus-within:bg-muted/10">
           <AiDocCommandPopover
             open={slashOpen}
             query={slashQuery || ''}
@@ -1917,22 +2103,31 @@ ${exec.prompt}`
             anchorRef={textareaRef}
           />
           {selectedSlashCommand ? (
-            <div className="ml-2 mt-3 flex h-5 max-w-[42%] shrink-0 items-center gap-1 text-sky-600 dark:text-sky-300">
-              <span className="truncate text-[12px] font-medium leading-none">
-                {selectedSlashCommand.title}
-              </span>
-              <button
-                type="button"
-                className="flex size-4 shrink-0 items-center justify-center rounded-sm text-sky-500/70 hover:bg-sky-500/10 hover:text-sky-700 dark:text-sky-300/70 dark:hover:bg-sky-300/10 dark:hover:text-sky-100"
-                onClick={() => {
-                  pendingCommandRef.current = null
-                  setSelectedSlashCommand(null)
-                  setTimeout(() => textareaRef.current?.focus(), 0)
-                }}
-                aria-label="取消已选命令"
+            <div className="flex w-full min-w-0 items-center px-2 pt-2">
+              <Badge
+                variant="outline"
+                className="h-7 max-w-full gap-1.5 rounded-md border-sky-300/70 bg-sky-500/10 px-1.5 py-0 pr-1 text-sky-700 shadow-sm shadow-sky-500/5 dark:border-sky-500/35 dark:bg-sky-500/15 dark:text-sky-200"
               >
-                <X className="size-3" />
-              </button>
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-sm bg-sky-500 text-white shadow-sm shadow-sky-500/20">
+                  <SelectedSlashCommandIcon className="size-3" />
+                </span>
+                <span className="min-w-0 truncate text-[12px] font-semibold leading-none">
+                  {selectedSlashCommandLabel}
+                </span>
+                <span className="shrink-0 rounded-sm bg-sky-500/10 px-1 text-[10px] font-semibold uppercase tracking-normal text-sky-700/75 dark:text-sky-100/70">
+                  tool
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="ml-0.5 size-5 shrink-0 rounded-sm text-sky-700/70 hover:bg-sky-500/15 hover:text-sky-800 dark:text-sky-100/70 dark:hover:bg-sky-300/15 dark:hover:text-white"
+                  onClick={handleSlashDismiss}
+                  aria-label="移除已选工具"
+                >
+                  <X className="size-3" />
+                </Button>
+              </Badge>
             </div>
           ) : null}
           <Textarea
@@ -1942,32 +2137,11 @@ ${exec.prompt}`
             disabled={!primaryModel || isResearchActive}
             value={text}
             onChange={(e) => {
-              const val = e.target.value
-              // 用户编辑了已选命令的文字 → 取消待定状态，恢复为普通 / 搜索
-              if (!selectedSlashCommand && pendingCommandRef.current && !getSlashCommandInvocation(val, pendingCommandRef.current)) {
-                pendingCommandRef.current = null
-              }
-              setText(val)
-              if (chatMode === 'chat' && isSensitiveInstruction(val)) {
-                setSuggestedMode({
-                  mode: 'agent',
-                  title: '建议切换到 Agent',
-                  description: '这看起来需要编辑文件、运行工具或处理本地资源。',
-                })
-              } else if (chatMode === 'chat' && isResearchInstruction(val)) {
-                setSuggestedMode({
-                  mode: 'research',
-                  title: '建议切换到 Research',
-                  description: '这看起来需要持续检索、分析资料或生成研究报告。',
-                })
-              } else {
-                setSuggestedMode(null)
-              }
-              const textarea = e.target
-              textarea.style.height = 'auto'
-              const newHeight = Math.min(textarea.scrollHeight, 240)
-              textarea.style.height = `${newHeight}px`
+              updateTextFromTextarea(e.target)
             }}
+            onClick={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
+            onKeyUp={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
+            onSelect={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
             placeholder={effectivePlaceholder}
             onKeyDown={(e) => {
               const textarea = e.target as HTMLTextAreaElement
@@ -1980,8 +2154,7 @@ ${exec.prompt}`
               if (selectedSlashCommand && !keyIsComposing) {
                 if (e.key === 'Escape' || (e.key === 'Backspace' && text.trim() === '')) {
                   e.preventDefault()
-                  pendingCommandRef.current = null
-                  setSelectedSlashCommand(null)
+                  handleSlashDismiss()
                   return
                 }
               }
@@ -2049,7 +2222,8 @@ ${exec.prompt}`
                 const slashCommand = pendingCommandRef.current
                 if (slashCommand && selectedSlashCommand?.id === slashCommand.id) {
                   e.preventDefault()
-                  void executeSlashCommand(slashCommand, text.trim())
+                  const invocation = getSlashCommandInvocation(text, slashCommand)
+                  void executeSlashCommand(slashCommand, invocation?.userRequest || text.trim())
                   return
                 }
 
@@ -2083,55 +2257,42 @@ ${exec.prompt}`
                 }
                 if (isSendEnter) {
                   e.preventDefault()
-                  const parsedSlashInput = parseSlashInput(text)
-                  const currentInvocation = findSlashCommandInvocation(text, slashFilteredCommands)
-                  const exactTarget = slashFilteredCommands.find(command =>
-                    isExactSlashCommandInput(text, command),
-                  )
-                  const shouldUseSelectedTarget = Boolean(
-                    parsedSlashInput?.commandToken || !parsedSlashInput?.userRequest,
-                  )
-                  const selectedTarget = shouldUseSelectedTarget
-                    ? slashFilteredCommands[Math.min(slashSelectedIndex, slashFilteredCommands.length - 1)]
+                  const activeTrigger = slashTrigger || findSlashTriggerAtCursor(textarea.value, textarea.selectionStart)
+                  const exactTarget = activeTrigger
+                    ? slashFilteredCommands.find(command =>
+                      isExactSlashCommandInput(textarea.value, command, activeTrigger),
+                    )
                     : undefined
-                  const target = currentInvocation?.command || exactTarget || selectedTarget
+                  const selectedTarget = slashFilteredCommands[Math.min(slashSelectedIndex, slashFilteredCommands.length - 1)]
+                  const target = exactTarget || selectedTarget
 
                   if (target) {
-                    if (currentInvocation || exactTarget) {
-                      void executeSlashCommand(target, currentInvocation?.userRequest)
-                      return
-                    }
-
-                    selectSlashCommand(target.id)
+                    void selectSlashCommand(target.id)
                     return
                   }
 
                   void (async () => {
-                    const allCommands = await getAllSlashCommands()
-                    const refreshedInvocation = findSlashCommandInvocation(text, allCommands)
-                    if (refreshedInvocation) {
-                      await executeSlashCommand(refreshedInvocation.command, refreshedInvocation.userRequest)
-                      return
-                    }
-
                     const refreshedCommands = await filterSlashCommands(slashQuery || '')
-                    const refreshedExactTarget = refreshedCommands.find(command =>
-                      isExactSlashCommandInput(text, command),
-                    )
+                    const refreshedTarget = activeTrigger
+                      ? refreshedCommands.find(command =>
+                        isExactSlashCommandInput(textarea.value, command, activeTrigger),
+                      )
+                      : refreshedCommands[0]
 
-                    if (refreshedExactTarget) {
-                      await executeSlashCommand(refreshedExactTarget)
+                    if (refreshedTarget) {
+                      await selectSlashCommand(refreshedTarget.id)
                       return
                     }
 
                     pendingCommandRef.current = null
+                    setSlashTrigger(null)
                     submitInput(textarea.value)
                   })()
                   return
                 }
                 if (e.key === 'Escape') {
                   e.preventDefault()
-                  setText('')
+                  setSlashTrigger(null)
                   return
                 }
               }
@@ -2182,8 +2343,12 @@ ${exec.prompt}`
             onCompositionStart={() => setIsComposing(true)}
             onCompositionEnd={() => setTimeout(() => {
               setIsComposing(false)
+              updateSlashTriggerFromTextarea(textareaRef.current)
             }, 0)}
-            onPaste={handlePaste}
+            onPaste={(event) => {
+              handlePaste(event)
+              requestAnimationFrame(() => updateSlashTriggerFromTextarea(event.currentTarget))
+            }}
           />
         </div>
 

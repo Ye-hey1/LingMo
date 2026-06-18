@@ -165,13 +165,19 @@ export async function getAllSlashCommands(): Promise<SlashCommandItem[]> {
  */
 export async function filterSlashCommands(query: string): Promise<SlashCommandItem[]> {
   const all = await getAllSlashCommands()
-  if (!query) return all
+  const q = query.trim().replace(/^\/+/, '').toLowerCase()
+  if (!q) return all
 
-  const q = query.toLowerCase()
+  const matchesTerm = (term?: string | null) => {
+    const normalized = term?.trim().toLowerCase()
+    if (!normalized) return false
+    return normalized.includes(q) || q.startsWith(normalized)
+  }
+
   return all.filter((item) =>
-    item.title.toLowerCase().includes(q)
-    || item.description.toLowerCase().includes(q)
-    || item.searchTerms.some((t) => t.toLowerCase().includes(q)),
+    matchesTerm(item.title)
+    || matchesTerm(item.description)
+    || item.searchTerms.some(matchesTerm),
   )
 }
 
