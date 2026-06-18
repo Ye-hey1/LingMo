@@ -3,8 +3,9 @@ import { getAISettings, validateAIService, prepareMessages, createOpenAIClient, 
 import type { AiConfig } from '@/app/core/setting/config'
 import { estimateTokens } from './token-counter'
 import { getModelCapabilityProfile } from './model-capabilities'
-import { prepareMessagesWithImages } from './vision-bridge'
+import { isVisionContentUnsupportedError, prepareMessagesWithImages } from './vision-bridge'
 import { createAiStreamContentProcessor } from './sanitize'
+import { getAiRateLimitUserMessage, isAiRateLimitError } from './rate-limit'
 
 export interface AiStreamFinishMetadata {
   finishReason?: string | null
@@ -37,6 +38,7 @@ function getErrorKind(error: unknown) {
   if (/AI_TRANSPORT_ERROR|error sending request|Failed to fetch|NetworkError|connect/i.test(message)) return 'connect'
   if (/timeout|timed out/i.test(message)) return 'timeout'
   if (/status=401|401|Unauthorized/i.test(message)) return 'unauthorized'
+  if (/status=402|402|payment required|insufficient.*balance|balance.*insufficient|insufficient.*quota|quota.*insufficient|quota exceeded|billing|credits?.*(?:exhausted|insufficient)|(?:exhausted|insufficient).*credits?/i.test(message)) return 'billing'
   if (/status=429|429|rate limit/i.test(message)) return 'rate_limit'
   if (/status=5\d\d| 5\d\d/i.test(message)) return 'server'
   return 'unknown'
@@ -49,6 +51,12 @@ function isExpectedAbortError(error: unknown, signal?: AbortSignal) {
 
   return error instanceof Error &&
     (error.name === 'AbortError' || error.message === 'Request was aborted.')
+}
+
+function appendRateLimitNotice(content: string, error: unknown) {
+  const notice = `> ${getAiRateLimitUserMessage(error)}`
+  const trimmed = content.trim()
+  return trimmed ? `${trimmed}\n\n${notice}` : notice
 }
 
 function estimateMessagesTokens(messages: OpenAI.Chat.ChatCompletionMessageParam[]) {
@@ -235,6 +243,7 @@ export async function fetchAiStream(
   let preparedMessages: OpenAI.Chat.ChatCompletionMessageParam[] = []
   let totalToolCallCount = 0
   let usageStoreKey = modelStoreKey?.trim() || 'primaryModel'
+  let fullContent = ''
   try {
 
 
@@ -272,7 +281,8 @@ export async function fetchAiStream(
 
     const openai = await createOpenAIClient(aiConfig)
     const capabilities = getModelCapabilityProfile(aiConfig)
-    preparedMessages = await prepareMessagesWithImages(preparedMessages, aiConfig, imageUrls, abortSignal)
+    const textPreparedMessages = preparedMessages
+    preparedMessages = await prepareMessagesWithImages(textPreparedMessages, aiConfig, imageUrls, abortSignal)
 
     // 构建请求参数
     const requestParams: any = {
@@ -296,12 +306,26 @@ export async function fetchAiStream(
       }
     }
 
-    const stream = await openai.chat.completions.create(requestParams, {
-      signal: abortSignal
-    }) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+    let stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+    try {
+      stream = await openai.chat.completions.create(requestParams, {
+        signal: abortSignal
+      }) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+    } catch (error) {
+      if (!imageUrls?.length || !isVisionContentUnsupportedError(error)) {
+        throw error
+      }
+
+      preparedMessages = await prepareMessagesWithImages(textPreparedMessages, aiConfig, imageUrls, abortSignal, {
+        forceBridge: true,
+      })
+      requestParams.messages = preparedMessages
+      stream = await openai.chat.completions.create(requestParams, {
+        signal: abortSignal
+      }) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+    }
 
     let thinking = ''
-    let fullContent = ''
     const streamProcessor = createAiStreamContentProcessor()
     const toolCalls: any[] = []
     let hasToolCalls = false
@@ -688,6 +712,19 @@ export async function fetchAiStream(
         toolCallCount: totalToolCallCount,
       })
       return ''
+    }
+    if (isAiRateLimitError(error) && fullContent.trim()) {
+      const fallbackContent = appendRateLimitNotice(fullContent, error)
+      onUpdate(fallbackContent)
+      onStreamFinish?.({
+        finishReason: 'rate_limit',
+        finishReasons: ['rate_limit'],
+        truncated: false,
+        aborted: false,
+        contentLength: fallbackContent.length,
+        toolCallCount: totalToolCallCount,
+      })
+      return fallbackContent
     }
     return handleAIError(error) || ''
   }

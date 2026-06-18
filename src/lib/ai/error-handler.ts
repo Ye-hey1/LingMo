@@ -94,9 +94,9 @@ const ERROR_MESSAGES: Record<ErrorKind, { title: string; message: string; retrya
   },
   rate_limit: {
     title: '请求过于频繁',
-    message: '已达到 API 速率限制，请稍后重试',
+    message: '已达到 API 速率限制，本轮已停止继续请求以避免反复触发限流',
     retryable: true,
-    action: '稍后重试',
+    action: '稍后重试或切换模型',
   },
   server: {
     title: '服务器错误',
@@ -258,7 +258,7 @@ export function getRecoverySuggestion(error: unknown): string {
     case 'billing':
       return '请在设置中：\n1. 检查当前 API 服务账户余额\n2. 切换到仍有额度的模型或服务商\n3. 更换可用的 API Key'
     case 'rate_limit':
-      return '请等待一段时间后重试，或升级 API 配额'
+      return '请等待一段时间后重试，或切换到更高 TPM/RPM 配额的模型；如果本轮已有内容，系统会优先保留已有内容。'
     case 'server':
       return 'AI 服务暂时不可用，请稍后重试。如持续出现，请联系服务提供商'
     case 'validation':

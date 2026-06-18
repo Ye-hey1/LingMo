@@ -16,7 +16,9 @@ export type ErrorCategory =
   | 'timeout'
   | 'network'
   | 'auth'
+  | 'billing'
   | 'rate_limit'
+  | 'server'
   | 'context_overflow'
   | 'model_output'
   | 'mcp_registry'
@@ -47,7 +49,9 @@ const ERROR_PATTERNS: Array<{
   { pattern: /timeout|timed?\s*out/i, category: 'timeout' },
   { pattern: /network|fetch|econnrefused|econnreset|enotfound|dns|socket|connection|failed to fetch/i, category: 'network' },
   { pattern: /unauthorized|401|403|invalid.*key|authentication|api.?key|permission denied/i, category: 'auth' },
-  { pattern: /rate.?limit|429|too many requests|quota/i, category: 'rate_limit' },
+  { pattern: /status=402|HTTP\s+402|\b402\b|payment required|insufficient.*balance|balance.*insufficient|insufficient.*quota|quota.*insufficient|quota exceeded|billing|credits?.*(?:exhausted|insufficient)|(?:exhausted|insufficient).*credits?/i, category: 'billing' },
+  { pattern: /rate.?limit|429|too many requests/i, category: 'rate_limit' },
+  { pattern: /status=5\d\d|HTTP\s+5\d\d|\b5\d\d\b|upstream error|do_request_failed|server error|internal error|bad gateway|service unavailable|gateway timeout/i, category: 'server' },
   { pattern: /context.*overflow|context.*length|prompt.*too.*long|too.*large|maximum context|token.*limit/i, category: 'context_overflow' },
   { pattern: /内容不能为空|empty.*(?:final|answer|response)|final answer.*empty|model.*empty|没有返回可展示正文/i, category: 'model_output' },
   { pattern: /stale_mcp_tool_registry|mcp.*registry|tool registry changed|刷新.*工具|mcp.*not.*ready/i, category: 'mcp_registry' },
@@ -93,11 +97,25 @@ const ERROR_MESSAGES: Record<ErrorCategory, Omit<FriendlyError, 'technicalDetail
     suggestion: '请在设置中检查并更新 API 密钥。',
     retryable: false,
   },
+  billing: {
+    category: 'billing',
+    title: '余额不足',
+    message: 'AI 服务账户余额或调用额度不足，本轮已停止继续请求。',
+    suggestion: '请充值、切换到仍有额度的模型或服务商，或更换可用的 API Key 后重试。',
+    retryable: false,
+  },
   rate_limit: {
     category: 'rate_limit',
     title: '请求频率超限',
-    message: '已达到 API 调用频率限制。',
-    suggestion: '请等待一段时间后重试，或升级 API 配额。',
+    message: '已达到 API 调用频率限制，本轮已停止继续请求，避免反复重试放大限流。',
+    suggestion: '请稍后重试、切换到更高 TPM/RPM 配额的模型，或减少本轮上下文长度。',
+    retryable: true,
+  },
+  server: {
+    category: 'server',
+    title: '上游服务异常',
+    message: 'AI 服务商或其上游模型暂时不可用，本轮请求没有成功完成。',
+    suggestion: '请稍后重试；如果连续出现，请切换模型或服务商。',
     retryable: true,
   },
   context_overflow: {
@@ -257,6 +275,12 @@ export function getErrorRecoverySuggestion(error: string | Error): {
           suggestion: '请在设置中更新 API 密钥',
           action: 'check_settings',
         }
+      case 'billing':
+        return {
+          canRecover: true,
+          suggestion: '请检查账户余额、切换模型或更换 API Key',
+          action: 'check_settings',
+        }
       case 'context_overflow':
         return {
           canRecover: true,
@@ -299,8 +323,12 @@ export function generateErrorContext(error: string | Error): string {
       return '上一步操作超时。请尝试简化操作或分步骤执行。'
     case 'network':
       return '网络连接失败。请检查网络状态，或尝试使用不需要网络的工具。'
+    case 'billing':
+      return 'AI 服务账户余额或调用额度不足。请停止本轮继续请求，并提示用户检查余额、切换模型或更换 API Key。'
     case 'rate_limit':
-      return '已达到 API 调用限制。请减少工具调用次数，或等待一段时间后继续。'
+      return '已达到 API 调用限制。请停止本轮继续请求，保留已有结果，等待一段时间后继续或切换模型。'
+    case 'server':
+      return 'AI 服务商或上游模型暂时不可用。请停止本轮继续请求，提示用户稍后重试或切换模型/服务商。'
     case 'context_overflow':
       return '上下文已满。请总结当前进展并给出最终答案，不要再调用工具。'
     case 'tool_not_found':

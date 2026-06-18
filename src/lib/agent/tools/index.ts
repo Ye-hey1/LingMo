@@ -19,6 +19,9 @@ import { visualReportTools } from './visual-report-tools'
 import { githubStarTools } from './github-star-tools'
 import { githubTrendingTools } from './github-trending-tools'
 import { reminderTools } from './reminder-tools'
+import { toolSearchTools } from './tool-search-tools'
+import { gitTools } from './git-tools'
+import { codeNavigationTools } from './code-navigation-tools'
 
 export const allTools: Tool[] = [
   ...noteTools,
@@ -39,6 +42,9 @@ export const allTools: Tool[] = [
   ...githubStarTools,
   ...githubTrendingTools,
   ...reminderTools,
+  ...toolSearchTools,
+  ...gitTools,
+  ...codeNavigationTools,
   ...safeTools,
 ]
 
@@ -323,3 +329,6 @@ export * from './visual-report-tools'
 export * from './github-star-tools'
 export * from './github-trending-tools'
 export * from './reminder-tools'
+export * from './tool-search-tools'
+export * from './git-tools'
+export * from './code-navigation-tools'

@@ -19,10 +19,10 @@ const CONTINUATION_FAILURE_PATTERNS = [
 ]
 
 const CONCRETE_ARTIFACT_REQUEST_PATTERN =
-  /生成|创建|制作|新建|导出|保存|绘制|画一|画个|画出|可视化|图表|思维导图|导图|流程图|架构图|白板|文件|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e|create|generate|export|save|file|presentation/i
+  /生成|创建|制作|新建|导出|保存|写入|输出到|输出为|整理成|绘制|画一|画个|画出|可视化|规划|设计|制定|图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|攻略|方案|行程|路线|计划|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e|create|generate|export|save|file|note|document|presentation|itinerary|plan/i
 
 const CONCRETE_ARTIFACT_DIRECTIVE_PATTERN =
-  /(?:生成|创建|制作|新建|导出|保存|绘制|画一|画个|画出|可视化).{0,30}(?:图表|思维导图|导图|流程图|架构图|白板|文件|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw)|(?:图表|思维导图|导图|流程图|架构图|白板|文件|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw).{0,30}(?:生成|创建|制作|新建|导出|保存|绘制)|\b(?:create|generate|export|save|visuali[sz]e).{0,40}(?:diagram|mind\s*map|mindmap|flowchart|file|presentation|pptx|pdf|docx|xlsx)\b/i
+  /(?:生成|创建|制作|新建|导出|保存|写入|输出|整理成|绘制|画一|画个|画出|可视化).{0,30}(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|攻略|方案|行程|路线|计划|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw)|(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|攻略|方案|行程|路线|计划|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw).{0,30}(?:生成|创建|制作|新建|导出|保存|写入|输出|绘制)|(?:规划|设计|制定|重新规划).{0,30}(?:攻略|方案|行程|路线|计划)|(?:输出|保存|写入|整理).{0,16}(?:到|为|成)?\s*(?:笔记|文档|文件)|\b(?:create|generate|export|save|write|produce|visuali[sz]e).{0,40}(?:diagram|mind\s*map|mindmap|flowchart|file|note|document|itinerary|plan|presentation|pptx|pdf|docx|xlsx)\b/i
 
 const INFORMATION_QUERY_PATTERN =
   /查看|查询|获取|检索|搜索|总结|汇总|梳理|分析|解读|列出|最新|热点|新闻|资讯|趋势|信息|内容|数据|find|search|fetch|get|retrieve|summari[sz]e|analy[sz]e|latest|news|trending|information/i
@@ -30,9 +30,60 @@ const INFORMATION_QUERY_PATTERN =
 const DIAGRAM_ARTIFACT_REQUEST_PATTERN =
   /绘制|画一|画个|画出|可视化|图表|思维导图|导图|流程图|架构图|白板|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e/i
 
+const NOTE_OUTPUT_REQUEST_PATTERN =
+  /(?:输出|保存|写入|整理|生成|创建|新建).{0,18}(?:到|为|成|进)?\s*(?:笔记|文档|文件)|(?:笔记|文档|文件).{0,18}(?:输出|保存|写入|整理|生成|创建|新建)/i
+
+const PLAN_ARTIFACT_REQUEST_PATTERN =
+  /(?:规划|设计|制定|重新规划|生成|输出|整理).{0,36}(?:攻略|方案|行程|路线|计划)|(?:攻略|方案|行程|路线|计划).{0,36}(?:规划|设计|制定|重新规划|生成|输出|整理)/i
+
+const PROGRESS_ONLY_FINAL_PATTERN =
+  /^(?:好(?:的)?|收到|明白|可以|没问题|了解|充分理解|我明白|我知道了)[。！!，,\s]*(?:我(?:现在|会|将|来|马上|准备|先|接下来)|这就|下面|接下来|先|正在|开始|准备|马上)?|^(?:我(?:现在|会|将|来|马上|准备|先|接下来)|这就|下面|接下来|先|正在|开始|准备|马上)/i
+
+const PROGRESS_VERB_PATTERN =
+  /(?:正在|准备|马上|接下来|下一步|先确认|先梳理|先整理|我会|我将|我现在|我来|这就|开始处理|继续处理|继续完成|稍后|待会|将会|会继续)/i
+
+function estimateChineseAwareLength(value: string) {
+  return Array.from(value.trim()).length
+}
+
+function countContentSignals(answer: string) {
+  let signals = 0
+  if (/^#{1,4}\s+\S/m.test(answer)) signals += 1
+  if (/(^|\n)\s*(?:[-*]|\d+[.、．])\s+\S/.test(answer)) signals += 1
+  if (/[\n\r].+[\n\r].+/.test(answer)) signals += 1
+  if (/[:：]\s*\S{8,}/.test(answer)) signals += 1
+  if (/[。.!?！？]\s*\S{12,}[。.!?！？]/.test(answer)) signals += 1
+  return signals
+}
+
+export function isProgressOnlyFinalAnswer(answer: string): boolean {
+  const normalized = answer.replace(/\s+/g, ' ').trim()
+  if (!normalized) return true
+
+  const length = estimateChineseAwareLength(normalized)
+  const contentSignals = countContentSignals(answer)
+  if (length <= 36 && PROGRESS_ONLY_FINAL_PATTERN.test(normalized)) {
+    return true
+  }
+
+  if (length <= 180 && PROGRESS_ONLY_FINAL_PATTERN.test(normalized) && PROGRESS_VERB_PATTERN.test(normalized) && contentSignals === 0) {
+    return true
+  }
+
+  if (length <= 260 && PROGRESS_VERB_PATTERN.test(normalized) && /(?:完成后|然后|再|最终|给你|输出|写入|整理出)/.test(normalized) && contentSignals === 0) {
+    return true
+  }
+
+  return false
+}
+
 function getConcreteToolHint(userInput: string): string {
   if (DIAGRAM_ARTIFACT_REQUEST_PATTERN.test(userInput)) {
     return '对于图表/思维导图/Excalidraw 任务，请继续输出 JSON Action，优先使用 create_diagram_from_outline；需要空白或自定义画布时使用 create_diagram_file。'
+  }
+
+  if (NOTE_OUTPUT_REQUEST_PATTERN.test(userInput)) {
+    return '对于输出到笔记/文档/文件的任务，请继续输出 JSON Action，优先使用 create_file；需要写入当前编辑器时使用 replace_editor_content。'
   }
 
   return '请继续输出 JSON Action，调用 create_file、replace_editor_content、create_diagram_from_outline 或其他实际工具完成任务。'
@@ -44,6 +95,10 @@ export function shouldRecoverWithAutoFinalAnswer(thought: string): boolean {
 }
 
 export function isConcreteArtifactRequest(userInput: string, actionLikeRequest: boolean): boolean {
+  if (NOTE_OUTPUT_REQUEST_PATTERN.test(userInput) || PLAN_ARTIFACT_REQUEST_PATTERN.test(userInput)) {
+    return true
+  }
+
   if (INFORMATION_QUERY_PATTERN.test(userInput) && !CONCRETE_ARTIFACT_DIRECTIVE_PATTERN.test(userInput)) {
     return false
   }
@@ -259,6 +314,10 @@ export function validateFinalAnswer(
 
   const normalizedAnswer = answer.toLowerCase().trim()
   const normalizedInput = userInput.toLowerCase().trim()
+
+  if (isProgressOnlyFinalAnswer(answer)) {
+    return { ok: false, reason: '这只是进度说明，不是完整最终答案，请继续完成用户任务后再收尾' }
+  }
 
   // 检查是否只是重复用户问题
   if (normalizedAnswer === normalizedInput) {

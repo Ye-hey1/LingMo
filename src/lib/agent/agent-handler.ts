@@ -19,6 +19,7 @@ import {
 } from './enhanced-resume'
 import { formatFriendlyError } from './friendly-errors'
 import { getDirectAgentReply } from './orchestration'
+import { classifyAgentTask } from './task-router'
 import {
   extractVisibleFinalAnswer,
   isInternalAgentInstruction,
@@ -104,6 +105,7 @@ export class AgentHandler {
   // 流式状态本地累积：reduce 不依赖 store 读取，保证 micro-batch 窗口内的中间状态不丢失
   private localPartSnapshot?: AgentPartSnapshot
   private localAgentEvents?: AgentEvent[]
+  private lastAnswerDeltaContent = ''
   private readonly stateBatcher = createAgentStateBatcher((patch) => {
     this.patchAgentState(patch)
   })
@@ -256,8 +258,8 @@ export class AgentHandler {
 
         if (toolCall.status === 'error') {
           return this.createActivity(
-            `Failed ${formatToolLabel(toolCall.toolName)}`,
-            'error',
+            `Recovering from ${formatToolLabel(toolCall.toolName)}`,
+            'tool',
             summarizeText(toolCall.result?.error || toolCall.result?.message),
             { iteration: event.iteration, toolName: toolCall.toolName }
           )
@@ -302,16 +304,18 @@ export class AgentHandler {
           )
         }
         return this.createActivity(
-          `${payload.success === false ? 'Failed' : 'Finished'} ${formatToolLabel(toolName) || 'tool'}`,
-          payload.success === false ? 'error' : 'tool',
+          `${payload.success === false ? 'Recovering from' : 'Finished'} ${formatToolLabel(toolName) || 'tool'}`,
+          'tool',
           summarizeText(String(payload.result || payload.message || payload.error || '')),
           { iteration: event.iteration, toolName }
         )
       case 'step.completed':
         if (isSupportOnlyToolName(String(payload.toolName || ''))) return undefined
         return this.createActivity(
-          payload.toolName ? `Completed ${formatToolLabel(String(payload.toolName))}` : 'Completed step',
-          payload.success === false ? 'error' : 'thinking',
+          payload.success === false && payload.toolName
+            ? `Recovering from ${formatToolLabel(String(payload.toolName))}`
+            : payload.toolName ? `Completed ${formatToolLabel(String(payload.toolName))}` : 'Completed step',
+          payload.success === false ? 'tool' : 'thinking',
           summarizeText(String(payload.observation || '')),
           { iteration: event.iteration, toolName }
         )
@@ -469,6 +473,7 @@ export class AgentHandler {
     // 重置本地流式累积状态，并冲掉上一轮可能残留的 batch
     this.localPartSnapshot = undefined
     this.localAgentEvents = undefined
+    this.lastAnswerDeltaContent = ''
     this.currentInput = userInput
     this.lastCheckpointIteration = 0
     this.stateBatcher.flush()
@@ -481,6 +486,13 @@ export class AgentHandler {
     })
 
     const forcedSkillIds = this.normalizeSkillIds(this.config.forcedSkillIds)
+    const routeDecision = classifyAgentTask({
+      userInput,
+      imageCount: imageUrls?.length || 0,
+      forcedSkillIds,
+      webSearchEnabled: this.config.webSearchEnabled,
+      hasQuote: Boolean(this.config.currentQuote),
+    })
     const directReply = forcedSkillIds.length === 0
       ? getDirectAgentReply(userInput, imageUrls)
       : null
@@ -500,41 +512,49 @@ export class AgentHandler {
       return directReply
     }
 
-    this.patchAgentState({
-      activity: this.createActivity('Loading runtime', 'preparing'),
-    })
     const middlewareState = runControl?.getMiddlewareState()
-    if (!middlewareState?.mcp && !middlewareState?.skills) {
+    let skillMatches: SkillMatchSummary[] = []
+    let activeSkills: string[] = []
+    let forcedActiveSkillIds: string[] = []
+
+    if (routeDecision.requiresRuntime) {
+      this.patchAgentState({
+        activity: this.createActivity('Loading runtime', 'preparing'),
+      })
+    }
+    if (routeDecision.requiresRuntime && !middlewareState?.mcp && !middlewareState?.skills) {
       await this.loadLegacyRuntimeState()
     }
 
     // 获取与当前请求相关的 Skills 候选。Harness middleware 优先；无 Harness 时保留兼容路径。
-    const forcedSkillMatches = middlewareState?.skills
-      ? this.getForcedSkillMatchesFromState(middlewareState)
-      : await this.getForcedSkillMatches(forcedSkillIds)
-    this.patchAgentState({
-      activity: this.createActivity('Selecting skills', 'loading-skills'),
-    })
-    const autoSkillMatches = middlewareState?.skills
-      ? middlewareState.skills.activeSkillMatches.filter(match => !forcedSkillMatches.some(forced => forced.id === match.id))
-      : await this.getAvailableSkills(userInput)
-    const skillMatches = this.mergeSkillMatches([...forcedSkillMatches, ...autoSkillMatches])
-    const activeSkills = skillMatches.map(skill => skill.id)
-    const forcedActiveSkillIds = forcedSkillMatches.map(skill => skill.id)
-    // 获取 Skills 的详细信息用于 UI 显示
-    const skillsInfo = await this.getSkillsInfo(skillMatches)
-    // 将加载的 Skills 信息存储到状态中，用于 UI 显示
-    this.patchAgentState({
-      loadedSkills: skillsInfo,
-      selectedSkills: forcedActiveSkillIds.length > 0 ? forcedActiveSkillIds : undefined,
-      activity: this.createActivity(
-        skillsInfo.length > 0 ? 'Skills ready' : 'No matching skill',
-        'loading-skills',
-        skillsInfo.length > 0
-          ? skillsInfo.slice(0, 3).map(skill => skill.name).join(', ')
-          : undefined
-      ),
-    })
+    if (routeDecision.requiresRuntime) {
+      const forcedSkillMatches = middlewareState?.skills
+        ? this.getForcedSkillMatchesFromState(middlewareState)
+        : await this.getForcedSkillMatches(forcedSkillIds)
+      this.patchAgentState({
+        activity: this.createActivity('Selecting skills', 'loading-skills'),
+      })
+      const autoSkillMatches = middlewareState?.skills
+        ? middlewareState.skills.activeSkillMatches.filter(match => !forcedSkillMatches.some(forced => forced.id === match.id))
+        : await this.getAvailableSkills(userInput)
+      skillMatches = this.mergeSkillMatches([...forcedSkillMatches, ...autoSkillMatches])
+      activeSkills = skillMatches.map(skill => skill.id)
+      forcedActiveSkillIds = forcedSkillMatches.map(skill => skill.id)
+      // 获取 Skills 的详细信息用于 UI 显示
+      const skillsInfo = await this.getSkillsInfo(skillMatches)
+      // 将加载的 Skills 信息存储到状态中，用于 UI 显示
+      this.patchAgentState({
+        loadedSkills: skillsInfo,
+        selectedSkills: forcedActiveSkillIds.length > 0 ? forcedActiveSkillIds : undefined,
+        activity: this.createActivity(
+          skillsInfo.length > 0 ? 'Skills ready' : 'No matching skill',
+          'loading-skills',
+          skillsInfo.length > 0
+            ? skillsInfo.slice(0, 3).map(skill => skill.name).join(', ')
+            : undefined
+        ),
+      })
+    }
 
     // 智能联网判断：当检测到时效性问题时，自动启用联网搜索
     // 即使 UI 上的联网按钮未开启
@@ -550,11 +570,12 @@ export class AgentHandler {
     }
 
     const runnerConfig = {
-      maxIterations: 15,
+      maxIterations: routeDecision.maxIterations || 15,
       webSearchEnabled: effectiveWebSearchEnabled,
       activeSkills,
       activeSkillMatches: skillMatches,
       forcedSkillIds: forcedActiveSkillIds,
+      taskRouteDecision: routeDecision,
       onThought: (thought: string) => {
         const finalAnswerContent = extractVisibleFinalAnswer(thought)
         const visibleThought = sanitizeVisibleAssistantContent(thought)
@@ -631,7 +652,12 @@ export class AgentHandler {
         if (!markdownContent.trim()) {
           return
         }
-        this.patchAgentState({
+        if (markdownContent === this.lastAnswerDeltaContent) {
+          return
+        }
+        this.lastAnswerDeltaContent = markdownContent
+
+        this.stateBatcher.enqueue({
           currentThought: '',
           currentAction: undefined,
           currentObservation: undefined,
@@ -641,7 +667,7 @@ export class AgentHandler {
           activity: this.createActivity('Writing answer', 'answering', undefined, {
             iteration: this.agentState.currentIteration,
           }),
-        })
+        }, false)
         this.config.onAnswerDelta?.(markdownContent)
       },
       onFinalAnswerRender: (markdownContent: string) => {
@@ -718,10 +744,13 @@ export class AgentHandler {
         ? [error.name, error.message].filter(Boolean).join(': ')
         : String(error)
       const friendlyError = formatFriendlyError(error instanceof Error ? error : rawError)
+      const showTechnicalDetails = friendlyError.technicalDetails &&
+        friendlyError.category !== 'unknown' &&
+        !['billing', 'rate_limit', 'server'].includes(friendlyError.category)
       const errorMessage = [
         friendlyError.title,
         friendlyError.message,
-        friendlyError.technicalDetails && friendlyError.category !== 'unknown'
+        showTechnicalDetails
           ? `详情：${friendlyError.technicalDetails}`
           : '',
       ].filter(Boolean).join('：')

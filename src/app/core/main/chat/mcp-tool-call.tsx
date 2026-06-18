@@ -19,7 +19,7 @@ interface McpToolCallCardProps {
  * - 不使用 Card 边框，融入消息流中
  */
 export function McpToolCallCard({ toolCall }: McpToolCallCardProps) {
-  const [expanded, setExpanded] = useState(toolCall.status === 'error')
+  const [expanded, setExpanded] = useState(false)
   
   const statusIcon = (() => {
     switch (toolCall.status) {

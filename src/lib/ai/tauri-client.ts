@@ -174,9 +174,23 @@ function truncateErrorBody(body: string, maxLength = 2000) {
   return body.length > maxLength ? body.slice(0, maxLength) : body
 }
 
+function extractHttpErrorMessage(body: string) {
+  if (!body.trim()) return ''
+  try {
+    const parsed = JSON.parse(body) as any
+    const message = parsed?.error?.message || parsed?.message || parsed?.error
+    if (typeof message === 'string') return message
+  } catch {
+    // Body is not JSON; keep the truncated raw body below.
+  }
+  return ''
+}
+
 function formatHttpError(status: number, body: string) {
   const retryable = status === 429 || status >= 500
-  return `AI_HTTP_ERROR status=${status} retryable=${retryable} body=${truncateErrorBody(body)}`
+  const message = extractHttpErrorMessage(body)
+  const messagePart = message ? ` message=${JSON.stringify(message)}` : ''
+  return `AI_HTTP_ERROR status=${status} retryable=${retryable}${messagePart} body=${truncateErrorBody(body)}`
 }
 
 async function requestJsonViaPluginHttp<T = JsonValue>(

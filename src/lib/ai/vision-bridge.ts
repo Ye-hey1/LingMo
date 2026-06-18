@@ -59,6 +59,10 @@ const IMAGE_CAPABLE_MODEL_PATTERNS = [
 
 const descriptionCache = new Map<string, { ts: number; desc: string }>()
 
+export interface PrepareMessagesWithImagesOptions {
+  forceBridge?: boolean
+}
+
 function getCapabilityText(config?: AiConfig) {
   return [
     config?.templateKey,
@@ -75,6 +79,14 @@ export function supportsImageInput(config?: AiConfig): boolean {
   }
 
   return IMAGE_CAPABLE_MODEL_PATTERNS.some(pattern => pattern.test(getCapabilityText(config)))
+}
+
+export function isVisionContentUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /messages\.content\.type/i.test(message) ||
+    /content\.type[^]*\[['"]?text['"]?\]/i.test(message) ||
+    /image_url/i.test(message) && /unsupported|invalid|not support|不支持|非法/i.test(message) ||
+    /取值范围\s*\[['"]?text['"]?\]/i.test(message)
 }
 
 export async function hasVisionBridgeModel(): Promise<boolean> {
@@ -377,13 +389,14 @@ export async function prepareMessagesWithImages(
   messages: OpenAI.Chat.ChatCompletionMessageParam[],
   aiConfig?: AiConfig,
   imageUrls?: string[],
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  options: PrepareMessagesWithImagesOptions = {},
 ) {
   if (!imageUrls?.length) {
     return messages
   }
 
-  if (supportsImageInput(aiConfig)) {
+  if (!options.forceBridge && supportsImageInput(aiConfig)) {
     return appendImagesToLastUserMessage(messages, imageUrls)
   }
 

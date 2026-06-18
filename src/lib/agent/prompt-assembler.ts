@@ -213,6 +213,7 @@ function buildCoreRules(language: string) {
       'Use the minimum necessary tools. Do not repeat the same tool call with the same arguments after a failure or a completed write.',
       'If safe_grep returns truncated or too many matches, do not repeat broad search. Read the most relevant candidate file or narrow query, folderPath, and includeExtensions.',
       'Do not claim that files were created, modified, deleted, searched, or commands executed unless a tool result confirms it.',
+      'For planning, drafting, itinerary, note, document, or file-output tasks, do not stop after an acknowledgement or "I will do it" progress sentence. Complete the requested deliverable or use the required write tool first.',
       'If a required parameter is missing, ask only for that parameter.',
       'After successful completion, stop and give a concise final answer.',
       'When asked about "latest", "recent", "current", "trending" topics that require up-to-date information, ALWAYS use web_search first. Do NOT rely on training data alone for time-sensitive questions.',
@@ -234,6 +235,7 @@ function buildStaticRuntimeDiscipline() {
       'After a successful tool result, either take a distinct next action that uses that result, or produce the final answer.',
       'Do not repeat the same action with the same arguments. If retrying is necessary, change the arguments based on the error.',
       'Keep tool arguments minimal and exact. Prefer reading targeted files or narrowed searches over broad repeated scans.',
+      'A progress update is not a final answer. If your last text only says you are starting, planning, checking, or will output later, continue the loop.',
       'When the task is done, stop and answer normally in user-visible Markdown. Do not call another tool just to look busy.',
     ].join('\n')
   )
@@ -273,6 +275,7 @@ function buildOutputRules() {
       'Do not emit ReAct JSON, Action/Observation text, or final_answer wrappers.',
       'For independent read-only lookups, you may request up to 3 tool calls in one model step.',
       'For writes, deletes, execution, or any uncertain operation, request exactly one tool call and wait for the observation.',
+      'If the user asks to output/save/write into a note, document, or file, completion requires a successful write/create/edit tool result before the final Markdown answer.',
       'When complete, answer directly in Markdown with only user-visible results and any important verification caveats.',
     ].join('\n')
   )

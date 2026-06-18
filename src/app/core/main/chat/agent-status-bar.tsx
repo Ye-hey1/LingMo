@@ -14,7 +14,7 @@ export function AgentStatusBar() {
   const isAgentRunning = agentState.isRunning || loading
   const hasHistory = agentState.completedSteps.length > 0 || agentState.toolCalls.length > 0
   const latestToolCall = [...agentState.toolCalls].reverse().find((toolCall) =>
-    toolCall.status === "running" || toolCall.status === "error"
+    toolCall.status === "running" || toolCall.status === "pending"
   )
 
   if (agentState.pendingConfirmation) {
@@ -32,9 +32,9 @@ export function AgentStatusBar() {
 
   if (!isAgentRunning && !hasHistory) return null
 
-  const hasError = agentState.toolCalls.some((toolCall) => toolCall.status === "error")
+  const hasError = !isAgentRunning && agentState.activity?.phase === "error"
   const label = hasError
-    ? "执行遇到问题"
+    ? "执行失败"
     : isAgentRunning
       ? latestToolCall?.status === "running"
         ? `正在处理：${getToolLabel(latestToolCall.toolName)}`

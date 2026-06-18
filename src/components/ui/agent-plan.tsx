@@ -944,10 +944,11 @@ export function AgentPlan({
   const hasCompletedStepsWithActions = displaySteps.some(step =>
     step.action && step.action.tool
   );
-  const hasRuntimeFailure =
-    eventTimeline.some(item => item.status === "failed") ||
-    displaySteps.some(step => step.status === "failed") ||
-    toolCalls.some(toolCall => toolCall.status === "error");
+  const hasRuntimeFailure = isRunning
+    ? eventTimeline.some(item => item.kind === "error" && item.status === "failed")
+    : eventTimeline.some(item => item.status === "failed") ||
+      displaySteps.some(step => step.status === "failed") ||
+      toolCalls.some(toolCall => toolCall.status === "error");
 
   if (mode === "live" && embedded && !pendingConfirmation && !hasRuntimeFailure) {
     return null;

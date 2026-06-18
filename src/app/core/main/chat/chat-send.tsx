@@ -8,6 +8,7 @@ import { useImperativeHandle, forwardRef, useRef, useEffect } from "react"
 import { useTranslations } from "next-intl"
 import useVectorStore from "@/stores/vector"
 import { fetchAiStream, type AiStreamFinishMetadata } from "@/lib/ai/chat"
+import { decideAutoWebSearch, type AutoWebSearchDecision } from "@/lib/ai/auto-web-search"
 import { type LinkedResource } from "@/lib/files"
 import { getWorkspacePath, getFilePathOptions } from "@/lib/workspace"
 import {
@@ -20,8 +21,10 @@ import {
   getPersistentApprovalOptions,
   recordPersistentApprovalHistory,
 } from "@/lib/agent"
+import { formatFriendlyError } from "@/lib/agent/friendly-errors"
 import { AgentOrchestrator } from "@/lib/agent-harness/orchestrator"
 import type { ContextItem } from "@/lib/agent-harness/types"
+import { classifyAgentTask, shouldBypassAgentRuntime } from "@/lib/agent/task-router"
 import { buildWriterSkillInstruction } from "@/lib/agent/writer-executor"
 import { skillManager } from "@/lib/skills"
 import { estimateTokens } from "@/lib/ai/token-counter"
@@ -166,7 +169,25 @@ function buildAutoNoteTitle(userInput: string) {
 }
 
 function isLikelyErrorContent(content: string) {
-  return /^工具 .+执行失败[:：]|^工具 .+执行出错[:：]|^Error:/.test(content.trim())
+  return /^工具 .+执行失败[:：]|^工具 .+执行出错[:：]|^Error:|^请求失败[:：]|^执行异常[:：]|^上游服务异常[:：]|^余额不足[:：]|^请求频率超限[:：]/.test(content.trim())
+}
+
+function formatUserVisibleError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error || '未知错误')
+  const friendly = formatFriendlyError(error instanceof Error ? error : raw)
+  if (friendly.category !== 'unknown') {
+    return [
+      friendly.title,
+      friendly.message,
+      friendly.suggestion,
+    ].filter(Boolean).join('：')
+  }
+
+  return raw
+    .replace(/^Error:\s*/i, '')
+    .replace(/\s*详情[:：]\s*AI_HTTP_ERROR[\s\S]*$/i, '')
+    .replace(/\s*body=\{[\s\S]*$/i, '')
+    .trim() || '请求失败，请稍后重试。'
 }
 
 function formatEmptyAiResponseMessage(meta?: AiStreamFinishMetadata | null, thinkingContent?: string) {
@@ -274,6 +295,23 @@ const RESEARCH_CLARIFICATION_SUFFIX = ' -->'
 type ResearchClarificationMeta = {
   originalQuery: string
   questions: string[]
+}
+
+function buildWebSearchInstruction(decision: AutoWebSearchDecision) {
+  const signals = decision.matchedSignals.length > 0
+    ? `触发信号：${decision.matchedSignals.join('、')}。`
+    : ''
+
+  return [
+    '## 自动联网',
+    '',
+    `系统已自动判断本轮需要联网搜索。${signals}`,
+    '请优先使用 Web 搜索结果回答实时、最新、近期、价格、天气、赛事、新闻、版本、政策等会变化的问题。',
+    '引用来源时请使用可点击 Markdown 链接，不要只写来源名称。',
+    '总结语气要像给用户做清晰 briefing：说重点、讲影响、少用官方腔和学术腔。',
+    '如果搜索结果不足或来源过旧，请明确说明证据不足，不要用训练数据猜测。',
+    '',
+  ].join('\n')
 }
 
 function encodeResearchClarificationMeta(meta: ResearchClarificationMeta) {
@@ -419,6 +457,11 @@ export const ChatSend = forwardRef<{
       ? [linkedResource]
       : []
   const isRunning = loading || researchRunning
+  const resolveAutoWebSearchDecision = (userInput: string) => decideAutoWebSearch({
+    userInput,
+    manualDefaultEnabled: webSearchEnabled,
+    hasSearchProvider: true,
+  })
 
   // 跟踪上一次的 loading 状态
   const wasLoadingRef = useRef(false)
@@ -718,6 +761,8 @@ export const ChatSend = forwardRef<{
 
   async function handleChatMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions) {
     const effectiveInstruction = instructionOverride ?? inputValue
+    const webDecision = resolveAutoWebSearchDecision(effectiveInstruction)
+    const effectiveWebSearchEnabled = webDecision.enabled
     const placeholderMessage = await insert({
       tagId: currentTagId,
       role: 'system',
@@ -742,9 +787,9 @@ export const ChatSend = forwardRef<{
         linkedResourcePreview,
         quoteData,
         isRagEnabled,
-        webSearchEnabled,
+        webSearchEnabled: effectiveWebSearchEnabled,
         userQuery: effectiveInstruction,
-        webSearchQuery: webSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
+        webSearchQuery: effectiveWebSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
         contextBudget: 15000,
         currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
         activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
@@ -753,6 +798,9 @@ export const ChatSend = forwardRef<{
       const { context, ragSources, ragSourceDetails } = contextResult
       const visibleRagSourceDetails = ragSourceDetails
       const visibleRagSources = ragSources
+      const systemContext = effectiveWebSearchEnabled
+        ? `${buildWebSearchInstruction(webDecision)}${context}`
+        : context
 
       const { chats: currentChats } = useChatStore.getState()
       const latestUserChatId = currentChats
@@ -766,10 +814,10 @@ export const ChatSend = forwardRef<{
             role: chat.role === 'user' ? 'user' as const : 'assistant' as const,
             content: chat.condensedContent || chat.content || '',
           })),
-        ...(context
+        ...(systemContext
           ? [{
               role: 'system' as const,
-              content: context,
+              content: systemContext,
             }]
           : []),
         {
@@ -839,7 +887,7 @@ export const ChatSend = forwardRef<{
     } catch (error) {
       await saveChat({
         ...placeholderMessage,
-        content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        content: formatUserVisibleError(error),
       }, true)
     } finally {
       abortControllerRef.current = null
@@ -848,6 +896,8 @@ export const ChatSend = forwardRef<{
 
   async function handleWriterMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions): Promise<string> {
     const effectiveInstruction = instructionOverride ?? inputValue
+    const webDecision = resolveAutoWebSearchDecision(effectiveInstruction)
+    const effectiveWebSearchEnabled = webDecision.enabled
     const placeholderMessage = await insert({
       tagId: currentTagId,
       role: 'system',
@@ -871,9 +921,9 @@ export const ChatSend = forwardRef<{
         linkedResourcePreview,
         quoteData,
         isRagEnabled,
-        webSearchEnabled,
+        webSearchEnabled: effectiveWebSearchEnabled,
         userQuery: effectiveInstruction,
-        webSearchQuery: webSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
+        webSearchQuery: effectiveWebSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
         contextBudget: 24000,
         currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
         activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
@@ -882,6 +932,9 @@ export const ChatSend = forwardRef<{
       const { context, ragSources, ragSourceDetails } = contextResult
       const visibleRagSourceDetails = ragSourceDetails
       const visibleRagSources = ragSources
+      const systemContext = effectiveWebSearchEnabled
+        ? `${buildWebSearchInstruction(webDecision)}${context}`
+        : context
 
       if (ragSources.length > 0 || ragSourceDetails.length > 0) {
         await saveChat({
@@ -924,7 +977,7 @@ export const ChatSend = forwardRef<{
             '你正在执行一个写作型 Skill。请直接输出用户可用的正文，保持自然连贯。',
             '不要输出工具调用、执行日志、JSON 包装、Action/Observation、Final Answer 标签或对 Skill 包装提示的解释。',
             '中文内容必须保持 UTF-8 正常字符，避免 mojibake、替换字符和乱码。',
-            context ? `\n## 可用上下文\n\n${context}` : '',
+            systemContext ? `\n## 可用上下文\n\n${systemContext}` : '',
           ].filter(Boolean).join('\n'),
         },
         {
@@ -989,7 +1042,7 @@ export const ChatSend = forwardRef<{
 
       return savedContent
     } catch (error) {
-      const errorContent = `Error: ${error instanceof Error ? error.message : String(error)}`
+      const errorContent = formatUserVisibleError(error)
       await saveChat({
         ...placeholderMessage,
         content: errorContent,
@@ -1597,6 +1650,8 @@ export const ChatSend = forwardRef<{
   // Agent 模式处理
   async function handleAgentMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions) {
     const effectiveInstruction = instructionOverride ?? inputValue
+    const webDecision = resolveAutoWebSearchDecision(effectiveInstruction)
+    const effectiveWebSearchEnabled = webDecision.enabled
     // 先创建一个占位的 AI 消息
     const placeholderMessage = await insert({
       tagId: currentTagId,
@@ -1613,12 +1668,107 @@ export const ChatSend = forwardRef<{
     })
 
     try {
+      const routeDecision = classifyAgentTask({
+        userInput: effectiveInstruction,
+        imageCount: imageUrls.length,
+        forcedSkillIds: options?.forcedSkillIds,
+        webSearchEnabled: effectiveWebSearchEnabled,
+        hasLinkedContext: effectiveLinkedResources.length > 0,
+        hasQuote: Boolean(quoteData),
+        hasRag: isRagEnabled,
+      })
+
+      if (shouldBypassAgentRuntime(routeDecision)) {
+        const agentHandler = new AgentHandler({
+          activeChatId: placeholderMessage.id,
+          webSearchEnabled: effectiveWebSearchEnabled,
+          forcedSkillIds: options?.forcedSkillIds,
+          requestConfirmation,
+          currentQuote: quoteData
+            ? {
+                fileName: quoteData.fileName,
+                startLine: quoteData.startLine,
+                endLine: quoteData.endLine,
+                from: quoteData.from,
+                to: quoteData.to,
+                fullContent: quoteData.fullContent,
+              }
+            : undefined,
+          onComplete: async (result, steps, stopped) => {
+            const { agentState } = useChatStore.getState()
+            const completedSteps = steps && steps.length > 0
+              ? steps
+              : agentState.completedSteps || []
+
+            const finalContent = sanitizeAgentFinalContent(
+              stopped ? (result || t('record.chat.input.stopped')) : result
+            )
+            const currentState = useChatStore.getState()
+            const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
+            const agentHistory = {
+              steps: completedSteps,
+              toolCalls: agentState.toolCalls,
+              events: agentState.agentEvents,
+              contextSnapshot: agentState.agentContextSnapshot,
+              runId: agentState.agentRunId,
+              iterations: agentState.currentIteration,
+              route: routeDecision,
+            }
+
+            await saveChat({
+              id: placeholderMessage.id,
+              tagId: placeholderMessage.tagId,
+              conversationId: placeholderMessage.conversationId,
+              role: placeholderMessage.role,
+              type: placeholderMessage.type,
+              inserted: placeholderMessage.inserted,
+              createdAt: placeholderMessage.createdAt,
+              ragSources: currentMessage?.ragSources,
+              ragSourceDetails: currentMessage?.ragSourceDetails,
+              content: finalContent,
+              agentHistory: JSON.stringify(agentHistory),
+            }, true)
+
+            setAgentState({
+              activeChatId: undefined,
+              isRunning: false,
+              isThinking: false,
+              pendingConfirmation: undefined,
+              isFinalAnswerMode: false,
+              finalAnswerContent: undefined,
+              currentStepStartTime: undefined,
+            })
+            agentHandlerRef.current = null
+          },
+          onError: async (error) => {
+            await saveChat({
+              ...placeholderMessage,
+              content: formatUserVisibleError(error),
+            }, true)
+            setAgentState({
+              activeChatId: undefined,
+              isRunning: false,
+              isThinking: false,
+              pendingConfirmation: undefined,
+              isFinalAnswerMode: false,
+              finalAnswerContent: undefined,
+              currentStepStartTime: undefined,
+            })
+            agentHandlerRef.current = null
+          },
+        })
+
+        agentHandlerRef.current = agentHandler
+        await agentHandler.execute(effectiveInstruction, undefined, imageUrls)
+        return
+      }
+
       const orchestrator = new AgentOrchestrator()
       await orchestrator.run({
         userInput: effectiveInstruction,
         route: options?.routeOverride === 'workflow' ? 'workflow' : 'agent',
         forcedSkillIds: options?.forcedSkillIds,
-        webSearchEnabled,
+        webSearchEnabled: effectiveWebSearchEnabled,
         agentExecutor: async (runControl) => {
           setAgentState({
             activeChatId: placeholderMessage.id,
@@ -1629,7 +1779,7 @@ export const ChatSend = forwardRef<{
           const agentHandler = new AgentHandler({
             runControl,
             activeChatId: placeholderMessage.id,
-            webSearchEnabled,
+            webSearchEnabled: effectiveWebSearchEnabled,
             forcedSkillIds: options?.forcedSkillIds,
             requestConfirmation,
             currentQuote: quoteData
@@ -1642,26 +1792,6 @@ export const ChatSend = forwardRef<{
                   fullContent: quoteData.fullContent,
                 }
               : undefined,
-            onFinalAnswerRender: (markdownContent) => {
-              const visibleMarkdownContent = cleanAssistantGeneratedContent(markdownContent)
-              // 检测到 Final Answer 时触发渲染
-              setAgentState({
-                activeChatId: placeholderMessage.id,
-                isFinalAnswerMode: true,
-                finalAnswerContent: visibleMarkdownContent
-              })
-            },
-            onAnswerDelta: (markdownContent) => {
-              const visibleMarkdownContent = cleanAssistantGeneratedContent(markdownContent)
-              if (!visibleMarkdownContent.trim()) {
-                return
-              }
-              setAgentState({
-                activeChatId: placeholderMessage.id,
-                isFinalAnswerMode: true,
-                finalAnswerContent: visibleMarkdownContent
-              })
-            },
             onComplete: async (result, steps, stopped) => {
               // 获取 Agent 执行历史，保存完整的 ReAct 步骤
               const { agentState } = useChatStore.getState()
@@ -1687,7 +1817,7 @@ export const ChatSend = forwardRef<{
 
               if (!stopped) {
                 const partialSuccessContent = buildPartialSuccessContent(result, agentState.toolCalls)
-                if (partialSuccessContent && /^工具 .+执行失败：|^工具 .+执行出错：|^Error:/.test(finalContent.trim())) {
+                if (partialSuccessContent && isLikelyErrorContent(finalContent)) {
                   finalContent = partialSuccessContent
                 }
               }
@@ -1771,7 +1901,7 @@ export const ChatSend = forwardRef<{
                 // 保留来自 currentMessage 的 RAG 相关字段
                 ragSources: currentMessage?.ragSources,
                 ragSourceDetails: currentMessage?.ragSourceDetails,
-                content: `Error: ${error}`,
+                content: formatUserVisibleError(error),
               }, true)
 
               // 清空 Final Answer 模式状态
@@ -1803,8 +1933,9 @@ export const ChatSend = forwardRef<{
             linkedResourcePreview,
             quoteData,
             isRagEnabled,
-            webSearchEnabled,
+            webSearchEnabled: effectiveWebSearchEnabled,
             userQuery: effectiveInstruction,
+            webSearchQuery: effectiveWebSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
             contextBudget: AGENT_CONTEXT_TOTAL_LIMIT,
             currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
             activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
@@ -1816,8 +1947,8 @@ export const ChatSend = forwardRef<{
 
           // 如果启用了 Web 搜索，添加提示
           let agentContext = context
-          if (webSearchEnabled) {
-            agentContext = `## 联网搜索\n\n用户已为本轮对话开启联网搜索。请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或正文提取不可用时再使用 web_fetch。\n\n当输出热门、最新、近期信息总结时，每个来源都必须用可点击 Markdown 链接呈现，例如 [来源标题](https://example.com)。总结语气要像给用户做清晰 briefing：说重点、讲影响、少用官方腔和学术腔。\n\n${context}`
+          if (effectiveWebSearchEnabled) {
+            agentContext = `${buildWebSearchInstruction(webDecision)}请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或正文提取不可用时再使用 web_fetch。\n\n${context}`
           }
 
           await runControl.setContextPack({
@@ -1916,13 +2047,15 @@ export const ChatSend = forwardRef<{
     let keepLoading = false
     const effectiveMode = options?.modeOverride || chatMode
     const effectiveRoute = options?.routeOverride || effectiveMode
+    const webDecision = resolveAutoWebSearchDecision(requestText)
+    const effectiveWebSearchEnabled = webDecision.enabled
     if (effectiveRoute === 'writer' || effectiveRoute === 'advisor') {
       const orchestrator = new AgentOrchestrator()
       await orchestrator.run({
         userInput: requestText,
         route: effectiveRoute,
         forcedSkillIds: options?.forcedSkillIds,
-        webSearchEnabled,
+        webSearchEnabled: effectiveWebSearchEnabled,
         writerExecutor: async () => handleWriterMode(imageUrls, effectiveInstruction, options),
       })
     } else if (effectiveRoute === 'chat') {

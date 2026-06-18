@@ -7,6 +7,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { createTauriOpenAIClient, type OpenAICompatibleClient } from "./tauri-client";
 import { buildXiaoMoChatSystemPrompt } from "./xiaomo-prompt";
 import { matchesConfiguredModelSelection } from "./model-selection";
+import { formatError } from "./error-handler";
 
 const MERMAID_OUTPUT_GUIDE = `When a process, architecture, relationship, decision tree, timeline, or comparison is better expressed visually, include a valid Mermaid fenced code block in the answer:
 \`\`\`mermaid
@@ -163,12 +164,14 @@ export async function convertImageToBase64(imageUrl: string): Promise<string | n
  * 处理AI请求错误
  */
 export function handleAIError(error: any, showToast = true): string | null {
-  const errorMessage = error instanceof Error ? error.message : '未知错误'
   // 检查是否是取消请求的错误，如果是则静默处理
-  if (error.message === 'Request was aborted.') {
+  if (error?.message === 'Request was aborted.') {
     // 静默处理取消请求，不显示任何消息
     return null
   }
+
+  const formatted = formatError(error)
+  const errorMessage = `${formatted.title}: ${formatted.message}`
   
   if (showToast) {
     toast({

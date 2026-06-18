@@ -16,7 +16,7 @@ import type {
 } from './types'
 
 const DEFAULT_MAX_VISIBLE_TOOLS = 46
-const SUPPORT_TOOL_NAMES = new Set(['select_skill', 'load_skill_content', 'get_current_time', 'list_agent_run_summaries'])
+const SUPPORT_TOOL_NAMES = new Set(['tool_search', 'select_skill', 'load_skill_content', 'get_current_time', 'list_agent_run_summaries'])
 const BASE_ALWAYS_VISIBLE = [
   'get_editor_content',
   'replace_editor_content',

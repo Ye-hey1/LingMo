@@ -10,6 +10,7 @@ import useVectorStore from "@/stores/vector"
 import { useSkillsStore } from "@/stores/skills"
 import { fetchAiQuickPrompts } from "@/lib/ai/placeholder"
 import { enhanceChatPrompt } from "@/lib/ai/prompt-enhancer"
+import { decideAutoWebSearch } from "@/lib/ai/auto-web-search"
 import {
   DICTATION_POLISH_MODE_LABELS,
   isDictationPolishMode,
@@ -25,7 +26,7 @@ import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFold
 import emitter from "@/lib/emitter"
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { ImageAttachment } from "./image-attachments"
-import { GlobeIcon, Loader2, Mic, MousePointer2, Square, WandSparkles, X } from "lucide-react"
+import { Loader2, Mic, MousePointer2, Square, WandSparkles, X } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
 import type { PendingQuote } from "@/stores/chat"
 import { convertFileSrc } from "@tauri-apps/api/core"
@@ -286,9 +287,7 @@ export const ChatInput = React.memo(function ChatInput() {
     aiModelList,
     imageMethodModel,
     sttModel,
-    tavilyApiKey,
     webSearchEnabled,
-    setWebSearchEnabled,
   } = useSettingStore()
   const {
     chats,
@@ -319,6 +318,11 @@ export const ChatInput = React.memo(function ChatInput() {
     return match[1]
   }, [text])
   const atOpen = atQuery !== null
+  const autoWebSearchDecision = useMemo(() => decideAutoWebSearch({
+    userInput: text,
+    manualDefaultEnabled: webSearchEnabled,
+    hasSearchProvider: true,
+  }), [text, webSearchEnabled])
 
   // 对话模式下,对需要工具或长任务的指令给出模式切换建议。
   const [suggestedMode, setSuggestedMode] = useState<null | {
@@ -1111,19 +1115,6 @@ ${exec.prompt}`
     }
   }
 
-  function handleToggleWebSearch() {
-    if (!webSearchEnabled && !tavilyApiKey.trim()) {
-      toast({
-        title: '请先配置联网搜索',
-        description: '你可以在"设置 > 联网搜索"中填写可用搜索渠道的 API Key,然后再开启联网搜索。',
-        variant: 'destructive',
-      })
-      return
-    }
-
-    void setWebSearchEnabled(!webSearchEnabled)
-  }
-
   async function handleEnhancePrompt() {
     const input = text.trim()
     if (!input) {
@@ -1175,7 +1166,7 @@ ${exec.prompt}`
             }
           : null,
         isRagEnabled,
-        webSearchEnabled,
+        webSearchEnabled: autoWebSearchDecision.enabled,
         enabledSkillNames,
         recentMessages,
       })
@@ -2203,15 +2194,6 @@ ${exec.prompt}`
               disabled={!primaryModel || isResearchActive}
               dictationPolishMode={dictationPolishMode}
               onDictationPolishModeChange={setDictationPolishModeValue}
-            />
-            <TooltipButton
-              variant={webSearchEnabled ? "secondary" : "ghost"}
-              size="icon"
-              icon={<GlobeIcon className={webSearchEnabled ? "size-4 text-primary" : "size-4"} />}
-              tooltipText={webSearchEnabled ? '已启用 Web 搜索' : '启用 Web 搜索'}
-              onClick={handleToggleWebSearch}
-              disabled={loading || isResearchActive}
-              buttonClassName={webSearchEnabled ? 'h-7 w-7 shrink-0 rounded-md bg-primary/10 text-primary hover:bg-primary/15' : 'h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-background/70 hover:text-foreground'}
             />
             <ChatModeSelect variant="compact" />
           </div>

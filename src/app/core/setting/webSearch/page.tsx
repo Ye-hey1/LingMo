@@ -399,7 +399,7 @@ export default function WebSearchPage() {
 
         <Section title="全局行为">
           <div className="border-y border-border/60">
-            <SettingLine title="输入框联网按钮默认状态" description="新对话输入框里的联网开关。">
+            <SettingLine title="自动联网默认策略" description="开启后每轮默认带入网页搜索；关闭时由输入内容自动判断是否需要联网。">
               <span className="text-sm text-muted-foreground">{webSearchEnabled ? '默认开启' : '默认关闭'}</span>
               <Switch checked={webSearchEnabled} onCheckedChange={(checked) => void setWebSearchEnabled(checked)} />
             </SettingLine>

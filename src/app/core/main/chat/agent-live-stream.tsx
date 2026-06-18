@@ -1,7 +1,17 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDown } from "lucide-react"
+import {
+  AlertTriangle,
+  Box,
+  CheckCircle2,
+  ChevronDown,
+  Circle,
+  Clock3,
+  FileText,
+  ListChecks,
+  Wrench,
+} from "lucide-react"
 import { CompactToolCalls } from "./compact-tool-calls"
 import { cn } from "@/lib/utils"
 import type { AgentActivity, AgentEvent, AgentState, AgentTurnTelemetry, ToolCall, AgentPartSnapshot } from "@/lib/agent"
@@ -22,6 +32,23 @@ type AgentLiveStreamProps = {
   currentStepStartTime?: number
   taskPlan?: AgentState["taskPlan"]
   partSnapshot?: AgentPartSnapshot
+}
+
+type TimelineTone = "running" | "done" | "error" | "muted"
+
+type TimelineItem = {
+  id: string
+  tone: TimelineTone
+  label: string
+  detail?: string
+  timestamp: number
+}
+
+type ArtifactRef = {
+  id: string
+  label: string
+  path: string
+  kind: "artifact" | "data"
 }
 
 function getActionToolName(currentAction?: string) {
@@ -56,6 +83,37 @@ function compactText(value?: string, maxLength = 96) {
   return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned
 }
 
+function formatToolName(toolName?: string) {
+  if (!toolName) return "tool"
+  return toolName
+    .split("__")
+    .pop()!
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function getPayloadToolName(payload: Record<string, any>) {
+  return typeof payload.toolName === "string"
+    ? payload.toolName
+    : typeof payload.tool === "string"
+      ? payload.tool
+      : typeof payload.toolCall?.toolName === "string"
+        ? payload.toolCall.toolName
+        : undefined
+}
+
+function compactParamSummary(params?: Record<string, any>) {
+  if (!params) return ""
+  const preferred = params.filePath || params.path || params.folderPath || params.query || params.url || params.name || params.skillId
+  if (typeof preferred === "string" && preferred.trim()) {
+    const normalized = preferred.replace(/\\/g, "/")
+    return normalized.includes("/") ? normalized.split("/").slice(-2).join("/") : normalized
+  }
+  const firstString = Object.values(params).find((value): value is string => typeof value === "string" && value.trim().length > 0)
+  return firstString ? compactText(firstString, 56) : ""
+}
+
 function getLatestVisibleTool(toolCalls: ToolCall[]) {
   return [...toolCalls]
     .reverse()
@@ -66,7 +124,8 @@ function getLatestVisibleTool(toolCalls: ToolCall[]) {
       call.status === "blocked" ||
       call.status === "skipped" ||
       call.status === "adjusted" ||
-      call.status === "cached"
+      call.status === "cached" ||
+      call.status === "cancelled"
     )
 }
 
@@ -96,6 +155,157 @@ function getLatestVisibleEvent(events: AgentEvent[]) {
   })
 }
 
+function getTimelineItem(event: AgentEvent): TimelineItem | null {
+  const payload = event.payload || {}
+  if (payload.internal === true || payload.visibility === "hidden") return null
+
+  const toolName = getPayloadToolName(payload)
+  if (isSupportOnlyToolName(toolName || "")) return null
+  const toolLabel = formatToolName(toolName)
+  const paramsSummary = compactParamSummary(payload.params || payload.toolCall?.params)
+  const detail = compactText(
+    String(payload.reason || payload.message || payload.error || payload.toolCall?.result?.message || payload.toolCall?.result?.error || payload.content || ""),
+    86,
+  )
+
+  switch (event.type) {
+    case "agent.started":
+      return { id: getTimelineId(event), tone: "running", label: "启动任务", detail: compactText(String(payload.userInput || ""), 86), timestamp: event.timestamp }
+    case "agent.context.compacted":
+      return { id: getTimelineId(event), tone: "muted", label: "整理上下文", detail, timestamp: event.timestamp }
+    case "agent.planning":
+      return { id: getTimelineId(event), tone: "running", label: "规划步骤", detail: compactText(String(payload.plan?.summary || ""), 86), timestamp: event.timestamp }
+    case "agent.completed":
+      return { id: getTimelineId(event), tone: "done", label: "任务完成", detail, timestamp: event.timestamp }
+    case "agent.stopped":
+      return { id: getTimelineId(event), tone: "muted", label: "已停止", detail, timestamp: event.timestamp }
+    case "iteration.started":
+      return { id: getTimelineId(event), tone: "running", label: `第 ${event.iteration || "?"} 轮思考`, timestamp: event.timestamp }
+    case "model.request.started":
+      return {
+        id: getTimelineId(event),
+        tone: payload.retry ? "error" : "running",
+        label: payload.retry ? "模型请求重试" : "请求模型",
+        detail: payload.retry?.reason ? compactText(String(payload.retry.reason), 86) : undefined,
+        timestamp: event.timestamp,
+      }
+    case "model.response.received":
+      return { id: getTimelineId(event), tone: "done", label: "模型返回", detail, timestamp: event.timestamp }
+    case "action.parsed":
+      return { id: getTimelineId(event), tone: "running", label: `准备 ${toolLabel}`, detail: paramsSummary, timestamp: event.timestamp }
+    case "tool.execution.started":
+      return { id: getTimelineId(event), tone: "running", label: `运行 ${toolLabel}`, detail: paramsSummary, timestamp: event.timestamp }
+    case "tool.updated":
+    case "tool.execution.finished": {
+      const status = String(payload.status || payload.toolCall?.status || "")
+      const success = payload.success !== false && status !== "error"
+      const adjusted = status === "blocked" || status === "skipped" || status === "adjusted" || status === "cached"
+      return {
+        id: getTimelineId(event),
+        tone: success ? "done" : adjusted ? "muted" : "error",
+        label: adjusted
+          ? `${status === "blocked" ? "阻止" : status === "skipped" ? "跳过" : status === "cached" ? "缓存" : "调整"} ${toolLabel}`
+          : `${success ? "完成" : "失败"} ${toolLabel}`,
+        detail,
+        timestamp: event.timestamp,
+      }
+    }
+    case "confirmation.waiting":
+      return { id: getTimelineId(event), tone: "running", label: "等待确认", detail: toolName ? formatToolName(toolName) : undefined, timestamp: event.timestamp }
+    case "confirmation.resolved":
+      return { id: getTimelineId(event), tone: "done", label: "确认完成", detail, timestamp: event.timestamp }
+    case "step.completed":
+      return { id: getTimelineId(event), tone: "done", label: "步骤完成", detail, timestamp: event.timestamp }
+    case "final.answer.rejected":
+      return { id: getTimelineId(event), tone: "muted", label: "继续执行", detail, timestamp: event.timestamp }
+    case "final":
+    case "final.answer.rendered":
+      return { id: getTimelineId(event), tone: "running", label: "写最终答案", timestamp: event.timestamp }
+    case "error":
+      return { id: getTimelineId(event), tone: "error", label: "执行异常", detail, timestamp: event.timestamp }
+    default:
+      return null
+  }
+}
+
+function getTimelineId(event: AgentEvent) {
+  return `${event.sequence || event.timestamp}-${event.type}`
+}
+
+function buildTimelineItems(events: AgentEvent[]) {
+  const items = events
+    .map(getTimelineItem)
+    .filter((item): item is TimelineItem => Boolean(item))
+
+  const deduped = items.reduce<TimelineItem[]>((acc, item) => {
+    const previous = acc.at(-1)
+    if (previous?.label === item.label && previous.detail === item.detail && previous.tone === item.tone) {
+      acc[acc.length - 1] = item
+      return acc
+    }
+    acc.push(item)
+    return acc
+  }, [])
+
+  return deduped.slice(-8)
+}
+
+function getPathLabel(path: string) {
+  const normalized = path.replace(/\\/g, "/")
+  return normalized.split("/").filter(Boolean).slice(-2).join("/") || normalized
+}
+
+function addArtifactRef(map: Map<string, ArtifactRef>, path: unknown, kind: ArtifactRef["kind"]) {
+  if (typeof path !== "string" || !path.trim()) return
+  const trimmed = path.trim()
+  map.set(`${kind}:${trimmed}`, {
+    id: `${kind}:${trimmed}`,
+    kind,
+    path: trimmed,
+    label: getPathLabel(trimmed),
+  })
+}
+
+function extractArtifactRefs(partSnapshot: AgentPartSnapshot | undefined, toolCalls: ToolCall[]) {
+  const refs = new Map<string, ArtifactRef>()
+
+  for (const part of partSnapshot?.parts || []) {
+    if (part.type === "artifact") {
+      addArtifactRef(refs, part.path, "artifact")
+    }
+  }
+
+  for (const call of toolCalls) {
+    const result = call.result
+    const data = result?.data && typeof result.data === "object" && !Array.isArray(result.data)
+      ? result.data as Record<string, any>
+      : {}
+
+    addArtifactRef(refs, data.dataRef || (result as any)?.dataRef, "data")
+    for (const artifact of Array.isArray(data.artifacts) ? data.artifacts : []) {
+      addArtifactRef(refs, artifact, "artifact")
+    }
+    for (const outputFile of Array.isArray(data.output_files) ? data.output_files : []) {
+      addArtifactRef(refs, outputFile, "artifact")
+    }
+    addArtifactRef(refs, data.filePath || data.path || data.fullPath, "artifact")
+  }
+
+  return Array.from(refs.values()).slice(-4)
+}
+
+function getRecoveryHint(message?: string) {
+  const text = message || ""
+  if (/rate.?limit|429|限流|too many requests/i.test(text)) return "已识别限流，稍后重试或切换模型更稳。"
+  if (/api.?key|unauthorized|401|forbidden|permission/i.test(text)) return "需要检查模型凭据或权限配置。"
+  if (/WEB_ACCESS_DISABLED|联网|web access/i.test(text)) return "需要开启联网搜索或改用本地资料路径。"
+  if (/messages\.content\.type|image_url|图片|vision/i.test(text)) return "图片输入会自动降级为 Vision Bridge 文本描述。"
+  if (/status=5\d\d|upstream error|do_request_failed|上游服务异常|server error|service unavailable|bad gateway/i.test(text)) return "上游模型服务暂时不可用，稍后重试或切换模型更稳。"
+  if (/timeout|timed out|network|connect/i.test(text)) return "网络或服务端暂时不可用，可以重试。"
+  if (/skipped|blocked|policy/i.test(text)) return "策略已保护当前操作，Agent 会尝试换路径完成。"
+  return text ? "已捕获异常，Agent 会优先尝试恢复或给出可执行结果。" : ""
+}
+
 function getStatus(input: {
   isRunning: boolean
   isThinking: boolean
@@ -106,24 +316,20 @@ function getStatus(input: {
   toolCalls: ToolCall[]
   agentEvents: AgentEvent[]
 }) {
-  if (input.partSnapshot?.visibleStatus) {
-    const status = input.partSnapshot.visibleStatus
-    const isInitialPreparingStatus = status.tone === "running" && status.label === "准备中"
-    if (isInitialPreparingStatus && input.isRunning && (input.isThinking || input.activity?.phase === "thinking")) {
-      return {
-        tone: "running" as const,
-        label: "思考中",
-        detail: "",
-      }
-    }
-    return input.partSnapshot.visibleStatus
-  }
   const visibleToolCalls = input.toolCalls.filter(call => !isSupportOnlyToolName(call.toolName))
   const latestTool = getLatestVisibleTool(visibleToolCalls)
   const latestEvent = getLatestVisibleEvent(input.agentEvents)
   const actionToolName = getActionToolName(input.currentAction)
   const visibleActionTool = isSupportOnlyToolName(actionToolName) ? "" : actionToolName
   const observation = compactText(input.currentObservation)
+
+  if (input.activity?.phase === "error") {
+    return {
+      tone: "error" as const,
+      label: "执行失败",
+      detail: compactText(latestTool?.result?.error || latestTool?.result?.message) || observation,
+    }
+  }
 
   if (input.activity?.phase === "answering") {
     return {
@@ -133,12 +339,34 @@ function getStatus(input: {
     }
   }
 
-  if (input.activity?.phase === "error") {
+  if (input.activity?.phase === "completed") {
     return {
-      tone: "error" as const,
-      label: "工具调用失败",
-      detail: compactText(latestTool?.result?.error || latestTool?.result?.message) || observation,
+      tone: "done" as const,
+      label: "已思考",
+      detail: "",
     }
+  }
+
+  if (input.partSnapshot?.visibleStatus) {
+    const status = input.partSnapshot.visibleStatus
+    if (status.tone === "error") return status
+    const isInitialPreparingStatus = status.tone === "running" && status.label === "准备中"
+    const isRecoveringToolStatus = status.tone === "running" && status.label === "工具步骤失败，正在恢复"
+    if (isInitialPreparingStatus && input.isRunning && (input.isThinking || input.activity?.phase === "thinking")) {
+      return {
+        tone: "running" as const,
+        label: "思考中",
+        detail: "",
+      }
+    }
+    if (isRecoveringToolStatus && input.isRunning && input.activity?.phase === "thinking") {
+      return {
+        tone: "running" as const,
+        label: "思考中",
+        detail: status.detail || "",
+      }
+    }
+    return input.partSnapshot.visibleStatus
   }
 
   if (latestTool?.status === "error") {
@@ -288,6 +516,170 @@ function StatusGlyph({
   )
 }
 
+function TimelineGlyph({ tone }: { tone: TimelineTone }) {
+  if (tone === "error") return <AlertTriangle className="size-3 text-destructive/70" />
+  if (tone === "done") return <CheckCircle2 className="size-3 text-emerald-600" />
+  if (tone === "running") return <Clock3 className="size-3 text-muted-foreground/65" />
+  return <Circle className="size-2.5 text-muted-foreground/35" />
+}
+
+function StatusChip({
+  label,
+  value,
+  tone = "muted",
+}: {
+  label: string
+  value: string | number
+  tone?: "muted" | "running" | "done" | "error"
+}) {
+  return (
+    <span className={cn(
+      "inline-flex min-w-0 items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px]",
+      tone === "running" && "border-border/25 bg-muted/10 text-muted-foreground",
+      tone === "done" && "border-emerald-500/15 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400",
+      tone === "error" && "border-destructive/20 bg-destructive/5 text-destructive/80",
+      tone === "muted" && "border-border/20 bg-background/30 text-muted-foreground/60",
+    )}>
+      <span className="text-muted-foreground/40">{label}</span>
+      <span className="truncate">{value}</span>
+    </span>
+  )
+}
+
+function EventTimeline({ items }: { items: TimelineItem[] }) {
+  if (items.length === 0) return null
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground/50">
+        <ListChecks className="size-3" />
+        <span>事件流</span>
+      </div>
+      <div className="space-y-1">
+        {items.map((item) => (
+          <div key={item.id} className="grid grid-cols-[14px_1fr] gap-1.5" title={new Date(item.timestamp).toLocaleTimeString()}>
+            <div className="mt-0.5 flex justify-center">
+              <TimelineGlyph tone={item.tone} />
+            </div>
+            <div className="min-w-0">
+              <div className={cn(
+                "truncate font-mono text-[10px]",
+                item.tone === "error" ? "text-destructive/75" : "text-muted-foreground/70",
+              )}>
+                {item.label}
+              </div>
+              {item.detail && (
+                <div className="truncate text-[10px] text-muted-foreground/40">
+                  {item.detail}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ArtifactStrip({ artifacts }: { artifacts: ArtifactRef[] }) {
+  if (artifacts.length === 0) return null
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground/50">
+        <Box className="size-3" />
+        <span>产物</span>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {artifacts.map((artifact) => (
+          <span
+            key={artifact.id}
+            className="inline-flex max-w-full items-center gap-1 rounded border border-border/20 bg-background/35 px-1.5 py-0.5 text-[10px] text-muted-foreground/65"
+            title={artifact.path}
+          >
+            <FileText className="size-3 shrink-0 text-muted-foreground/45" />
+            <span className="shrink-0 text-muted-foreground/35">
+              {artifact.kind === "data" ? "数据" : "文件"}
+            </span>
+            <span className="truncate">{artifact.label}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function RecoveryNotice({ message }: { message?: string }) {
+  if (!message) return null
+
+  return (
+    <div className="rounded-md border border-amber-500/15 bg-amber-500/5 px-2 py-1.5 text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
+      <div className="flex items-start gap-1.5">
+        <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+        <span>{message}</span>
+      </div>
+    </div>
+  )
+}
+
+function ToolSummaryStrip({
+  toolCalls,
+  isStreaming,
+  successfulCount,
+  failedCount,
+}: {
+  toolCalls: ToolCall[]
+  isStreaming: boolean
+  successfulCount: number
+  failedCount: number
+}) {
+  const [expanded, setExpanded] = React.useState(false)
+  if (toolCalls.length === 0) return null
+
+  const runningCount = toolCalls.filter(call => call.status === "running" || call.status === "pending").length
+  const latestTool = getLatestVisibleTool(toolCalls)
+  const latestLabel = latestTool ? formatToolName(latestTool.toolName) : "工具"
+  const tone = failedCount > 0 ? "error" : runningCount > 0 ? "running" : "muted"
+
+  return (
+    <div className="rounded-md border border-border/10 bg-background/20">
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-center gap-1.5 px-2 py-1 text-left text-[10px] text-muted-foreground/45 transition-colors hover:bg-muted/10"
+        onClick={() => setExpanded(value => !value)}
+        aria-label={expanded ? "Collapse tool details / 收起工具详情" : "Expand tool details / 展开工具详情"}
+      >
+        <Wrench className="size-3 shrink-0" />
+        <span className="shrink-0">工具</span>
+        <span className="min-w-0 flex-1 truncate font-mono">
+          {latestLabel}
+        </span>
+        {runningCount > 0 && <StatusChip label="运行" value={runningCount} tone="running" />}
+        {successfulCount > 0 && <StatusChip label="完成" value={successfulCount} tone="muted" />}
+        {failedCount > 0 && <StatusChip label="失败" value={failedCount} tone="error" />}
+        {failedCount === 0 && runningCount === 0 && successfulCount === 0 && (
+          <StatusChip label="记录" value={toolCalls.length} tone={tone} />
+        )}
+        <ChevronDown className={cn(
+          "size-3 shrink-0 text-muted-foreground/30 transition-transform",
+          expanded && "rotate-180",
+        )} />
+      </button>
+
+      {expanded && (
+        <div className="border-t border-border/10 px-1.5 py-1">
+          <CompactToolCalls
+            toolCalls={toolCalls}
+            isStreaming={isStreaming}
+            grouped={false}
+            defaultExpanded={false}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function AgentLiveStream({
   isRunning,
   isThinking,
@@ -307,16 +699,25 @@ export function AgentLiveStream({
     [toolCalls],
   )
   const recentToolCalls = React.useMemo(() => {
-    const activeOrError = visibleToolCalls.filter(call =>
+    const activeOrImportant = visibleToolCalls.filter(call =>
       call.status === "running" ||
       call.status === "pending" ||
       call.status === "error" ||
       call.status === "blocked" ||
       call.status === "skipped" ||
-      call.status === "adjusted"
+      call.status === "adjusted" ||
+      call.status === "cancelled"
     )
-    return (activeOrError.length > 0 ? activeOrError : visibleToolCalls.slice(-2)).slice(-4)
+    return (activeOrImportant.length > 0 ? activeOrImportant : visibleToolCalls.slice(-2)).slice(-4)
   }, [visibleToolCalls])
+  const timelineItems = React.useMemo(
+    () => buildTimelineItems(agentEvents),
+    [agentEvents],
+  )
+  const artifactRefs = React.useMemo(
+    () => extractArtifactRefs(partSnapshot, visibleToolCalls),
+    [partSnapshot, visibleToolCalls],
+  )
 
   const status = getStatus({
     isRunning,
@@ -335,7 +736,21 @@ export function AgentLiveStream({
   const statusLabel = formatClawStatusLabel(status.label)
   const elapsedMs = useLiveElapsedMs({ isRunning, telemetry, currentStepStartTime, activity })
   const elapsedLabel = formatThinkingElapsedSeconds(elapsedMs)
-  const hasDetails = Boolean(fullThought || status.detail || recentToolCalls.length > 0)
+  const latestErrorMessage = status.tone === "error"
+    ? status.detail
+    : partSnapshot?.recoverableErrors.at(-1) || visibleToolCalls.find(call => call.status === "error")?.result?.error
+  const recoveryHint = getRecoveryHint(latestErrorMessage)
+  const hasDetails = Boolean(
+    fullThought ||
+    status.detail ||
+    recentToolCalls.length > 0 ||
+    timelineItems.length > 0 ||
+    artifactRefs.length > 0 ||
+    recoveryHint,
+  )
+  const successfulToolCount = telemetry?.successfulToolCount || visibleToolCalls.filter(call => call.status === "success").length
+  const failedToolCount = telemetry?.failedToolCount || visibleToolCalls.filter(call => call.status === "error").length
+  const outputChars = telemetry?.outputChars || partSnapshot?.finalAnswerContent?.length || 0
 
   if (!isRunning && visibleToolCalls.length === 0 && !fullThought && status.tone !== "error") {
     return null
@@ -361,12 +776,20 @@ export function AgentLiveStream({
             </span>
           )}
         </span>
+        <div className="hidden shrink-0 items-center gap-1 sm:flex">
+          {visibleToolCalls.length > 0 && (
+            <StatusChip label="工具" value={visibleToolCalls.length} tone={failedToolCount > 0 ? "error" : successfulToolCount > 0 ? "done" : "running"} />
+          )}
+          {outputChars > 0 && (
+            <StatusChip label="输出" value={outputChars} />
+          )}
+        </div>
         {hasDetails && (
           <button
             type="button"
             className="shrink-0 rounded p-0.5 text-muted-foreground/45 transition-colors hover:bg-muted/15"
             onClick={() => setDetailsExpanded(value => !value)}
-            aria-label={detailsExpanded ? "Collapse details" : "Expand details"}
+            aria-label={detailsExpanded ? "Collapse details / 收起 Agent 详情" : "Expand details / 展开 Agent 详情"}
           >
             <ChevronDown className={cn(
               "size-3.5 transition-transform",
@@ -396,24 +819,37 @@ export function AgentLiveStream({
 
       {detailsExpanded && hasDetails && (
         <div className={cn(
-          "mt-2 max-h-48 overflow-auto rounded-md border border-border/15 bg-muted/8 px-2.5 py-1.5",
+          "mt-2 max-h-72 overflow-auto rounded-md border border-border/15 bg-muted/8 px-2.5 py-2",
           "text-[11px] leading-relaxed text-muted-foreground/60",
         )}>
+          <div className="mb-2 flex flex-wrap gap-1">
+            <StatusChip label="阶段" value={statusLabel} tone={status.tone === "error" ? "error" : isRunning ? "running" : "done"} />
+            {elapsedLabel && <StatusChip label="耗时" value={elapsedLabel} />}
+            {visibleToolCalls.length > 0 && <StatusChip label="工具" value={`${successfulToolCount}/${visibleToolCalls.length}`} tone={failedToolCount > 0 ? "error" : "done"} />}
+            {outputChars > 0 && <StatusChip label="字符" value={outputChars} />}
+          </div>
+
+          <RecoveryNotice message={recoveryHint} />
+
           {(fullThought || status.detail) && (
-            <div className="whitespace-pre-wrap break-words">
+            <div className={cn(
+              "whitespace-pre-wrap break-words rounded-md border border-border/10 bg-background/30 px-2 py-1.5 font-mono text-[10px]",
+              recoveryHint && "mt-2",
+            )}>
               {fullThought || status.detail}
             </div>
           )}
-          {recentToolCalls.length > 0 && (
-            <div className={(fullThought || status.detail) ? "mt-2" : undefined}>
-              <CompactToolCalls
-                toolCalls={recentToolCalls}
-                isStreaming={isRunning}
-                grouped={false}
-                defaultExpanded={false}
-              />
-            </div>
-          )}
+
+          <div className={(fullThought || status.detail || recoveryHint) ? "mt-2 space-y-2" : "space-y-2"}>
+            <EventTimeline items={timelineItems} />
+            <ArtifactStrip artifacts={artifactRefs} />
+            <ToolSummaryStrip
+              toolCalls={recentToolCalls}
+              isStreaming={isRunning}
+              successfulCount={successfulToolCount}
+              failedCount={failedToolCount}
+            />
+          </div>
         </div>
       )}
     </div>

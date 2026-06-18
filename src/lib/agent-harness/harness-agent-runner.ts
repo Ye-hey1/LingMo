@@ -1,6 +1,6 @@
 import type OpenAI from 'openai'
 import { createOpenAIClient, getAISettings } from '@/lib/ai/utils'
-import { prepareMessagesWithImages } from '@/lib/ai/vision-bridge'
+import { isVisionContentUnsupportedError, prepareMessagesWithImages } from '@/lib/ai/vision-bridge'
 import { getModelCapabilityProfile } from '@/lib/ai/model-capabilities'
 import { estimateTokens } from '@/lib/ai/token-counter'
 import { getAllToolsSync, reloadMcpTools } from '@/lib/agent/tools'
@@ -14,6 +14,7 @@ import { buildAgentHistoryContext } from '@/lib/agent/context-compression'
 import { filterToolsWithCache } from '@/lib/agent/dynamic-tool-filter'
 import { generateTaskPlan, isTaskLikelyComplex, type TaskPlan } from '@/lib/agent/task-planner'
 import { getDirectAgentReply } from '@/lib/agent/orchestration'
+import { classifyAgentTask, type AgentTaskRouteDecision } from '@/lib/agent/task-router'
 import { executeGovernedHarnessTool } from './tool-governance'
 import type { SkillMatchSummary } from '@/lib/skills/types'
 import { skillManager } from '@/lib/skills'
@@ -24,6 +25,7 @@ import { createAiStreamContentProcessor } from '@/lib/ai/sanitize'
 import { validateFinalAnswer } from '@/lib/agent/final-answer'
 import type { LinkedResource } from '@/lib/files'
 import { AgentLifecycleController } from './turn-lifecycle'
+import { getAiRateLimitUserMessage, isAiRateLimitError } from '@/lib/ai/rate-limit'
 
 export interface HarnessAgentRunnerConfig {
   runId?: string
@@ -42,6 +44,7 @@ export interface HarnessAgentRunnerConfig {
     fullContent?: string
   }
   linkedResources?: LinkedResource[]
+  taskRouteDecision?: AgentTaskRouteDecision
   requestConfirmation?: (toolName: string, params: Record<string, any>, context?: any) => Promise<boolean>
   onThought?: (thought: string) => void
   onAction?: (action: string, params: Record<string, any>) => void
@@ -67,6 +70,17 @@ const MAX_DYNAMIC_REACT_ITERATIONS = 42
 const DEFAULT_READ_ONLY_BATCH_LIMIT = 3
 const MAX_READ_ONLY_BATCH_LIMIT = 6
 const BUDGET_EXHAUSTION_TEXT_PATTERN = /工具(?:调用)?(?:次数|预算|上限|迭代|step|steps).{0,24}(?:耗尽|不足|用尽|达到|限制|上限)|(?:达到|超过|耗尽|用尽).{0,24}(?:工具(?:调用)?(?:次数|预算|上限)|迭代上限|最大步数|max(?:imum)? steps?|tool budget|tool calls?)/i
+
+class AiRateLimitRunError extends Error {
+  readonly partialContent: string
+
+  constructor(error: unknown, partialContent = '') {
+    super(getAiRateLimitUserMessage(error))
+    this.name = 'AiRateLimitRunError'
+    this.partialContent = partialContent
+  }
+}
+
 
 function isLengthTruncated(reason?: string | null) {
   return reason === 'length' || reason === 'max_tokens'
@@ -194,7 +208,11 @@ function isConcreteCompletionTool(toolName?: string) {
 }
 
 function isInformationQueryRequest(userInput: string) {
-  return /查看|查询|获取|检索|搜索|总结|汇总|梳理|分析|解读|列出|最新|热点|新闻|资讯|趋势|信息|内容|数据|资料|事实|来源|攻略|指南|方案|find|search|fetch|get|retrieve|summari[sz]e|analy[sz]e|latest|news|trending|information|research|source|guide/i.test(userInput)
+  if (/(?:规划|设计|制定|重新规划|输出|保存|写入|生成|创建|整理成).{0,32}(?:攻略|方案|行程|路线|计划|笔记|文档|文件)/.test(userInput)) {
+    return false
+  }
+
+  return /查看|查询|获取|检索|搜索|总结|汇总|梳理|分析|解读|列出|最新|热点|新闻|资讯|趋势|信息|内容|数据|资料|事实|来源|指南|find|search|fetch|get|retrieve|summari[sz]e|analy[sz]e|latest|news|trending|information|research|source|guide/i.test(userInput)
 }
 
 function validateHarnessFinalAnswer(input: {
@@ -230,7 +248,7 @@ function validateHarnessFinalAnswer(input: {
   const normalizedInput = input.userInput.toLowerCase()
   const claimsExecution = /已生成|已创建|已保存|已完成|已导出|已验证|成功使用|generated|created|saved|exported|verified|completed/.test(input.finalAnswer)
   const requestedArtifact = !informationQuery &&
-    /生成|创建|制作|导出|保存|输出|pptx|pdf|docx|xlsx|文件|演示文稿|generate|create|export|save|file|presentation/.test(normalizedInput)
+    /生成|创建|制作|导出|保存|输出|写入|规划|设计|制定|攻略|方案|行程|路线|计划|笔记|文档|pptx|pdf|docx|xlsx|文件|演示文稿|generate|create|export|save|write|plan|itinerary|file|note|document|presentation/.test(normalizedInput)
   const requestedEdit = /修改|编辑|改成|改为|改回|替换|删除|移动|重命名|复制|插入|rewrite|edit|modify|change|replace|delete|move|rename|copy|insert/.test(normalizedInput)
   const claimsEditApplied = /已修改|已更新|已改为|已改回|已删除|已移动|已重命名|已复制|现在为|已经是|updated|changed|modified|deleted|moved|renamed|copied/.test(input.finalAnswer)
   const hasMutationSuccess = input.steps.some(step => isMutationTool(step.action?.tool) && isSuccessfulStep(step))
@@ -318,6 +336,36 @@ function buildMaxIterationFallback(steps: ReActStep[]) {
   }
 
   return '这轮暂时没有拿到足够的可展示信息。可以把任务拆成更小的一步继续，我会从当前上下文接着处理。'
+}
+
+function buildRateLimitFallback(input: { userInput: string; steps: ReActStep[]; partialContent?: string; error: unknown }) {
+  const partial = sanitizeFinalAnswerContent(input.partialContent || '')
+  if (partial) {
+    return [
+      partial,
+      '',
+      '> 当前模型触发了速率限制，我已停止继续请求以避免反复限流。上面内容是本轮已经生成出的部分结果；稍后重试可以从这里继续补全。',
+    ].join('\n').trim()
+  }
+
+  const digest = buildObservationDigest(input.steps, 10)
+  const notice = getAiRateLimitUserMessage(input.error)
+  if (digest) {
+    return [
+      '我先基于本轮已经拿到的信息整理如下：',
+      '',
+      digest,
+      '',
+      `> ${notice}`,
+      '> 由于当前模型限流，未继续发起新的模型请求；稍后重试或切换模型后可以继续补全。',
+    ].join('\n')
+  }
+
+  return [
+    notice,
+    '',
+    '本轮在模型继续生成前触发限流，暂时没有足够的可展示正文。请稍后重试，或切换到更高 TPM 配额/更小上下文的模型。',
+  ].join('\n')
 }
 
 function buildForcedFinalAnswerPrompt(userInput: string, steps: ReActStep[], _reason: string) {
@@ -440,6 +488,15 @@ function buildReActBudgetPrompt(input: {
     '- Prefer one high-value tool call. Multiple read-only tool calls are allowed only when they answer distinct missing facts.',
     '- When enough evidence exists, stop calling tools and write the user-visible Markdown answer.',
     '- The final user-visible answer must not mention internal control messages.',
+  ].join('\n')
+}
+
+function buildQuickAnswerSystemPrompt() {
+  return [
+    '你是小墨，一个响应很快的本地知识管理助手。',
+    '当前请求已被判定为简单问题，请直接回答，不要调用工具，不要输出内部思考、Action、Observation 或 JSON 包装。',
+    '回答要短而有用；能一句话讲清就不要展开成长篇。需要步骤时最多给 3-5 条。',
+    '如果用户实际需要读取本地文件、联网、写入或执行操作，请用一句话说明需要进入完整 Agent 工具模式，而不是假装已经完成。',
   ].join('\n')
 }
 
@@ -708,7 +765,8 @@ export class HarnessAgentRunner {
     const aiConfig = await getAISettings()
     const openai = await createOpenAIClient(aiConfig)
     const capabilities = getModelCapabilityProfile(aiConfig)
-    const messages = await prepareMessagesWithImages(input.messages, aiConfig, input.imageUrls, this.abortController?.signal)
+    const textMessages = input.messages
+    let messages = await prepareMessagesWithImages(textMessages, aiConfig, input.imageUrls, this.abortController?.signal)
     const requestParams: any = {
       model: aiConfig?.model || '',
       messages,
@@ -733,7 +791,7 @@ export class HarnessAgentRunner {
       startedAt: modelStartedAt,
     })
 
-    const stream = await withTransientRetry(
+    const createStream = () => withTransientRetry(
       () => openai.chat.completions.create(requestParams, {
         signal: this.abortController?.signal,
       }) as unknown as Promise<AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>>,
@@ -749,6 +807,24 @@ export class HarnessAgentRunner {
         },
       },
     )
+
+    let stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+    try {
+      stream = await createStream()
+    } catch (error) {
+      if (isAiRateLimitError(error)) {
+        throw new AiRateLimitRunError(error)
+      }
+      if (!input.imageUrls?.length || !isVisionContentUnsupportedError(error)) {
+        throw error
+      }
+
+      messages = await prepareMessagesWithImages(textMessages, aiConfig, input.imageUrls, this.abortController?.signal, {
+        forceBridge: true,
+      })
+      requestParams.messages = messages
+      stream = await createStream()
+    }
 
     let content = ''
     let thinking = ''
@@ -767,47 +843,72 @@ export class HarnessAgentRunner {
       this.emitEvent('thought.updated', { content: thinking, streaming: !force, throttled: !force })
     }
 
-    for await (const chunk of stream) {
-      if (this.stopped) throw new Error('USER_STOPPED')
-      const choice = chunk.choices[0]
-      const delta = choice?.delta
-      if (choice?.finish_reason) finishReason = choice.finish_reason
-      const thinkingContent = (delta as any)?.reasoning_content || ''
-      if (thinkingContent) {
-        thinking += thinkingContent
-        emitThoughtUpdate()
-      }
-
-      if (delta?.tool_calls) {
-        for (const toolCall of delta.tool_calls) {
-          const index = toolCall.index || 0
-          if (!toolCalls[index]) {
-            toolCalls[index] = {
-              id: toolCall.id || '',
-              name: toolCall.function?.name || '',
-              argumentsText: '',
-            }
-          }
-          if (toolCall.id) toolCalls[index].id = toolCall.id
-          if (toolCall.function?.name) toolCalls[index].name = toolCall.function.name
-          if (toolCall.function?.arguments) toolCalls[index].argumentsText += toolCall.function.arguments
-        }
-      }
-
-      const text = delta?.content || ''
-      if (text) {
-        const processed = streamProcessor.push(text)
-        if (processed.thinking) {
-          thinking += processed.thinking
+    try {
+      for await (const chunk of stream) {
+        if (this.stopped) throw new Error('USER_STOPPED')
+        const choice = chunk.choices[0]
+        const delta = choice?.delta
+        if (choice?.finish_reason) finishReason = choice.finish_reason
+        const thinkingContent = (delta as any)?.reasoning_content || ''
+        if (thinkingContent) {
+          thinking += thinkingContent
           emitThoughtUpdate()
         }
-        if (processed.content) {
-          content += processed.content
-          if (input.streamAnswerDelta) {
-            this.config.onAnswerDelta?.(content)
+
+        if (delta?.tool_calls) {
+          for (const toolCall of delta.tool_calls) {
+            const index = toolCall.index || 0
+            if (!toolCalls[index]) {
+              toolCalls[index] = {
+                id: toolCall.id || '',
+                name: toolCall.function?.name || '',
+                argumentsText: '',
+              }
+            }
+            if (toolCall.id) toolCalls[index].id = toolCall.id
+            if (toolCall.function?.name) toolCalls[index].name = toolCall.function.name
+            if (toolCall.function?.arguments) toolCalls[index].argumentsText += toolCall.function.arguments
+          }
+        }
+
+        const text = delta?.content || ''
+        if (text) {
+          const processed = streamProcessor.push(text)
+          if (processed.thinking) {
+            thinking += processed.thinking
+            emitThoughtUpdate()
+          }
+          if (processed.content) {
+            content += processed.content
+            if (input.streamAnswerDelta) {
+              this.config.onAnswerDelta?.(content)
+            }
           }
         }
       }
+    } catch (error) {
+      if (isAiRateLimitError(error)) {
+        const remaining = streamProcessor.flush()
+        const partialContent = sanitizeFinalAnswerContent(`${content}${remaining.content || ''}`)
+        if (remaining.thinking) {
+          thinking += remaining.thinking
+          emitThoughtUpdate(true)
+        }
+        if (partialContent && input.streamAnswerDelta) {
+          this.config.onAnswerDelta?.(partialContent)
+        }
+        this.emitEvent('model.response.received', {
+          contentLength: partialContent.length,
+          outputTokens: estimateTokens(partialContent),
+          finishReason: 'rate_limit',
+          truncated: false,
+          toolCallCount: toolCalls.length,
+          durationMs: Date.now() - modelStartedAt,
+          error: getAiRateLimitUserMessage(error),
+        })
+        throw new AiRateLimitRunError(error, partialContent)
+      }
+      throw error
     }
 
     const remaining = streamProcessor.flush()
@@ -832,6 +933,46 @@ export class HarnessAgentRunner {
     })
 
     return { content, toolCalls: normalizeToolCalls(toolCalls), finishReason }
+  }
+
+  private async runQuickAnswer(input: {
+    userInput: string
+    contextOrMessages?: string | OpenAI.Chat.ChatCompletionMessageParam[]
+    imageUrls?: string[]
+    routeDecision: AgentTaskRouteDecision
+  }) {
+    this.currentIteration = 1
+    this.emitEvent('iteration.started', {
+      route: input.routeDecision.route,
+      complexity: input.routeDecision.complexity,
+      reason: input.routeDecision.reason,
+    })
+
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: buildQuickAnswerSystemPrompt() },
+      { role: 'user', content: input.userInput },
+    ]
+
+    const response = await this.streamModel({
+      messages,
+      tools: [],
+      imageUrls: input.imageUrls,
+      streamAnswerDelta: true,
+      maxTokens: 900,
+    })
+    const finalAnswer = sanitizeFinalAnswerContent(response.content.trim()) || '我暂时没有生成可展示的正文，请再试一次。'
+
+    this.config.onFinalAnswerRender?.(finalAnswer)
+    this.emitEvent('final', { content: finalAnswer })
+    this.emitEvent('final.answer.rendered', { content: finalAnswer })
+    this.emitEvent('agent.completed', {
+      result: finalAnswer,
+      route: input.routeDecision.route,
+      complexity: input.routeDecision.complexity,
+    })
+    this.lifecycle.finish({ status: 'completed', finalAnswer })
+    this.flushLifecycleSessionLog()
+    return finalAnswer
   }
 
   private async executeModelToolCall(input: {
@@ -1056,8 +1197,16 @@ export class HarnessAgentRunner {
     this.selectedSkillIds = new Set((this.config.forcedSkillIds || []).filter(Boolean))
     const forcedSkillIds = Array.from(this.selectedSkillIds)
     const intentPolicy = deriveIntentPolicy(userInput)
+    const routeDecision = this.config.taskRouteDecision || classifyAgentTask({
+      userInput,
+      imageCount: imageUrls?.length || 0,
+      forcedSkillIds,
+      webSearchEnabled: this.config.webSearchEnabled,
+      hasLinkedContext: Boolean(this.config.linkedResources?.length),
+      hasQuote: Boolean(this.config.currentQuote),
+    })
 
-    this.emitEvent('agent.started', { userInput, intentPolicy, forcedSkillIds })
+    this.emitEvent('agent.started', { userInput, intentPolicy, forcedSkillIds, taskRoute: routeDecision })
     this.lifecycle = new AgentLifecycleController(this.eventBus.getRunId())
     this.lifecycle.startRun({
       route: this.config.runControl?.route || 'agent',
@@ -1076,6 +1225,10 @@ export class HarnessAgentRunner {
       return directReply
     }
 
+    if (routeDecision.route === 'quick_answer') {
+      return this.runQuickAnswer({ userInput, contextOrMessages, imageUrls, routeDecision })
+    }
+
     try {
       try {
         const { ensureMcpReadyForAgent } = await import('@/lib/mcp/agent-ready')
@@ -1091,7 +1244,7 @@ export class HarnessAgentRunner {
         console.warn('[AgentHarness] Failed to prepare Skills runtime:', error)
       }
 
-      if (isTaskLikelyComplex(userInput)) {
+      if (routeDecision.allowPlanning && isTaskLikelyComplex(userInput)) {
         try {
           const toolNames = getAllToolsSync().map(tool => tool.name)
           this.taskPlan = await generateTaskPlan(userInput, toolNames, this.abortController.signal)
@@ -1125,7 +1278,11 @@ export class HarnessAgentRunner {
         })
       const contextPackRef = this.config.runControl?.getSnapshot().contextPackRef
 
-      const maxIterations = resolveReActMaxIterations(userInput, this.config.maxIterations, this.taskPlan)
+      const maxIterations = resolveReActMaxIterations(
+        userInput,
+        this.config.maxIterations || routeDecision.maxIterations,
+        this.taskPlan,
+      )
       const maxToolIterations = Math.max(1, maxIterations - FINAL_ANSWER_RESERVE_ITERATIONS)
       let finalAnswer = ''
 
@@ -1400,16 +1557,31 @@ export class HarnessAgentRunner {
     this.lifecycle.finish({ status: 'completed', finalAnswer })
     this.flushLifecycleSessionLog()
     return finalAnswer
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!['settled', 'failed'].includes(this.lifecycle.getPhase())) {
-        this.lifecycle.finish({
-          status: message === 'USER_STOPPED' ? 'paused' : 'failed',
-          error: message,
-        })
-      }
+  } catch (error) {
+    if (error instanceof AiRateLimitRunError) {
+      const finalAnswer = buildRateLimitFallback({
+        userInput,
+        steps: this.steps,
+        partialContent: error.partialContent,
+        error,
+      })
+      this.config.onFinalAnswerRender?.(finalAnswer)
+      this.emitEvent('final', { content: finalAnswer })
+      this.emitEvent('final.answer.rendered', { content: finalAnswer })
+      this.emitEvent('agent.completed', { result: finalAnswer, rateLimited: true })
+      this.lifecycle.finish({ status: 'completed', finalAnswer })
       this.flushLifecycleSessionLog()
-      throw error
+      return finalAnswer
     }
+    const message = error instanceof Error ? error.message : String(error)
+    if (!['settled', 'failed'].includes(this.lifecycle.getPhase())) {
+      this.lifecycle.finish({
+        status: message === 'USER_STOPPED' ? 'paused' : 'failed',
+        error: message,
+      })
+    }
+    this.flushLifecycleSessionLog()
+    throw error
   }
+}
 }

@@ -215,7 +215,7 @@ interface ToolCallRowProps {
 }
 
 function ToolCallRow({ toolCall, isStreaming = false, defaultExpanded = false }: ToolCallRowProps) {
-  const [expanded, setExpanded] = React.useState(defaultExpanded)
+  const [expanded, setExpanded] = React.useState(defaultExpanded && !isStreaming)
   const paramSummary = extractParamSummary(toolCall.toolName, toolCall.params)
   const isRunning = toolCall.status === "running" || toolCall.status === "pending"
   const hasError = toolCall.status === "error"
@@ -494,7 +494,6 @@ export function CompactToolCalls({
           group={group}
           isStreaming={isStreaming}
           defaultExpanded={
-            group.calls.some(c => c.status === "error") ||
             (defaultExpanded && group.calls.length === 1)
           }
         />
@@ -522,7 +521,7 @@ function GroupedToolCalls({ group, isStreaming, defaultExpanded = false }: Group
       <ToolCallRow
         toolCall={group.calls[0]}
         isStreaming={isStreaming}
-        defaultExpanded={defaultExpanded || group.calls[0].status === "error"}
+        defaultExpanded={defaultExpanded}
       />
     )
   }
@@ -550,7 +549,7 @@ function GroupedToolCalls({ group, isStreaming, defaultExpanded = false }: Group
                 key={call.id || `${call.toolName}-${i}`}
                 toolCall={call}
                 isStreaming={isStreaming}
-                defaultExpanded={call.status === "error"}
+                defaultExpanded={false}
               />
             ))}
           </motion.div>

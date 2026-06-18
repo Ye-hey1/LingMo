@@ -8,6 +8,8 @@
  * 主要用于包装 LLM / MCP / 外部 API 调用，提升网络抖动下的稳定性。
  */
 
+import { isAiTpmLimitError } from '../ai/rate-limit'
+
 // 可重试的 HTTP 状态码（限流 + 服务端临时故障）
 const RETRYABLE_HTTP_STATUS = new Set([429, 500, 502, 503, 504, 529])
 // 可重试的网络错误码（连接重置、管道断裂、超时、网络不可达、DNS 临时失败）
@@ -44,7 +46,12 @@ export interface RetryableErrorInfo {
  * 兼容 OpenAI SDK 的 APIError（status）、通用 fetch 错误（code）、超时错误。
  */
 export function isRetryableTransientError(error: unknown): RetryableErrorInfo {
+  if (isAiTpmLimitError(error)) {
+    return { retryable: false, reason: 'TPM rate limit' }
+  }
+
   const anyErr = error as Record<string, any> | null
+  const message = String(anyErr?.message || (typeof error === 'string' ? error : ''))
 
   // 1. HTTP 状态码（OpenAI APIError.status / response.status / statusCode）
   const status = anyErr?.status ?? anyErr?.response?.status ?? anyErr?.statusCode
@@ -59,6 +66,15 @@ export function isRetryableTransientError(error: unknown): RetryableErrorInfo {
     return { retryable: false, reason: `HTTP ${status}` }
   }
 
+  const statusMatch = message.match(/(?:status=|HTTP\s+|\bstatus["']?\s*:\s*)(\d{3})/i)
+  const messageStatus = statusMatch ? Number(statusMatch[1]) : undefined
+  if (typeof messageStatus === 'number' && !Number.isNaN(messageStatus)) {
+    if (RETRYABLE_HTTP_STATUS.has(messageStatus)) {
+      return { retryable: true, reason: `HTTP ${messageStatus}` }
+    }
+    return { retryable: false, reason: `HTTP ${messageStatus}` }
+  }
+
   // 2. 网络错误码
   const code = anyErr?.code
   if (typeof code === 'string' && RETRYABLE_NETWORK_CODES.has(code)) {
@@ -67,7 +83,6 @@ export function isRetryableTransientError(error: unknown): RetryableErrorInfo {
 
   // 3. 超时类错误（名称或消息命中）
   const name = String(anyErr?.name || '')
-  const message = String(anyErr?.message || '')
   if (name === 'TimeoutError' || /timeout|timed?\s*out/i.test(message)) {
     return { retryable: true, reason: 'timeout' }
   }

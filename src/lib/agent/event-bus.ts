@@ -303,7 +303,7 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
         if (isSupportOnlyToolName(payload.toolName)) {
           break
         }
-        currentPhase = payload.success === false && !['blocked', 'skipped', 'adjusted', 'cached'].includes(String(payload.status || '')) ? 'error' : 'tool'
+        currentPhase = 'tool'
         replay.executionSteps.push({
           status: event.type,
           title: typeof payload.title === 'string' ? payload.title : undefined,
@@ -317,7 +317,7 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
           break
         }
         completedStepCount += 1
-        currentPhase = payload.success === false ? 'error' : currentPhase
+        currentPhase = payload.success === false ? 'tool' : currentPhase
         replay.executionSteps.push({
           status: event.type,
           title: typeof payload.title === 'string' ? payload.title : undefined,

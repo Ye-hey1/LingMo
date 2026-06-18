@@ -74,6 +74,17 @@ export const LOW_RISK_WRITE_TOOLS = new Set([
 ])
 
 export const READ_ONLY_TOOLS = new Set([
+  'tool_search',
+  'git_status',
+  'git_diff',
+  'git_log',
+  'git_show',
+  'git_blame',
+  'code_search_symbols',
+  'code_file_outline',
+  'code_find_definition',
+  'code_find_references',
+  'code_read_context',
   'select_skill',
   'load_skill_content',
   'get_editor_selection',
@@ -117,12 +128,19 @@ export const READ_ONLY_TOOLS = new Set([
 const writePatterns = [
   /创建|新建|新增|写入|改写|修改|编辑|更新|重写|插入|替换|保存/,
   /优化|精简|简化|润色|调整|补充|增加|添加|补全|扩写|完善|丰富/,
-  /重命名|改名|命名为|移动|复制|草拟|起草/,
+  /重新规划|输出到笔记|保存到笔记|写入笔记|整理成笔记/,
+  /重命名|改名|命名为|移动|移到|移动到|挪动|挪到|搬到|转移|迁移|复制|拷贝|草拟|起草/,
+  /整理|归档|收纳|分类|分组|放到|放进|放入|存到|存入|并入|合并到|移入|移动进|移动至|归到/,
+  /(整理|归档|分类|收纳|移动|移到|移动到|挪到|放到|放进|放入).*(文件|目录|文件夹|folder|directory)/i,
+  /(把|将).*(文件|笔记|目录|文件夹|内容).*(移动|移到|移动到|挪到|放到|放进|放入|归档|分类|整理|复制|拷贝)/,
+  /(输出|保存|写入|整理成|生成|创建|新建).{0,20}(笔记|文档|文件|攻略|方案|行程|计划)/,
+  /(规划|设计|制定|重新规划|生成|整理).{0,30}(攻略|方案|行程|路线|计划|旅游|旅行)/,
   /提醒|通知|定时|闹钟|计时器|倒计时/,
   /写(一篇|个|份)?(关于|有关|主题为)?/,
-  /生成(文章|内容|文件|笔记|文档|图表|流程图|思维导图|白板|幻灯片|ppt|pdf|docx|xlsx)/,
+  /生成(文章|内容|文件|笔记|文档|攻略|方案|行程|计划|图表|流程图|思维导图|白板|幻灯片|ppt|pdf|docx|xlsx)/,
   /改成|改为|整理成|转换成/,
-  /\b(create|write|draft|modify|edit|update|insert|replace|save|rename|move|copy)\b/i,
+  /\b(?:plan|design|draft|write|create|generate|produce).{0,40}(?:itinerary|travel plan|trip plan|route|note|document|file|guide|proposal|report)\b/i,
+  /\b(create|write|draft|modify|edit|update|insert|replace|save|rename|move|copy|organize|archive|classify|sort|relocate)\b/i,
 ]
 
 const destructivePatterns = [
@@ -190,7 +208,10 @@ export function formatIntentPolicyForPrompt(intentPolicy: IntentPolicy): string 
     `- Write mode: ${writeMode}`,
     `- Destructive mode: ${destructiveMode}`,
     `- Execute mode: ${executeMode}`,
-    '- If a mode is disabled, do not call related tools; give Final Answer and ask for explicit user confirmation instead.',
+    '- If write mode is disabled, it means this turn did not contain a clear write/move/edit intent. State that an explicit write or move target is needed before using write tools.',
+    '- If the user clearly asks to organize, archive, classify, move, copy, rename, create, save, or edit files, write mode should be enabled and medium-risk write tools may proceed through the normal confirmation flow.',
+    '- If destructive mode is disabled, do not delete or clear content; ask for explicit destructive confirmation instead.',
+    '- If execute mode is disabled, do not run commands or scripts; ask for explicit execution confirmation instead.',
     '- High-risk tools always require confirmation before execution.',
   ].join('\n')
 }

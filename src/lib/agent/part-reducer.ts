@@ -184,12 +184,10 @@ function mapToolStatus(status: ToolCall['status']): AgentPartStatus {
   return status
 }
 
-function getToolVisibleStatus(status: AgentPartStatus, recoverable?: boolean, detail?: string) {
+function getToolVisibleStatus(status: AgentPartStatus, detail?: string) {
   switch (status) {
     case 'error':
-      return recoverable
-        ? { tone: 'running' as const, label: '工具步骤失败，正在恢复', detail }
-        : { tone: 'error' as const, label: '工具调用失败', detail }
+      return { tone: 'running' as const, label: '工具步骤失败，正在恢复', detail }
     case 'blocked':
       return { tone: 'running' as const, label: '工具被策略阻止', detail }
     case 'skipped':
@@ -223,7 +221,7 @@ function resolveVisibleStatus(snapshot: AgentPartSnapshot, nextStatus: AgentVisi
   if (isTerminalVisibleStatus(nextStatus)) return nextStatus
 
   const currentStatus = snapshot.visibleStatus
-  if (isTerminalVisibleStatus(currentStatus)) return currentStatus
+  if (isTerminalVisibleStatus(currentStatus) && snapshot.status !== 'running') return currentStatus
 
   if (isPreparingVisibleStatus(nextStatus) && !isPreparingVisibleStatus(currentStatus)) {
     return currentStatus
@@ -358,15 +356,14 @@ function reduceAgentPartSnapshotCore(
         recoverable,
       }
       const detail = toolCall.result?.error || toolCall.result?.message
-      const visibleStatus = getToolVisibleStatus(status, recoverable, detail)
+      const visibleStatus = getToolVisibleStatus(status, detail)
       return {
         ...snapshot,
         runId: event.runId || snapshot.runId,
-        status: status === 'error' && !recoverable ? 'error' : 'running',
+        status: 'running',
         parts: upsertPart(snapshot.parts, part),
         visibleStatus: resolveVisibleStatus(snapshot, visibleStatus),
-        recoverableErrors: recoverable && detail ? [...snapshot.recoverableErrors, detail] : snapshot.recoverableErrors,
-        fatalErrors: status === 'error' && !recoverable && detail ? [...snapshot.fatalErrors, detail] : snapshot.fatalErrors,
+        recoverableErrors: status === 'error' && detail ? [...snapshot.recoverableErrors, detail] : snapshot.recoverableErrors,
       }
     }
 
@@ -375,6 +372,15 @@ function reduceAgentPartSnapshotCore(
         ...snapshot,
         status: 'waiting_approval',
         visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '等待确认', detail: payload.reason }),
+      }
+
+    case 'final.answer.rejected':
+      return {
+        ...snapshot,
+        status: 'running',
+        parts: snapshot.parts.filter(part => part.id !== getFinalAnswerPartId(event)),
+        finalAnswerContent: undefined,
+        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '思考中', detail: payload.reason }),
       }
 
     case 'final':
@@ -487,7 +493,6 @@ function computeToolTelemetry(parts: AgentPart[]) {
 }
 
 function phaseFromEvent(event: AgentEvent): AgentActivityPhase | undefined {
-  const p = event.payload || {}
   switch (event.type) {
     case 'agent.started':
       return 'preparing'
@@ -507,9 +512,7 @@ function phaseFromEvent(event: AgentEvent): AgentActivityPhase | undefined {
       return 'tool'
     case 'tool.execution.finished':
     case 'step.completed': {
-      const isError = p.success === false
-        && !['blocked', 'skipped', 'adjusted', 'cached'].includes(String(p.status || ''))
-      return isError ? 'error' : 'tool'
+      return 'tool'
     }
     case 'confirmation.waiting':
       return 'waiting-confirmation'

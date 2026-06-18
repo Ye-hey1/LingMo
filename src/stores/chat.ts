@@ -598,7 +598,16 @@ const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setAgentState: (state: Partial<AgentState>) => {
-    set({ agentState: { ...get().agentState, ...state } })
+    const currentState = get().agentState
+    const hasChanges = Object.entries(state).some(([key, value]) => {
+      return currentState[key as keyof AgentState] !== value
+    })
+
+    if (!hasChanges) {
+      return
+    }
+
+    set({ agentState: { ...currentState, ...state } })
   },
 
   resetAgentState: () => {

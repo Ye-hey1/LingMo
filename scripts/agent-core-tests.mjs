@@ -121,6 +121,7 @@ try {
   const {
     deriveIntentPolicy,
     evaluateIntentAwareToolPolicy,
+    formatIntentPolicyForPrompt,
     getToolRiskLevel,
   } = await importTsModule('src/lib/agent/tool-policy.ts')
   const {
@@ -140,7 +141,9 @@ try {
   } = await importTsModule('src/lib/agent/event-bus.ts')
   const {
     getConcreteToolCompletionBlockReason,
+    isProgressOnlyFinalAnswer,
     isConcreteArtifactRequest,
+    validateFinalAnswer,
   } = await importTsModule('src/lib/agent/final-answer.ts')
   const {
     classifyError,
@@ -186,6 +189,18 @@ try {
     classifyError: classifyAiError,
     formatError: formatAiError,
   } = await importTsModule('src/lib/ai/error-handler.ts')
+  const {
+    getAiRateLimitUserMessage,
+    isAiRateLimitError,
+    isAiTpmLimitError,
+  } = await importTsModule('src/lib/ai/rate-limit.ts')
+  const {
+    isRetryableTransientError,
+  } = await importTsModule('src/lib/agent/transient-retry.ts')
+  const {
+    classifyAgentTask,
+    shouldBypassAgentRuntime,
+  } = await importTsModule('src/lib/agent/task-router.ts')
   const {
     createConfiguredModelSelectionId,
     matchesConfiguredModelSelection,
@@ -243,18 +258,80 @@ try {
 
   assert.equal(deriveIntentPolicy('帮我完善当前图表').allowWrite, true)
   assert.equal(deriveIntentPolicy('AI 能进行操作吗？').allowWrite, false)
+  assert.equal(deriveIntentPolicy('帮我把这些文件整理到素材文件夹').allowWrite, true)
+  assert.equal(deriveIntentPolicy('把这篇笔记挪到旅行目录').allowWrite, true)
+  assert.equal(deriveIntentPolicy('请归档这些 draft 文件').allowWrite, true)
+  assert.equal(deriveIntentPolicy('分类到已完成文件夹').allowWrite, true)
+  assert.equal(deriveIntentPolicy('organize these notes into archive folder').allowWrite, true)
+  assert.equal(deriveIntentPolicy('根据上面3天行程重新规划旅游攻略，并输出到笔记中').allowWrite, true)
+  assert.equal(deriveIntentPolicy('帮我设计一份19日到21日出行方案并保存到笔记').allowWrite, true)
   assert.equal(deriveIntentPolicy('删除这个文件').allowDestructive, true)
   assert.equal(deriveIntentPolicy('不要删除，只总结一下').allowDestructive, false)
   assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowWrite, true)
   assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowExecute, true)
   assert.equal(deriveIntentPolicy('不要执行脚本，只给命令建议').allowExecute, false)
+  const disabledWritePrompt = formatIntentPolicyForPrompt({
+    allowWrite: false,
+    allowDestructive: false,
+    allowExecute: false,
+  })
+  assert.match(disabledWritePrompt, /did not contain a clear write\/move\/edit intent/)
+  assert.match(disabledWritePrompt, /explicit write or move target is needed/)
+  assert.match(disabledWritePrompt, /normal confirmation flow/)
+  assert.doesNotMatch(disabledWritePrompt, /Agent cannot write files/)
+  assert.doesNotMatch(disabledWritePrompt, /system policy/i)
   assert.equal(classifyError('STALE_MCP_TOOL_REGISTRY'), 'mcp_registry')
   assert.equal(classifyError('Final Answer 内容不能为空'), 'model_output')
   assert.equal(classifyError('TypeError: Cannot read properties of undefined'), 'runtime')
+  assert.equal(classifyError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}'), 'billing')
+  const agentBillingError = formatFriendlyError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}')
+  assert.equal(agentBillingError.title, '余额不足')
+  assert.equal(agentBillingError.retryable, false)
+  const upstreamError = 'AI_HTTP_ERROR status=500 retryable=true body={"error":{"message":"upstream error: do request failed","code":"do_request_failed"}}'
+  assert.equal(classifyError(upstreamError), 'server')
+  const agentServerError = formatFriendlyError(upstreamError)
+  assert.equal(agentServerError.title, '上游服务异常')
+  assert.equal(agentServerError.retryable, true)
   assert.equal(classifyAiError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}'), 'billing')
   const billingError = formatAiError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}')
   assert.equal(billingError.title, '余额不足')
   assert.equal(billingError.retryable, false)
+  const tpmError = 'AI_HTTP_ERROR status=429 retryable=true body={"message":"Request was rejected due to rate limiting. Details: TPM limit reached.","data":null}'
+  assert.equal(classifyAiError(tpmError), 'rate_limit')
+  assert.equal(isAiRateLimitError(tpmError), true)
+  assert.equal(isAiTpmLimitError(tpmError), true)
+  assert.equal(isRetryableTransientError(new Error(tpmError)).retryable, false)
+  assert.match(getAiRateLimitUserMessage(tpmError), /TPM/)
+  const generic429 = 'AI_HTTP_ERROR status=429 retryable=true body={"message":"Too many requests"}'
+  assert.equal(isRetryableTransientError(new Error(generic429)).retryable, true)
+
+  const tauriClientSource = await readFile(join(repoRoot, 'src/lib/ai/tauri-client.ts'), 'utf8')
+  assert.match(tauriClientSource, /extractHttpErrorMessage/)
+  assert.match(tauriClientSource, /message=\$\{JSON\.stringify\(message\)\}/)
+
+  const greetingRoute = classifyAgentTask({ userInput: '你好' })
+  assert.equal(greetingRoute.route, 'direct_static')
+  assert.equal(shouldBypassAgentRuntime(greetingRoute), true)
+  const simpleRoute = classifyAgentTask({ userInput: '什么是 MCP？' })
+  assert.equal(simpleRoute.route, 'quick_answer')
+  assert.equal(simpleRoute.requiresRuntime, false)
+  assert.equal(shouldBypassAgentRuntime(simpleRoute), true)
+  const simpleDesignRoute = classifyAgentTask({ userInput: '什么是系统设计？' })
+  assert.equal(simpleDesignRoute.route, 'quick_answer')
+  assert.equal(simpleDesignRoute.requiresRuntime, false)
+  const latestRoute = classifyAgentTask({ userInput: '帮我搜索今天的 AI 新闻并总结来源' })
+  assert.equal(latestRoute.requiresRuntime, true)
+  assert.notEqual(latestRoute.route, 'quick_answer')
+  const editRoute = classifyAgentTask({ userInput: '请修复当前项目里的类型错误' })
+  assert.equal(editRoute.requiresRuntime, true)
+  assert.notEqual(editRoute.route, 'quick_answer')
+  const forcedSkillRoute = classifyAgentTask({ userInput: '润色这段文字', forcedSkillIds: ['renwei-writing'] })
+  assert.equal(forcedSkillRoute.route, 'standard_agent')
+  assert.equal(forcedSkillRoute.requiresRuntime, true)
+  const travelNoteRoute = classifyAgentTask({ userInput: '根据上面3天行程，重新规划旅游攻略，出行时间19日-21日，规划设计一份出行方案，并输出到笔记中' })
+  assert.equal(travelNoteRoute.requiresRuntime, true)
+  assert.notEqual(travelNoteRoute.route, 'quick_answer')
+  assert.equal(shouldBypassAgentRuntime(travelNoteRoute), false)
   assert.equal(createConfiguredModelSelectionId('provider-a', 'model-b'), 'provider-a:model-b')
   assert.deepEqual(parseConfiguredModelSelectionId('provider-a:model-b'), {
     configKey: 'provider-a',
@@ -369,6 +446,14 @@ try {
   assert.equal(getClawStreamVisibleMarkdown('```ts\nconst x = 1\n```\n', true), '```ts\nconst x = 1\n```\n')
   assert.match(normalizeClawNestedFences('```markdown\n```ts\nx\n```\n```'), /^````markdown/)
   assert.equal(isConcreteArtifactRequest('使用 aihot 技能获取最新 AI 信息并直接输出文字', true), false)
+  assert.equal(isConcreteArtifactRequest('根据上面3天行程重新规划旅游攻略，并输出到笔记中', true), true)
+  assert.equal(isConcreteArtifactRequest('规划设计一份19日-21日出行方案', true), true)
+  assert.equal(isProgressOnlyFinalAnswer('收到。我现在先确认行程核心数据，然后输出到笔记中。'), true)
+  assert.equal(isProgressOnlyFinalAnswer('充分理解。原图存在问题，我会重新规划一版完整方案。'), true)
+  assert.equal(
+    validateFinalAnswer('收到。我现在先确认行程核心数据，然后输出到笔记中。', '根据上面3天行程重新规划旅游攻略，并输出到笔记中', false).ok,
+    false,
+  )
   assert.equal(
     getConcreteToolCompletionBlockReason({
       userInput: '使用 aihot 技能获取最新 AI 信息并直接输出文字',
@@ -377,6 +462,15 @@ try {
       hasOnlySupportProgress: false,
     }),
     null,
+  )
+  assert.match(
+    getConcreteToolCompletionBlockReason({
+      userInput: '根据上面3天行程重新规划旅游攻略，并输出到笔记中',
+      actionLikeRequest: true,
+      hasConcreteSuccessfulAction: false,
+      hasOnlySupportProgress: false,
+    }) || '',
+    /create_file|replace_editor_content/,
   )
   const toolExposure = buildToolExposureSnapshot({
     tools: [
@@ -699,14 +793,42 @@ try {
   assert.equal(partSnapshot.status, 'running')
   assert.equal(partSnapshot.visibleStatus.label, '工具步骤失败，正在恢复')
   assert.equal(partSnapshot.recoverableErrors.length, 1)
+  assert.equal(partSnapshot.fatalErrors.length, 0)
   partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
     type: 'tool.execution.finished',
     runId: 'tool-run',
+    sequence: 3,
+    timestamp: 140,
+    payload: {
+      toolName: 'maps_geo',
+      toolCallId: 'tool-2',
+      params: { address: '白音敖包沙地云杉景区' },
+      success: false,
+      error: 'ENGINE_RESPONSE_DATA_ERROR',
+      message: 'Geocoding failed',
+    },
+  })
+  assert.equal(partSnapshot.status, 'running')
+  assert.equal(partSnapshot.visibleStatus.label, '工具步骤失败，正在恢复')
+  assert.equal(partSnapshot.recoverableErrors.length, 2)
+  assert.equal(partSnapshot.fatalErrors.length, 0)
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'model.request.started',
+    runId: 'tool-run',
     sequence: 4,
+    timestamp: 150,
+    payload: {},
+  })
+  assert.equal(partSnapshot.status, 'running')
+  assert.equal(partSnapshot.visibleStatus.label, '思考中')
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'tool.execution.finished',
+    runId: 'tool-run',
+    sequence: 5,
     timestamp: 180,
     payload: {
       toolCall: {
-        id: 'tool-2',
+        id: 'tool-3',
         toolName: 'safe_read_file',
         params: { filePath: 'daily.md' },
         status: 'skipped',
@@ -729,7 +851,7 @@ try {
   partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
     type: 'final.answer.rendered',
     runId: 'tool-run',
-    sequence: 3,
+    sequence: 6,
     timestamp: 160,
     payload: { content: '日报正文', streaming: true },
   })
@@ -781,6 +903,17 @@ try {
   assert.equal(getToolRiskLevel('delete_markdown_file', 'note'), 'high')
   assert.equal(getToolRiskLevel('safe_read_file', 'filesystem'), 'low')
   assert.equal(getToolRiskLevel('safe_write_file', 'filesystem'), 'medium')
+  assert.equal(getToolRiskLevel('tool_search', 'system'), 'low')
+  assert.equal(getToolRiskLevel('git_status', 'system'), 'low')
+  assert.equal(getToolRiskLevel('git_diff', 'system'), 'low')
+  assert.equal(getToolRiskLevel('git_log', 'system'), 'low')
+  assert.equal(getToolRiskLevel('git_show', 'system'), 'low')
+  assert.equal(getToolRiskLevel('git_blame', 'system'), 'low')
+  assert.equal(getToolRiskLevel('code_search_symbols', 'filesystem'), 'low')
+  assert.equal(getToolRiskLevel('code_file_outline', 'filesystem'), 'low')
+  assert.equal(getToolRiskLevel('code_find_definition', 'filesystem'), 'low')
+  assert.equal(getToolRiskLevel('code_find_references', 'filesystem'), 'low')
+  assert.equal(getToolRiskLevel('code_read_context', 'filesystem'), 'low')
   assert.equal(getToolRiskLevel('github_sync_starred', 'web'), 'low')
   assert.equal(getToolRiskLevel('github_list_starred', 'web'), 'low')
   assert.equal(getToolRiskLevel('github_summarize_recent_stars', 'web'), 'low')
@@ -1347,6 +1480,7 @@ contextPolicy:
   assert.match(middlewareSource, /matchRelevantSkillScores/)
   assert.match(middlewareSource, /Visible tools/)
   assert.match(middlewareSource, /Harness Skill Scope/)
+  assert.match(middlewareSource, /SUPPORT_TOOL_NAMES[\s\S]*tool_search/)
   const runIdSource = await readFile(join(repoRoot, 'src/lib/agent-harness/run-id.ts'), 'utf8')
   assert.match(runIdSource, /export function createAgentRunId/)
   const vfsSource = await readFile(join(repoRoot, 'src/lib/agent-harness/vfs.ts'), 'utf8')
@@ -1602,6 +1736,10 @@ contextPolicy:
   assert.match(chatSendSource, /没有返回可展示正文/)
   assert.match(chatSendSource, /createAgentEventBus/)
   assert.match(chatSendSource, /onError:\s*async \(error\)/)
+  assert.match(chatSendSource, /function formatUserVisibleError/)
+  assert.match(chatSendSource, /isLikelyErrorContent\(finalContent\)/)
+  assert.doesNotMatch(chatSendSource, /content:\s*`Error: \$\{error\}`/)
+  assert.doesNotMatch(chatSendSource, /const errorContent = `Error:/)
   assert.match(chatSendSource, /isRunning:\s*false/)
   assert.match(chatSendSource, /isThinking:\s*false/)
   assert.match(chatSendSource, /pendingConfirmation:\s*undefined/)
@@ -1652,9 +1790,14 @@ contextPolicy:
   assert.match(agentLiveStreamSource, /useLiveElapsedMs/)
   assert.match(agentLiveStreamSource, /\.toFixed\(1\)\}s/)
   assert.match(agentLiveStreamSource, /activity\?\.phase === "answering"/)
+  assert.match(agentLiveStreamSource, /activity\?\.phase === "completed"/)
   assert.match(agentLiveStreamSource, /tone:\s*"done" as const/)
   assert.doesNotMatch(agentLiveStreamSource, /正在输出回答/)
   assert.match(agentLiveStreamSource, /Collapse details/)
+  assert.match(agentLiveStreamSource, /function ToolSummaryStrip/)
+  assert.match(agentLiveStreamSource, /Expand tool details/)
+  assert.match(agentLiveStreamSource, /upstream error\|do_request_failed/)
+  assert.doesNotMatch(agentLiveStreamSource, /md:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)\]/)
   assert.doesNotMatch(agentLiveStreamSource, /收起思考详情|展开思考详情/)
   assert.doesNotMatch(agentLiveStreamSource, /Agent 正在执行|执行时间线|任务清单/)
 
@@ -1673,6 +1816,9 @@ contextPolicy:
   assert.match(compactToolCallsSource, /dataRef/)
   assert.match(compactToolCallsSource, /retryable/)
   assert.match(compactToolCallsSource, /errorKind/)
+  assert.match(compactToolCallsSource, /defaultExpanded && !isStreaming/)
+  assert.doesNotMatch(compactToolCallsSource, /group\.calls\.some\(c => c\.status === "error"\)\s*\|\|/)
+  assert.doesNotMatch(compactToolCallsSource, /defaultExpanded=\{call\.status === "error"\}/)
 
   const harnessToolRuntimeSource = await readFile(join(repoRoot, 'src/lib/agent-harness/tool-runtime.ts'), 'utf8')
   assert.match(harnessToolRuntimeSource, /invalid\[_\\s-\]\?api/)
@@ -1681,6 +1827,26 @@ contextPolicy:
   const agentPartReducerSource = await readFile(join(repoRoot, 'src/lib/agent/part-reducer.ts'), 'utf8')
   assert.match(agentPartReducerSource, /invalid\[_\\s-\]\?api/)
   assert.doesNotMatch(agentPartReducerSource, /truncated\|firecrawl\|web_fetch\|stale/)
+  assert.doesNotMatch(agentPartReducerSource, /status:\s*status === 'error' && !recoverable \? 'error' : 'running'/)
+  assert.doesNotMatch(agentPartReducerSource, /fatalErrors:\s*status === 'error' && !recoverable/)
+  assert.match(agentPartReducerSource, /status:\s*'running'/)
+
+  assert.match(agentHandlerSource, /Recovering from/)
+  assert.match(agentHandlerSource, /showTechnicalDetails/)
+  assert.match(agentHandlerSource, /!\['billing', 'rate_limit', 'server'\]\.includes/)
+  assert.doesNotMatch(agentHandlerSource, /payload\.success === false \? 'error' : 'tool'/)
+  assert.doesNotMatch(agentHandlerSource, /toolCall\.status === 'error'[\s\S]{0,240}'error'/)
+
+  const agentEventBusSource = await readFile(join(repoRoot, 'src/lib/agent/event-bus.ts'), 'utf8')
+  assert.doesNotMatch(agentEventBusSource, /payload\.success === false[\s\S]{0,160}\? 'error' : 'tool'/)
+
+  const mcpToolCallSource = await readFile(join(repoRoot, 'src/app/core/main/chat/mcp-tool-call.tsx'), 'utf8')
+  assert.match(mcpToolCallSource, /useState\(false\)/)
+  assert.doesNotMatch(mcpToolCallSource, /useState\(toolCall\.status === 'error'\)/)
+
+  const agentPlanSource = await readFile(join(repoRoot, 'src/components/ui/agent-plan.tsx'), 'utf8')
+  assert.match(agentPlanSource, /item\.kind === "error" && item\.status === "failed"/)
+  assert.doesNotMatch(agentPlanSource, /eventTimeline\.some\(item => item\.status === "failed"\) \|\|\s*displaySteps\.some\(step => step\.status === "failed"\) \|\|\s*\(!isRunning && toolCalls\.some/)
 
   const safeListFilesSource = await readFile(join(repoRoot, 'src/lib/agent/tools/safe-tools.ts'), 'utf8')
   assert.match(safeListFilesSource, /isMissingDirectoryError/)
@@ -1749,10 +1915,65 @@ contextPolicy:
   assert.doesNotMatch(githubStarToolsSource, /### 高频主题/)
   assert.doesNotMatch(githubStarToolsSource, /### 值得关注/)
 
+  const toolSearchToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/tool-search-tools.ts'), 'utf8')
+  assert.match(toolSearchToolsSource, /name:\s*['"]tool_search['"]/)
+  assert.match(toolSearchToolsSource, /getAllToolsSync/)
+  assert.match(toolSearchToolsSource, /maxResults/)
+  assert.match(toolSearchToolsSource, /category/)
+  assert.match(toolSearchToolsSource, /requiresConfirmation:\s*false/)
+  assert.match(toolSearchToolsSource, /capabilities:\s*\[\s*['"]read['"]\s*\]/)
+
+  const gitToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/git-tools.ts'), 'utf8')
+  for (const toolName of [
+    'git_status',
+    'git_diff',
+    'git_log',
+    'git_show',
+    'git_blame',
+  ]) {
+    assert.match(gitToolsSource, new RegExp(`name:\\s*['"]${toolName}['"]`))
+  }
+  assert.match(gitToolsSource, /PYTHON_GIT_RUNNER/)
+  assert.match(gitToolsSource, /subprocess\.run\(/)
+  assert.match(gitToolsSource, /shell=False/)
+  assert.match(gitToolsSource, /\["git", \*args\]/)
+  assert.match(gitToolsSource, /validateRevision/)
+  assert.match(gitToolsSource, /normalizeOptionalRepoPath/)
+  assert.match(gitToolsSource, /truncateText/)
+  assert.doesNotMatch(gitToolsSource, /name:\s*['"]command['"]/)
+  assert.doesNotMatch(gitToolsSource, /shell:\s*true/)
+
+  const codeNavigationToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/code-navigation-tools.ts'), 'utf8')
+  for (const toolName of [
+    'code_search_symbols',
+    'code_file_outline',
+    'code_find_definition',
+    'code_find_references',
+    'code_read_context',
+  ]) {
+    assert.match(codeNavigationToolsSource, new RegExp(`name:\\s*['"]${toolName}['"]`))
+  }
+  assert.match(codeNavigationToolsSource, /SYMBOL_PATTERNS/)
+  assert.match(codeNavigationToolsSource, /extractSymbols/)
+  assert.match(codeNavigationToolsSource, /symbolReferencePattern/)
+  assert.match(codeNavigationToolsSource, /ensureSafeWorkspaceRelativePath/)
+  assert.match(codeNavigationToolsSource, /capabilities:\s*\[\s*['"]read['"]\s*\]/)
+  assert.doesNotMatch(codeNavigationToolsSource, /Command\.create/)
+  assert.doesNotMatch(codeNavigationToolsSource, /writeTextFile/)
+
   const toolIndexSource = await readFile(join(repoRoot, 'src/lib/agent/tools/index.ts'), 'utf8')
   assert.match(toolIndexSource, /import \{ githubStarTools \} from '\.\/github-star-tools'/)
   assert.match(toolIndexSource, /\.\.\.githubStarTools/)
   assert.match(toolIndexSource, /export \* from '\.\/github-star-tools'/)
+  assert.match(toolIndexSource, /import \{ toolSearchTools \} from '\.\/tool-search-tools'/)
+  assert.match(toolIndexSource, /\.\.\.toolSearchTools/)
+  assert.match(toolIndexSource, /export \* from '\.\/tool-search-tools'/)
+  assert.match(toolIndexSource, /import \{ gitTools \} from '\.\/git-tools'/)
+  assert.match(toolIndexSource, /\.\.\.gitTools/)
+  assert.match(toolIndexSource, /export \* from '\.\/git-tools'/)
+  assert.match(toolIndexSource, /import \{ codeNavigationTools \} from '\.\/code-navigation-tools'/)
+  assert.match(toolIndexSource, /\.\.\.codeNavigationTools/)
+  assert.match(toolIndexSource, /export \* from '\.\/code-navigation-tools'/)
 
   console.log('agent core tests passed')
 } finally {
