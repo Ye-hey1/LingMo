@@ -26,9 +26,7 @@ import { isLinkedFolder, type LinkedResource, type MarkdownFile, type LinkedFold
 import emitter from "@/lib/emitter"
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { ImageAttachment } from "./image-attachments"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Loader2, Mic, MousePointer2, Square, WandSparkles, X, Wrench } from "lucide-react"
+import { Loader2, Mic, MousePointer2, Square, WandSparkles } from "lucide-react"
 import { TooltipButton } from "@/components/tooltip-button"
 import type { PendingQuote } from "@/stores/chat"
 import { convertFileSrc } from "@tauri-apps/api/core"
@@ -255,6 +253,20 @@ function getSlashToolLabel(command: SlashCommandItem) {
   return `/${getSlashCommandInsertToken(command)}`
 }
 
+function buildSlashHighlightSegments(input: string, command: SlashCommandItem | null) {
+  if (!command) return [{ text: input, isCommand: false }]
+
+  const invocation = getSlashCommandInvocation(input, command)
+  if (!invocation) return [{ text: input, isCommand: false }]
+
+  const { from, to } = invocation.range
+  return [
+    { text: input.slice(0, from), isCommand: false },
+    { text: input.slice(from, to), isCommand: true },
+    { text: input.slice(to), isCommand: false },
+  ].filter(segment => segment.text.length > 0)
+}
+
 const SENSITIVE_KEYWORDS = [
   '修改代码', '修改文件', '编辑文件', '编辑代码', '替换文件',
   '新建文件', '创建文件', '写入文件', '删除文件', '执行指令',
@@ -441,10 +453,10 @@ export const ChatInput = React.memo(function ChatInput() {
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<SlashCommandItem | null>(null)
   const isModelRunning = loading || researchRunning
   const isResearchActive = researchRunning || (loading && chatMode === 'research')
-  const SelectedSlashCommandIcon = selectedSlashCommand?.icon ?? Wrench
-  const selectedSlashCommandLabel = selectedSlashCommand
-    ? getSlashToolLabel(selectedSlashCommand)
-    : ''
+  const slashHighlightSegments = useMemo(
+    () => buildSlashHighlightSegments(text, selectedSlashCommand),
+    [selectedSlashCommand, text],
+  )
   const effectivePlaceholder = isResearchActive
     ? '研究运行中,预计 3-6 分钟完成。你可以点击停止按钮中断。'
     : selectedSlashCommand
@@ -457,12 +469,20 @@ export const ChatInput = React.memo(function ChatInput() {
   // 已选中但尚未提交的命令：选择后仅填入输入框，按 Enter 才真正执行
   const pendingCommandRef = useRef<SlashCommandItem | null>(null)
   const [slashTrigger, setSlashTrigger] = useState<SlashTrigger | null>(null)
+  const slashHighlightRef = useRef<HTMLDivElement>(null)
 
   const updateSlashTriggerFromTextarea = useCallback((textarea?: HTMLTextAreaElement | null, nextValue?: string) => {
     const value = nextValue ?? textarea?.value ?? text
     const cursor = textarea?.selectionStart ?? value.length
     setSlashTrigger(findSlashTriggerAtCursor(value, cursor))
   }, [text])
+
+  const syncSlashHighlightScroll = useCallback((textarea?: HTMLTextAreaElement | null) => {
+    const highlight = slashHighlightRef.current
+    if (!textarea || !highlight) return
+    highlight.scrollTop = textarea.scrollTop
+    highlight.scrollLeft = textarea.scrollLeft
+  }, [])
 
   const slashQuery = selectedSlashCommand ? null : slashTrigger?.commandToken ?? null
   const slashOpen = slashQuery !== null
@@ -488,30 +508,6 @@ export const ChatInput = React.memo(function ChatInput() {
       return Math.min(prev, slashFilteredCommands.length - 1)
     })
   }, [slashFilteredCommands])
-
-  const handleSlashDismiss = useCallback(() => {
-    const invocation = selectedSlashCommand
-      ? getSlashCommandInvocation(text, selectedSlashCommand)
-      : null
-
-    if (invocation) {
-      const nextText = replaceTextRange(text, invocation.range.from, invocation.range.to, ' ')
-        .replace(/[ \t]{2,}/g, ' ')
-        .trim()
-      setText(nextText)
-      requestAnimationFrame(() => {
-        const textarea = textareaRef.current
-        if (!textarea) return
-        textarea.style.height = 'auto'
-        textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`
-      })
-    }
-
-    pendingCommandRef.current = null
-    setSelectedSlashCommand(null)
-    setSlashTrigger(null)
-    requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [selectedSlashCommand, text])
 
   const updateSuggestedModeFromText = useCallback((val: string) => {
     if (chatMode === 'chat' && isSensitiveInstruction(val)) {
@@ -554,7 +550,8 @@ export const ChatInput = React.memo(function ChatInput() {
     textarea.style.height = 'auto'
     const newHeight = Math.min(textarea.scrollHeight, 240)
     textarea.style.height = `${newHeight}px`
-  }, [selectedSlashCommand, updateSlashTriggerFromTextarea, updateSuggestedModeFromText])
+    syncSlashHighlightScroll(textarea)
+  }, [selectedSlashCommand, syncSlashHighlightScroll, updateSlashTriggerFromTextarea, updateSuggestedModeFromText])
 
   // ---- 阶段 1：选中命令，仅填入输入框 ----
   const selectSlashCommand = useCallback(async (commandId: string) => {
@@ -2102,62 +2099,42 @@ ${exec.prompt}`
             files={flattenedFiles}
             anchorRef={textareaRef}
           />
-          {selectedSlashCommand ? (
-            <div className="flex w-full min-w-0 items-center px-2 pt-2">
-              <Badge
-                variant="outline"
-                className="h-7 max-w-full gap-1.5 rounded-md border-sky-300/70 bg-sky-500/10 px-1.5 py-0 pr-1 text-sky-700 shadow-sm shadow-sky-500/5 dark:border-sky-500/35 dark:bg-sky-500/15 dark:text-sky-200"
-              >
-                <span className="flex size-5 shrink-0 items-center justify-center rounded-sm bg-sky-500 text-white shadow-sm shadow-sky-500/20">
-                  <SelectedSlashCommandIcon className="size-3" />
-                </span>
-                <span className="min-w-0 truncate text-[12px] font-semibold leading-none">
-                  {selectedSlashCommandLabel}
-                </span>
-                <span className="shrink-0 rounded-sm bg-sky-500/10 px-1 text-[10px] font-semibold uppercase tracking-normal text-sky-700/75 dark:text-sky-100/70">
-                  tool
-                </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="ml-0.5 size-5 shrink-0 rounded-sm text-sky-700/70 hover:bg-sky-500/15 hover:text-sky-800 dark:text-sky-100/70 dark:hover:bg-sky-300/15 dark:hover:text-white"
-                  onClick={handleSlashDismiss}
-                  aria-label="移除已选工具"
+          <div className="relative w-full">
+            <div
+              ref={slashHighlightRef}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 min-h-[44px] max-h-[240px] overflow-hidden whitespace-pre-wrap break-words px-3 py-2.5 text-sm leading-6 text-foreground"
+            >
+              {text ? slashHighlightSegments.map((segment, index) => (
+                <span
+                  key={`${index}-${segment.text}`}
+                  className={segment.isCommand ? 'font-medium text-sky-600 dark:text-sky-300' : undefined}
                 >
-                  <X className="size-3" />
-                </Button>
-              </Badge>
+                  {segment.text}
+                </span>
+              )) : null}
             </div>
-          ) : null}
-          <Textarea
-            ref={textareaRef}
-            className="relative min-h-[44px] max-h-[240px] flex-1 resize-none overflow-y-auto border-none bg-transparent px-3 py-2.5 text-sm leading-6 shadow-none outline-none placeholder:text-sm placeholder:text-muted-foreground/60 focus-visible:ring-0 disabled:opacity-60"
-            rows={1}
-            disabled={!primaryModel || isResearchActive}
-            value={text}
-            onChange={(e) => {
-              updateTextFromTextarea(e.target)
-            }}
-            onClick={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
-            onKeyUp={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
-            onSelect={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
-            placeholder={effectivePlaceholder}
-            onKeyDown={(e) => {
+            <Textarea
+              ref={textareaRef}
+              className="relative min-h-[44px] max-h-[240px] flex-1 resize-none overflow-y-auto border-none bg-transparent px-3 py-2.5 text-sm leading-6 text-transparent caret-foreground shadow-none outline-none placeholder:!text-muted-foreground/60 placeholder:text-sm focus-visible:ring-0 disabled:opacity-60"
+              rows={1}
+              disabled={!primaryModel || isResearchActive}
+              value={text}
+              onChange={(e) => {
+                updateTextFromTextarea(e.target)
+              }}
+              onClick={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
+              onKeyUp={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
+              onSelect={(e) => updateSlashTriggerFromTextarea(e.currentTarget)}
+              onScroll={(e) => syncSlashHighlightScroll(e.currentTarget)}
+              placeholder={effectivePlaceholder}
+              onKeyDown={(e) => {
               const textarea = e.target as HTMLTextAreaElement
               const cursorPosition = textarea.selectionStart
               const isAtStart = cursorPosition === 0
               const isAtEnd = cursorPosition === text.length
               const keyIsComposing = isKeyboardEventComposing(e) || (isComposing && e.key !== 'Enter')
               const isSendEnter = isSendEnterKey(e)
-
-              if (selectedSlashCommand && !keyIsComposing) {
-                if (e.key === 'Escape' || (e.key === 'Backspace' && text.trim() === '')) {
-                  e.preventDefault()
-                  handleSlashDismiss()
-                  return
-                }
-              }
 
               // @ 文件联想面板按键拦截
               if (atOpen && !keyIsComposing) {
@@ -2339,17 +2316,18 @@ ${exec.prompt}`
                   setPlaceholder(t('record.chat.input.placeholder.default'))
                 }
               }
-            }}
-            onCompositionStart={() => setIsComposing(true)}
-            onCompositionEnd={() => setTimeout(() => {
-              setIsComposing(false)
-              updateSlashTriggerFromTextarea(textareaRef.current)
-            }, 0)}
-            onPaste={(event) => {
-              handlePaste(event)
-              requestAnimationFrame(() => updateSlashTriggerFromTextarea(event.currentTarget))
-            }}
-          />
+              }}
+              onCompositionStart={() => setIsComposing(true)}
+              onCompositionEnd={() => setTimeout(() => {
+                setIsComposing(false)
+                updateSlashTriggerFromTextarea(textareaRef.current)
+              }, 0)}
+              onPaste={(event) => {
+                handlePaste(event)
+                requestAnimationFrame(() => updateSlashTriggerFromTextarea(event.currentTarget))
+              }}
+            />
+          </div>
         </div>
 
         <div className="flex w-full min-w-0 items-center gap-1 overflow-hidden border-t border-border/50 px-1 pt-1.5 pb-0.5">
