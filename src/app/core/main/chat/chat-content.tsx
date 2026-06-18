@@ -14,13 +14,12 @@ import { useTranslations } from 'next-intl'
 import ChatThinking from './chat-thinking'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
-import { McpToolCallCard } from './mcp-tool-call'
 import { AgentExecutionStatus } from './agent-execution-status'
-import { AgentThinkingSummary } from './agent-thinking-summary'
+import { AgentRunSummary } from './agent-run-summary'
 import { MessageCitations } from './message-citations'
 import { TaskPlanProgress, ResearchResumeCard } from './task-plan-progress'
 import { ChatImages } from "./chat-images"
-import type { AgentEvent, ReActStep } from '@/lib/agent'
+import type { AgentEvent, AgentTurnTelemetry, ReActStep } from '@/lib/agent'
 import { cleanAssistantGeneratedContent } from '@/lib/ai/assistant-content'
 import {
   extractWebCitationDetails,
@@ -330,7 +329,7 @@ MessageWrapper.displayName = 'MessageWrapper'
 
 const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat; searchQuery?: string }) {
   const t = useTranslations()
-  const { chats, deleteChat, getMcpToolCallsByChatId, loading, agentState, researchRun } = useChatStore()
+  const { chats, deleteChat, loading, agentState, researchRun } = useChatStore()
   const content = chat.content
   const displayContent = useMemo(
     () => chat.role === 'system' ? cleanAssistantGeneratedContent(content || '') : content,
@@ -349,7 +348,6 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     return false
   }, [chat.id, chat.role, chats])
   const isResponseStreaming = chat.role === 'system' && loading && (isActiveAgentMessage || isLatestSystemMessage)
-  const isLiveAgentVisible = isActiveAgentMessage && (agentState.isRunning || agentState.isFinalAnswerMode)
   const liveTextPartContent = useMemo(() => {
     if (!isActiveAgentMessage) return ''
     const textPart = [...(agentState.agentPartSnapshot?.parts || [])]
@@ -361,6 +359,9 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     () => cleanAssistantGeneratedContent(liveTextPartContent || agentState.finalAnswerContent || ''),
     [agentState.finalAnswerContent, liveTextPartContent]
   )
+  const isLiveAgentActive = isActiveAgentMessage && (agentState.isRunning || agentState.isFinalAnswerMode)
+  const shouldShowLiveAgentStatus = isActiveAgentMessage && agentState.isRunning && !agentState.isFinalAnswerMode
+  const shouldShowLiveFinalAnswer = isActiveAgentMessage && agentState.isFinalAnswerMode && Boolean(liveFinalAnswerContent)
   const visibleThinkingContent = useMemo(
     () => chat.role === 'system' ? cleanAssistantGeneratedContent(chat.thinking || '') : (chat.thinking || ''),
     [chat.role, chat.thinking],
@@ -408,21 +409,22 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     () => parseStoredAgentHistory(chat.agentHistory),
     [chat.agentHistory]
   )
-  const storedThinkingSummary = useMemo(() => {
+  const storedRunSummary = useMemo(() => {
     if (!storedAgentHistory) return null
     const history = storedAgentHistory as typeof storedAgentHistory & {
       steps?: ReActStep[]
       events?: AgentEvent[]
+      telemetry?: AgentTurnTelemetry
     }
     const steps = history.steps || []
-    const lastThought = [...steps].reverse().find(step => step.thought)?.thought
-    const elapsedMs = steps.reduce(
+    const elapsedMs = history.telemetry?.elapsedMs ?? steps.reduce(
       (sum: number, step: { duration?: number }) => sum + (typeof step.duration === 'number' ? step.duration : 0),
       0,
     )
+
     return {
-      thought: lastThought,
       elapsedMs,
+      telemetry: history.telemetry,
       steps,
       toolCalls: storedAgentHistory.toolCalls || [],
       events: history.events || [],
@@ -439,9 +441,6 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     () => [...ragSourceDetails, ...webCitationDetails],
     [ragSourceDetails, webCitationDetails]
   )
-
-  // 获取该消息关联的 MCP 工具调用
-  const mcpToolCalls = useMemo(() => getMcpToolCallsByChatId(chat.id), [chat.id, getMcpToolCallsByChatId])
 
   // 解析图片数组
   const images = useMemo(() => {
@@ -513,12 +512,10 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
       const hasContent = chat.role === 'system' && (
         !!content ||
         !!visibleResearchProgress ||
-        !!visibleThinkingContent ||
-        (chat.agentHistory && chat.agentHistory.length > 0) ||
+        (!storedAgentHistory && !!visibleThinkingContent) ||
         ragSources.length > 0 ||
         citationDetails.length > 0 ||
-        mcpToolCalls.length > 0 ||
-        isLiveAgentVisible ||
+        isLiveAgentActive ||
         isResponseStreaming
       )
 
@@ -537,10 +534,10 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
             className="w-full space-y-2.5"
           >
             {/* 2. Agent 实时执行状态 */}
-            {isLiveAgentVisible && (
+            {(shouldShowLiveAgentStatus || shouldShowLiveFinalAnswer) && (
               <div className="space-y-2">
                 <AgentExecutionStatus />
-                {agentState.isFinalAnswerMode && liveFinalAnswerContent && (
+                {shouldShowLiveFinalAnswer && (
                   <ChatPreview
                     text={liveFinalAnswerContent}
                     streaming={isResponseStreaming}
@@ -550,35 +547,23 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
               </div>
             )}
 
-            {/* 3. 历史工具调用 — 优先用紧凑展示 */}
-            {mcpToolCalls.length > 0 && !isLiveAgentVisible && (
-              <div className="space-y-0.5">
-                {mcpToolCalls.map(toolCall => (
-                  <McpToolCallCard key={toolCall.id} toolCall={toolCall} />
-                ))}
-              </div>
+            {/* 4. 思考内容 - Agent 状态以 Codex 风格轻摘要展示，细节点击后查看 */}
+            {!isLiveAgentActive && storedRunSummary && (
+              <AgentRunSummary
+                elapsedMs={storedRunSummary.elapsedMs}
+                telemetry={storedRunSummary.telemetry}
+                steps={storedRunSummary.steps}
+                toolCalls={storedRunSummary.toolCalls}
+                events={storedRunSummary.events}
+              />
             )}
-
-            {/* 4. 思考内容 - live Agent 的 thinking 由 AgentExecutionStatus 渲染 */}
-            {!isLiveAgentVisible && (
-              <>
-                {storedThinkingSummary ? (
-                  <AgentThinkingSummary
-                    thought={storedThinkingSummary.thought}
-                    elapsedMs={storedThinkingSummary.elapsedMs}
-                    steps={storedThinkingSummary.steps}
-                    toolCalls={storedThinkingSummary.toolCalls}
-                    events={storedThinkingSummary.events}
-                  />
-                ) : (
-                  <ChatThinking
-                    chat={chat}
-                    isStreaming={isResponseStreaming}
-                    citationDetails={citationDetails}
-                    ragSources={ragSources}
-                  />
-                )}
-              </>
+            {!isLiveAgentActive && !storedAgentHistory && (
+              <ChatThinking
+                chat={chat}
+                isStreaming={isResponseStreaming}
+                citationDetails={citationDetails}
+                ragSources={ragSources}
+              />
             )}
 
             {/* 5. 恢复研究卡片 + 研究进度 + 正式回复内容 */}
@@ -597,7 +582,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
               />
             )}
 
-            {citationDetails.length > 0 && !isLiveAgentVisible && (
+            {citationDetails.length > 0 && !isLiveAgentActive && (
               <MessageCitations
                 details={citationDetails}
                 content={displayContent || ''}

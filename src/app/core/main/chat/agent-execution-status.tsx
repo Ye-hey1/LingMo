@@ -4,6 +4,7 @@ import useChatStore from "@/stores/chat"
 import { Button } from "@/components/ui/button"
 import { DiffViewer } from "@/components/ui/diff-viewer"
 import { AgentLiveStream } from "./agent-live-stream"
+import { AgentRunSummary } from "./agent-run-summary"
 import type { AgentApprovalScope } from "@/lib/agent"
 import {
   formatConfirmationPreview,
@@ -116,6 +117,17 @@ export function AgentExecutionStatus() {
   }
 
   if (!pendingConfirmation) {
+    if (agentState.isFinalAnswerMode) {
+      return (
+        <AgentRunSummary
+          telemetry={agentState.telemetry}
+          steps={agentState.completedSteps}
+          toolCalls={agentState.toolCalls}
+          events={agentState.agentEvents}
+        />
+      )
+    }
+
     return (
       <AgentLiveStream
         isRunning={agentState.isRunning}
