@@ -50,6 +50,9 @@ function useLiveElapsedMs(input: {
 
 export function AgentLiveStream({
   isRunning,
+  currentThought,
+  currentAction,
+  currentObservation,
   visibleOutput,
   toolCalls = [],
   agentEvents = [],
@@ -72,6 +75,10 @@ export function AgentLiveStream({
       visibleOutput={visibleOutput}
       toolCalls={visibleToolCalls}
       events={agentEvents}
+      activity={activity}
+      currentThought={currentThought}
+      currentAction={currentAction}
+      currentObservation={currentObservation}
       live
     />
   )
