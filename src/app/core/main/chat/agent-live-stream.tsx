@@ -12,6 +12,7 @@ type AgentLiveStreamProps = {
   currentAction?: string
   currentObservation?: string
   visibleOutput?: string
+  steps?: AgentState["completedSteps"]
   toolCalls?: ToolCall[]
   agentEvents?: AgentEvent[]
   activity?: AgentActivity
@@ -54,11 +55,13 @@ export function AgentLiveStream({
   currentAction,
   currentObservation,
   visibleOutput,
+  steps = [],
   toolCalls = [],
   agentEvents = [],
   activity,
   telemetry,
   currentStepStartTime,
+  partSnapshot,
 }: AgentLiveStreamProps) {
   const visibleToolCalls = React.useMemo(
     () => toolCalls.filter(call => !isSupportOnlyToolName(call.toolName)),
@@ -73,12 +76,14 @@ export function AgentLiveStream({
       elapsedMs={elapsedMs}
       telemetry={telemetry}
       visibleOutput={visibleOutput}
+      steps={steps}
       toolCalls={visibleToolCalls}
       events={agentEvents}
       activity={activity}
       currentThought={currentThought}
       currentAction={currentAction}
       currentObservation={currentObservation}
+      partSnapshot={partSnapshot}
       live
     />
   )

@@ -23,6 +23,41 @@
   display: none;
 }
 
+.image-editor-svg-toolbar {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding: 0.35rem 0.75rem;
+  scrollbar-width: none;
+}
+
+.image-editor-svg-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.image-editor-toolbar-cluster {
+  display: inline-flex;
+  height: 2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.15rem;
+  white-space: nowrap;
+}
+
+.image-editor-svg-actions {
+  margin-left: auto;
+}
+
+.image-editor-toolbar-divider {
+  width: 1px;
+  height: 1.25rem;
+  margin: 0 0.35rem;
+  background: hsl(var(--border) / 0.72);
+}
+
 .image-editor-tool-group {
   display: inline-flex;
   height: 2rem;
@@ -114,6 +149,17 @@
     linear-gradient(90deg, hsl(var(--foreground) / 0.035) 1px, transparent 1px);
   background-size: 32px 32px;
   mask-image: radial-gradient(circle at center, black 0 42%, transparent 72%);
+}
+
+.image-editor-preview-image {
+  display: block;
+  width: auto;
+  height: auto;
+  min-width: 1px;
+  min-height: 1px;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
 }
 
 @media (max-width: 720px) {

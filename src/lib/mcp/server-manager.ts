@@ -1,11 +1,12 @@
 import { MCPClient } from './client'
 import { normalizeCallToolResult } from './result'
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { useMcpStore } from '@/stores/mcp'
+import { classifyMcpToolError } from './error-message'
 import type {
   MCPServerConfig,
   MCPTool,
   MCPResource,
+  ServerStatus,
   CallToolResult,
 } from './types'
 
@@ -23,19 +24,9 @@ interface MCPBatchTestResult {
  * MCP 服务器管理器
  * 管理多个 MCP 服务器的连接和工具调用
  */
-export class MCPServerManager {
-  private static instance: MCPServerManager
+class MCPServerManager {
   private clients: Map<string, MCPClient> = new Map()
   private toolGeneration = 0
-  
-  private constructor() {}
-  
-  static getInstance(): MCPServerManager {
-    if (!MCPServerManager.instance) {
-      MCPServerManager.instance = new MCPServerManager()
-    }
-    return MCPServerManager.instance
-  }
 
   getToolGeneration(): number {
     return this.toolGeneration
@@ -45,7 +36,7 @@ export class MCPServerManager {
     this.toolGeneration += 1
     return this.toolGeneration
   }
-  
+
   /**
    * 连接到服务器
    */
@@ -55,7 +46,7 @@ export class MCPServerManager {
     if (this.clients.has(config.id)) {
       await this.disconnectServer(config.id)
     }
-    
+
     // 设置连接中状态
     const connectingGeneration = this.bumpToolGeneration()
     store.setServerState(config.id, {
@@ -67,15 +58,15 @@ export class MCPServerManager {
       toolGeneration: connectingGeneration,
       staleTools: true,
     })
-    
+
     try {
       const client = new MCPClient(config)
       await client.connect()
-      
+
       // 初始化并获取工具列表
       await client.initialize()
       const tools = await client.listTools()
-      
+
       // 尝试获取资源列表（某些服务器可能不支持）
       let resources: MCPResource[] = []
       try {
@@ -83,9 +74,9 @@ export class MCPServerManager {
       } catch {
         // 静默处理，某些服务器不支持 resources
       }
-      
+
       this.clients.set(config.id, client)
-      
+
       // 更新连接成功状态
       const connectedGeneration = this.bumpToolGeneration()
       store.setServerState(config.id, {
@@ -98,27 +89,37 @@ export class MCPServerManager {
         toolGeneration: connectedGeneration,
         staleTools: false,
       })
-      
+
       // 更新最后连接时间
       store.updateServer(config.id, { lastConnected: Date.now() })
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const errorKind = classifyMcpToolError(errorMessage)
+      const failedStatus: ServerStatus = errorKind === 'auth'
+        ? 'needs_auth'
+        : errorKind === 'invalid_arguments'
+          ? 'needs_permission'
+          : 'failed'
+
       // 静默处理错误，设置错误状态
       const failedGeneration = this.bumpToolGeneration()
       store.setServerState(config.id, {
         id: config.id,
-        status: 'failed',
+        status: failedStatus,
         tools: [],
         resources: [],
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
         lastAttemptedAt: Date.now(),
         toolGeneration: failedGeneration,
         staleTools: true,
+        authRequired: failedStatus === 'needs_auth',
+        permissionRequired: failedStatus === 'needs_permission',
       })
-      
+
       throw error
     }
   }
-  
+
   /**
    * 断开服务器连接
    */
@@ -128,7 +129,7 @@ export class MCPServerManager {
       await client.disconnect()
       this.clients.delete(serverId)
     }
-    
+
     const store = useMcpStore.getState()
     const disconnectedGeneration = this.bumpToolGeneration()
     store.setServerState(serverId, {
@@ -140,7 +141,7 @@ export class MCPServerManager {
       staleTools: true,
     })
   }
-  
+
   /**
    * 重新连接服务器
    */
@@ -169,7 +170,7 @@ export class MCPServerManager {
       }
     }
   }
-  
+
   /**
    * 获取服务器的所有工具
    */
@@ -178,14 +179,14 @@ export class MCPServerManager {
     const state = store.getServerState(serverId)
     return state?.tools || []
   }
-  
+
   /**
    * 获取所有已连接服务器的工具
    */
   getAllTools(): Map<string, MCPTool[]> {
     const store = useMcpStore.getState()
     const toolsMap = new Map<string, MCPTool[]>()
-    
+
     for (const server of store.servers) {
       if (server.enabled) {
         const state = store.getServerState(server.id)
@@ -194,10 +195,10 @@ export class MCPServerManager {
         }
       }
     }
-    
+
     return toolsMap
   }
-  
+
   /**
    * 调用工具
    */
@@ -210,10 +211,10 @@ export class MCPServerManager {
     if (!client) {
       throw new Error(`Server ${serverId} is not connected`)
     }
-    
+
     return normalizeCallToolResult(await client.callTool(toolName, args))
   }
-  
+
   /**
    * 获取服务器资源
    */
@@ -222,7 +223,7 @@ export class MCPServerManager {
     const state = store.getServerState(serverId)
     return state?.resources || []
   }
-  
+
   /**
    * 读取资源
    */
@@ -231,10 +232,10 @@ export class MCPServerManager {
     if (!client) {
       throw new Error(`Server ${serverId} is not connected`)
     }
-    
+
     return await client.readResource(uri)
   }
-  
+
   /**
    * 断开所有服务器
    */
@@ -244,52 +245,32 @@ export class MCPServerManager {
     )
     await Promise.all(promises)
   }
-  
+
   /**
    * 测试服务器连接
    * 注意：测试时不会更新 store 中的服务器状态
    */
   async testConnection(config: MCPServerConfig): Promise<boolean> {
     try {
-      if (config.type === 'http') {
-        // 对于 HTTP 服务器，简单测试 URL 是否可访问
-        if (!config.url) {
-          throw new Error('HTTP server URL is required')
-        }
-        
-        // 发送一个简单的 OPTIONS 请求来测试连接
-        await tauriFetch(config.url, {
-          method: 'OPTIONS',
-          headers: {
-            'Accept': 'application/json, text/event-stream',
-          },
-        })
-        
-        // 只要服务器响应了（即使是错误），就认为连接成功
+      const testConfig: MCPServerConfig = {
+        ...config,
+        id: `mcp-test-${config.id}-${Date.now()}`,
+      }
+      const client = new MCPClient(testConfig)
+      try {
+        await client.connect()
+        await client.initialize()
+        await client.listTools()
+        await client.disconnect()
         return true
-      } else {
-        // 对于 stdio 服务器，需要实际启动和初始化
-        const testConfig: MCPServerConfig = {
-          ...config,
-          id: `mcp-test-${config.id}-${Date.now()}`,
-        }
-        const client = new MCPClient(testConfig)
+      } catch (error) {
+        console.error('测试连接失败:', error)
         try {
-          await client.connect()
-          await client.initialize()
-          // 测试完成后立即断开连接并清理
           await client.disconnect()
-          return true
-        } catch (error) {
-          console.error('测试连接失败:', error)
-          // 确保清理临时客户端
-          try {
-            await client.disconnect()
-          } catch {
-            // 静默处理清理错误
-          }
-          throw error
+        } catch {
+          // 静默处理清理错误
         }
+        throw error
       }
     } catch {
       // 静默处理测试失败
@@ -316,5 +297,5 @@ export class MCPServerManager {
   }
 }
 
-// 导出单例
-export const mcpServerManager = MCPServerManager.getInstance()
+// 导出单例实例
+export const mcpServerManager = new MCPServerManager()

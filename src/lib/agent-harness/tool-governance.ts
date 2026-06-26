@@ -12,6 +12,7 @@ import { getSafeGrepConvergenceMessage, formatToolObservation } from '@/lib/agen
 import { getGlobalToolCache, extractResources } from '@/lib/agent/tool-cache'
 import { isLinkedFolder, type LinkedResource } from '@/lib/files'
 import useArticleStore from '@/stores/article'
+import { formatMcpToolErrorMessage } from '../mcp/error-message'
 
 export interface ConfirmationPreviewContext {
   previewParams?: Record<string, any>
@@ -49,7 +50,6 @@ const WEB_ACCESS_TOOL_NAMES = new Set([
   'web_search',
   'web_fetch',
   'web_extract',
-  'clip_web_content',
 ])
 
 function truncatePreviewContent(content: string, maxLength = 5000): string {
@@ -432,6 +432,17 @@ async function buildConfirmationContext(toolName: string, params: Record<string,
     }
   }
 
+  if (toolName === 'create_drawio_diagram_from_cells') {
+    const cellsXml = typeof params.cellsXml === 'string' ? params.cellsXml : ''
+    confirmContext.previewParams = {
+      title: params.title,
+      fileName: params.fileName,
+      folderPath: params.folderPath,
+      cellsPreview: cellsXml ? truncatePreviewContent(cellsXml) : '',
+      openAfterCreate: params.openAfterCreate !== false,
+    }
+  }
+
   if (toolName === 'create_diagram_from_outline') {
     confirmContext.previewParams = {
       title: params.title,
@@ -477,12 +488,52 @@ async function buildConfirmationContext(toolName: string, params: Record<string,
     }
   }
 
+  if (toolName === 'append_drawio_diagram_cells' && typeof params.filePath === 'string') {
+    const cellsXml = typeof params.cellsXml === 'string' ? params.cellsXml : ''
+    confirmContext.filePath = params.filePath
+    confirmContext.previewParams = {
+      filePath: params.filePath,
+      cellsPreview: cellsXml ? truncatePreviewContent(cellsXml) : '',
+      expectedModifiedAt: params.expectedModifiedAt,
+    }
+  }
+
+  if (toolName === 'edit_drawio_diagram' && typeof params.filePath === 'string') {
+    confirmContext.filePath = params.filePath
+    confirmContext.previewParams = {
+      filePath: params.filePath,
+      operations: Array.isArray(params.operations)
+        ? params.operations.slice(0, 20)
+        : params.operations,
+      expectedModifiedAt: params.expectedModifiedAt,
+    }
+  }
+
+  if (toolName === 'export_drawio_diagram' && typeof params.filePath === 'string') {
+    confirmContext.filePath = params.filePath
+    confirmContext.previewParams = {
+      filePath: params.filePath,
+      format: params.format || 'svg',
+      outputFileName: params.outputFileName,
+      folderPath: params.folderPath || 'diagrams/exports',
+      scale: params.scale || 1,
+      border: params.border ?? 8,
+    }
+  }
+
   return confirmContext
 }
 
 function formatExecutionObservation(toolName: string, tool: Tool, result: ToolResult, dataRef?: string): string {
   const formattedObservation = formatToolObservation(toolName, result)
   let observation = formattedObservation || result.message || (result.success ? `工具 ${toolName} 执行成功。` : `工具 ${toolName} 执行失败：${result.error || '未知错误'}`)
+
+  if (!result.success && tool.category === 'mcp') {
+    observation = result.error || result.message || formatMcpToolErrorMessage({
+      toolName,
+      error: result.error || result.message || 'Unknown MCP tool error',
+    })
+  }
 
   if (result.success && result.data && !formattedObservation) {
     if (Array.isArray(result.data)) {

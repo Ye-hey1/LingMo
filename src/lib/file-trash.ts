@@ -324,6 +324,7 @@ export async function clearFileKnowledgeIndexes(paths: string[]) {
   const { deleteVectorDocumentsByFilename } = await import('@/db/vector')
   const { deleteTopicsForNote } = await import('@/db/note-topics')
   const { deleteRelationsForNote } = await import('@/db/note-relations')
+  const { objectRegistry } = await import('@/lib/knowledge/object-registry')
   const { default: useArticleStore } = await import('@/stores/article')
   const deletedVectorKeys = new Set<string>()
 
@@ -357,6 +358,12 @@ export async function clearFileKnowledgeIndexes(paths: string[]) {
       await deleteRelationsForNote(path)
     } catch (error) {
       console.error('[file-trash] Failed to delete note relations:', path, error)
+    }
+
+    try {
+      await objectRegistry.softDelete('note', path)
+    } catch (error) {
+      console.error('[file-trash] Failed to soft-delete knowledge object:', path, error)
     }
 
     useNoteIndexStore.getState().updateFileIndex(path, '')

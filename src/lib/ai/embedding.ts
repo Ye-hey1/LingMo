@@ -2,6 +2,7 @@ import { Store } from "@tauri-apps/plugin-store";
 import { AiConfig } from "@/app/core/setting/config";
 import { handleAIError } from "./utils";
 import { invokeAiJson } from "./tauri-client";
+import { matchesConfiguredModelSelection } from "./model-selection";
 
 // 嵌入请求响应类型
 interface EmbeddingResponse {
@@ -34,7 +35,11 @@ async function getEmbeddingModelInfo() {
     // 检查新的 models 数组结构
     if (config.models && config.models.length > 0) {
       const targetModel = config.models.find(model => 
-        model.id === embeddingModel && model.modelType === 'embedding'
+        model.modelType === 'embedding' && matchesConfiguredModelSelection({
+          configKey: config.key,
+          modelId: model.id,
+          selectionId: embeddingModel,
+        })
       );
       if (targetModel) {
         // 返回合并了模型配置的 AiConfig
@@ -75,7 +80,11 @@ export async function getRerankModelInfo() {
     // 检查新的 models 数组结构
     if (config.models && config.models.length > 0) {
       const targetModel = config.models.find(model => 
-        model.id === rerankModel && model.modelType === 'rerank'
+        model.modelType === 'rerank' && matchesConfiguredModelSelection({
+          configKey: config.key,
+          modelId: model.id,
+          selectionId: rerankModel,
+        })
       );
       if (targetModel) {
         // 返回合并了模型配置的 AiConfig

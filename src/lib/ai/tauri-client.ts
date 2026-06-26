@@ -140,7 +140,7 @@ function getErrorMessage(error: unknown) {
 
 function isRetryableTransportError(error: unknown) {
   const message = getErrorMessage(error)
-  return /AI_TRANSPORT_ERROR|error sending request|Failed to fetch|NetworkError|Load failed/i.test(message) &&
+  return /AI_TRANSPORT_ERROR|AI_JSON_PARSE_ERROR|error decoding response body|unexpected end of hex escape|error sending request|Failed to fetch|NetworkError|Load failed/i.test(message) &&
     !/Request was aborted/i.test(message)
 }
 

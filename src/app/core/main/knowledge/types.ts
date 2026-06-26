@@ -66,6 +66,10 @@ export interface GraphEdge {
     createdAt: string;
     source: string;
     evidence?: string;
+    sourceMethod?: string;
+    sourceMethods?: string[];
+    relationType?: string;
+    relationTypes?: string[];
   };
 }
 
@@ -83,6 +87,10 @@ export interface EdgeStyleConfig {
 /** 图谱筛选器 */
 export interface GraphFilters {
   types?: NodeType[];
+  nodeKinds?: NodeKind[];
+  nodeModes?: Array<'topic' | 'note'>;
+  edgeLabels?: string[];
+  edgeSources?: string[];
   search?: string;
   dateRange?: {
     start: string;
@@ -215,7 +223,7 @@ export interface GraphState {
 /** 图谱 Actions */
 export interface GraphActions {
   // 数据加载
-  loadGraph: () => Promise<void>;
+  loadGraph: (options?: { force?: boolean }) => Promise<void>;
   loadNeighbors: (nodeId: string, depth?: number) => Promise<void>;
   
   // 节点操作

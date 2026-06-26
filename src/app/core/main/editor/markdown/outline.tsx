@@ -31,6 +31,7 @@ interface OutlineProps {
 }
 
 const HEADING_SCROLL_OFFSET = 88
+const OUTLINE_EXTRACT_DEBOUNCE_MS = 240
 
 function isImplicitOutlineHeading(text: string): boolean {
   const trimmed = text.trim()
@@ -65,6 +66,8 @@ export function Outline({
   const headingsRef = useRef<HeadingItem[]>([])
   const isEditorReadyRef = useRef(false)
   const [isReady, setIsReady] = useState(false)
+  const extractTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeFrameRef = useRef<number | null>(null)
 
   const getEditorScrollContainer = useCallback(() => {
     const editorElement = editor?.view?.dom as HTMLElement | undefined
@@ -121,7 +124,8 @@ export function Outline({
     let index = 0
     let fallbackIndex = 0
 
-    editor.state.doc.descendants((node, pos) => {
+    editor.state.doc.forEach((node, offset) => {
+      const pos = offset
       if (node.type.name === 'heading') {
         const level = node.attrs.level
         const text = node.textContent.trim() || `Heading ${level}`
@@ -221,13 +225,12 @@ export function Outline({
   useEffect(() => {
     if (!editor || !editor.view || !editor.view.dom) return
 
-    try {
-      setHeadings(extractHeadings())
-    } catch (e) {
-      console.error('[Outline] Error in extractHeadings:', e)
+    if (!isOpen) {
+      setHeadings([])
+      return
     }
 
-    const handleUpdate = () => {
+    const runExtractHeadings = () => {
       try {
         setHeadings(extractHeadings())
       } catch (e) {
@@ -235,11 +238,32 @@ export function Outline({
       }
     }
 
+    const scheduleExtractHeadings = (delay = OUTLINE_EXTRACT_DEBOUNCE_MS) => {
+      if (extractTimerRef.current) {
+        clearTimeout(extractTimerRef.current)
+      }
+
+      extractTimerRef.current = setTimeout(() => {
+        extractTimerRef.current = null
+        runExtractHeadings()
+      }, delay)
+    }
+
+    scheduleExtractHeadings(0)
+
+    const handleUpdate = () => {
+      scheduleExtractHeadings()
+    }
+
     editor.on('update', handleUpdate)
     return () => {
+      if (extractTimerRef.current) {
+        clearTimeout(extractTimerRef.current)
+        extractTimerRef.current = null
+      }
       editor.off('update', handleUpdate)
     }
-  }, [editor, extractHeadings])
+  }, [editor, extractHeadings, isOpen])
 
   const findActiveHeadingByScroll = useCallback((): string | null => {
     if (!isEditorReadyRef.current || headings.length === 0) return null
@@ -288,17 +312,28 @@ export function Outline({
 
   useEffect(() => {
     if (!editor || !editor.view || !editor.view.dom) return
+    if (!isOpen) return
+
+    const scheduleActiveHeading = (source: 'selection' | 'viewport') => {
+      if (activeFrameRef.current !== null) {
+        cancelAnimationFrame(activeFrameRef.current)
+      }
+
+      activeFrameRef.current = requestAnimationFrame(() => {
+        activeFrameRef.current = null
+        const activeId = resolveActiveHeading(source)
+        if (activeId) {
+          setActiveHeadingId(activeId)
+        }
+      })
+    }
 
     const updateActiveHeading = () => {
-      const activeId = resolveActiveHeading('selection')
-      setActiveHeadingId(activeId)
+      scheduleActiveHeading('selection')
     }
 
     const handleScroll = () => {
-      const scrollActiveId = resolveActiveHeading('viewport')
-      if (scrollActiveId) {
-        setActiveHeadingId(scrollActiveId)
-      }
+      scheduleActiveHeading('viewport')
     }
 
     handleScroll()
@@ -309,11 +344,15 @@ export function Outline({
     scrollContainer?.addEventListener('scroll', handleScroll, { passive: true })
 
     return () => {
+      if (activeFrameRef.current !== null) {
+        cancelAnimationFrame(activeFrameRef.current)
+        activeFrameRef.current = null
+      }
       editor.off('selectionUpdate', updateActiveHeading)
       editor.off('transaction', updateActiveHeading)
       scrollContainer?.removeEventListener('scroll', handleScroll)
     }
-  }, [editor, getEditorScrollContainer, resolveActiveHeading])
+  }, [editor, getEditorScrollContainer, isOpen, resolveActiveHeading])
 
   useEffect(() => {
     if (!isOpen) return

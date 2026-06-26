@@ -3,7 +3,6 @@ import { clear, hasImage, hasText, readImageBase64, readText } from "tauri-plugi
 import { useEffect, useRef } from 'react';
 import { BaseDirectory, exists, mkdir, writeFile } from '@tauri-apps/plugin-fs';
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { v4 as uuid } from "uuid";
 import useChatStore from "@/stores/chat";
 import useTagStore from "@/stores/tag";
 import { Store } from "@tauri-apps/plugin-store";
@@ -35,7 +34,7 @@ export function ClipboardListener() {
     }
     const image = await readImageBase64()
     const uint8Array = Uint8Array.from(atob(image), c => c.charCodeAt(0)) || new Uint8Array()
-    const path = `clipboard/${uuid()}.png`
+    const path = `clipboard/${crypto.randomUUID()}.png`
     await writeFile(path, uint8Array, { baseDir: BaseDirectory.AppData })
     await clear()
     await insert({

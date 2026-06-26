@@ -81,6 +81,21 @@ export interface ContextBuildResult {
   ragSources: string[]
   ragSourceDetails: ChatCitationSource[]
   diagnostics: ContextBuildDiagnostics
+  /**
+   * Phase 1 #B：结构化上下文段（与 context 字段并行）。
+   * 每个段是该层"应直接展示给模型"的 Markdown 文本（含小节标题）。
+   * 调用方可把这些段注入到 buildAgentSystemPrompt 的 contextSections，
+   * 让预算控制器按层独立截断，而不是把所有东西塞进一个字符串。
+   *
+   * context 字段保持原行为不变（向后兼容），仍是这些段的拼接结果。
+   */
+  sections?: {
+    web?: string
+    current?: string
+    linked?: string
+    quote?: string
+    rag?: string
+  }
 }
 
 // ============================================================
@@ -700,6 +715,7 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
   })
   const budget = { remaining: contextBudget }
   let context = ''
+  const sections: NonNullable<ContextBuildResult['sections']> = {}
   const ragSources: string[] = []
   const ragSourceDetails: ChatCitationSource[] = []
   const diagnostics: ContextBuildDiagnostics = {
@@ -730,6 +746,9 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
     try {
       const webSearchContext = await buildWebSearchContext(webSearchQuery)
       context += webSearchContext.context
+      if (webSearchContext.context.trim()) {
+        sections.web = webSearchContext.context.trim()
+      }
       diagnostics.injectedChars.web += countChars(webSearchContext.context)
       webSearchContext.sources.forEach(source => {
         addCitationSource(ragSources, ragSourceDetails, source)
@@ -744,6 +763,9 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
   const currentNoteResult = buildCurrentNoteContext(activeFilePath, currentArticle, linkedFiles, budget)
   if (currentNoteResult.context) {
     context += currentNoteResult.context
+    if (currentNoteResult.context.trim()) {
+      sections.current = currentNoteResult.context.trim()
+    }
     diagnostics.currentNoteInjected = true
     diagnostics.injectedChars.current += countChars(currentNoteResult.context)
     if (currentNoteResult.source) {
@@ -761,6 +783,9 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
     budget
   )
   context += linkedResult.context
+  if (linkedResult.context.trim()) {
+    sections.linked = linkedResult.context.trim()
+  }
   diagnostics.linkedFileInjectedCount = linkedResult.injectedCount
   diagnostics.injectedChars.linked += countChars(linkedResult.context)
   diagnostics.warnings.push(...linkedResult.warnings)
@@ -773,6 +798,9 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
   const quoteResult = buildQuoteContext(quoteData, budget)
   if (quoteResult.context) {
     context += quoteResult.context
+    if (quoteResult.context.trim()) {
+      sections.quote = quoteResult.context.trim()
+    }
     diagnostics.quoteInjected = true
     diagnostics.injectedChars.quote += countChars(quoteResult.context)
     if (quoteResult.source) {
@@ -798,6 +826,9 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
       budget
     )
     context += ragResult.context
+    if (ragResult.context.trim()) {
+      sections.rag = ragResult.context.trim()
+    }
     diagnostics.ragKeywords = ragResult.keywords
     diagnostics.ragSourceCount = ragResult.sources.length
     diagnostics.injectedChars.rag += countChars(ragResult.context)
@@ -810,5 +841,5 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
 
   diagnostics.injectedChars.total = countChars(context)
 
-  return { context, ragSources, ragSourceDetails, diagnostics }
+  return { context, ragSources, ragSourceDetails, diagnostics, sections }
 }

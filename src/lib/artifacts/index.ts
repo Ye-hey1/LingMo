@@ -1,5 +1,5 @@
 export * from './input'
+export * from './destination'
 export * from './prompt'
 export * from './templates'
 export * from './types'
-

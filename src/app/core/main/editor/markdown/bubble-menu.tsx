@@ -452,11 +452,9 @@ export function BubbleMenu({
     }
 
     editor.on('selectionUpdate', updateHandler)
-    editor.on('transaction', updatePosition)
 
     return () => {
       editor.off('selectionUpdate', updateHandler)
-      editor.off('transaction', updatePosition)
     }
   }, [editor, updatePosition])
 

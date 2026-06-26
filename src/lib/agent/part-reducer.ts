@@ -1,5 +1,6 @@
 import type { AgentActivityPhase, AgentEvent, AgentTurnTelemetry, ToolCall } from './types'
 import type { AgentRuntimeSnapshot } from './runtime-snapshot'
+import { extractVisibleFinalAnswer, isInternalAgentInstruction, sanitizeVisibleAssistantContent } from './parse-action-input'
 
 export type AgentPartStatus =
   | 'pending'
@@ -144,6 +145,39 @@ function getFinalAnswerPartId(event: AgentEvent) {
   return `${event.runId || 'agent'}:text:final`
 }
 
+function sanitizeSingleFinalAnswerContent(value: unknown) {
+  const raw = typeof value === 'string' ? value : ''
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+
+  const explicitFinalAnswer = extractVisibleFinalAnswer(trimmed)
+  if (explicitFinalAnswer?.trim()) return explicitFinalAnswer.trim()
+
+  if (isInternalAgentInstruction(trimmed)) return undefined
+
+  const sanitized = sanitizeVisibleAssistantContent(trimmed).trim()
+  if (!sanitized || isInternalAgentInstruction(sanitized)) return undefined
+
+  if (/^(?:基础策略规定|错误恢复方案|恢复策略|内部策略|系统策略|策略规定)\s*[:：]/i.test(sanitized)) {
+    return undefined
+  }
+
+  if (/^(?:Action|Action Input|Observation|Thought)\s*[:：]/i.test(sanitized)) {
+    return undefined
+  }
+
+  return sanitized
+}
+
+function sanitizeFinalAnswerPartContent(value: unknown, fallback?: string) {
+  const primary = sanitizeSingleFinalAnswerContent(value)
+  if (primary) return primary
+  if (typeof fallback === 'string' && fallback !== value) {
+    return sanitizeSingleFinalAnswerContent(fallback)
+  }
+  return undefined
+}
+
 function getPayloadToolName(payload: Record<string, any>) {
   return typeof payload.toolName === 'string'
     ? payload.toolName
@@ -213,6 +247,12 @@ function isAnsweringVisibleStatus(status?: AgentVisibleStatus) {
   return status?.tone === 'running' && status.label === '正在写答案'
 }
 
+function canOverrideAnsweringStatus(status: AgentVisibleStatus) {
+  return status.label.includes('工具') ||
+    status.label === '准备调用工具' ||
+    status.label === '等待确认'
+}
+
 function isTerminalVisibleStatus(status?: AgentVisibleStatus) {
   return status?.tone === 'done' || status?.tone === 'error'
 }
@@ -227,7 +267,11 @@ function resolveVisibleStatus(snapshot: AgentPartSnapshot, nextStatus: AgentVisi
     return currentStatus
   }
 
-  if (isAnsweringVisibleStatus(currentStatus) && !isAnsweringVisibleStatus(nextStatus)) {
+  if (
+    isAnsweringVisibleStatus(currentStatus) &&
+    !isAnsweringVisibleStatus(nextStatus) &&
+    !canOverrideAnsweringStatus(nextStatus)
+  ) {
     return currentStatus
   }
 
@@ -288,6 +332,43 @@ function reduceAgentPartSnapshotCore(
         visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '准备中' }),
       }
 
+    case 'mcp.runtime.warmup': {
+      const timedOut = payload.timedOut === true
+      const failedCount = typeof payload.failedServerCount === 'number' ? payload.failedServerCount : 0
+      const selectedCount = typeof payload.selectedServerCount === 'number' ? payload.selectedServerCount : 0
+      const degraded = !timedOut && (payload.degraded === true || failedCount > 0)
+      return {
+        ...snapshot,
+        runId: event.runId || snapshot.runId,
+        status: 'running',
+        visibleStatus: resolveVisibleStatus(snapshot, {
+          tone: 'running',
+          label: timedOut ? 'MCP 后台加载中' : degraded ? '部分 MCP 不可用' : 'MCP 工具已就绪',
+          detail: timedOut
+            ? '先用已就绪工具响应，新工具加载完成后会自动刷新。'
+            : degraded
+              ? `${failedCount}/${selectedCount || failedCount} 个 MCP 服务初始化失败，已跳过不可用工具。`
+              : undefined,
+        }),
+      }
+    }
+
+    case 'agent.stream.delta':
+      return {
+        ...snapshot,
+        runId: event.runId || snapshot.runId,
+        status: 'running',
+        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '正在写答案' }),
+      }
+
+    case 'agent.stream.started':
+    case 'agent.stream.finished':
+      return {
+        ...snapshot,
+        runId: event.runId || snapshot.runId,
+        status: 'running',
+      }
+
     case 'iteration.started':
     case 'model.request.started':
       return {
@@ -307,7 +388,7 @@ function reduceAgentPartSnapshotCore(
         runId: event.runId,
         type: 'reasoning',
         status: payload.streaming === false ? 'completed' : 'running',
-        visibility: 'hidden',
+        visibility: 'visible',
         createdAt: snapshot.parts.find(existing => existing.id === getReasoningPartId(event))?.createdAt || now,
         updatedAt: now,
         text: payload.content,
@@ -332,6 +413,34 @@ function reduceAgentPartSnapshotCore(
         visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '准备调用工具' }),
       }
     }
+
+    case 'tool.batch.started':
+      return {
+        ...snapshot,
+        runId: event.runId || snapshot.runId,
+        status: 'running',
+        visibleStatus: resolveVisibleStatus(snapshot, {
+          tone: 'running',
+          label: '准备调用工具',
+          detail: typeof payload.runningCount === 'number'
+            ? `本轮 ${payload.runningCount} 个工具进入执行。`
+            : undefined,
+        }),
+      }
+
+    case 'tool.batch.finished':
+      return {
+        ...snapshot,
+        runId: event.runId || snapshot.runId,
+        status: 'running',
+        visibleStatus: resolveVisibleStatus(snapshot, {
+          tone: 'running',
+          label: '工具调用完成',
+          detail: typeof payload.finishedCount === 'number'
+            ? `已处理 ${payload.finishedCount} 个工具结果。`
+            : undefined,
+        }),
+      }
 
     case 'tool':
     case 'tool.updated':
@@ -385,7 +494,7 @@ function reduceAgentPartSnapshotCore(
 
     case 'final':
     case 'final.answer.rendered': {
-      const content = typeof payload.content === 'string' ? payload.content : snapshot.finalAnswerContent
+      const content = sanitizeFinalAnswerPartContent(payload.content, snapshot.finalAnswerContent)
       if (!content) {
         return {
           ...snapshot,
@@ -416,7 +525,7 @@ function reduceAgentPartSnapshotCore(
     }
 
     case 'agent.completed': {
-      const content = typeof payload.result === 'string' ? payload.result : snapshot.finalAnswerContent
+      const content = sanitizeFinalAnswerPartContent(payload.result, snapshot.finalAnswerContent)
       const now = event.timestamp
       const existing = snapshot.parts.find(part => part.id === getFinalAnswerPartId(event))
       const parts = content
@@ -496,6 +605,12 @@ function phaseFromEvent(event: AgentEvent): AgentActivityPhase | undefined {
   switch (event.type) {
     case 'agent.started':
       return 'preparing'
+    case 'mcp.runtime.warmup':
+      return 'preparing'
+    case 'agent.stream.delta':
+      return 'answering'
+    case 'agent.stream.started':
+      return 'thinking'
     case 'agent.planning':
       return 'planning'
     case 'iteration.started':
@@ -508,6 +623,8 @@ function phaseFromEvent(event: AgentEvent): AgentActivityPhase | undefined {
     case 'action.parsed':
     case 'tool':
     case 'tool.updated':
+    case 'tool.batch.started':
+    case 'tool.batch.finished':
     case 'tool.execution.started':
       return 'tool'
     case 'tool.execution.finished':
@@ -558,7 +675,8 @@ export function deriveTelemetry(
     outputChars = Math.max(outputChars, payload.content.length)
   }
   if (event.type === 'agent.completed' && typeof payload.result === 'string') {
-    outputChars = Math.max(outputChars, payload.result.length)
+    const content = sanitizeFinalAnswerPartContent(payload.result, snapshot.finalAnswerContent)
+    outputChars = Math.max(outputChars, (content || payload.result).length)
   }
   const inputTokens = typeof payload.inputTokens === 'number' ? payload.inputTokens : prev?.inputTokens
   const outputTokens = typeof payload.outputTokens === 'number' ? payload.outputTokens : prev?.outputTokens

@@ -248,6 +248,43 @@ const AFFECT_TOKENS = new Set([
 const CHINESE_CONCEPT_SUFFIX_PATTERN =
   /(?:模型|系统|架构|算法|策略|机制|原则|流程|知识|数据|向量|语义|检索|产品|用户|体验|设计|自动化|智能|代理|协作|管理|研究|技术|模式|方法|框架|网络|数据库|工具|平台|生态|理论|任务|问题|指标|能力|场景|趋势|记忆|图谱|应用|实践|范式|协议|标准|工程|组件|服务)$/;
 
+const CHINESE_CONCEPT_TOKEN_PATTERN =
+  /(?:模型|系统|架构|算法|策略|机制|原则|流程|知识|数据|向量|语义|检索|产品|用户|体验|设计|自动化|智能|代理|协作|管理|研究|技术|模式|方法|框架|网络|数据库|工具|平台|生态|理论|任务|问题|指标|能力|场景|趋势|记忆|图谱|应用|实践|范式|协议|标准|工程|组件|服务|学习)/g;
+
+const CHINESE_TOPIC_BRIDGE_NOISE_PATTERN =
+  /(?:路径|指南|教程|说明|概述|核心|优势|指标|能力|表现|质量|效率|基础|单元|章节|案例|分析|训练|泛化|并行化)/;
+
+const VALID_DISCIPLINE_TOPIC_PATTERN =
+  /(?:机器学习|深度学习|强化学习|迁移学习|监督学习|无监督学习|自监督学习|元学习|心理学|经济学|语言学|统计学|数学|哲学|社会学|传播学|管理学|教育学|认知科学|数据科学|计算机科学|信息科学)$/;
+
+const ACCIDENTAL_DISCIPLINE_SUFFIXES = [
+  '模型',
+  '图谱',
+  '架构',
+  '系统',
+  '数据',
+  '技术',
+  '网络',
+  '平台',
+  '工具',
+  '组件',
+  '服务',
+  '流程',
+  '策略',
+  '向量',
+  '语义',
+  '检索',
+  '代理',
+  '智能',
+  '算法',
+  '框架',
+  '数据库',
+  '产品',
+  '用户',
+  '体验',
+  '设计',
+] as const;
+
 const CHINESE_FRAGMENT_PATTERN =
   /^(?:的|式|性|型|类|种|个|项|些|年|月|日|在|于|从|由|被|将|对|把|让|使|为|以|其|这|那|该|本|处于|当前|默认|自动|手动)|(?:的|地|得|和|与|及|或|并|但)$/;
 
@@ -274,6 +311,9 @@ const CANONICAL_CHINESE_CONCEPT_PATTERN =
 
 const CANONICAL_SHORT_CONCEPT_PATTERN =
   /^(?:[A-Za-z0-9+#.-]{1,12})?[\u4e00-\u9fa5]{2,6}(?:学|论|法|术|器|库|链|流|图|谱|栈|层|端|云|脑|网)$/;
+
+const LATIN_PREFIX_COMPACT_CONCEPT_PATTERN =
+  /^(?:[A-Za-z0-9+#.-]{1,12})(?:模型|系统|架构|算法|策略|流程|知识|数据|向量|语义|检索|产品|用户|体验|设计|智能|代理|技术|网络|工具|平台|图谱|应用|工程|组件|服务)$/;
 
 export function stripKnowledgeNoise(content: string): string {
   if (!content) return '';
@@ -306,7 +346,7 @@ export function prepareKnowledgeIndexText(content: string): string {
 }
 
 export function normalizeKnowledgeTopic(keyword: string): string {
-  const normalized = stripKnowledgeNoise(keyword)
+  let normalized = stripKnowledgeNoise(keyword)
     .replace(/^[\s#>*\-+.,，。:：;；'"“”‘’/\\]+/, '')
     .replace(/[\s#>*\-+.,，。:：;；'"“”‘’/\\]+$/, '')
     .replace(/[`"'“”‘’()[\]{}<>]/g, '')
@@ -314,7 +354,43 @@ export function normalizeKnowledgeTopic(keyword: string): string {
     .trim();
 
   if (!normalized) return '';
+  normalized = normalizeAccidentalDisciplineSuffix(normalized);
   return /^[A-Z0-9+\-.#]+$/.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function findAccidentalDisciplineSuffix(keyword: string) {
+  if (VALID_DISCIPLINE_TOPIC_PATTERN.test(keyword)) return null;
+
+  if (keyword.endsWith('学习')) {
+    const stem = keyword.slice(0, -2);
+    const suffix = ACCIDENTAL_DISCIPLINE_SUFFIXES.find(item => stem.endsWith(item));
+    if (!suffix) return null;
+
+    const prefix = stem.slice(0, -suffix.length);
+    return { stem, prefix, suffix };
+  }
+
+  if (!keyword.endsWith('学')) return null;
+
+  const stem = keyword.slice(0, -1);
+  const suffix = ACCIDENTAL_DISCIPLINE_SUFFIXES.find(item => stem.endsWith(item));
+  if (!suffix) return null;
+
+  const prefix = stem.slice(0, -suffix.length);
+  return { stem, prefix, suffix };
+}
+
+function normalizeAccidentalDisciplineSuffix(keyword: string) {
+  const match = findAccidentalDisciplineSuffix(keyword);
+  if (!match?.prefix) return keyword;
+
+  // TextRank can merge a topical noun with the trailing "学" from "学习/学科".
+  // Keep the domain concept itself so stale DB rows such as "AI模型学" render as "AI模型".
+  if (/[A-Za-z0-9]/.test(match.prefix) || /[\u4e00-\u9fa5]{2,}/.test(match.prefix)) {
+    return match.stem;
+  }
+
+  return keyword;
 }
 
 function countTokenHits(keyword: string, tokens: Set<string>) {
@@ -368,10 +444,29 @@ function looksLikeGenericConceptShell(keyword: string) {
   return false;
 }
 
+function looksLikeMalformedDisciplineConcept(keyword: string) {
+  return Boolean(findAccidentalDisciplineSuffix(keyword));
+}
+
+function looksLikeOverMergedChineseTopic(keyword: string) {
+  if (!/[\u4e00-\u9fa5]/.test(keyword)) return false;
+  const compact = keyword.replace(/[A-Za-z0-9+#.-]/g, '');
+  if (compact.length <= 8) return false;
+
+  const conceptHits = compact.match(CHINESE_CONCEPT_TOKEN_PATTERN)?.length ?? 0;
+  if (conceptHits >= 2 && CHINESE_TOPIC_BRIDGE_NOISE_PATTERN.test(compact)) return true;
+  if (conceptHits >= 4 && compact.length >= 12) return true;
+  return false;
+}
+
 function isCanonicalChineseConcept(keyword: string) {
   if (!/[\u4e00-\u9fa5]/.test(keyword)) return true;
+  if (VALID_DISCIPLINE_TOPIC_PATTERN.test(keyword)) return true;
+  if (LATIN_PREFIX_COMPACT_CONCEPT_PATTERN.test(keyword)) return true;
   if (looksLikeSentenceFragment(keyword)) return false;
   if (looksLikeGenericConceptShell(keyword)) return false;
+  if (looksLikeMalformedDisciplineConcept(keyword)) return false;
+  if (looksLikeOverMergedChineseTopic(keyword)) return false;
   if (keyword.length <= 4) return !/[的是在被为于从由把让使将]/.test(keyword);
   if (CANONICAL_SHORT_CONCEPT_PATTERN.test(keyword)) return true;
   return CANONICAL_CHINESE_CONCEPT_PATTERN.test(keyword);
@@ -425,7 +520,12 @@ export function topicQualityScore(keyword: string): number {
 
   if (chineseChars >= 2) score += 0.45;
   if (chineseChars >= 4) score += 0.2;
-  if (CANONICAL_CHINESE_CONCEPT_PATTERN.test(normalized) || CANONICAL_SHORT_CONCEPT_PATTERN.test(normalized)) score += 0.45;
+  if (
+    CANONICAL_CHINESE_CONCEPT_PATTERN.test(normalized) ||
+    CANONICAL_SHORT_CONCEPT_PATTERN.test(normalized) ||
+    LATIN_PREFIX_COMPACT_CONCEPT_PATTERN.test(normalized) ||
+    VALID_DISCIPLINE_TOPIC_PATTERN.test(normalized)
+  ) score += 0.45;
   if (latinChars > 0 && LATIN_TOPIC_ALLOWLIST.has(normalized.toLowerCase())) score += 0.55;
   if (/[-_.#]/.test(normalized)) score -= 0.25;
   if (/^(?:\w+\s+){2,}\w+$/i.test(normalized)) score -= 0.15;
@@ -479,21 +579,27 @@ export function extractKnowledgeTopicCandidates(
     .filter(Boolean);
 
   for (const rawSegment of chineseSegments) {
-    const segment = rawSegment.replace(/[^\u4e00-\u9fa5A-Za-z0-9+#.-]/g, '');
-    if (!/[\u4e00-\u9fa5]{2,}/.test(segment)) continue;
+    const segmentParts = rawSegment
+      .split(/\s+/)
+      .map(part => part.replace(/[^\u4e00-\u9fa5A-Za-z0-9+#.-]/g, ''))
+      .filter(Boolean);
 
-    const titleWeight = title.includes(segment) ? 1.35 : 1;
-    if (segment.length >= 2 && segment.length <= 8 && CHINESE_CONCEPT_SUFFIX_PATTERN.test(segment)) {
-      addCandidate(segment, 1.35 * titleWeight);
-    }
+    for (const segment of segmentParts) {
+      if (!/[\u4e00-\u9fa5]{2,}/.test(segment)) continue;
 
-    for (const match of segment.matchAll(/[\u4e00-\u9fa5]{2,12}?(?:模型|系统|架构|算法|策略|流程|知识|数据|向量|语义|检索|产品|用户|体验|设计|自动化|智能|代理|协作|管理|研究|技术|模式|方法|框架|网络|数据库|工具|平台|生态|理论|任务|问题|指标|能力|场景|趋势|记忆|图谱)/g)) {
-      const phrase = match[0];
-      addCandidate(phrase, 1.25 * titleWeight);
-    }
+      const titleWeight = title.includes(segment) ? 1.35 : 1;
+      if (segment.length >= 2 && segment.length <= 8 && CHINESE_CONCEPT_SUFFIX_PATTERN.test(segment)) {
+        addCandidate(segment, 1.35 * titleWeight);
+      }
 
-    for (const match of segment.matchAll(/(?:AI|RAG|LLM|Agent)?[\u4e00-\u9fa5]{2,6}(?:学|论|法|术|器|库|图|谱|链|流)/gi)) {
-      addCandidate(match[0], 1.1 * titleWeight);
+      for (const match of segment.matchAll(/[\u4e00-\u9fa5]{2,12}?(?:模型|系统|架构|算法|策略|流程|知识|数据|向量|语义|检索|产品|用户|体验|设计|自动化|智能|代理|协作|管理|研究|技术|模式|方法|框架|网络|数据库|工具|平台|生态|理论|任务|问题|指标|能力|场景|趋势|记忆|图谱)/g)) {
+        const phrase = match[0];
+        addCandidate(phrase, 1.25 * titleWeight);
+      }
+
+      for (const match of segment.matchAll(/(?:AI|RAG|LLM|Agent)?[\u4e00-\u9fa5]{2,6}(?:学习|学|论|法|术|器|库|图|谱|链|流)/gi)) {
+        addCandidate(match[0], 1.1 * titleWeight);
+      }
     }
   }
 

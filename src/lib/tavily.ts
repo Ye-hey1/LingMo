@@ -769,21 +769,40 @@ export async function tavilyExtract(options: TavilyExtractOptions): Promise<Tavi
 }
 
 export async function searchWeb(options: TavilySearchOptions): Promise<TavilySearchResponse> {
+  const query = options.query.trim()
   try {
     return await tavilySearch(options)
   } catch (tavilyError) {
     options.signal?.throwIfAborted()
-    const fallback = await requestDuckDuckGoFallback(
-      options.query.trim(),
-      clampNumber(options.maxResults, 5, 1, 10),
-      normalizeDomainList(options.includeDomains),
-      normalizeDomainList(options.excludeDomains),
-      options.signal,
-    )
+    const tavilyMessage = tavilyError instanceof Error ? tavilyError.message : String(tavilyError)
+    try {
+      const fallback = await requestDuckDuckGoFallback(
+        query,
+        clampNumber(options.maxResults, 5, 1, 10),
+        normalizeDomainList(options.includeDomains),
+        normalizeDomainList(options.excludeDomains),
+        options.signal,
+      )
 
-    return {
-      ...fallback,
-      fallbackReason: tavilyError instanceof Error ? tavilyError.message : String(tavilyError),
+      return {
+        ...fallback,
+        fallbackReason: tavilyMessage,
+      }
+    } catch (fallbackError) {
+      options.signal?.throwIfAborted()
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+      console.warn('[searchWeb] Tavily and DuckDuckGo fallback failed; continuing without web results.', {
+        tavilyError: tavilyMessage,
+        fallbackError: fallbackMessage,
+      })
+
+      return {
+        query,
+        results: [],
+        provider: 'duckduckgo',
+        degraded: true,
+        fallbackReason: `Tavily failed: ${tavilyMessage}; DuckDuckGo fallback failed: ${fallbackMessage}`,
+      }
     }
   }
 }

@@ -1,4 +1,6 @@
-export const VISUAL_REPORTS_ROOT = 'visual-reports'
+import { ARTIFACT_ROOTS } from '@/lib/artifacts/destination'
+
+export const VISUAL_REPORTS_ROOT = ARTIFACT_ROOTS.visual_report
 
 export function isVisualReportPath(path: string) {
   const normalized = path.trim().replace(/\\/g, '/').replace(/^\.?\//, '')

@@ -1,5 +1,6 @@
 import { readDir, BaseDirectory, DirEntry } from "@tauri-apps/plugin-fs";
 import { getFilePathOptions, getWorkspacePath } from "./workspace";
+import { isInSkillsFolder, isSkillsFolder } from "./skills/utils";
 
 export interface MarkdownFile {
   name: string;
@@ -46,6 +47,12 @@ function isPathNotFoundError(error: unknown): boolean {
   );
 }
 
+export function isUserKnowledgeFilePath(path: string): boolean {
+  const normalizedPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalizedPath) return false;
+  return !isInSkillsFolder(normalizedPath) && !isSkillsFolder(normalizedPath.split("/")[0] || "");
+}
+
 // 收集文件夹下的所有 Markdown 文件
 export async function collectMarkdownFiles(folderPath: string): Promise<Array<{path: string, name: string}>> {
   const files: Array<{path: string, name: string}> = [];
@@ -66,7 +73,7 @@ export async function collectMarkdownFiles(folderPath: string): Promise<Array<{p
         const entryPath = dirPath ? `${dirPath}/${entry.name}` : entry.name;
         
         // 过滤隐藏文件夹
-        if (entry.name.startsWith('.')) {
+        if (entry.name.startsWith('.') || !isUserKnowledgeFilePath(entryPath)) {
           continue;
         }
         
@@ -121,6 +128,9 @@ export async function getAllMarkdownFiles(includeMetadata: boolean = false): Pro
         }
 
         const currentRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+        if (!isUserKnowledgeFilePath(currentRelativePath)) {
+          continue;
+        }
 
         if (entry.isDirectory) {
           // 递归处理子目录

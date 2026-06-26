@@ -22,6 +22,10 @@ function isRetryableError(error: string) {
 }
 
 function isResultMarkedRetryable(result: ToolResult) {
+  if (typeof result.data?.retryable === 'boolean') {
+    return result.data.retryable
+  }
+
   const message = `${result.error || ''}\n${result.message || ''}`
   if (/invalid[_\s-]?api[_\s-]?key|api key|unauthorized|forbidden|permission/i.test(message)) {
     return false
@@ -31,6 +35,17 @@ function isResultMarkedRetryable(result: ToolResult) {
     result.data?.retryable ||
     /STALE_MCP_TOOL_REGISTRY|rate.?limit|429|503|502|500|temporar/i.test(message)
   )
+}
+
+function getStructuredErrorKind(result: ToolResult): ToolObservation['errorKind'] | undefined {
+  const value = result.data?.errorKind
+  return value === 'validation' ||
+    value === 'permission' ||
+    value === 'timeout' ||
+    value === 'network' ||
+    value === 'tool'
+    ? value
+    : undefined
 }
 
 function formatResultText(result: Awaited<ReturnType<Tool['execute']>>) {
@@ -166,7 +181,7 @@ export async function executeHarnessTool(
         toolName: tool.name,
         success: false,
         summary: error,
-        errorKind: classifyError(error),
+        errorKind: getStructuredErrorKind(result) || classifyError(error),
         retryable,
       }, error, tool, context)
       return { result, observation }

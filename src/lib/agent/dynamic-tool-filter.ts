@@ -19,23 +19,136 @@ const TOOL_AFFINITY_GROUPS: Record<string, string[]> = {
   'read_markdown_file': ['replace_editor_content', 'get_editor_content', 'insert_at_cursor'],
   'get_editor_content': ['replace_editor_content', 'insert_at_cursor', 'read_markdown_file'],
   'create_file': ['update_markdown_file', 'read_markdown_file'],
-  
+  'get_current_note_context': ['search_knowledge_objects', 'get_connected_notes', 'get_note_backlinks', 'suggest_links_for_note'],
+  'search_knowledge_objects': ['get_knowledge_object_overview', 'get_current_note_context', 'read_markdown_file'],
+  'get_knowledge_object_overview': ['search_knowledge_objects', 'find_unindexed_notes', 'reindex_knowledge_objects', 'query_agent_runs'],
+
   // Search operations
   'safe_grep': ['safe_read_file', 'read_markdown_file'],
   'search_markdown_files': ['read_markdown_file', 'read_markdown_files_batch'],
-  
+
   // Tag/mark operations
   'create_tag': ['read_tags', 'create_mark', 'read_marks'],
   'create_mark': ['read_marks', 'create_tag', 'read_tags'],
-  
+
   // Diagram operations
-  'create_diagram_from_outline': ['read_diagram_file', 'update_diagram_file'],
-  'create_diagram_file': ['read_diagram_file', 'update_diagram_file'],
-  
+  'create_diagram_from_outline': ['read_diagram_file', 'edit_drawio_diagram', 'update_diagram_file', 'validate_drawio_diagram', 'export_drawio_diagram'],
+  'create_diagram_file': ['read_diagram_file', 'create_drawio_diagram_from_cells', 'edit_drawio_diagram', 'update_diagram_file', 'validate_drawio_diagram', 'export_drawio_diagram'],
+  'create_drawio_diagram_from_cells': ['get_drawio_shape_library', 'read_diagram_file', 'append_drawio_diagram_cells', 'edit_drawio_diagram', 'validate_drawio_diagram', 'export_drawio_diagram'],
+  'read_diagram_file': ['edit_drawio_diagram', 'append_drawio_diagram_cells', 'update_diagram_file', 'get_drawio_shape_library', 'validate_drawio_diagram', 'export_drawio_diagram'],
+  'get_drawio_shape_library': ['create_drawio_diagram_from_cells', 'edit_drawio_diagram'],
+  'edit_drawio_diagram': ['read_diagram_file', 'get_drawio_shape_library', 'validate_drawio_diagram', 'export_drawio_diagram'],
+  'append_drawio_diagram_cells': ['read_diagram_file', 'edit_drawio_diagram', 'validate_drawio_diagram', 'export_drawio_diagram'],
+  'validate_drawio_diagram': ['read_diagram_file', 'edit_drawio_diagram', 'append_drawio_diagram_cells', 'export_drawio_diagram'],
+  'export_drawio_diagram': ['read_diagram_file', 'validate_drawio_diagram'],
+
   // Web operations
   'web_search': ['web_fetch', 'web_extract'],
   'web_fetch': ['web_extract', 'web_search'],
+
+  // GitHub star — 用一个就把同组都带进来，避免"调了一个就漏了同步/列表"
+  'github_list_starred': ['github_sync_starred', 'github_summarize_recent_stars', 'github_search_my_stars', 'github_list_star_releases'],
+  'github_sync_starred': ['github_list_starred', 'github_summarize_recent_stars', 'github_search_my_stars'],
+  'github_summarize_recent_stars': ['github_list_starred', 'github_sync_starred', 'github_search_my_stars'],
+  'github_search_my_stars': ['github_list_starred', 'github_summarize_recent_stars'],
+
+  // GitHub trending
+  'github_trending': ['github_search', 'github_topic', 'github_analyze_repo'],
+  'github_search': ['github_trending', 'github_topic', 'github_analyze_repo'],
+
+  // Git
+  'git_status': ['git_diff', 'git_log', 'git_show', 'git_blame'],
+  'git_log': ['git_status', 'git_diff', 'git_show', 'git_blame'],
+
+  // Code navigation
+  'code_search_symbols': ['code_file_outline', 'code_find_definition', 'code_find_references', 'code_read_context'],
+  'code_find_definition': ['code_search_symbols', 'code_find_references', 'code_read_context'],
 }
+
+// ---------------------------------------------------------------------------
+// Query → Tool affinity（关键词 → 工具名 → 加分）
+// 当用户输入命中关键词时，给匹配的专用工具大幅加分，避免被通用 web_search 抢走
+// ---------------------------------------------------------------------------
+
+interface QueryToolAffinityRule {
+  /** 命中即生效的关键词正则 */
+  keywords: RegExp
+  /** 命中后强制纳入 + 加分的工具名 */
+  tools: string[]
+  /** 加分值，越大越优先；50 基本可以盖过 alwaysInclude 的基础分 */
+  boost: number
+}
+
+const QUERY_TOOL_AFFINITY: QueryToolAffinityRule[] = [
+  {
+    keywords: /github|星标|starred|my\s*star|^star\b|\bstar\s/i,
+    tools: [
+      'github_list_starred', 'github_sync_starred',
+      'github_summarize_recent_stars', 'github_search_my_stars',
+      'github_list_star_releases', 'github_list_my_forks',
+    ],
+    boost: 60,
+  },
+  {
+    keywords: /trending|热门|榜单|热搜/i,
+    tools: ['github_trending', 'github_search', 'github_topic', 'github_analyze_repo'],
+    boost: 60,
+  },
+  {
+    keywords: /闪卡|flashcard|抽认卡|复习|spaced\s*repetition/i,
+    tools: ['generate_flashcards', 'get_study_insights'],
+    boost: 50,
+  },
+  {
+    keywords: /\bgit\s|commit|branch|分支|提交|diff\s| blame /i,
+    tools: ['git_status', 'git_diff', 'git_log', 'git_show', 'git_blame'],
+    boost: 50,
+  },
+  {
+    keywords: /代码符号|symbol|定义|definition|引用|reference|outline/i,
+    tools: ['code_search_symbols', 'code_file_outline', 'code_find_definition', 'code_find_references', 'code_read_context'],
+    boost: 50,
+  },
+  {
+    keywords: /agent\s*run|自省|历史\s*run|上次\s*失败|最近\s*失败/i,
+    tools: ['query_agent_runs', 'query_self_failures', 'get_agent_run_detail', 'list_agent_run_summaries', 'search_knowledge_objects'],
+    boost: 50,
+  },
+  {
+    keywords: /知识库|知识对象|知识管理|当前笔记|相关笔记|关联笔记|我的笔记|记忆|重建索引|刷新索引|重新索引|同步索引|索引不同步|memory|knowledge\s*base|current\s*note|related\s*notes|reindex/i,
+    tools: ['search_knowledge_objects', 'get_knowledge_object_overview', 'get_current_note_context', 'reindex_knowledge_objects', 'get_connected_notes', 'get_note_backlinks'],
+    boost: 55,
+  },
+  {
+    keywords: /标签|tags?\b|归类/i,
+    tools: ['list_tags', 'search_tags', 'create_tag', 'update_tag', 'tag_files', 'find_unindexed_notes', 'search_knowledge_objects', 'get_knowledge_object_overview'],
+    boost: 40,
+  },
+  {
+    keywords: /高亮|mark|标注|划线/i,
+    tools: ['read_marks', 'search_marks', 'search_all_marks', 'create_mark'],
+    boost: 40,
+  },
+  {
+    keywords: /活动|统计|最近.*做|activity/i,
+    tools: ['get_user_activity'],
+    boost: 40,
+  },
+  {
+    keywords: /draw\.?io|图表|流程图|架构图|云架构|思维导图|导图|白板|diagram|flowchart|architecture|mind\s*map|mindmap/i,
+    tools: [
+      'create_diagram_from_outline',
+      'create_diagram_file',
+      'create_drawio_diagram_from_cells',
+      'read_diagram_file',
+      'edit_drawio_diagram',
+      'get_drawio_shape_library',
+      'validate_drawio_diagram',
+      'export_drawio_diagram',
+    ],
+    boost: 55,
+  },
+]
 
 // ---------------------------------------------------------------------------
 // Context-based tool scoring
@@ -54,12 +167,23 @@ function computeContextualScore(
   tool: Tool,
   steps: ReActStep[],
   lastObservation: string | undefined,
-  iteration: number
+  iteration: number,
+  userInput: string | undefined,
 ): number {
   let score = 0
 
   // 基础分：所有工具都有
   score += 10
+
+  // 0. 用户输入的 query→tool affinity（最高优先级，专治"该用专用工具却用 web_search"）
+  if (userInput) {
+    for (const rule of QUERY_TOOL_AFFINITY) {
+      if (!rule.keywords.test(userInput)) continue
+      if (rule.tools.includes(tool.name)) {
+        score += rule.boost
+      }
+    }
+  }
 
   // 1. 上一步使用的工具的亲和性加分
   if (steps.length > 0) {
@@ -123,6 +247,8 @@ export interface DynamicFilterOptions {
   minScore?: number
   alwaysInclude?: string[]
   forceInclude?: string[]
+  /** Phase 1：用户当前输入，用于 query→tool affinity 加分 */
+  userInput?: string
 }
 
 const DEFAULT_OPTIONS: DynamicFilterOptions = {
@@ -132,6 +258,10 @@ const DEFAULT_OPTIONS: DynamicFilterOptions = {
     'get_editor_content',
     'replace_editor_content',
     'read_markdown_file',
+    'get_current_note_context',
+    'search_knowledge_objects',
+    'get_knowledge_object_overview',
+    'reindex_knowledge_objects',
     'safe_grep',
     'create_file',
     'get_current_time',
@@ -159,7 +289,7 @@ export function filterToolsDynamically(
   // 计算每个工具的得分
   const scoredTools: ToolScore[] = allTools.map(tool => ({
     tool,
-    score: computeContextualScore(tool, steps, lastObservation, iteration),
+    score: computeContextualScore(tool, steps, lastObservation, iteration, opts.userInput),
     reason: '',
   }))
 

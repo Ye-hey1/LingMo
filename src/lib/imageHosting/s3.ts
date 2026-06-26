@@ -1,7 +1,6 @@
 import { Store } from "@tauri-apps/plugin-store";
 import { fetch, Proxy } from '@tauri-apps/plugin-http'
 import { toast } from '@/hooks/use-toast';
-import { v4 as uuid } from 'uuid';
 
 interface S3Config {
   accessKeyId: string
@@ -296,7 +295,7 @@ export async function uploadImageByS3(file: File): Promise<string | undefined> {
     const proxy: Proxy | undefined = proxyUrl ? { all: proxyUrl } : undefined
 
     // 生成文件名
-    const id = uuid();
+    const id = crypto.randomUUID();
     const ext = file.name.split('.').pop() || 'jpg';
     const filename = `${id}.${ext}`.replace(/\s/g, '_');
     

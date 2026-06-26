@@ -215,6 +215,8 @@ export async function initAllDatabases() {
   const { initGithubStarsDb } = await import('./github-stars')
   const { initAiHotspotsDb } = await import('./ai-hotspots')
   const { initNoteHistoryDb } = await import('./history')
+  const { initAgentDb } = await import('./agent')
+  const { initKnowledgeObjectsDb } = await import('./knowledge-objects')
 
   // 先确保基础表存在，再做依赖这些表的初始化。
   await initChatsDb()
@@ -233,4 +235,7 @@ export async function initAllDatabases() {
   await initNoteIntelligenceDb()
   await initGithubStarsDb()
   await initAiHotspotsDb()
+  await initAgentDb()
+  // KnowledgeObject 是统一索引层，依赖各原表已存在，放最后
+  await initKnowledgeObjectsDb()
 }

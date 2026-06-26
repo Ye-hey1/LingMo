@@ -567,6 +567,14 @@ const INTERNAL_AGENT_INSTRUCTION_PATTERNS = [
   /已选择\s*Skill，但还没有真正完成执行步骤/i,
   /仅完成了\s*Skill\s*选择或说明读取/i,
   /Your previous response could not be parsed/i,
+  /基础策略规定\s*[:：]/i,
+  /错误恢复方案\s*[:：]/i,
+  /恢复策略\s*[:：]/i,
+  /内部策略\s*[:：]/i,
+  /当证据足够时\s*[，,]?\s*停止调用工具/i,
+  /停止调用工具并(?:直接)?(?:给出|输出)最终/i,
+  /抓取工具持续异常/i,
+  /两个搜索引擎都不可用/i,
 ]
 
 export function isInternalAgentInstruction(value: unknown): boolean {

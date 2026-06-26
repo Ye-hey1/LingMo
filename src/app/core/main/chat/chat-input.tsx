@@ -48,6 +48,7 @@ import {
   type LingMoFilePointerDragDetail,
 } from "@/lib/file-pointer-drag"
 import { buildTypingFrames } from './onboarding-typing'
+import type { ActivityCalendarData } from '@/lib/activity/types'
 import type { AiConfig, ModelConfig } from '@/app/core/setting/config'
 import { AiDocCommandPopover } from './ai-doc-command-popover'
 import { filterSlashCommands, findSlashCommand, type SlashCommandItem } from '@/lib/ai-doc-commands/slash-bridge'
@@ -496,6 +497,7 @@ export const ChatInput = React.memo(function ChatInput() {
     chats,
     loading,
     researchRunning,
+    agentState,
     chatMode,
     setChatMode,
     setLinkedResources: setChatLinkedResources,
@@ -509,7 +511,9 @@ export const ChatInput = React.memo(function ChatInput() {
     startNewConversation,
   } = useChatStore()
   const { marks, trashState } = useMarkStore()
-  const { activeFilePath, currentArticle, loadFileTree, fileTree } = useArticleStore()
+  const activeFilePath = useArticleStore((state) => state.activeFilePath)
+  const fileTree = useArticleStore((state) => state.fileTree)
+  const loadFileTree = useArticleStore((state) => state.loadFileTree)
 
   // 行内文件联想输入状态
   const [atSelectedIndex, setAtSelectedIndex] = useState(0)
@@ -546,7 +550,8 @@ export const ChatInput = React.memo(function ChatInput() {
   const [placeholder, setPlaceholder] = useState('')
   const [, setAiQuickPrompts] = useState<QuickPrompt[]>([])
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<SlashCommandItem | null>(null)
-  const isModelRunning = loading || researchRunning
+  const isAgentMode = chatMode === 'agent'
+  const isModelRunning = researchRunning || (isAgentMode ? agentState.isRunning : loading)
   const isResearchActive = researchRunning || (loading && chatMode === 'research')
   const slashHighlightSegments = useMemo(
     () => buildSlashHighlightSegments(text, selectedSlashCommand),
@@ -741,6 +746,7 @@ export const ChatInput = React.memo(function ChatInput() {
       try {
         const isAgentSkill = slashCommand.executionMode === 'agent'
         if (process.env.NODE_ENV !== 'production') {
+          // 调试日志：记录斜杠命令路由信息
           console.debug('[SlashSkill] route', {
             id: slashCommand.id,
             runtimeProfile: slashCommand.runtimeProfile,
@@ -767,7 +773,7 @@ export const ChatInput = React.memo(function ChatInput() {
     if (!command) return
 
     // 加载活动数据（回顾类命令需要，其他命令可接受 null）
-    let data: any = null
+    let data: ActivityCalendarData | null = null
     if (command.category === 'review') {
       try {
         data = (await loadCachedActivityCalendarData({ includeExternalAiDetails: true }))
@@ -1448,7 +1454,7 @@ ${exec.prompt}`
         userInput: input,
         chatMode,
         currentFilePath: activeFilePath,
-        currentArticle,
+        currentArticle: useArticleStore.getState().currentArticle,
         linkedResources,
         linkedResourcePreviews,
         quoteData: pendingQuote
@@ -1889,6 +1895,9 @@ ${exec.prompt}`
     const resourcePath = resource.relativePath || resource.path || resource.name
     const isPdf = /\.pdf$/i.test(resourcePath)
     const isActiveResource = activeFilePath === resource.relativePath
+    const currentArticle = isActiveResource
+      ? useArticleStore.getState().currentArticle
+      : ''
 
     if (isPdf) {
       addLinkedResource(resource, {
@@ -1920,7 +1929,7 @@ ${exec.prompt}`
       },
     })
     return key
-  }, [activeFilePath, addLinkedResource, currentArticle, generateFilePreview, getLinkedResourceKey])
+  }, [activeFilePath, addLinkedResource, generateFilePreview, getLinkedResourceKey])
 
   useEffect(() => {
     attachResourceWithContextRef.current = attachResourceWithContext

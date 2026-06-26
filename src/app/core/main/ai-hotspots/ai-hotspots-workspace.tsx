@@ -5,22 +5,14 @@ import {
   AlertCircle,
   Bookmark,
   Clipboard,
-  Copy,
-  ExternalLink,
-  FileText,
   Heart,
   Layers3,
   Newspaper,
   Radar,
   Rss,
-  Save,
-  Search,
   Sparkles,
   Trash2,
-  WandSparkles,
-  X,
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { toast } from '@/hooks/use-toast'
 import emitter from '@/lib/emitter'
@@ -35,9 +27,10 @@ import { HotspotDigestView, type HotspotDigestScope } from './hotspot-digest-vie
 import { HotspotFilterBar, type HotspotViewMode } from './hotspot-filter-bar'
 import { HotspotItem } from './hotspot-item'
 import { HotspotList } from './hotspot-list'
+import { HotspotReader } from './hotspot-reader'
 import { HotspotSettingsDialog } from './hotspot-settings-dialog'
 import { HotspotSourceView } from './hotspot-source-view'
-import { formatHotspotTime, getHotspotHost, getPrimaryHotspotTag } from './hotspot-utils'
+import { getPrimaryHotspotTag } from './hotspot-utils'
 
 type TopicOption = {
   key: string
@@ -329,12 +322,12 @@ function NavButton({
       className={cn(
         'flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-left transition-colors',
         active
-          ? 'bg-[#165DFF] text-white shadow-sm'
-          : 'text-[#4E5968] hover:bg-[#F2F3F5] hover:text-[#1D2129]',
+          ? 'bg-primary text-primary-foreground'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
       onClick={onClick}
     >
-      <span className={cn('flex size-5 shrink-0 items-center justify-center', active ? 'text-white' : 'text-[#86909C]')}>
+      <span className={cn('flex size-5 shrink-0 items-center justify-center', active ? 'text-primary-foreground' : 'text-muted-foreground/60')}>
         {item.icon}
       </span>
       <span className="min-w-0 flex-1">
@@ -342,15 +335,13 @@ function NavButton({
       </span>
       <span className={cn(
         'text-[11px] tabular-nums',
-        active ? 'text-white/80' : 'text-[#C9CDD4]',
+        active ? 'text-primary-foreground/70' : 'text-muted-foreground/40',
       )}>
         {count}
       </span>
     </button>
   )
 }
-
-// Metric component removed - no longer used in sidebar
 
 function SourceMiniList({ sources }: { sources: AiHotspotSourceStatus[] }) {
   const topSources = sources
@@ -359,228 +350,20 @@ function SourceMiniList({ sources }: { sources: AiHotspotSourceStatus[] }) {
     .slice(0, 5)
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
       {topSources.map(source => (
-        <div key={source.sourceId} className="flex min-w-0 items-center gap-2 rounded px-1 py-1 text-[12px] hover:bg-[#F2F3F5]">
-          <span className={cn('size-1.5 shrink-0 rounded-full', source.ok ? 'bg-[#00B42A]' : 'bg-[#F53F3F]')} />
-          <span className="min-w-0 flex-1 truncate text-[#4E5968]">{source.sourceName}</span>
-          <span className="shrink-0 tabular-nums text-[#86909C]">{source.itemCount}</span>
+        <div key={source.sourceId} className="flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-[12px] hover:bg-muted">
+          <span className={cn('size-1.5 shrink-0 rounded-full', source.ok ? 'bg-emerald-500' : 'bg-destructive')} />
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">{source.sourceName}</span>
+          <span className="shrink-0 tabular-nums text-muted-foreground/60">{source.itemCount}</span>
         </div>
       ))}
       {topSources.length === 0 ? (
-        <div className="rounded bg-white px-2 py-3 text-center text-[12px] leading-5 text-[#86909C]">
+        <div className="rounded-md bg-background px-2 py-3 text-center text-[12px] leading-5 text-muted-foreground/70">
           刷新后显示信源状态。
         </div>
       ) : null}
     </div>
-  )
-}
-
-function SignalDetailPanel({
-  item,
-  open,
-  relatedItems,
-  onAddToDigest,
-  onClose,
-  onDeepDive,
-  onGenerateInsight,
-  onSaveSnapshot,
-  onSelectRelated,
-}: {
-  item: AiHotspotItem | null
-  open: boolean
-  relatedItems: AiHotspotItem[]
-  onAddToDigest: (id: string) => void
-  onClose: () => void
-  onDeepDive: (id: string) => void
-  onGenerateInsight: (id: string) => void
-  onSaveSnapshot: (id: string) => void
-  onSelectRelated: (id: string) => void
-}) {
-  if (!open || !item) {
-    return (
-      <aside className="hidden w-0 shrink-0 border-l border-transparent bg-white transition-[width] duration-200 xl:flex" aria-hidden="true">
-        <div className="hidden flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[#86909C]">
-          <Radar className="mb-3 size-9" />
-          选择一条信号查看详情
-        </div>
-      </aside>
-    )
-  }
-
-  const summary = item.signalSummary || item.summary || ''
-  const essence = item.signalEssence || ''
-
-  return (
-    <aside className="hidden w-[360px] shrink-0 border-l border-[#E5E7EB] bg-[#FAFAFA] transition-[width] duration-200 xl:flex">
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* 顶部：标题 + 关闭 */}
-        <div className="shrink-0 border-b border-[#E5E7EB] bg-white px-4 py-3">
-          <div className="flex items-start justify-between gap-2">
-            <h3 className="flex-1 break-words text-sm font-semibold leading-5 text-[#1D2129]">{item.title}</h3>
-            <button
-              type="button"
-              className="shrink-0 rounded p-1 text-[#C9CDD4] hover:bg-[#F2F3F5] hover:text-[#4E5968]"
-              onClick={onClose}
-            >
-              <X className="size-4" />
-            </button>
-          </div>
-          <div className="mt-2 flex items-center gap-2 text-xs text-[#86909C]">
-            <span className="rounded bg-[#F7F8FA] px-1.5 py-0.5">{item.sourceName}</span>
-            <span>{formatHotspotTime(item.lastSeenAt || item.publishedAt)}</span>
-          </div>
-        </div>
-
-        {/* 内容区 */}
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="space-y-3 p-4">
-            {/* 操作按钮 - 横向排列 */}
-            <div className="flex items-center gap-1.5">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
-                onClick={() => onSaveSnapshot(item.id)}
-              >
-                <Save className="size-3" />
-                {item.savedNotePath ? '快照' : '沉淀'}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
-                onClick={() => onAddToDigest(item.id)}
-              >
-                <FileText className="size-3" />
-                日报
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
-                onClick={() => onDeepDive(item.id)}
-              >
-                <Search className="size-3" />
-                深挖
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
-                onClick={() => window.open(item.url, '_blank')}
-              >
-                <ExternalLink className="size-3" />
-                原文
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 rounded px-2 text-xs shadow-none"
-                onClick={() => navigator.clipboard?.writeText(item.url)}
-              >
-                <Copy className="size-3" />
-              </Button>
-            </div>
-
-            {/* 标签 + 热度 */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              {item.score >= 36 && <span className="rounded bg-[#F53F3F] px-1.5 py-0.5 text-[11px] font-medium text-white">高强度</span>}
-              {!item.isRead && <span className="rounded bg-[#165DFF] px-1.5 py-0.5 text-[11px] font-medium text-white">新信号</span>}
-              <span className={cn(
-                'rounded px-1.5 py-0.5 text-[11px] font-medium',
-                item.score >= 24 ? 'bg-[#FFF7E8] text-[#FF7D00]' : 'bg-[#F2F3F5] text-[#86909C]',
-              )}>
-                热度 {item.score}
-              </span>
-              {item.tags.slice(0, 3).map(tag => (
-                <span key={tag} className="rounded bg-[#F2F3F5] px-1.5 py-0.5 text-[11px] text-[#4E5968]">{tag}</span>
-              ))}
-            </div>
-
-            {/* 摘要 */}
-            {summary && (
-              <div className="rounded-lg border border-[#E5E7EB] bg-white p-3">
-                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#4E5968]">
-                  <Sparkles className="size-3.5 text-[#165DFF]" />
-                  内容摘要
-                </div>
-                <p className="text-sm leading-6 text-[#1D2129]">{summary}</p>
-              </div>
-            )}
-
-            {/* 精华判断 */}
-            {essence && (
-              <div className="rounded-lg border border-[#FFE7BA] bg-[#FFFDF5] p-3">
-                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#946500]">
-                  <WandSparkles className="size-3.5" />
-                  精华判断
-                </div>
-                <p className="text-sm leading-6 text-[#4E5968]">{essence}</p>
-              </div>
-            )}
-
-            {/* 生成按钮 */}
-            {(!item.signalSummary || !item.signalEssence) && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-full gap-1.5 rounded text-xs shadow-none hover:bg-[#F2F3F5]"
-                onClick={() => onGenerateInsight(item.id)}
-              >
-                <WandSparkles className="size-3.5" />
-                AI 生成摘要
-              </Button>
-            )}
-
-            {/* 影响对象 */}
-            {item.impactAudience.length > 0 && (
-              <div>
-                <div className="mb-1.5 text-xs font-medium text-[#4E5968]">影响对象</div>
-                <div className="flex flex-wrap gap-1">
-                  {item.impactAudience.map(a => (
-                    <span key={a} className="rounded bg-[#E8F3FF] px-2 py-0.5 text-xs text-[#165DFF]">{a}</span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* 证据线 */}
-            <div className="rounded-lg border border-[#E5E7EB] bg-white p-3">
-              <div className="mb-1.5 text-xs font-medium text-[#4E5968]">来源信息</div>
-              <div className="space-y-1 text-xs text-[#86909C]">
-                <div>信源：{item.sourceName} / {item.feedName}</div>
-                <div>站点：{getHotspotHost(item.url) || '未知'}</div>
-                <div>时间：{item.lastSeenAt || item.publishedAt}</div>
-              </div>
-            </div>
-
-            {/* 相关信号 */}
-            {relatedItems.length > 0 && (
-              <div>
-                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#4E5968]">
-                  <Layers3 className="size-3.5" />
-                  相关信号
-                </div>
-                <div className="space-y-1.5">
-                  {relatedItems.map(related => (
-                    <button
-                      key={related.id}
-                      type="button"
-                      className="w-full rounded border border-[#E5E7EB] bg-white px-3 py-2 text-left transition-colors hover:border-[#165DFF] hover:bg-[#F7FBFF]"
-                      onClick={() => onSelectRelated(related.id)}
-                    >
-                      <div className="line-clamp-2 text-xs font-medium leading-4 text-[#1D2129]">{related.title}</div>
-                      <div className="mt-1 text-[11px] text-[#C9CDD4]">{related.sourceName} · {formatHotspotTime(related.lastSeenAt || related.publishedAt)}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </ScrollArea>
-      </div>
-    </aside>
   )
 }
 
@@ -615,9 +398,9 @@ function ClusterView({
 }) {
   if (groups.length === 0) {
     return (
-      <div className="flex h-[360px] flex-col items-center justify-center rounded-md border bg-background px-4 text-center">
-        <Layers3 className="mb-3 size-10 text-muted-foreground" />
-        <div className="text-sm font-medium">暂无主题簇</div>
+      <div className="flex h-[360px] flex-col items-center justify-center rounded-lg border border-border bg-card px-4 text-center">
+        <Layers3 className="mb-3 size-10 text-muted-foreground/60" />
+        <div className="text-sm font-medium text-foreground">暂无主题簇</div>
         <div className="mt-1 max-w-md text-sm leading-6 text-muted-foreground">
           刷新或放宽筛选后，会按模型、工具、研究、算力等主题自动聚合。
         </div>
@@ -629,9 +412,9 @@ function ClusterView({
     <div className="space-y-6">
       {groups.map(group => (
         <section key={group.tag} className="space-y-2">
-          <div className="flex items-center gap-2 border-b pb-2">
+          <div className="flex items-center gap-2 border-b border-border pb-2">
             <Layers3 className="size-4 text-muted-foreground" />
-            <h3 className="text-sm font-semibold">{group.tag}</h3>
+            <h3 className="text-sm font-semibold text-foreground">{group.tag}</h3>
             <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{group.items.length} 条</span>
           </div>
           <div className="space-y-2">
@@ -768,7 +551,7 @@ export function AiHotspotsWorkspace({ onClose }: AiHotspotsWorkspaceProps) {
   }
   const showSignalList = view !== 'digest' && view !== 'sources'
   const showDetailPanel = showSignalList && view !== 'trash'
-  const detailPanelOpen = showDetailPanel && Boolean(selectedItem)
+  const readerOpen = showDetailPanel && Boolean(selectedItem)
   const emptyCopy = getEmptyCopy(view, items.length > 0, hasActiveFilters || activeTopic !== 'all')
 
   useEffect(() => {
@@ -1188,18 +971,18 @@ export function AiHotspotsWorkspace({ onClose }: AiHotspotsWorkspaceProps) {
   }
 
   return (
-    <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-[#F7F8FA] text-[#1D2129]">
-      {/* 左侧边栏 */}
-      <aside className="hidden w-[220px] shrink-0 flex-col border-r border-[#E5E7EB] bg-[#FAFAFA] lg:flex">
+    <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-background text-foreground">
+      {/* 左侧导航 */}
+      <aside className="hidden w-[220px] shrink-0 flex-col border-r border-border bg-muted/30 lg:flex">
         {/* Logo + 标题 */}
-        <div className="border-b border-[#F0F0F0] px-4 py-4">
+        <div className="border-b border-border px-4 py-4">
           <div className="flex items-center gap-2.5">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#165DFF] text-white">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <Radar className="size-4" />
             </div>
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-[#1D2129]">AI 信号雷达</div>
-              <div className="text-[11px] text-[#C9CDD4]">知识聚合 · 信号追踪</div>
+              <div className="text-sm font-semibold text-foreground">AI 信号雷达</div>
+              <div className="text-[11px] text-muted-foreground/60">知识聚合 · 信号追踪</div>
             </div>
           </div>
         </div>
@@ -1225,8 +1008,8 @@ export function AiHotspotsWorkspace({ onClose }: AiHotspotsWorkspaceProps) {
         </div>
 
         {/* 信源状态 */}
-        <div className="border-t border-[#F0F0F0] px-3 py-3">
-          <div className="mb-2 flex items-center justify-between text-[11px] text-[#C9CDD4]">
+        <div className="border-t border-border px-3 py-3">
+          <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground/60">
             <span>信源</span>
             <span>{sources.filter(s => s.ok).length}/{sources.length}</span>
           </div>
@@ -1234,76 +1017,89 @@ export function AiHotspotsWorkspace({ onClose }: AiHotspotsWorkspaceProps) {
         </div>
       </aside>
 
-      {/* 主内容区 */}
+      {/* 主区域：响应式 master-detail */}
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {/* 筛选栏 - 在主内容区顶部 */}
+        {/* 筛选栏：小屏阅读时隐藏，让阅读器占满 */}
         {view !== 'digest' && view !== 'sources' && (
-          <HotspotFilterBar
-            filters={filters}
-            items={filterBarItems}
-            sources={sources}
-            activeTopic={activeTopic}
-            isRefreshing={isRefreshing}
-            viewMode={viewMode}
-            topicTotalCount={currentViewItems.length}
-            topicOptions={topicOptions}
-            onFiltersChange={setFilters}
-            onClose={onClose}
-            onOpenSettings={() => setSettingsOpen(true)}
-            onRefresh={view === 'featured' ? handleFeaturedRefresh : handleRefresh}
-            onTopicChange={setActiveTopic}
-            onViewModeChange={setViewMode}
-          />
+          <div className={cn(readerOpen && 'hidden xl:block')}>
+            <HotspotFilterBar
+              filters={filters}
+              items={filterBarItems}
+              sources={sources}
+              activeTopic={activeTopic}
+              isRefreshing={isRefreshing}
+              viewMode={viewMode}
+              topicTotalCount={currentViewItems.length}
+              topicOptions={topicOptions}
+              onFiltersChange={setFilters}
+              onClose={onClose}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onRefresh={view === 'featured' ? handleFeaturedRefresh : handleRefresh}
+              onTopicChange={setActiveTopic}
+              onViewModeChange={setViewMode}
+            />
+          </div>
         )}
 
         {/* 错误提示 */}
         {error ? (
-          <div className="flex shrink-0 items-start gap-2 bg-[#FEECEC] px-4 py-2 text-xs text-[#F53F3F]">
+          <div className="flex shrink-0 items-start gap-2 bg-destructive/10 px-4 py-2 text-xs text-destructive">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
             <span>{error}</span>
           </div>
         ) : null}
 
-        {/* 内容区 */}
+        {/* 内容区：列表 + 应用内阅读器 */}
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          {view === 'digest' ? (
-            <main className="min-h-0 flex-1 overflow-y-auto bg-[#F7F8FA] p-4 lg:overflow-hidden">
-              {renderMain()}
-            </main>
+          {/* 列表面板：阅读器打开时，大屏收窄为侧栏，小屏隐藏 */}
+          <div className={cn(
+            'flex min-h-0 flex-col',
+            readerOpen ? 'hidden w-[400px] shrink-0 border-r border-border bg-muted/20 xl:flex' : 'flex-1 bg-muted/20',
+          )}>
+            {view === 'digest' ? (
+              <main className="min-h-0 flex-1 overflow-y-auto p-4 lg:overflow-hidden">
+                {renderMain()}
+              </main>
             ) : (
-              <ScrollArea className="min-h-0 flex-1 bg-[#F7F8FA]">
+              <ScrollArea className="min-h-0 flex-1">
                 <main className="w-full px-4 py-4">
                   {renderMain()}
                 </main>
               </ScrollArea>
             )}
-
-            {showDetailPanel ? (
-              <SignalDetailPanel
-                item={selectedItem}
-                open={detailPanelOpen}
-                relatedItems={relatedItems}
-                onClose={() => setSelectedItemId(null)}
-                onSaveSnapshot={(id) => void handleSaveSnapshot(id)}
-                onGenerateInsight={(id) => void handleGenerateInsight(id)}
-                onAddToDigest={(id) => void handleAddToDigest(id)}
-                onDeepDive={(id) => sendItemToChat(id, 'deep-dive')}
-                onSelectRelated={handleSelectRelated}
-              />
-            ) : null}
           </div>
 
-          {/* 底部状态栏 */}
-          <div className="flex h-7 shrink-0 items-center gap-2 border-t border-[#E5E7EB] bg-white px-3 text-[11px] text-[#86909C]">
-            <span className="whitespace-nowrap">{Math.min(displayCount, visibleItems.length)}/{activeItems.length} 条</span>
-            <span className="h-3 w-px bg-[#E5E7EB]" />
-            <span className="whitespace-nowrap">{favoriteCount} 收藏</span>
-            <span className="whitespace-nowrap">{savedCount} 快照</span>
-            <span className="ml-auto whitespace-nowrap">{formatRefreshTime(lastRefreshAt)}</span>
-            {failedSourceCount > 0 && (
-              <span className="whitespace-nowrap text-[#F53F3F]">{failedSourceCount} 源失败</span>
-            )}
-          </div>
+          {/* 应用内阅读器：大屏右侧主阅读区，小屏占满 */}
+          {readerOpen && selectedItem ? (
+            <HotspotReader
+              item={selectedItem}
+              relatedItems={relatedItems}
+              canBack
+              onBack={() => setSelectedItemId(null)}
+              onClose={() => setSelectedItemId(null)}
+              onToggleFavorite={(id) => void toggleFavorite(id)}
+              onMarkRead={(id, read) => void markRead(id, read)}
+              onSaveSnapshot={(id) => void handleSaveSnapshot(id)}
+              onAddToDigest={(id) => void handleAddToDigest(id)}
+              onSendToChat={(id) => sendItemToChat(id, 'discuss')}
+              onDeepDive={(id) => sendItemToChat(id, 'deep-dive')}
+              onGenerateInsight={(id) => void handleGenerateInsight(id)}
+              onSelectRelated={handleSelectRelated}
+            />
+          ) : null}
+        </div>
+
+        {/* 底部状态栏 */}
+        <div className="flex h-7 shrink-0 items-center gap-2 border-t border-border bg-background px-3 text-[11px] text-muted-foreground">
+          <span className="whitespace-nowrap">{Math.min(displayCount, visibleItems.length)}/{activeItems.length} 条</span>
+          <span className="h-3 w-px bg-border" />
+          <span className="whitespace-nowrap">{favoriteCount} 收藏</span>
+          <span className="whitespace-nowrap">{savedCount} 快照</span>
+          <span className="ml-auto whitespace-nowrap">{formatRefreshTime(lastRefreshAt)}</span>
+          {failedSourceCount > 0 && (
+            <span className="whitespace-nowrap text-destructive">{failedSourceCount} 源失败</span>
+          )}
+        </div>
       </section>
 
       <HotspotSettingsDialog

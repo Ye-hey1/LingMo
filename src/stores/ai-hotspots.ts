@@ -33,7 +33,10 @@ import {
 } from '@/lib/ai-hotspots'
 import { seedBuiltinSources } from '@/lib/ai-hotspots/seed-builtin-sources'
 import { generateAiHotspotInsight } from '@/lib/ai-hotspots/insights'
+import { runAiFilterPipeline, type AiTag } from '@/lib/ai-hotspots/ai-filter'
 import { writeHotspotDigestNote, writeHotspotItemNote } from '@/lib/ai-hotspots/notes'
+import { DEFAULT_INTEREST_TEXT, DEFAULT_INTERESTS_TEXT } from '@/lib/ai-hotspots/interests'
+import { getInterestConfig, invalidateInterestConfig } from '@/lib/ai-hotspots/rules'
 import type {
   AiHotspotFilters,
   AiHotspotItem,
@@ -48,12 +51,22 @@ type AiHotspotRefreshProgress = {
   message: string
 } | null
 
+export type AiHotspotFilterMethod = 'keyword' | 'ai'
+
 export interface AiHotspotSettings {
   autoRefreshOnOpen: boolean
   refreshCooldownMinutes: number
   defaultTimeRange: AiHotspotTimeRange
   translateTitles: boolean
   translateMaxNew: number
+  /** 筛选模式：keyword=词组DSL匹配(免token) / ai=AI智能分类 */
+  filterMethod: AiHotspotFilterMethod
+  /** AI 智能分类的最低相关度阈值 (0-1) */
+  aiMinScore: number
+  /** 词组 DSL 配置文本（keyword 模式 + ai 模式回退） */
+  interestText: string
+  /** 自然语言兴趣描述（ai 模式） */
+  interestsText: string
 }
 
 type AiHotspotDigestScope = 'current' | '24h' | '7d' | 'favorites' | 'unread'
@@ -66,6 +79,10 @@ interface AiHotspotsState {
   userFeeds: AiHotspotUserFeed[]
   filters: AiHotspotFilters
   settings: AiHotspotSettings
+  /** AI 智能分类缓存的标签集合（两阶段流水线复用，省 token） */
+  aiTagsCache: AiTag[]
+  /** 上次 AI 分类时兴趣文本的 hash（增量决策） */
+  aiInterestsHash: string
   isLoading: boolean
   isRefreshing: boolean
   lastRefreshAt: string | null
@@ -96,6 +113,8 @@ interface AiHotspotsState {
   updateUserFeed: (id: string, patch: UpdateAiHotspotUserFeedPatch) => Promise<void>
   deleteUserFeed: (id: string) => Promise<void>
   importOpml: (content: string) => Promise<number>
+  /** AI 智能分类流水线：从兴趣描述提取标签并对未分类条目批量分类 */
+  classifyWithAi: () => Promise<{ classified: number; tags: number }>
 }
 
 const STORE_KEYS = {
@@ -104,6 +123,10 @@ const STORE_KEYS = {
   defaultTimeRange: 'aiHotspotsDefaultTimeRange',
   translateTitles: 'aiHotspotsTranslateTitles',
   translateMaxNew: 'aiHotspotsTranslateMaxNew',
+  filterMethod: 'aiHotspotsFilterMethod',
+  aiMinScore: 'aiHotspotsAiMinScore',
+  interestText: 'aiHotspotsInterestText',
+  interestsText: 'aiHotspotsInterestsText',
   lastRefreshAt: 'aiHotspotsLastRefreshAt',
   lastDailyRefreshAt: 'aiHotspotsDailyLastRefreshAt',
   lastDailyAutoRefreshDate: 'aiHotspotsDailyLastAutoRefreshDate',
@@ -115,6 +138,10 @@ const DEFAULT_SETTINGS: AiHotspotSettings = {
   defaultTimeRange: '24h',
   translateTitles: false,
   translateMaxNew: AI_HOTSPOT_CONFIG.refresh.defaultTranslateMaxNew,
+  filterMethod: 'keyword',
+  aiMinScore: 0.6,
+  interestText: DEFAULT_INTEREST_TEXT,
+  interestsText: DEFAULT_INTERESTS_TEXT,
 }
 
 const DEFAULT_FILTERS: AiHotspotFilters = {
@@ -133,6 +160,10 @@ async function loadTauriStoreSettings() {
     defaultTimeRange: await store.get<AiHotspotTimeRange>(STORE_KEYS.defaultTimeRange) ?? DEFAULT_SETTINGS.defaultTimeRange,
     translateTitles: await store.get<boolean>(STORE_KEYS.translateTitles) ?? DEFAULT_SETTINGS.translateTitles,
     translateMaxNew: await store.get<number>(STORE_KEYS.translateMaxNew) ?? DEFAULT_SETTINGS.translateMaxNew,
+    filterMethod: await store.get<AiHotspotFilterMethod>(STORE_KEYS.filterMethod) ?? DEFAULT_SETTINGS.filterMethod,
+    aiMinScore: await store.get<number>(STORE_KEYS.aiMinScore) ?? DEFAULT_SETTINGS.aiMinScore,
+    interestText: await store.get<string>(STORE_KEYS.interestText) ?? DEFAULT_SETTINGS.interestText,
+    interestsText: await store.get<string>(STORE_KEYS.interestsText) ?? DEFAULT_SETTINGS.interestsText,
   }
   const lastRefreshAt = await store.get<string>(STORE_KEYS.lastRefreshAt) || null
   const lastDailyRefreshAt = await store.get<string>(STORE_KEYS.lastDailyRefreshAt) || null
@@ -267,6 +298,8 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
   userFeeds: [],
   filters: DEFAULT_FILTERS,
   settings: DEFAULT_SETTINGS,
+  aiTagsCache: [],
+  aiInterestsHash: '',
   isLoading: false,
   isRefreshing: false,
   lastRefreshAt: null,
@@ -300,7 +333,14 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
     await store.set(STORE_KEYS.defaultTimeRange, nextSettings.defaultTimeRange)
     await store.set(STORE_KEYS.translateTitles, nextSettings.translateTitles)
     await store.set(STORE_KEYS.translateMaxNew, nextSettings.translateMaxNew)
+    await store.set(STORE_KEYS.filterMethod, nextSettings.filterMethod)
+    await store.set(STORE_KEYS.aiMinScore, nextSettings.aiMinScore)
+    await store.set(STORE_KEYS.interestText, nextSettings.interestText)
+    await store.set(STORE_KEYS.interestsText, nextSettings.interestsText)
     await store.save()
+    // 兴趣配置变更后，刷新分类/评分缓存
+    invalidateInterestConfig()
+    getInterestConfig(nextSettings.interestText || DEFAULT_INTEREST_TEXT)
 
     const filters = {
       ...get().filters,
@@ -336,6 +376,8 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
         ...get().filters,
         timeRange: settings.defaultTimeRange,
       }
+      // 注入用户兴趣配置（词组 DSL），供分类/评分使用
+      getInterestConfig(settings.interestText || DEFAULT_INTEREST_TEXT)
 
       set({
         items,
@@ -726,6 +768,49 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
 
     set({ userFeeds: await getAiHotspotUserFeeds() })
     return importedCount
+  },
+
+  classifyWithAi: async () => {
+    const { settings, items, aiTagsCache, aiInterestsHash } = get()
+    if (settings.filterMethod !== 'ai') {
+      return { classified: 0, tags: aiTagsCache.length }
+    }
+    // 仅对未分类过的活跃条目增量分类（省 token）；标签重建时全量
+    const active = items.filter(item => !item.deletedAt && !item.isIgnored)
+    const pending = active
+
+    set({ refreshProgress: { stage: 'refreshing', message: 'AI 正在智能分类' } })
+    try {
+      const result = await runAiFilterPipeline(pending, {
+        interestsText: settings.interestsText,
+        interestText: settings.interestText,
+        minScore: settings.aiMinScore,
+        batchSize: 200,
+        cachedTags: aiTagsCache,
+        cachedInterestsHash: aiInterestsHash,
+      })
+
+      // 写回分类结果：把 AI 标签写入 item.tags（保留原标签）
+      const tagById = new Map(result.classifications.map(c => [c.id, c.tag]))
+      let classified = 0
+      for (const item of items) {
+        const aiTag = tagById.get(item.id)
+        if (aiTag && !item.tags.includes(aiTag)) {
+          item.tags = [aiTag, ...item.tags.filter(t => t !== aiTag)]
+          await setAiHotspotInsight(item.id, { signalSummary: item.signalSummary } as never)
+          classified += 1
+        }
+      }
+
+      set({
+        aiTagsCache: result.tags,
+        aiInterestsHash: result.interestsHash,
+        items: await getAiHotspotItems(),
+      })
+      return { classified, tags: result.tags.length }
+    } finally {
+      set({ refreshProgress: null })
+    }
   },
 }))
 

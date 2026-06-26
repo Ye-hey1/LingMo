@@ -2,9 +2,11 @@
 
 import { create } from 'zustand';
 import type { NoteTopic } from '@/db/note-topics';
+import type { NoteRelation } from '@/db/note-relations';
 import type { VectorEmbeddingDocument } from '@/db/vector';
 import type { NodeType, EdgeType, NodeKind, GraphNode, GraphEdge, GraphFilters, PhysicsConfig, ColorGroup } from '../types';
 import { NODE_TYPE_COLORS } from '../constants';
+import { parseNote } from '@/lib/knowledge/frontmatter';
 import {
   cleanKnowledgeSample,
   extractKnowledgeTopicCandidates,
@@ -46,8 +48,14 @@ interface GraphState {
   graphMode: 'global' | 'local';
   graphView: 'topic' | 'note';
 
-  loadGraph: () => Promise<void>;
+  // Cached snapshots prevent theme/view/tab switches from re-reading and re-analyzing notes.
+  cacheKey: string;
+  cacheInvalidatedAt: number;
+  graphCache: Map<string, GraphCacheEntry>;
+
+  loadGraph: (options?: { force?: boolean }) => Promise<void>;
   loadNeighbors: (nodeId: string, depth?: number) => Promise<void>;
+  invalidateCache: () => void;
   createNode: (type: NodeType, data: Partial<GraphNode>) => Promise<void>;
   updateNode: (nodeId: string, updates: Partial<GraphNode>) => Promise<void>;
   deleteNode: (nodeId: string) => Promise<void>;
@@ -99,6 +107,25 @@ interface NoteMeta {
   name: string;
   title: string;
   content: string;
+}
+
+interface GraphCacheEntry {
+  cacheKey: string;
+  graphMode: 'global' | 'local';
+  graphView: 'topic' | 'note';
+  notePaths: string[];
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  createdAt: number;
+}
+
+interface ExplicitNoteRelation {
+  source: string;
+  target: string;
+  type: string;
+  confidence: number;
+  evidence: string;
+  sourceMethod: string;
 }
 
 interface TopicAccumulator {
@@ -213,6 +240,44 @@ function extractFallbackTopics(content: string, title: string): Array<{ keyword:
   return extractKnowledgeTopicCandidates(content, title).slice(0, 12);
 }
 
+function expandCuratedTagTopics(tag: string) {
+  const raw = String(tag || '').trim().replace(/^#+/, '');
+  if (!raw) return [];
+
+  const candidates = new Set<string>([raw]);
+  for (const part of raw.split(/[/>\\]+/).map(item => item.trim()).filter(Boolean)) {
+    candidates.add(part.replace(/^#+/, ''));
+  }
+  if (/[\u4e00-\u9fa5]/.test(raw)) {
+    candidates.add(raw.replace(/[/>\\\s_-]+/g, ''));
+  }
+
+  return Array.from(candidates)
+    .map(normalizeTopicKeyword)
+    .filter(keyword => isUsefulTopic(keyword));
+}
+
+function addTopicForFile(
+  topicsByFile: Map<string, Array<{ keyword: string; weight: number; source: string }>>,
+  filename: string,
+  topic: { keyword: string; weight: number; source: string },
+) {
+  const keyword = normalizeTopicKeyword(topic.keyword);
+  if (!isUsefulTopic(keyword)) return;
+
+  const topics = topicsByFile.get(filename) ?? [];
+  const existing = topics.find(item => item.keyword === keyword);
+  if (existing) {
+    existing.weight = clamp(existing.weight + topic.weight, 0.08, 4.8);
+    if (topic.source === 'frontmatter' || existing.source === 'frontmatter') {
+      existing.source = 'frontmatter';
+    }
+  } else {
+    topics.push({ ...topic, keyword, weight: clamp(topic.weight, 0.08, 4.8) });
+  }
+  topicsByFile.set(filename, topics);
+}
+
 function cosineSimilarity(vecA: number[], vecB: number[]) {
   if (vecA.length !== vecB.length || vecA.length === 0) return 0;
 
@@ -260,6 +325,61 @@ function edgeKey(source: string, target: string) {
   return source < target ? `${source}:::${target}` : `${target}:::${source}`;
 }
 
+function directedEdgeKey(source: string, target: string, label: string, sourceMethod = '') {
+  return `${source}->${target}:${label}:${sourceMethod}`;
+}
+
+function normalizeRelationType(type?: string) {
+  const normalized = String(type || 'related').trim().toLowerCase();
+  if (normalized === 'related_to') return 'related';
+  if (normalized === 'part_of') return 'part-of';
+  if (normalized === 'example_of') return 'example-of';
+  if (normalized === 'similar_to') return 'analogous';
+  if (normalized === 'builds_on') return 'extends';
+  return normalized.replace(/_/g, '-');
+}
+
+function getRelationDisplayLabel(type?: string) {
+  const normalized = normalizeRelationType(type);
+  const labels: Record<string, string> = {
+    references: '引用',
+    related: '相关',
+    extends: '延伸',
+    supports: '支撑',
+    contradicts: '矛盾',
+    analogous: '类比',
+    'example-of': '示例',
+    uses: '使用',
+    mentions: '提及',
+    'part-of': '属于',
+    created: '创建',
+  };
+  return labels[normalized] ?? normalized;
+}
+
+function getSourceDisplayLabel(sourceMethod?: string) {
+  const labels: Record<string, string> = {
+    wikilink: '双链',
+    frontmatter: '显式关联',
+    keyword: '关键词',
+    cosine: '向量',
+    llm: 'AI 判定',
+    cross_validated: '交叉验证',
+    topic: '主题',
+    vector: '向量',
+  };
+  return labels[String(sourceMethod || '').trim()] ?? sourceMethod ?? '';
+}
+
+function getEdgeSourceMethods(edge: GraphEdge) {
+  return Array.from(new Set([
+    ...(edge.metadata?.sourceMethods ?? []),
+    edge.metadata?.sourceMethod,
+    edge.label === 'wikilink' ? 'wikilink' : undefined,
+    edge.label === 'semantic' ? 'cosine' : undefined,
+  ].filter(Boolean) as string[]));
+}
+
 function addTopicEdge(
   edgeMap: Map<string, TopicEdgeAccumulator>,
   source: string,
@@ -289,12 +409,29 @@ function filterGraphData(nodes: GraphNode[], edges: GraphEdge[], filters: GraphF
     if (filters.types && filters.types.length > 0) {
       if (!filters.types.includes(node.nodeType)) return false;
     }
+    if (filters.nodeKinds && filters.nodeKinds.length > 0) {
+      if (!node.kind || !filters.nodeKinds.includes(node.kind)) return false;
+    }
+    if (filters.nodeModes && filters.nodeModes.length > 0) {
+      const mode = node.nodeProperties?.mode;
+      if (!mode || !filters.nodeModes.includes(mode)) return false;
+    }
     if (!filters.includeNoisyTopics && node.nodeProperties?.mode === 'topic' && node.nodeProperties?.isNoisyTopic) {
       return false;
     }
     if (filters.search) {
       const searchLower = filters.search.toLowerCase();
-      if (!node.nodeLabel.toLowerCase().includes(searchLower)) return false;
+      const searchable = [
+        node.nodeLabel,
+        node.nodeProperties?.path,
+        node.nodeProperties?.keyword,
+        node.nodeProperties?.clusterLabel,
+        node.nodeProperties?.summary,
+        ...(Array.isArray(node.nodeProperties?.tags) ? node.nodeProperties.tags : []),
+      ]
+        .map(item => String(item ?? '').toLowerCase())
+        .join('\n');
+      if (!searchable.includes(searchLower)) return false;
     }
     if (filters.minConnections !== undefined) {
       if ((node.connections || 0) < filters.minConnections) return false;
@@ -306,11 +443,31 @@ function filterGraphData(nodes: GraphNode[], edges: GraphEdge[], filters: GraphF
   });
 
   const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
-  const filteredEdges = edges.filter(edge =>
-    filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target),
-  );
+  const filteredEdges = edges.filter(edge => {
+    if (!filteredNodeIds.has(edge.source) || !filteredNodeIds.has(edge.target)) return false;
+    if (filters.edgeLabels?.length && !filters.edgeLabels.includes(edge.label)) return false;
+    if (filters.edgeSources?.length) {
+      const sourceMethods = getEdgeSourceMethods(edge);
+      if (!sourceMethods.some(method => filters.edgeSources!.includes(method))) return false;
+    }
+    return true;
+  });
 
-  return { filteredNodes, filteredEdges };
+  const hasEdgeFilter = Boolean(filters.edgeLabels?.length || filters.edgeSources?.length);
+  if (!hasEdgeFilter) {
+    return { filteredNodes, filteredEdges };
+  }
+
+  const connectedNodeIds = new Set<string>();
+  for (const edge of filteredEdges) {
+    connectedNodeIds.add(edge.source);
+    connectedNodeIds.add(edge.target);
+  }
+
+  return {
+    filteredNodes: filteredNodes.filter(node => connectedNodeIds.has(node.id)),
+    filteredEdges,
+  };
 }
 
 function refineTopicClusters(
@@ -399,12 +556,24 @@ function buildTopicGraph(
   const noteMetaByPath = new Map(noteMetas.map(meta => [meta.path, meta]));
   const topicsByFile = new Map<string, Array<{ keyword: string; weight: number; source: string }>>();
 
+  for (const meta of noteMetas) {
+    const frontmatter = parseNote(meta.content).frontmatter;
+    for (const tag of frontmatter.tags ?? []) {
+      for (const keyword of expandCuratedTagTopics(tag)) {
+        addTopicForFile(topicsByFile, meta.path, {
+          keyword,
+          weight: 2.2 * topicQualityScore(keyword),
+          source: 'frontmatter',
+        });
+      }
+    }
+  }
+
   for (const topic of storedTopics) {
     const keyword = normalizeTopicKeyword(topic.keyword);
     if (!isUsefulTopic(keyword)) continue;
     const quality = topicQualityScore(keyword);
-    if (!topicsByFile.has(topic.filename)) topicsByFile.set(topic.filename, []);
-    topicsByFile.get(topic.filename)!.push({
+    addTopicForFile(topicsByFile, topic.filename, {
       keyword,
       weight: clamp((topic.weight || 0.1) * quality, 0.08, 3.4),
       source: topic.source,
@@ -417,8 +586,8 @@ function buildTopicGraph(
     const fallback = extractFallbackTopics(meta.content, meta.title)
       .slice(0, Math.max(4, 10 - (existing?.length ?? 0)))
       .map(topic => ({ ...topic, weight: clamp(topic.weight / 4, 0.08, 1.6), source: 'fallback' }));
-    if (fallback.length) {
-      topicsByFile.set(meta.path, [...(existing ?? []), ...fallback]);
+    for (const topic of fallback) {
+      addTopicForFile(topicsByFile, meta.path, topic);
     }
   }
 
@@ -587,6 +756,7 @@ function buildTopicGraph(
       nodeProperties: {
         mode: 'topic',
         keyword: topic.keyword,
+        summary: `${topic.keyword} 关联 ${topic.noteWeights.size} 篇笔记，属于${getTopicClusterLabel(topic.clusterId)}主题。`,
         isNoisyTopic: topic.noisy,
         topicWeight: Number(topic.totalWeight.toFixed(2)),
         vectorWeight: Number(topic.vectorWeight.toFixed(2)),
@@ -627,6 +797,9 @@ function buildTopicGraph(
       metadata: {
         createdAt: now,
         source: edge.vector > 0 ? 'RAG chunk similarity' : 'topic co-occurrence',
+        sourceMethod: edge.vector > 0 ? 'vector' : 'topic',
+        sourceMethods: [edge.vector > 0 ? 'vector' : 'topic'],
+        relationType: edge.vector > edge.cooccurrence ? 'rag-vector' : edge.vector > 0 ? 'topic-semantic' : 'topic-cooccurrence',
         evidence: `共现 ${edge.cooccurrence.toFixed(2)} · 向量 ${edge.vector.toFixed(2)} · 样本 ${edge.count}`,
       },
     }));
@@ -767,6 +940,9 @@ function buildTopicGraph(
           metadata: {
             createdAt: now,
             source: '未解析双链引用',
+            sourceMethod: 'wikilink',
+            sourceMethods: ['wikilink'],
+            relationType: 'mentions',
             evidence: `提及于笔记：${noteMetaByPath.get(sourcePath)?.title ?? sourcePath}`,
           },
         });
@@ -893,7 +1069,6 @@ function isRealNotePath(path?: string) {
 
 function collectOpenNotePaths(articleState: {
   openTabs?: Array<{ path: string; name?: string; isFolder?: boolean }>;
-  activeFilePath?: string;
 }) {
   const paths: string[] = [];
   const addPath = (path?: string, isFolder?: boolean) => {
@@ -905,7 +1080,6 @@ function collectOpenNotePaths(articleState: {
   for (const tab of articleState.openTabs ?? []) {
     addPath(tab.path, tab.isFolder);
   }
-  addPath(articleState.activeFilePath);
 
   return paths;
 }
@@ -941,6 +1115,14 @@ function filterLocalKnowledgeRows<T extends { filename: string }>(rows: T[], not
   return rows.filter(row => localPathSet.has(normalizeGraphNotePath(row.filename)));
 }
 
+function filterLocalRelations(relations: NoteRelation[], notePaths: string[]) {
+  const localPathSet = new Set(notePaths.map(normalizeGraphNotePath));
+  return relations.filter(relation =>
+    localPathSet.has(normalizeGraphNotePath(relation.source_note)) &&
+    localPathSet.has(normalizeGraphNotePath(relation.target_note)),
+  );
+}
+
 function getAverageNoteEmbeddings(vectorDocs: VectorEmbeddingDocument[]) {
   const sums = new Map<string, number[]>();
   const counts = new Map<string, number>();
@@ -971,9 +1153,12 @@ function getAverageNoteEmbeddings(vectorDocs: VectorEmbeddingDocument[]) {
 function buildNoteGraph(
   noteMetas: NoteMeta[],
   vectorDocs: VectorEmbeddingDocument[],
+  relations: NoteRelation[] = [],
 ): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const now = new Date().toISOString();
+  const noteByPath = new Map(noteMetas.map(meta => [meta.path, meta]));
   const noteByKey = new Map<string, NoteMeta>();
+  const parsedByPath = new Map(noteMetas.map(meta => [meta.path, parseNote(meta.content).frontmatter]));
 
   for (const meta of noteMetas) {
     const pathWithoutExt = meta.path.replace(NOTE_FILE_EXTENSION_PATTERN, '');
@@ -984,26 +1169,33 @@ function buildNoteGraph(
     noteByKey.set(normalizeNoteLookupKey(nameWithoutExt), meta);
   }
 
-  const nodes: GraphNode[] = noteMetas.map(meta => ({
-    id: meta.path,
-    nodeType: 'note' as NodeType,
-    nodeLabel: meta.title,
-    nodeColor: NODE_TYPE_COLORS.note,
-    nodeSize: 16,
-    nodeProperties: {
-      path: meta.path,
-      mode: 'note',
-      summary: stripMarkdown(meta.content).slice(0, 180),
-      chunkCount: vectorDocs.filter(doc => doc.filename === meta.path).length,
-    },
-    nodeMetadata: {
-      createdAt: now,
-      updatedAt: now,
-      source: 'markdown',
-    },
-    connections: 0,
-    kind: 'note' as NodeKind,
-  }));
+  const nodes: GraphNode[] = noteMetas.map(meta => {
+    const frontmatter = parsedByPath.get(meta.path);
+    return {
+      id: meta.path,
+      nodeType: 'note' as NodeType,
+      nodeLabel: frontmatter?.title || meta.title,
+      nodeColor: NODE_TYPE_COLORS.note,
+      nodeSize: 16,
+      nodeProperties: {
+        path: meta.path,
+        mode: 'note',
+        summary: stripMarkdown(meta.content).slice(0, 180),
+        chunkCount: vectorDocs.filter(doc => normalizeGraphNotePath(doc.filename) === meta.path).length,
+        tags: frontmatter?.tags ?? [],
+        aliases: frontmatter?.aliases ?? [],
+        status: frontmatter?.status,
+        source: frontmatter?.source,
+      },
+      nodeMetadata: {
+        createdAt: frontmatter?.created ?? now,
+        updatedAt: frontmatter?.updated ?? now,
+        source: 'markdown',
+      },
+      connections: 0,
+      kind: 'note' as NodeKind,
+    };
+  });
 
   const edges: GraphEdge[] = [];
   const edgeIds = new Set<string>();
@@ -1021,7 +1213,7 @@ function buildNoteGraph(
       if (edgeIds.has(key)) continue;
       edgeIds.add(key);
       edges.push({
-        id: `note-wikilink:${edgeCounter++}`,
+        id: directedEdgeKey(meta.path, target.path, 'wikilink', 'wikilink') || `note-wikilink:${edgeCounter++}`,
         source: meta.path,
         target: target.path,
         label: 'wikilink',
@@ -1029,7 +1221,10 @@ function buildNoteGraph(
         confidence: 1,
         metadata: {
           createdAt: now,
-          source: 'wiki-link',
+          source: getSourceDisplayLabel('wikilink'),
+          sourceMethod: 'wikilink',
+          sourceMethods: ['wikilink'],
+          relationType: 'wikilink',
           evidence: `[[${targetText}]]`,
         },
       });
@@ -1063,15 +1258,22 @@ function buildNoteGraph(
         confidence: similarity,
         metadata: {
           createdAt: now,
-          source: 'file embedding similarity',
+          source: getSourceDisplayLabel('cosine'),
+          sourceMethod: 'cosine',
+          sourceMethods: ['cosine'],
+          relationType: 'semantic',
           evidence: `文件平均向量相似度 ${(similarity * 100).toFixed(1)}%`,
         },
       });
     }
   }
 
+  edges.push(...buildFrontmatterRelationEdges(noteMetas, noteByPath, noteByKey));
+  edges.push(...buildTypedRelationEdges(relations, noteByPath, noteByKey));
+  const mergedEdges = mergeNoteEdges(edges);
+
   const connectionCounts = new Map<string, number>();
-  for (const edge of edges) {
+  for (const edge of mergedEdges) {
     connectionCounts.set(edge.source, (connectionCounts.get(edge.source) || 0) + 1);
     connectionCounts.set(edge.target, (connectionCounts.get(edge.target) || 0) + 1);
   }
@@ -1086,10 +1288,217 @@ function buildNoteGraph(
     };
   });
 
-  return { nodes: nodesWithConnections, edges };
+  return { nodes: nodesWithConnections, edges: mergedEdges };
 }
 
 // ==================== Store 实现 ====================
+
+/** 生成缓存键：基于模式/视图 + 文件列表哈希 */
+function generateCacheKey(
+  graphMode: 'global' | 'local',
+  graphView: 'topic' | 'note',
+  notePaths: string[],
+): string {
+  const paths = notePaths.slice().sort().join('|');
+  let hash = 0;
+  for (let i = 0; i < paths.length; i++) {
+    hash = ((hash << 5) - hash + paths.charCodeAt(i)) | 0;
+  }
+  return `${graphMode}-${graphView}-${Math.abs(hash)}`;
+}
+
+function findLatestGraphCacheEntry(
+  graphCache: Map<string, GraphCacheEntry>,
+  prefix: string,
+) {
+  let latest: GraphCacheEntry | undefined;
+  for (const [key, entry] of graphCache.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
+    }
+  }
+  return latest;
+}
+
+function buildGraphStatePayload(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  filters: GraphFilters,
+) {
+  const { filteredNodes, filteredEdges } = filterGraphData(nodes, edges, filters);
+
+  return {
+    nodes,
+    edges,
+    filteredNodes,
+    filteredEdges,
+    nodesMapping: new Map(nodes.map(n => [n.id, n])),
+    edgesMapping: new Map(edges.map(e => [e.id, e])),
+  };
+}
+
+function buildFrontmatterRelationEdges(
+  noteMetas: NoteMeta[],
+  noteByPath: Map<string, NoteMeta>,
+  noteByKey: Map<string, NoteMeta>,
+) {
+  const edges: GraphEdge[] = [];
+  const edgeIds = new Set<string>();
+
+  for (const meta of noteMetas) {
+    const parsed = parseNote(meta.content);
+    const relatedPaths = Array.isArray(parsed.frontmatter.related) ? parsed.frontmatter.related : [];
+    for (const relatedPath of relatedPaths) {
+      const normalizedTarget = normalizeGraphNotePath(relatedPath);
+      if (!normalizedTarget || normalizedTarget === meta.path) continue;
+
+      const targetMeta = noteByPath.get(normalizedTarget)
+        ?? noteByKey.get(normalizeNoteLookupKey(normalizedTarget))
+        ?? noteByKey.get(normalizeNoteLookupKey(relatedPath));
+      if (!targetMeta) continue;
+
+      const edgeId = directedEdgeKey(meta.path, targetMeta.path, 'references', 'frontmatter');
+      if (edgeIds.has(edgeId)) continue;
+      edgeIds.add(edgeId);
+      edges.push({
+        id: edgeId,
+        source: meta.path,
+        target: targetMeta.path,
+        label: 'references',
+        weight: 0.95,
+        confidence: 1,
+        metadata: {
+          createdAt: new Date().toISOString(),
+          source: getSourceDisplayLabel('frontmatter'),
+          sourceMethod: 'frontmatter',
+          sourceMethods: ['frontmatter'],
+          relationType: 'references',
+          evidence: `related: ${relatedPath}`,
+        },
+      });
+    }
+  }
+
+  return edges;
+}
+
+function buildTypedRelationEdges(
+  relations: NoteRelation[],
+  noteByPath: Map<string, NoteMeta>,
+  noteByKey: Map<string, NoteMeta>,
+) {
+  const edges: GraphEdge[] = [];
+  const edgeIds = new Set<string>();
+
+  for (const rel of relations) {
+    const sourceRef = normalizeGraphNotePath(rel.source_note);
+    const targetRef = normalizeGraphNotePath(rel.target_note);
+    const sourceMeta = noteByPath.get(sourceRef)
+      ?? noteByKey.get(normalizeNoteLookupKey(sourceRef))
+      ?? noteByKey.get(normalizeNoteLookupKey(rel.source_note));
+    const targetMeta = noteByPath.get(targetRef)
+      ?? noteByKey.get(normalizeNoteLookupKey(targetRef))
+      ?? noteByKey.get(normalizeNoteLookupKey(rel.target_note));
+    if (!sourceMeta || !targetMeta || sourceMeta.path === targetMeta.path) continue;
+
+    const relationType = normalizeRelationType(rel.relation_type);
+    const sourceMethod = String(rel.source_method || 'cross_validated');
+    const edgeId = directedEdgeKey(sourceMeta.path, targetMeta.path, relationType, sourceMethod);
+    if (edgeIds.has(edgeId)) continue;
+    edgeIds.add(edgeId);
+
+    edges.push({
+      id: edgeId,
+      source: sourceMeta.path,
+      target: targetMeta.path,
+      label: relationType,
+      weight: clamp(rel.confidence || 0.2, 0.08, 1.8),
+      confidence: rel.confidence,
+      metadata: {
+        createdAt: new Date(rel.updated_at || Date.now()).toISOString(),
+        source: `${getSourceDisplayLabel(sourceMethod)} · ${getRelationDisplayLabel(relationType)}`,
+        sourceMethod,
+        sourceMethods: [sourceMethod],
+        relationType,
+        evidence: rel.evidence || undefined,
+      },
+    });
+  }
+
+  return edges;
+}
+
+function getEdgePriority(edge: GraphEdge) {
+  const sourceMethod = edge.metadata?.sourceMethod ?? '';
+  if (sourceMethod === 'frontmatter') return 96;
+  if (sourceMethod === 'cross_validated') return 94;
+  if (sourceMethod === 'llm') return 88;
+  if (edge.label === 'wikilink') return 82;
+  if (edge.label === 'semantic' || sourceMethod === 'cosine') return 54;
+  if (sourceMethod === 'keyword') return 46;
+  return 35;
+}
+
+function mergeNoteEdges(edges: GraphEdge[]) {
+  const merged = new Map<string, GraphEdge>();
+  const now = new Date().toISOString();
+
+  for (const edge of edges) {
+    const pairKey = edgeKey(edge.source, edge.target);
+    const current = merged.get(pairKey);
+    if (!current) {
+      merged.set(pairKey, {
+        ...edge,
+        metadata: {
+          ...edge.metadata,
+          createdAt: edge.metadata?.createdAt ?? now,
+          source: edge.metadata?.source ?? getRelationDisplayLabel(String(edge.label)),
+          sourceMethods: edge.metadata?.sourceMethods ?? [edge.metadata?.sourceMethod || String(edge.label)],
+        },
+      });
+      continue;
+    }
+
+    const sourceMethods = Array.from(new Set([
+      ...(current.metadata?.sourceMethods ?? []),
+      ...(edge.metadata?.sourceMethods ?? []),
+      edge.metadata?.sourceMethod,
+    ].filter(Boolean) as string[]));
+    const relationTypes = Array.from(new Set([
+      ...(current.metadata?.relationTypes ?? []),
+      ...(edge.metadata?.relationTypes ?? []),
+      current.metadata?.relationType,
+      edge.metadata?.relationType,
+      current.label,
+      edge.label,
+    ].filter(Boolean).map(item => normalizeRelationType(String(item)))));
+    const evidenceParts = Array.from(new Set([
+      current.metadata?.evidence,
+      edge.metadata?.evidence,
+    ].filter(Boolean) as string[]));
+    const stronger = getEdgePriority(edge) > getEdgePriority(current) ? edge : current;
+    const weaker = stronger === edge ? current : edge;
+
+    merged.set(pairKey, {
+      ...stronger,
+      id: `note-relation:${pairKey}`,
+      weight: Math.max(stronger.weight ?? 0.1, weaker.weight ?? 0.1),
+      confidence: Math.max(stronger.confidence ?? 0, weaker.confidence ?? 0) || undefined,
+      metadata: {
+        ...stronger.metadata,
+        createdAt: stronger.metadata?.createdAt ?? weaker.metadata?.createdAt ?? now,
+        sourceMethods,
+        source: sourceMethods.map(getSourceDisplayLabel).join(' / ') || stronger.metadata?.source || getRelationDisplayLabel(String(stronger.label)),
+        relationType: String(stronger.label),
+        relationTypes,
+        evidence: evidenceParts.join('；') || stronger.metadata?.evidence,
+      },
+    });
+  }
+
+  return Array.from(merged.values());
+}
 
 export const useGraphStore = create<GraphState>((set, get) => ({
   nodes: [],
@@ -1120,36 +1529,83 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   colorGroups: [],
   graphMode: 'global',
   graphView: 'topic',
+  cacheKey: '',
+  cacheInvalidatedAt: 0,
+  graphCache: new Map(),
 
   // ==================== 数据加载 ====================
 
-  loadGraph: async () => {
+  loadGraph: async (options = {}) => {
+    const { cacheKey, cacheInvalidatedAt, graphMode, graphView, graphCache } = get();
+    const force = options.force === true;
+
+    // Local mode can decide cache eligibility before reading note contents.
+    let notePaths: string[] = [];
+    const useArticleStore = (await import('@/stores/article')).default;
+    const articleStore = useArticleStore.getState();
+    let targetCacheKey = '';
+
+    if (graphMode === 'local') {
+      const openNotePaths = collectOpenNotePaths(articleStore);
+      notePaths = Array.from(new Set(openNotePaths.map(normalizeGraphNotePath)));
+      targetCacheKey = generateCacheKey(graphMode, graphView, notePaths);
+
+      if (!force && cacheKey === targetCacheKey && cacheInvalidatedAt === 0 && !get().isLoading) {
+        console.log('[KnowledgeGraph] Local cache hit');
+        return;
+      }
+    } else {
+      const cachePrefix = `${graphMode}-${graphView}-`;
+      const cachedEntry = !force && cacheInvalidatedAt === 0
+        ? findLatestGraphCacheEntry(graphCache, cachePrefix)
+        : undefined;
+
+      if (cachedEntry) {
+        set({
+          ...buildGraphStatePayload(cachedEntry.nodes, cachedEntry.edges, get().filters),
+          cacheKey: cachedEntry.cacheKey,
+          isLoading: false,
+          error: null,
+        });
+        console.log('[KnowledgeGraph] Global cache hit');
+        return;
+      }
+    }
+
+    if (!force && targetCacheKey) {
+      const cachedEntry = cacheInvalidatedAt === 0 ? graphCache.get(targetCacheKey) : undefined;
+      if (cachedEntry) {
+        set({
+          ...buildGraphStatePayload(cachedEntry.nodes, cachedEntry.edges, get().filters),
+          cacheKey: cachedEntry.cacheKey,
+          isLoading: false,
+          error: null,
+        });
+        console.log('[KnowledgeGraph] Local cache restored');
+        return;
+      }
+    }
+
     set({ isLoading: true, error: null });
     try {
-      // 动态导入依赖
-      const useArticleStore = (await import('@/stores/article')).default;
       const { readTextFile } = await import('@tauri-apps/plugin-fs');
       const { getFilePathOptions } = await import('@/lib/workspace');
       const { getAllTopics } = await import('@/db/note-topics');
       const { getAllVectorEmbeddingDocuments } = await import('@/db/vector');
+      const { getAllRelations } = await import('@/db/note-relations');
 
-      const articleStore = useArticleStore.getState();
       const noteMetas: NoteMeta[] = [];
-      const graphMode = get().graphMode;
-      const graphView = get().graphView;
       let storedTopics: NoteTopic[] = [];
       let vectorDocs: VectorEmbeddingDocument[] = [];
+      let noteRelations: NoteRelation[] = [];
 
       if (graphMode === 'local') {
-        const openNotePaths = collectOpenNotePaths(articleStore);
-        for (const relativePath of openNotePaths) {
+        for (const relativePath of notePaths) {
           try {
             noteMetas.push(await readNoteMetaFromPath(
               relativePath,
               readTextFile,
               getFilePathOptions,
-              articleStore.activeFilePath,
-              articleStore.currentArticle,
             ));
           } catch {
             const fileName = relativePath.split('/').pop() || relativePath;
@@ -1162,21 +1618,22 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           }
         }
 
-        const [allTopics, allVectorDocs] = await Promise.all([
+        const [allTopics, allVectorDocs, allRelations] = await Promise.all([
           getAllTopics().catch(() => [] as NoteTopic[]),
           getAllVectorEmbeddingDocuments().catch(() => [] as VectorEmbeddingDocument[]),
+          getAllRelations().catch(() => [] as NoteRelation[]),
         ]);
-        storedTopics = filterLocalKnowledgeRows(allTopics, openNotePaths);
-        vectorDocs = filterLocalKnowledgeRows(allVectorDocs, openNotePaths);
+        storedTopics = filterLocalKnowledgeRows(allTopics, notePaths);
+        vectorDocs = filterLocalKnowledgeRows(allVectorDocs, notePaths);
+        noteRelations = filterLocalRelations(allRelations, notePaths);
       } else {
+        // 全局模式：缓存未命中时才加载文件树
         const { useNoteIndexStore } = await import('@/stores/note-index');
         const noteIndexStore = useNoteIndexStore.getState();
 
         await articleStore.loadFileTree({ skipRemoteSync: true });
-
         const currentFileTree = useArticleStore.getState().fileTree;
 
-        // 确保索引已构建
         if (!noteIndexStore.isIndexed && !noteIndexStore.isBuilding) {
           await noteIndexStore.buildIndex(currentFileTree);
         }
@@ -1184,13 +1641,15 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         const allFiles = collectNoteFilesFromTree(currentFileTree)
           .sort((left, right) => left.relativePath.localeCompare(right.relativePath, 'zh-Hans-CN'));
 
-        // 读取笔记内容，主题词节点需要知道来源笔记和标题
         for (const file of allFiles) {
+          const normalizedPath = normalizeGraphNotePath(file.relativePath);
+          if (notePaths.includes(normalizedPath)) continue;
+          notePaths.push(normalizedPath);
           try {
-            noteMetas.push(await readNoteMetaFromPath(file.relativePath, readTextFile, getFilePathOptions));
+            noteMetas.push(await readNoteMetaFromPath(normalizedPath, readTextFile, getFilePathOptions));
           } catch {
             noteMetas.push({
-              path: file.relativePath,
+              path: normalizedPath,
               name: file.name,
               title: cleanFileName(file.name),
               content: '',
@@ -1198,44 +1657,60 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           }
         }
 
-        [storedTopics, vectorDocs] = await Promise.all([
+        [storedTopics, vectorDocs, noteRelations] = await Promise.all([
           getAllTopics().catch(() => [] as NoteTopic[]),
           getAllVectorEmbeddingDocuments().catch(() => [] as VectorEmbeddingDocument[]),
+          getAllRelations().catch(() => [] as NoteRelation[]),
         ]);
       }
 
-      const { nodes, edges } = graphView === 'note'
-        ? buildNoteGraph(noteMetas, vectorDocs)
-        : buildTopicGraph(noteMetas, storedTopics, vectorDocs, graphMode === 'local'
-          ? {
-            includeDiagnostics: false,
-            maxTopics: clamp(noteMetas.length * 18, 24, 90),
-            maxEdges: clamp(noteMetas.length * 36, 48, 240),
-          }
-          : undefined);
-      const filters = get().filters;
-      const { filteredNodes, filteredEdges } = filterGraphData(nodes, edges, filters);
+      const topicGraph = buildTopicGraph(noteMetas, storedTopics, vectorDocs, graphMode === 'local'
+        ? {
+          includeDiagnostics: false,
+          maxTopics: clamp(noteMetas.length * 18, 24, 90),
+          maxEdges: clamp(noteMetas.length * 36, 48, 240),
+        }
+        : undefined);
+      const noteGraph = buildNoteGraph(noteMetas, vectorDocs, noteRelations);
+      const graphByView = {
+        topic: topicGraph,
+        note: noteGraph,
+      };
+      const activeGraph = graphByView[graphView];
+      const nextCacheKey = generateCacheKey(graphMode, graphView, notePaths);
+      const createdAt = Date.now();
+      const nextGraphCache = new Map(force ? [] : get().graphCache);
 
-      // 构建索引
-      const nodesMapping = new Map(nodes.map(n => [n.id, n]));
-      const edgesMapping = new Map(edges.map(e => [e.id, e]));
+      (['topic', 'note'] as const).forEach(view => {
+        const viewGraph = graphByView[view];
+        const viewCacheKey = generateCacheKey(graphMode, view, notePaths);
+        nextGraphCache.set(viewCacheKey, {
+          cacheKey: viewCacheKey,
+          graphMode,
+          graphView: view,
+          notePaths: [...notePaths],
+          nodes: viewGraph.nodes,
+          edges: viewGraph.edges,
+          createdAt,
+        });
+      });
 
       set({
-        nodes,
-        edges,
-        filteredNodes,
-        filteredEdges,
-        nodesMapping,
-        edgesMapping,
+        ...buildGraphStatePayload(activeGraph.nodes, activeGraph.edges, get().filters),
+        graphCache: nextGraphCache,
+        cacheKey: nextCacheKey,
+        cacheInvalidatedAt: 0,
         isLoading: false,
       });
 
-      console.log(`[KnowledgeGraph] Loaded ${nodes.length} ${graphMode}/${graphView} nodes, ${edges.length} edges`);
+      console.log(`[KnowledgeGraph] Loaded ${activeGraph.nodes.length} ${graphMode}/${graphView} nodes, ${activeGraph.edges.length} edges`);
     } catch (error) {
       console.error('[KnowledgeGraph] Failed to load:', error);
       set({ error: String(error), isLoading: false });
     }
   },
+
+  invalidateCache: () => set({ cacheInvalidatedAt: Date.now(), cacheKey: '', graphCache: new Map() }),
 
   loadNeighbors: async (nodeId: string, depth: number = 1) => {
     const { edges, nodesMapping } = get();
@@ -1396,36 +1871,14 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   searchNodes: async (query: string) => {
-    if (!query.trim()) {
-      set(state => ({
-        filteredNodes: state.nodes,
-        filteredEdges: state.edges,
-        filters: { ...state.filters, search: '' },
-      }));
-      return;
-    }
-
     const { nodes, edges } = get();
-    const searchLower = query.toLowerCase();
-
-    const includeNoisyTopics = get().filters.includeNoisyTopics === true;
-    const filteredNodes = nodes.filter(node => {
-      if (!includeNoisyTopics && node.nodeProperties?.mode === 'topic' && node.nodeProperties?.isNoisyTopic) {
-        return false;
-      }
-      return node.nodeLabel.toLowerCase().includes(searchLower) ||
-        node.nodeProperties?.path?.toLowerCase().includes(searchLower);
-    });
-
-    const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
-    const filteredEdges = edges.filter(e =>
-      filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target)
-    );
+    const nextFilters = { ...get().filters, search: query.trim() };
+    const { filteredNodes, filteredEdges } = filterGraphData(nodes, edges, nextFilters);
 
     set({
       filteredNodes,
       filteredEdges,
-      filters: { ...get().filters, search: query },
+      filters: nextFilters,
     });
   },
 
@@ -1468,7 +1921,6 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       selectedEdge: null,
       showDetailPanel: false,
     });
-    void get().loadGraph();
   },
   setGraphView: (view) => {
     set({
@@ -1478,7 +1930,6 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       selectedEdge: null,
       showDetailPanel: false,
     });
-    void get().loadGraph();
   },
 
   toggleDetailPanel: () => set(state => ({ showDetailPanel: !state.showDetailPanel })),

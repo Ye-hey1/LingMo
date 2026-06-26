@@ -1,7 +1,6 @@
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { useLocalStorage } from "react-use"
-import { v4 } from "uuid"
 import { Store } from "@tauri-apps/plugin-store"
 import { Plus, Settings } from "lucide-react"
 
@@ -30,7 +29,7 @@ export default function CreateConfig({ hasCustomModels = false, onConfigCreated,
       const store = await Store.load("store.json")
       const aiModelList = (await store.get<AiConfig[]>("aiModelList")) || []
 
-      const id = v4()
+      const id = crypto.randomUUID()
       const newConfig: AiConfig = {
         key: id,
         title: t("custom"),

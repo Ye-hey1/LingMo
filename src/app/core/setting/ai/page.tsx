@@ -4,7 +4,6 @@ import { useEffect, useState } from "react"
 import { useTranslations } from 'next-intl'
 import { useLocalStorage } from 'react-use'
 import { Store } from "@tauri-apps/plugin-store"
-import { v4 } from 'uuid'
 import { confirm } from '@tauri-apps/plugin-dialog'
 
 import { Input } from "@/components/ui/input"
@@ -412,7 +411,7 @@ export default function AiPage() {
       return [
         ...prev,
         {
-          id: v4(),
+          id: crypto.randomUUID(),
           model: value,
           modelType,
           temperature: 0.7,
@@ -595,7 +594,7 @@ export default function AiPage() {
 
     const store = await Store.load('store.json')
     const aiModelListInStore = (await store.get<AiConfig[]>('aiModelList')) || []
-    const id = v4()
+    const id = crypto.randomUUID()
 
     const templateConfig: AiConfig = {
       ...template,
@@ -796,7 +795,7 @@ export default function AiPage() {
   const addNewModel = async () => {
     if (!currentConfig) return
 
-    const newModelId = v4()
+    const newModelId = crypto.randomUUID()
     const newModel: ModelConfig = {
       id: newModelId,
       model: '',
@@ -906,7 +905,7 @@ export default function AiPage() {
 
     if (config.model) {
       const migratedModel: ModelConfig = {
-        id: v4(),
+        id: crypto.randomUUID(),
         model: config.model,
         modelType: config.modelType || 'chat',
         temperature: config.temperature,
@@ -996,7 +995,7 @@ export default function AiPage() {
       {allModelConfigs.length > 0 && (
         <div className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-            <aside className="rounded-xl border bg-card/70 p-3">
+            <aside className="flex h-[calc(100vh-12rem)] flex-col rounded-xl border bg-card/70 p-3">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="text-sm font-medium">{t('modelConfigTitle')}</div>
                 <span className="rounded-full bg-muted/80 px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">
@@ -1022,7 +1021,7 @@ export default function AiPage() {
                 }}
               />
 
-              <div className="max-h-[62vh] overflow-y-auto pr-1">
+              <div className="flex-1 overflow-y-auto pr-1">
                 {!hasAnyProviderResult ? (
                   <div className="py-8 text-center text-xs text-muted-foreground/50">
                     无匹配结果
@@ -1055,7 +1054,8 @@ export default function AiPage() {
               </div>
             </aside>
 
-            <section className="rounded-xl border bg-card/70 p-4 md:p-5">
+            <section className="flex h-[calc(100vh-12rem)] flex-col overflow-hidden rounded-xl border bg-card/70">
+              <div className="flex-1 overflow-y-auto p-4 md:p-5">
               {currentConfig ? (
                 <div className="space-y-5 text-[13px]">
                   <div className="rounded-xl border bg-background/60 p-4">
@@ -1366,6 +1366,7 @@ export default function AiPage() {
                   ← 选择一个服务商
                 </div>
               )}
+              </div>
             </section>
           </div>
         </div>

@@ -18,7 +18,7 @@ import { toast } from "@/hooks/use-toast";
 import { join } from "@tauri-apps/api/path";
 import { Store } from "@tauri-apps/plugin-store";
 import { createHash } from 'crypto';
-import { isSkillsFolder } from './skills/utils';
+import { isUserKnowledgeFilePath } from './files';
 import { getVectorDocumentKey } from './vector-document-key';
 import { prepareKnowledgeIndexText } from './knowledge-topic-cleaner';
 
@@ -492,9 +492,8 @@ export async function processMarkdownFile(
   fileContent?: string
 ): Promise<boolean> {
   try {
-    // 检查文件是否在 skills 文件夹下，如果是则跳过处理
-    const pathParts = filePath.split('/');
-    if (pathParts.some(part => isSkillsFolder(part))) {
+    // Skill 运行资产不作为用户知识笔记索引。
+    if (!isUserKnowledgeFilePath(filePath)) {
       return false;
     }
 
@@ -582,7 +581,7 @@ async function getWorkspaceFiles(): Promise<DirTree[]> {
   const workspace = await getWorkspacePath();
   
   // 递归处理目录的辅助函数
-  async function processDirectory(dirPath: string, useCustomPath: boolean): Promise<DirTree[]> {
+  async function processDirectory(dirPath: string, useCustomPath: boolean, relativePath: string = ''): Promise<DirTree[]> {
     let entries: DirEntry[];
     
     if (useCustomPath) {
@@ -594,7 +593,8 @@ async function getWorkspaceFiles(): Promise<DirTree[]> {
     const result: DirTree[] = [];
     
     for (const entry of entries) {
-      if (entry.name === '.DS_Store' || entry.name.startsWith('.')) continue;
+      const entryRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+      if (entry.name === '.DS_Store' || entry.name.startsWith('.') || !isUserKnowledgeFilePath(entryRelativePath)) continue;
       if (!entry.isDirectory && !entry.name.endsWith('.md')) continue;
       
       // 创建DirTree对象
@@ -612,7 +612,7 @@ async function getWorkspaceFiles(): Promise<DirTree[]> {
       if (entry.isDirectory) {
         const childPath = await join(dirPath, entry.name);
         // 递归处理子目录
-        item.children = await processDirectory(childPath, useCustomPath);
+        item.children = await processDirectory(childPath, useCustomPath, entryRelativePath);
         
         // 设置父级关系
         item.children.forEach(child => {
@@ -1389,6 +1389,10 @@ export function showVectorProcessingToast(message: string) {
  */
 async function collectMarkdownContentsInFolder(folderPath: string): Promise<SearchItem[]> {
   try {
+    if (!isUserKnowledgeFilePath(folderPath)) {
+      return [];
+    }
+
     const workspace = await getWorkspacePath();
     const items: SearchItem[] = [];
 
@@ -1412,9 +1416,8 @@ async function collectMarkdownContentsInFolder(folderPath: string): Promise<Sear
       }
 
       for (const entry of currentEntries) {
-        if (entry.name.startsWith('.')) continue;
-
         const entryRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+        if (entry.name.startsWith('.') || !isUserKnowledgeFilePath(entryRelativePath)) continue;
 
         if (entry.isDirectory) {
           const entryFullPath = workspace.isCustom

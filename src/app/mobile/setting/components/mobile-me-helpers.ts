@@ -1,4 +1,4 @@
-import { endOfWeek, startOfWeek } from 'date-fns'
+import dayjs from 'dayjs'
 
 import type { ActivityCalendarData, ActivityDaySummary } from '@/lib/activity/types'
 import { SyncStateEnum } from '@/lib/sync/github.types'
@@ -52,9 +52,9 @@ function toTitleCase(value: string) {
 export function getCurrentWeekActivityCount(data: ActivityCalendarData | null) {
   if (!data) return 0
 
-  const now = new Date()
-  const weekStart = formatDateInTimeZone(startOfWeek(now, { weekStartsOn: 1 }), data.timeZone)
-  const weekEnd = formatDateInTimeZone(endOfWeek(now, { weekStartsOn: 1 }), data.timeZone)
+  const now = dayjs()
+  const weekStart = formatDateInTimeZone(now.startOf('week').add(1, 'day').toDate(), data.timeZone)
+  const weekEnd = formatDateInTimeZone(now.endOf('week').add(1, 'day').toDate(), data.timeZone)
 
   return data.days.reduce((total, day) => {
     if (day.day >= weekStart && day.day <= weekEnd) {

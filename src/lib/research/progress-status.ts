@@ -52,7 +52,7 @@ const STEP_BLUEPRINTS = [
   {
     id: 'runtime',
     title: '连接检索能力',
-    description: '检查 Firecrawl MCP，并准备联网搜索通道。',
+    description: '检查 MCP、Tavily、DuckDuckGo 等可用检索通道。',
   },
   {
     id: 'plan',

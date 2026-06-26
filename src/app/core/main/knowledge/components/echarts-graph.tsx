@@ -113,16 +113,28 @@ const SHAPE_MAP: Record<string, string> = {
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const GRAPH_SERIES_ID = 'knowledge-graph-main-series';
 const GRAPH_TOOLTIP_VERSION = 'light-tooltip-v2';
+function deferEChartsEventUpdate(callback: () => void) {
+  globalThis.setTimeout(callback, 0);
+}
 
 const EDGE_STYLE_MAP: Record<string, { label: string; color: string; type: string; width: number }> = {
   wikilink: { label: '双链', color: '#64748b', type: 'solid', width: 1.25 },
   semantic: { label: '语义关联', color: '#059669', type: 'dashed', width: 1.15 },
   references: { label: '引用', color: '#d97706', type: 'solid', width: 1 },
+  related: { label: '相关', color: '#64748b', type: 'solid', width: 1 },
+  extends: { label: '延伸', color: '#f59e0b', type: 'solid', width: 1.25 },
+  supports: { label: '支撑', color: '#16a34a', type: 'solid', width: 1.25 },
+  contradicts: { label: '矛盾', color: '#ef4444', type: 'solid', width: 1.35 },
+  analogous: { label: '类比', color: '#8b5cf6', type: 'dashed', width: 1.1 },
+  'example-of': { label: '示例', color: '#06b6d4', type: 'dashed', width: 1 },
+  uses: { label: '使用', color: '#22c55e', type: 'solid', width: 1.15 },
+  'part-of': { label: '属于', color: '#6366f1', type: 'solid', width: 1.1 },
   contains: { label: '包含', color: '#7c3aed', type: 'solid', width: 1 },
   mentions: { label: '提及', color: '#be185d', type: 'dotted', width: 1 },
   'topic-cooccurrence': { label: '主题共现', color: '#94a3b8', type: 'solid', width: 0.75 },
   'topic-semantic': { label: '主题语义', color: '#64748b', type: 'solid', width: 0.9 },
   'rag-vector': { label: 'RAG 向量相似', color: '#0f766e', type: 'solid', width: 1.05 },
+  'topic-note': { label: '主题归属', color: '#94a3b8', type: 'dotted', width: 0.8 },
 };
 
 function cssColor(variable: string, fallback: string) {
@@ -430,7 +442,9 @@ function _getEdgeGradient(sourceColor: string, targetColor: string, opacity: num
 }
 
 function getEdgeConfig(edge: GraphEdge) {
-  const key = edge.label.startsWith('semantic:') ? 'semantic' : edge.label;
+  const key = edge.label.startsWith('semantic:')
+    ? 'semantic'
+    : String(edge.metadata?.relationType ?? edge.label).replace(/_/g, '-');
   return EDGE_STYLE_MAP[key] ?? { label: edge.label || '关联', color: '#64748b', type: 'solid', width: 1 };
 }
 
@@ -649,6 +663,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
   const [reducedMotion, setReducedMotion] = useState(false);
   const chartRef = useRef<any>(null);
   const roamTimeoutRef = useRef<any>(null);
+  const getOptionRef = useRef<(() => any) | null>(null);
 
   // 交互与手势控制 Ref（不触发组件重渲染）
   const selectedNodeRef = useRef(useGraphStore.getState().selectedNode);
@@ -742,12 +757,12 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
               instance.dispatchAction({
                 type: 'select',
                 seriesIndex: 0,
-                name: node.nodeLabel,
+                name: node.id,
               });
               instance.dispatchAction({
                 type: 'focusNodeAdjacency',
                 seriesIndex: 0,
-                name: node.nodeLabel,
+                name: node.id,
               });
             }
           } else {
@@ -761,6 +776,13 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
               dataIndex: Array.from({ length: localNodes.length }, (_, i) => i),
             });
           }
+          deferEChartsEventUpdate(() => {
+            const latestInstance = chartRef.current?.getEchartsInstance?.();
+            if (!latestInstance) return;
+            const nextOption = getOptionRef.current?.();
+            if (!nextOption) return;
+            latestInstance.setOption(nextOption, { notMerge: true });
+          });
         }
       }
 
@@ -803,7 +825,6 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
       }
     }
 
-    const visibleLabels = localNodes.length <= 60;
     const localCounts = new Map<string, number>();
     const roleCounts = new Map<string, number>();
     const categoryColors = new Map<string, string>();
@@ -879,11 +900,9 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
 
       const position = layoutPositions.get(node.id)
         ?? buildInitialPosition(node, localIndex, roleIndex, roleCounts.get(categoryName) ?? 1, gridWidth, gridHeight);
-      const labelActive = isSelected;
+      const labelActive = isSelected || isNeighbor;
       const isNoteGraphNode = graphView === 'note' && node.nodeProperties?.mode === 'note';
-      const labelVisible = isTopicNode
-        ? true
-        : isUnresolved ? false : isNoteGraphNode || isOrphan || visibleLabels || labelActive || role === 'current' || connections >= 3;
+      const labelVisible = true;
       const topicLabelLength = node.nodeLabel.trim().length;
       const labelFontSize = isTopicNode
         ? clampNumber(symbolSize / Math.max(4.8, topicLabelLength * 0.62), 7.5, symbolSize >= 58 ? 12 : 10.5)
@@ -900,7 +919,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
             borderType: 'dashed' as const,
             shadowBlur: isSelected ? 6 : 0,
             shadowColor: 'rgba(248, 113, 113, 0.35)',
-            opacity: isDimmed ? 0.24 : 0.92,
+            opacity: isDimmed ? 0.1 : 0.92,
           };
         }
         if (isOrphan) {
@@ -910,11 +929,11 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
             borderWidth: 1.5,
             borderType: 'dashed' as const,
             shadowBlur: 0,
-            opacity: isDimmed ? 0.28 : 0.76,
+            opacity: isDimmed ? 0.12 : 0.76,
           };
         }
         return {
-          color: isTopicNode ? color : withAlpha(color, isDimmed ? 0.14 : isSelected ? 0.95 : node.nodeProperties?.mode === 'note' ? 0.82 : isHovered ? 0.88 : 0.72),
+          color: isTopicNode ? withAlpha(color, isDimmed ? 0.16 : 1) : withAlpha(color, isDimmed ? 0.09 : isSelected ? 0.95 : node.nodeProperties?.mode === 'note' ? 0.82 : isHovered ? 0.88 : 0.72),
           borderColor: isSelected
             ? theme.foreground
             : isHovered
@@ -924,7 +943,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
           borderType: 'solid' as const,
           shadowBlur: isTopicNode ? 0 : isSelected ? 7 : node.nodeProperties?.mode === 'note' && connections > 0 ? 3 : 0,
           shadowColor: isTopicNode ? 'rgba(0,0,0,0)' : withAlpha(color, isSelected ? 0.22 : node.nodeProperties?.mode === 'note' ? 0.12 : isHovered ? 0.16 : 0),
-          opacity: isDimmed ? 0.32 : 1,
+          opacity: isDimmed ? 0.16 : 1,
         };
       };
 
@@ -942,7 +961,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
 
       const getLabelColor = () => {
         if (isDimmed) {
-          return 'rgba(115, 115, 115, 0.22)';
+          return isDark ? 'rgba(250, 250, 250, 0.46)' : 'rgba(64, 64, 64, 0.5)';
         }
         if (labelPosition === 'inside') {
           if (isTopicNode) {
@@ -976,7 +995,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
 
       return {
         id: node.id,
-        name: node.nodeLabel,
+        name: node.id,
         category: roleIndex,
         symbolSize: isSelected ? symbolSize + (isTopicNode ? 8 : 5) : symbolSize,
         symbol: isTopicNode ? getTripstarNodeSymbol(node) : (isOrphan || isUnresolved) ? 'circle' : SHAPE_MAP[node.nodeType] || 'circle',
@@ -989,10 +1008,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
           show: labelVisible,
           position: labelPosition,
           formatter: (params: any) => {
-            const name = String(params.data?.name ?? '');
-            if (isUnresolved) {
-              return '';
-            }
+            const name = String(params.data?.nodeData?.nodeLabel ?? params.data?.name ?? '');
             if (isTopicNode) return formatTopicCenterLabel(name);
             if (node.nodeProperties?.mode === 'note') return formatFullGraphLabel(name, isNoteGraphNode ? 14 : symbolSize >= 30 ? 12 : 10);
             return name;
@@ -1000,7 +1016,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
           fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
           fontSize: labelFontSize,
           fontWeight: isTopicNode ? 650 : isSelected || role === 'hub' ? 600 : 500,
-          color: labelColor,
+          color: isNeighbor && !isFocused ? withAlpha(labelColor, 0.9) : labelColor,
           textBorderColor: labelBorderColor,
           textBorderWidth: isTopicNode ? 1.15 : 2,
           textShadowBlur: isTopicNode ? 0 : 1,
@@ -1029,7 +1045,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
             show: labelVisible,
             fontSize: labelFontSize,
             fontWeight: isTopicNode ? 650 : isSelected || role === 'hub' ? 600 : 500,
-            color: labelColor,
+            color: isNeighbor && !isFocused ? withAlpha(labelColor, 0.9) : labelColor,
             distance: isTopicNode ? 0 : 6,
           },
         },
@@ -1041,6 +1057,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
     const echartsEdges = localEdges.map(edge => {
       const isSelected = selectedEdgeRef.current === edge.id;
       const isHighlighted = focusNodeId === edge.source || focusNodeId === edge.target;
+      const isFocusBridge = !!focusNodeId && edge.source !== focusNodeId && edge.target !== focusNodeId && neighborIds.has(edge.source) && neighborIds.has(edge.target);
       const isDimmed = !!focusNodeId && !isHighlighted;
       const isTopicEdge = edge.label === 'topic-cooccurrence' || edge.label === 'topic-semantic' || edge.label === 'rag-vector';
       const config = getEdgeConfig(edge);
@@ -1048,8 +1065,11 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
       const sourceColor = getGraphNodeDisplayColor(nodeIndex.get(edge.source) ?? ({ id: edge.source, nodeType: 'note', nodeLabel: edge.source, nodeProperties: {}, nodeMetadata: { createdAt: '', updatedAt: '' } } as GraphNode));
       const targetColor = getGraphNodeDisplayColor(nodeIndex.get(edge.target) ?? ({ id: edge.target, nodeType: 'note', nodeLabel: edge.target, nodeProperties: {}, nodeMetadata: { createdAt: '', updatedAt: '' } } as GraphNode));
       const opacity = isTopicEdge
-        ? (isDimmed ? 0.014 : isSelected || isHighlighted ? 0.3 : Math.max(0.025, Math.min(0.105, 0.032 + Math.sqrt(weight) * 0.03)))
-        : (isDimmed ? 0.04 : isSelected || isHighlighted ? 0.6 : Math.max(0.06, Math.min(0.34, 0.12 + Math.sqrt(weight) * 0.08)));
+        ? (isDimmed ? (isFocusBridge ? 0.06 : 0.006) : isSelected || isHighlighted ? 0.42 : Math.max(0.018, Math.min(0.09, 0.026 + Math.sqrt(weight) * 0.026)))
+        : (isDimmed ? (isFocusBridge ? 0.12 : 0.012) : isSelected || isHighlighted ? 0.72 : Math.max(0.045, Math.min(0.28, 0.095 + Math.sqrt(weight) * 0.07)));
+      const typedEdgeColor = edge.label === 'wikilink' || edge.label === 'semantic'
+        ? null
+        : config.color;
 
       return {
         id: edge.id,
@@ -1059,7 +1079,9 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
         lineStyle: {
           color: isTopicEdge
             ? withAlpha(theme.foreground, opacity)
-            : {
+            : typedEdgeColor
+              ? withAlpha(typedEdgeColor, opacity)
+              : {
               type: 'linear',
               x: 0,
               y: 0,
@@ -1072,7 +1094,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
                 { offset: 0.7, color: withAlpha(targetColor, opacity * 0.85) },
                 { offset: 1, color: withAlpha(targetColor, opacity) },
               ],
-            },
+              },
           width: isTopicEdge
             ? (isSelected ? 2.2 : isHighlighted ? 1.65 : 1)
             : (isSelected ? config.width + 1.5 : isHighlighted ? config.width + 1 : Math.max(0.5, config.width * Math.min(1.3, Math.sqrt(weight)))),
@@ -1085,7 +1107,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
         emphasis: {
           lineStyle: {
             width: config.width + 1.1,
-            color: {
+            color: typedEdgeColor ? withAlpha(typedEdgeColor, 0.82) : {
               type: 'linear',
               x: 0,
               y: 0,
@@ -1163,7 +1185,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
             const mutedColor = theme.mutedForeground;
             const chipBgColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.06)';
             const isTopic = nodeData.nodeProperties?.mode === 'topic';
-            const title = String(params.name ?? nodeData.nodeLabel);
+            const title = nodeData.nodeLabel;
 
             if (isTopic) {
               const noteCount = Number(nodeData.nodeProperties.noteCount ?? 0);
@@ -1210,6 +1232,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
             const textColor = theme.foreground;
             const mutedColor = theme.mutedForeground;
             const confidence = edgeData.confidence ? `${(edgeData.confidence * 100).toFixed(0)}% 相关` : '';
+            const sourceLabel = edgeData.metadata?.source ? String(edgeData.metadata.source) : '';
 
             return `
               <div style="width: 172px; font-family: Inter, system-ui, sans-serif;">
@@ -1225,6 +1248,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
                     <span style="color: ${textColor};">→</span> ${target}
                   </div>
                 </div>
+                ${sourceLabel ? `<div style="margin-top: 5px; color: ${mutedColor}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px;">${sourceLabel}</div>` : ''}
               </div>
             `;
           }
@@ -1300,7 +1324,7 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
         blur: {
           itemStyle: { opacity: 0.12 },
           lineStyle: { opacity: 0.025 },
-          label: { opacity: 0.1 },
+          label: { opacity: 0.44 },
         },
         scaleLimit: {
           min: 0.32,
@@ -1339,6 +1363,10 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
     physics,
     colorGroups,
   ]);
+
+  useEffect(() => {
+    getOptionRef.current = getOption;
+  }, [getOption]);
 
   useEffect(() => {
     if (!apiRef) return;
@@ -1386,17 +1414,19 @@ export function EChartsGraph({ width, height, layoutMode = 'force', onNodeClick,
       const isNodeClick = !!clickedNodeId && (params.dataType === 'node' || !!params.data?.nodeData || !params.dataType);
       const isEdgeClick = !!clickedEdgeId && params.dataType === 'edge';
 
-      if (isNodeClick && clickedNodeId) {
-        selectNode(clickedNodeId);
-        selectEdge(null);
-        onNodeClick?.(clickedNodeId);
-      } else if (isEdgeClick && clickedEdgeId) {
-        selectEdge(clickedEdgeId);
-        selectNode(null);
-      } else {
-        selectNode(null);
-        selectEdge(null);
-      }
+      deferEChartsEventUpdate(() => {
+        if (isNodeClick && clickedNodeId) {
+          selectNode(clickedNodeId);
+          selectEdge(null);
+          onNodeClick?.(clickedNodeId);
+        } else if (isEdgeClick && clickedEdgeId) {
+          selectEdge(clickedEdgeId);
+          selectNode(null);
+        } else {
+          selectNode(null);
+          selectEdge(null);
+        }
+      });
     },
     graphRoam: () => {
       if (roamTimeoutRef.current) {

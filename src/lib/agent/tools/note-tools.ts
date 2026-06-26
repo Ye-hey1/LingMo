@@ -8,6 +8,9 @@ import useChatStore from '@/stores/chat'
 import emitter from '@/lib/emitter'
 import { getVectorDocumentKey } from '@/lib/vector-document-key'
 import { clearFileKnowledgeIndexes, moveWorkspaceEntryToTrash } from '@/lib/file-trash'
+import { ensureRequiredFrontmatter, applyFrontmatterPatch, type NoteFrontmatter, fileNameToTitle } from '@/lib/knowledge/frontmatter'
+import { registerNoteFromSave } from '@/lib/knowledge/note-sync'
+import { ARTIFACT_ROOTS } from '@/lib/artifacts/destination'
 
 function formatToolError(error: unknown): string {
   if (error instanceof Error && error.message) {
@@ -175,6 +178,19 @@ function updateVectorIndexedState(oldPath: string | null, newPath: string | null
   }
 
   useArticleStore.setState({ vectorIndexedFiles: nextMap })
+}
+
+function isMarkdownPath(filePath: string): boolean {
+  return /\.(md|markdown)$/i.test(filePath)
+}
+
+async function registerMarkdownKnowledgeObject(filePath: string, content: string, source: string) {
+  if (!isMarkdownPath(filePath)) return
+  try {
+    await registerNoteFromSave(filePath, content, { origin: 'agent_generated' })
+  } catch (error) {
+    console.error(`[${source}] registerNoteFromSave failed:`, error)
+  }
 }
 
 export const listMarkdownFilesTool: Tool = {
@@ -355,7 +371,8 @@ export const createFileTool: Tool = {
 
       const filePath = await ensureSafeWorkspaceRelativePath(joinRelativePath(normalizedFolderPath, fileName))
       const isSpecialSkillPath =
-        filePath.startsWith('skills/') || filePath.startsWith('outputs/')
+        filePath.startsWith(`${ARTIFACT_ROOTS.skill_runtime}/`) ||
+        filePath.startsWith(`${ARTIFACT_ROOTS.skill_output}/`)
 
       // 统一使用 getFilePathOptions 来处理路径
       const specialArticleRelativePath = isSpecialSkillPath
@@ -396,11 +413,29 @@ export const createFileTool: Tool = {
         }
       }
 
-      if (baseDir) {
-        await writeTextFile(path, params.content, { baseDir })
-      } else {
-        await writeTextFile(path, params.content)
+      // 对 .md 文件，自动补全必填 frontmatter 字段（title 回退链、created、updated、status）
+      // Phase 0 #2 frontmatter 标准化的关键写入点
+      let finalContent = params.content
+      if (/\.(md|markdown)$/i.test(filePath)) {
+        try {
+          const normalized = ensureRequiredFrontmatter(params.content, {
+            title: fileNameToTitle(filePath),
+            origin: 'agent_generated',
+          })
+          if (normalized !== params.content) {
+            finalContent = normalized
+          }
+        } catch (error) {
+          console.error('[create_file] frontmatter ensure failed:', error)
+        }
       }
+
+      if (baseDir) {
+        await writeTextFile(path, finalContent, { baseDir })
+      } else {
+        await writeTextFile(path, finalContent)
+      }
+      await registerMarkdownKnowledgeObject(filePath, finalContent, 'create_file')
 
       // 获取完整路径用于返回
       const { getWorkspacePath } = await import('@/lib/workspace')
@@ -502,11 +537,53 @@ export const updateMarkdownFileTool: Tool = {
         }
       }
 
-      if (baseDir) {
-        await writeTextFile(path, params.content, { baseDir })
-      } else {
-        await writeTextFile(path, params.content)
+      // 对 .md 文件，合并/保留现有 frontmatter：
+      // - 如果 agent 写入的内容没有 frontmatter，但磁盘文件有 → 用磁盘 frontmatter 包裹新 body
+      // - 自动 bump updated 字段
+      // Phase 0 #2 frontmatter 标准化的关键写入点
+      let finalContent = params.content
+      if (/\.(md|markdown)$/i.test(normalizedFilePath)) {
+        try {
+          let existingContent: string | null = null
+          try {
+            existingContent = baseDir
+              ? await readTextFile(path, { baseDir })
+              : await readTextFile(path)
+          } catch {
+            existingContent = null
+          }
+          if (existingContent) {
+            const patch: NoteFrontmatter = { updated: new Date().toISOString() }
+            const candidate = applyFrontmatterPatch(existingContent, patch)
+            // 仅当 agent 给的 content 没有 frontmatter 但磁盘有时，用磁盘 frontmatter 包裹
+            // 如果 agent 自己写了 frontmatter，就尊重 agent 的版本（applyFrontmatterPatch 已经合并）
+            const { parseNote } = await import('@/lib/knowledge/frontmatter')
+            const agentParsed = parseNote(params.content)
+            if (!agentParsed.hasFrontmatter) {
+              const existingParsed = parseNote(existingContent)
+              const merged = { ...existingParsed.frontmatter, ...patch }
+              const { serializeNote } = await import('@/lib/knowledge/frontmatter')
+              finalContent = serializeNote(merged, params.content)
+            } else {
+              finalContent = candidate
+            }
+          } else {
+            finalContent = ensureRequiredFrontmatter(params.content, {
+              title: fileNameToTitle(normalizedFilePath),
+              origin: 'agent_generated',
+            })
+          }
+        } catch (error) {
+          console.error('[update_markdown_file] frontmatter merge failed:', error)
+        }
       }
+
+      if (baseDir) {
+        await writeTextFile(path, finalContent, { baseDir })
+      } else {
+        await writeTextFile(path, finalContent)
+      }
+      await registerMarkdownKnowledgeObject(normalizedFilePath, finalContent, 'update_markdown_file')
 
       // 如果更新的是当前打开的文件，通过 saveCurrentArticle 刷新编辑器内容
       // 注意：不要使用 setCurrentArticle，因为它会触发 clearStack 清空撤销历史
@@ -1447,6 +1524,10 @@ export const copyFileTool: Tool = {
       if (copiedVectorUpdatedAt !== null) {
         updateVectorIndexedState(null, newRelativePath, copiedVectorUpdatedAt)
       }
+      const copiedContent = finalNewBaseDir
+        ? await readTextFile(finalNewPath, { baseDir: finalNewBaseDir })
+        : await readTextFile(finalNewPath)
+      await registerMarkdownKnowledgeObject(newRelativePath, copiedContent, 'copy_file')
 
       const inserted = articleStore.insertLocalEntry(newRelativePath, false)
       await articleStore.ensurePathExpanded(newRelativePath)
@@ -1719,6 +1800,10 @@ export const copyFilesBatchTool: Tool = {
           if (copiedVectorUpdatedAt !== null) {
             updateVectorIndexedState(null, newRelativePath, copiedVectorUpdatedAt)
           }
+          const copiedContent = finalNewBaseDir
+            ? await readTextFile(finalNewPath, { baseDir: finalNewBaseDir })
+            : await readTextFile(finalNewPath)
+          await registerMarkdownKnowledgeObject(newRelativePath, copiedContent, 'copy_files_batch')
 
           results.push({
             sourcePath: filePath,
@@ -1894,7 +1979,6 @@ export const noteTools: Tool[] = [
   updateMarkdownFileTool,
   deleteMarkdownFileTool,
   searchMarkdownFilesTool,
-  // modifyCurrentNoteTool: DEPRECATED - use replace_editor_content from editor-tools.ts instead
   readMarkdownFilesBatchTool,
   deleteMarkdownFilesBatchTool,
   listMarkdownFilesByDateTool,

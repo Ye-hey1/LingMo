@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState, useEffect, memo } from 'react'
-import { X, FileText, Folder, Plus, Undo2, Redo2, Network, WalletCards, Brain, Code2, Github } from 'lucide-react'
+import { X, FileText, Folder, Plus, Undo2, Redo2, Network, WalletCards, Brain, Code2, Github, Workflow } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import emitter from '@/lib/emitter'
@@ -36,6 +36,7 @@ import { isKnowledgeGraphTabPath } from '../knowledge/knowledge-graph-constants'
 import { isFlashcardTabPath } from '../flashcard/flashcard-constants'
 import { isMemoryTabPath } from '../memory/memory-constants'
 import { isGithubStarsTabPath } from '../github-stars/github-stars-constants'
+import { isAgentCenterTabPath } from '../agent/agent-constants'
 
 export interface TabInfo {
   id: string
@@ -140,7 +141,9 @@ function SortableTabWithMenu({
           {...attributes}
           {...listeners}
         >
-          {isKnowledgeGraphTabPath(tab.path) ? (
+          {isAgentCenterTabPath(tab.path) ? (
+            <Workflow className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
+          ) : isKnowledgeGraphTabPath(tab.path) ? (
             <Network className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />
           ) : isGithubStarsTabPath(tab.path) ? (
             <Github className={cn('h-4 w-4 shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')} />

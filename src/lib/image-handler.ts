@@ -1,7 +1,6 @@
 import { Store } from '@tauri-apps/plugin-store'
 import { writeFile, exists, mkdir } from '@tauri-apps/plugin-fs'
 import { dirname } from '@tauri-apps/api/path'
-import { v4 as uuidv4 } from 'uuid'
 import { uploadImage } from './imageHosting'
 import { getFilePathOptions, toWorkspaceRelativePath, getWorkspacePath } from './workspace'
 import { convertImageByWorkspace } from './utils'
@@ -85,7 +84,7 @@ async function saveImageLocally(file: File, markdownPath: string): Promise<{
 }> {
   // 生成唯一的图片文件名
   const ext = file.name.split('.').pop() || 'png'
-  const filename = `${uuidv4()}.${ext}`.replace(/\s/g, '_')
+  const filename = `${crypto.randomUUID()}.${ext}`.replace(/\s/g, '_')
 
   // 获取工作区路径信息
   const workspace = await getWorkspacePath()

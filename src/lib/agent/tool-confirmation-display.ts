@@ -65,6 +65,12 @@ const TOOL_CONFIRMATION_DISPLAY: Record<string, ToolConfirmationDisplayConfig> =
     summaryFields: ['kind', 'fileName', 'folderPath', 'contentPreview', 'openAfterCreate'],
     contentFields: ['contentPreview'],
   },
+  create_drawio_diagram_from_cells: {
+    titleKey: 'record.chat.input.agent.confirmation.tools.create_drawio_diagram_from_cells.title',
+    descriptionKey: 'record.chat.input.agent.confirmation.tools.create_drawio_diagram_from_cells.description',
+    summaryFields: ['title', 'fileName', 'folderPath', 'cellsPreview', 'openAfterCreate'],
+    contentFields: ['cellsPreview'],
+  },
   create_diagram_from_outline: {
     titleKey: 'record.chat.input.agent.confirmation.tools.create_diagram_from_outline.title',
     descriptionKey: 'record.chat.input.agent.confirmation.tools.create_diagram_from_outline.description',
@@ -82,6 +88,23 @@ const TOOL_CONFIRMATION_DISPLAY: Record<string, ToolConfirmationDisplayConfig> =
     descriptionKey: 'record.chat.input.agent.confirmation.tools.update_diagram_file.description',
     summaryFields: ['filePath', 'contentPreview', 'expectedModifiedAt'],
     contentFields: ['contentPreview'],
+  },
+  append_drawio_diagram_cells: {
+    titleKey: 'record.chat.input.agent.confirmation.tools.append_drawio_diagram_cells.title',
+    descriptionKey: 'record.chat.input.agent.confirmation.tools.append_drawio_diagram_cells.description',
+    summaryFields: ['filePath', 'cellsPreview', 'expectedModifiedAt'],
+    contentFields: ['cellsPreview'],
+  },
+  edit_drawio_diagram: {
+    titleKey: 'record.chat.input.agent.confirmation.tools.edit_drawio_diagram.title',
+    descriptionKey: 'record.chat.input.agent.confirmation.tools.edit_drawio_diagram.description',
+    summaryFields: ['filePath', 'operations', 'expectedModifiedAt'],
+    contentFields: ['operations'],
+  },
+  export_drawio_diagram: {
+    titleKey: 'record.chat.input.agent.confirmation.tools.export_drawio_diagram.title',
+    descriptionKey: 'record.chat.input.agent.confirmation.tools.export_drawio_diagram.description',
+    summaryFields: ['filePath', 'format', 'outputFileName', 'folderPath', 'scale', 'border'],
   },
   delete_markdown_file: {
     titleKey: 'record.chat.input.agent.confirmation.tools.delete_markdown_file.title',

@@ -94,6 +94,7 @@ export interface ChatSendOptions {
 const MIN_AUTO_EXTRACT_CHAR_COUNT = 500
 const AGENT_CONTEXT_TOTAL_LIMIT = 70000
 const AI_DOC_COMMAND_PREFIX = '你正在执行一个应用内命令：'
+const KNOWLEDGE_CAPTURE_INTENT_PATTERN = /总结|教程|方案|沉淀|笔记|整理|归纳|提炼|复盘|要点|大纲|知识库|保存|存成|存为|save|note|notes|summary|summarize|tutorial|guide|plan|organize|capture|extract|outline/i
 
 function buildHarnessContextItems(input: {
   userInput: string
@@ -221,7 +222,13 @@ function hasKnowledgeRichContent(content: string): boolean {
   return false
 }
 
-function shouldSuggestExtractToNote(content: string, hasSuccessfulToolCall: boolean) {
+function hasExplicitKnowledgeCaptureIntent(userInput: string) {
+  return KNOWLEDGE_CAPTURE_INTENT_PATTERN.test(userInput.trim())
+}
+
+function shouldSuggestExtractToNote(content: string, hasSuccessfulToolCall: boolean, userInput: string) {
+  if (!hasExplicitKnowledgeCaptureIntent(userInput)) return false
+
   const trimmed = cleanAssistantGeneratedContent(content || '').trim()
   if (!trimmed) return false
   if (isLikelyErrorContent(trimmed)) return false
@@ -432,6 +439,7 @@ export const ChatSend = forwardRef<{
     insert,
     loading,
     researchRunning,
+    agentState,
     chatMode,
     setLoading,
     setResearchRunning,
@@ -456,7 +464,8 @@ export const ChatSend = forwardRef<{
     : linkedResource
       ? [linkedResource]
       : []
-  const isRunning = loading || researchRunning
+  const isAgentMode = chatMode === 'agent'
+  const isRunning = researchRunning || (isAgentMode ? agentState.isRunning : loading)
   const resolveAutoWebSearchDecision = (userInput: string) => decideAutoWebSearch({
     userInput,
     manualDefaultEnabled: webSearchEnabled,
@@ -677,6 +686,57 @@ export const ChatSend = forwardRef<{
     return cleanAssistantGeneratedContent(trimmed.slice(0, cutoff).trim())
   }
 
+  const finishVisibleAgentRun = () => {
+    setAgentState({
+      activeChatId: undefined,
+      isRunning: false,
+      isThinking: false,
+      pendingConfirmation: undefined,
+      isFinalAnswerMode: false,
+      finalAnswerContent: undefined,
+      currentStepStartTime: undefined,
+    })
+    setLoading(false)
+  }
+
+  const createPreparingAgentActivity = (startedAt: number) => ({
+    label: '正在准备 Agent',
+    phase: 'preparing' as const,
+    startedAt,
+  })
+
+  const primeAgentRunStatus = (activeChatId?: number, startedAt = Date.now()) => {
+    setAgentState({
+      agentRunId: undefined,
+      agentEventCursor: undefined,
+      activeChatId,
+      isRunning: true,
+      isThinking: true,
+      currentThought: '',
+      thoughtHistory: [],
+      completedSteps: [],
+      currentAction: undefined,
+      currentObservation: undefined,
+      toolCalls: [],
+      agentEvents: [],
+      currentIteration: 0,
+      pendingConfirmation: undefined,
+      loadedSkills: undefined,
+      selectedSkills: undefined,
+      currentStepStartTime: startedAt,
+      ragSources: undefined,
+      ragSourceDetails: undefined,
+      agentContextSnapshot: undefined,
+      agentPartSnapshot: undefined,
+      agentParts: [],
+      isFinalAnswerMode: false,
+      finalAnswerContent: undefined,
+      activity: createPreparingAgentActivity(startedAt),
+      telemetry: undefined,
+      taskPlan: undefined,
+    })
+  }
+
   const triggerAutoExtractSuggestion = async (params: {
     finalContent: string
     placeholderMessageId: number
@@ -701,7 +761,7 @@ export const ChatSend = forwardRef<{
       return
     }
 
-    if (!shouldSuggestExtractToNote(finalContent, hasSuccessfulToolCall)) {
+    if (!shouldSuggestExtractToNote(finalContent, hasSuccessfulToolCall, userInput)) {
       return
     }
 
@@ -1542,9 +1602,9 @@ export const ChatSend = forwardRef<{
   // Agent 确认回调 - 使用内联确认而不是弹窗
   const requestConfirmation = async (
     toolName: string,
-    params: Record<string, any>,
+    params: Record<string, unknown>,
     context?: {
-      previewParams?: Record<string, any>
+      previewParams?: Record<string, unknown>
       originalContent?: string
       modifiedContent?: string
       filePath?: string
@@ -1661,11 +1721,16 @@ export const ChatSend = forwardRef<{
       inserted: false,
     })
 
-    if (!placeholderMessage) return
+    if (!placeholderMessage) {
+      finishVisibleAgentRun()
+      return
+    }
 
-    setAgentState({
-      activeChatId: placeholderMessage.id,
-    })
+    // 绑定真实占位消息，让会话区的即时状态从临时行平滑接管到 AI 消息行。
+    primeAgentRunStatus(
+      placeholderMessage.id,
+      useChatStore.getState().agentState.currentStepStartTime || Date.now(),
+    )
 
     try {
       const routeDecision = classifyAgentTask({
@@ -1710,6 +1775,7 @@ export const ChatSend = forwardRef<{
               toolCalls: agentState.toolCalls,
               events: agentState.agentEvents,
               telemetry: agentState.telemetry,
+              partSnapshot: agentState.agentPartSnapshot,
               contextSnapshot: agentState.agentContextSnapshot,
               runId: agentState.agentRunId,
               iterations: agentState.currentIteration,
@@ -1730,15 +1796,7 @@ export const ChatSend = forwardRef<{
               agentHistory: JSON.stringify(agentHistory),
             }, true)
 
-            setAgentState({
-              activeChatId: undefined,
-              isRunning: false,
-              isThinking: false,
-              pendingConfirmation: undefined,
-              isFinalAnswerMode: false,
-              finalAnswerContent: undefined,
-              currentStepStartTime: undefined,
-            })
+            finishVisibleAgentRun()
             agentHandlerRef.current = null
           },
           onError: async (error) => {
@@ -1746,15 +1804,7 @@ export const ChatSend = forwardRef<{
               ...placeholderMessage,
               content: formatUserVisibleError(error),
             }, true)
-            setAgentState({
-              activeChatId: undefined,
-              isRunning: false,
-              isThinking: false,
-              pendingConfirmation: undefined,
-              isFinalAnswerMode: false,
-              finalAnswerContent: undefined,
-              currentStepStartTime: undefined,
-            })
+            finishVisibleAgentRun()
             agentHandlerRef.current = null
           },
         })
@@ -1768,6 +1818,7 @@ export const ChatSend = forwardRef<{
       await orchestrator.run({
         userInput: effectiveInstruction,
         route: options?.routeOverride === 'workflow' ? 'workflow' : 'agent',
+        conversationId: placeholderMessage.conversationId ?? null,
         forcedSkillIds: options?.forcedSkillIds,
         webSearchEnabled: effectiveWebSearchEnabled,
         agentExecutor: async (runControl) => {
@@ -1834,6 +1885,7 @@ export const ChatSend = forwardRef<{
                 toolCalls: agentState.toolCalls,
                 events: agentState.agentEvents,
                 telemetry: agentState.telemetry,
+                partSnapshot: agentState.agentPartSnapshot,
                 contextSnapshot: agentState.agentContextSnapshot,
                 harnessSnapshot: runControl.getSnapshot(),
                 runId: agentState.agentRunId || runControl.runId,
@@ -1861,30 +1913,21 @@ export const ChatSend = forwardRef<{
                 agentHistory: JSON.stringify(agentHistory),
               }, true)
 
+              finishVisibleAgentRun()
+              agentHandlerRef.current = null
+
               if (!stopped) {
                 const hasSuccessfulToolCall = agentState.toolCalls.some(call => call.result?.success)
-                await triggerAutoExtractSuggestion({
+                void triggerAutoExtractSuggestion({
                   finalContent,
                   placeholderMessageId: placeholderMessage.id,
                   conversationId: placeholderMessage.conversationId,
                   userInput: options?.displayText || effectiveInstruction,
                   hasSuccessfulToolCall,
+                }).catch(error => {
+                  console.warn('[Agent] Auto extract suggestion failed:', error)
                 })
               }
-
-              // 清空 Final Answer 模式状态
-              setAgentState({
-                activeChatId: undefined,
-                isRunning: false,
-                isThinking: false,
-                pendingConfirmation: undefined,
-                isFinalAnswerMode: false,
-                finalAnswerContent: undefined,
-                currentStepStartTime: undefined,
-              })
-
-              // 清空 ref
-              agentHandlerRef.current = null
             },
             onError: async (error) => {
               // 获取当前消息状态，保留 ragSources 和 ragSourceDetails
@@ -1906,18 +1949,7 @@ export const ChatSend = forwardRef<{
                 content: formatUserVisibleError(error),
               }, true)
 
-              // 清空 Final Answer 模式状态
-              setAgentState({
-                activeChatId: undefined,
-                isRunning: false,
-                isThinking: false,
-                pendingConfirmation: undefined,
-                isFinalAnswerMode: false,
-                finalAnswerContent: undefined,
-                currentStepStartTime: undefined,
-              })
-
-              // 清空 ref
+              finishVisibleAgentRun()
               agentHandlerRef.current = null
             },
           })
@@ -1943,9 +1975,20 @@ export const ChatSend = forwardRef<{
             activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
           })
 
-          const { context, ragSources, ragSourceDetails } = contextResult
+          const { context, ragSources, ragSourceDetails, sections: chatContextSections } = contextResult
           const visibleRagSourceDetails = ragSourceDetails
           const visibleRagSources = ragSources
+
+          // Phase 1 #B：把结构化 sections 写回 agentHandler
+          // 必须在 execute() 之前调用；setContextSections 会替换 config.contextSections
+          if (chatContextSections) {
+            agentHandler.setContextSections({
+              currentDoc: chatContextSections.current || chatContextSections.quote,
+              linkedFiles: chatContextSections.linked,
+              rag: chatContextSections.rag,
+              webSearch: chatContextSections.web,
+            })
+          }
 
           // 如果启用了 Web 搜索，添加提示
           let agentContext = context
@@ -2034,6 +2077,13 @@ export const ChatSend = forwardRef<{
     onSent?.(displayText)
 
     const imageUrls = attachedImages.map(img => img.url)
+    const effectiveMode = options?.modeOverride || chatMode
+    const effectiveRoute = options?.routeOverride || effectiveMode
+    const shouldPrimeAgentRunStatus = effectiveRoute === 'agent' || effectiveRoute === 'workflow'
+    if (shouldPrimeAgentRunStatus) {
+      primeAgentRunStatus(undefined, Date.now())
+    }
+
     const userMessage = await insert({
       tagId: currentTagId,
       role: 'user',
@@ -2043,12 +2093,15 @@ export const ChatSend = forwardRef<{
       images: imageUrls.length > 0 ? JSON.stringify(imageUrls) : undefined,
       quoteData: quoteData ? JSON.stringify(quoteData) : undefined,
     })
-    if (!userMessage) return
+    if (!userMessage) {
+      if (shouldPrimeAgentRunStatus) {
+        finishVisibleAgentRun()
+      }
+      return
+    }
 
     setLoading(true)
     let keepLoading = false
-    const effectiveMode = options?.modeOverride || chatMode
-    const effectiveRoute = options?.routeOverride || effectiveMode
     const webDecision = resolveAutoWebSearchDecision(requestText)
     const effectiveWebSearchEnabled = webDecision.enabled
     if (effectiveRoute === 'writer' || effectiveRoute === 'advisor') {
@@ -2081,13 +2134,27 @@ export const ChatSend = forwardRef<{
     }
 
     // 停止 Agent 执行
+    const hasActiveAgentHandler = Boolean(agentHandlerRef.current)
     if (agentHandlerRef.current) {
       agentHandlerRef.current.stop()
       // 不立即清空 ref，等待 Agent 的错误处理完成并调用 onComplete
     }
 
     // 重置 loading 状态
-    setAgentState({ pendingConfirmation: undefined })
+    setAgentState({
+      pendingConfirmation: undefined,
+      ...(hasActiveAgentHandler
+        ? {}
+        : {
+            activeChatId: undefined,
+            isRunning: false,
+            isThinking: false,
+            isFinalAnswerMode: false,
+            finalAnswerContent: undefined,
+            currentStepStartTime: undefined,
+            activity: undefined,
+          }),
+    })
     setResearchRunning(false)
     setLoading(false)
   }

@@ -8,7 +8,15 @@ interface WordCountProps {
 }
 
 export function WordCount({ editor }: WordCountProps) {
-  const [characters, setCharacters] = useState(() => editor.storage.characterCount?.characters?.() ?? 0)
+  const getCharacters = () => {
+    const extensionCount = editor.storage.characterCount?.characters?.()
+    if (typeof extensionCount === 'number') {
+      return extensionCount
+    }
+
+    return Math.max(0, editor.state.doc.content.size - 2)
+  }
+  const [characters, setCharacters] = useState(getCharacters)
 
   useEffect(() => {
     if (!editor) {
@@ -16,15 +24,27 @@ export function WordCount({ editor }: WordCountProps) {
       return
     }
 
+    let timer: ReturnType<typeof setTimeout> | null = null
+
     const updateCharacters = () => {
-      setCharacters(editor.storage.characterCount?.characters?.() ?? 0)
+      if (timer) {
+        clearTimeout(timer)
+      }
+
+      timer = setTimeout(() => {
+        timer = null
+        setCharacters(getCharacters())
+      }, 180)
     }
 
-    updateCharacters()
+    setCharacters(getCharacters())
     editor.on('create', updateCharacters)
     editor.on('update', updateCharacters)
 
     return () => {
+      if (timer) {
+        clearTimeout(timer)
+      }
       editor.off('create', updateCharacters)
       editor.off('update', updateCharacters)
     }

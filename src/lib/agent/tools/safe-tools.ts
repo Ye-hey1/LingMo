@@ -1,14 +1,12 @@
 import { Tool, ToolResult } from '../types'
-import { exists, mkdir, readDir, readTextFile, stat, writeTextFile } from '@tauri-apps/plugin-fs'
-import { appDataDir } from '@tauri-apps/api/path'
+import { readDir, readTextFile, stat, writeTextFile } from '@tauri-apps/plugin-fs'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
-import { getFilePathOptions, getWorkspacePath, normalizeWorkspaceRelativePath, ensureSafeWorkspaceRelativePath } from '@/lib/workspace'
+import { getFilePathOptions, normalizeWorkspaceRelativePath, ensureSafeWorkspaceRelativePath } from '@/lib/workspace'
 import useArticleStore from '@/stores/article'
 import { searchWeb, tavilyExtract } from '@/lib/tavily'
-import { processMarkdownFile } from '@/lib/rag'
-import { getVectorDocumentKey } from '@/lib/vector-document-key'
-import { collapseWhitespace, htmlToMarkdown, looksLikeHtml, normalizeWebContent } from '@/lib/web/content-extractor'
+import { htmlToMarkdown, looksLikeHtml } from '@/lib/web/content-extractor'
 import { isTimeSensitiveRequest } from '../tool-intent'
+import { registerNoteFromSave } from '@/lib/knowledge/note-sync'
 
 interface WorkspaceEntry {
   name: string
@@ -223,6 +221,15 @@ function getExtension(path: string): string {
   return index >= 0 ? lastSegment.slice(index).toLowerCase() : ''
 }
 
+async function registerMarkdownKnowledgeObject(filePath: string, content: string, source: string) {
+  if (!/\.(md|markdown)$/i.test(filePath)) return
+  try {
+    await registerNoteFromSave(filePath, content, { origin: 'agent_generated' })
+  } catch (error) {
+    console.error(`[${source}] registerNoteFromSave failed:`, error)
+  }
+}
+
 function normalizeTextExtensions(value: unknown): Set<string> {
   if (!Array.isArray(value) || value.length === 0) {
     return DEFAULT_TEXT_EXTENSIONS
@@ -355,120 +362,6 @@ function isBlockedUrl(url: URL): boolean {
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
     (a === 169 && b === 254)
-}
-
-function sanitizeWebClipFileName(title: string): string {
-  const cleaned = title
-    .trim()
-    .replace(/\s+/g, '_')
-    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '')
-
-  const fallback = `web-clip-${new Date().toISOString().replace(/[:.]/g, '-')}`
-  const name = (cleaned || fallback).slice(0, 80)
-  return `${name}.md`
-}
-
-function sanitizeWebClipTagToken(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-function buildWebClipTags(url: URL): string[] {
-  const tags = new Set<string>(['web-clip', 'source-web'])
-  const normalizedHost = sanitizeWebClipTagToken(url.hostname.replace(/^www\./i, ''))
-  if (normalizedHost) {
-    tags.add(`source-${normalizedHost}`)
-  }
-
-  const firstPathSegment = url.pathname.split('/').find(segment => segment.trim().length > 0)
-  if (firstPathSegment) {
-    const normalizedPathTag = sanitizeWebClipTagToken(firstPathSegment)
-    if (normalizedPathTag) {
-      tags.add(`topic-${normalizedPathTag}`)
-    }
-  }
-
-  return [...tags]
-}
-
-async function ensureWorkspaceFolder(folderPath: string) {
-  const safeFolder = await ensureSafeWorkspaceRelativePath(folderPath)
-  const { path, baseDir } = await getFilePathOptions(safeFolder)
-  if (baseDir) {
-    await mkdir(path, { baseDir, recursive: true })
-  } else {
-    await mkdir(path, { recursive: true })
-  }
-}
-
-async function resolveUniqueWorkspaceFilePath(initialRelativePath: string): Promise<string> {
-  const normalizedInitialPath = await ensureSafeWorkspaceRelativePath(initialRelativePath)
-  const pathParts = normalizedInitialPath.split('/')
-  const fileName = pathParts.pop() || normalizedInitialPath
-  const folderPath = pathParts.join('/')
-  const extIndex = fileName.lastIndexOf('.')
-  const baseName = extIndex > 0 ? fileName.slice(0, extIndex) : fileName
-  const extension = extIndex > 0 ? fileName.slice(extIndex) : ''
-
-  let candidate = normalizedInitialPath
-  for (let index = 1; index <= 99; index += 1) {
-    const { path, baseDir } = await getFilePathOptions(candidate)
-    const alreadyExists = baseDir ? await exists(path, { baseDir }) : await exists(path)
-    if (!alreadyExists) {
-      return candidate
-    }
-
-    const nextFileName = `${baseName}-${index + 1}${extension}`
-    candidate = folderPath ? `${folderPath}/${nextFileName}` : nextFileName
-  }
-
-  throw new Error('无法生成唯一的沉淀文件名，请稍后重试')
-}
-
-function buildWebClipMarkdown(params: {
-  title: string
-  url: string
-  tags: string[]
-  snippet?: string
-  body: string
-}) {
-  const snippet = params.snippet?.trim()
-  const tagsLine = params.tags.length > 0
-    ? params.tags.map(tag => `#${tag}`).join(' ')
-    : '#web-clip'
-  const lines = [
-    `# ${params.title}`,
-    '',
-    `- Source URL: ${params.url}`,
-    `- Saved At: ${new Date().toISOString()}`,
-    `- Tags: ${tagsLine}`,
-    '',
-  ]
-
-  if (snippet) {
-    lines.push('## 摘要', '', snippet, '')
-  }
-
-  lines.push('## 正文', '', params.body || '未抓取到正文内容。', '')
-  return lines.join('\n')
-}
-
-async function fetchWebClipBody(url: URL, maxChars: number, signal?: AbortSignal): Promise<string> {
-  assertNotAborted(signal)
-  const response = await tauriFetch(url.toString(), {
-    method: 'GET',
-    signal,
-    headers: {
-      Accept: 'text/html, text/plain, application/json;q=0.9, */*;q=0.1',
-    },
-  })
-  assertNotAborted(signal)
-  const text = await response.text()
-  return normalizeWebContent(text).slice(0, maxChars)
 }
 
 export const safeListFilesTool: Tool = {
@@ -644,6 +537,7 @@ export const safeWriteFileTool: Tool = {
         await writeTextFile(path, nextContent)
       }
       assertNotAborted(context?.abortSignal)
+      await registerMarkdownKnowledgeObject(filePath, nextContent, 'safe_write_file')
 
       const articleStore = useArticleStore.getState()
       const inserted = articleStore.insertLocalEntry(filePath, false)
@@ -1176,142 +1070,6 @@ export const webExtractTool: Tool = {
   },
 }
 
-export const clipWebContentTool: Tool = {
-  name: 'clip_web_content',
-  description: 'Save web search/fetch content into a Markdown note and update vector index automatically for future RAG reuse.',
-  category: 'web',
-  requiresConfirmation: true,
-  risk: 'medium',
-  capabilities: ['read', 'write', 'network'],
-  parameters: [
-    {
-      name: 'url',
-      type: 'string',
-      description: 'Public http(s) URL to clip.',
-      required: true,
-    },
-    {
-      name: 'title',
-      type: 'string',
-      description: 'Optional note title. Defaults to page hostname or URL.',
-      required: false,
-    },
-    {
-      name: 'content',
-      type: 'string',
-      description: 'Optional pre-extracted content/snippet. If empty, tool fetches URL body.',
-      required: false,
-    },
-    {
-      name: 'folderPath',
-      type: 'string',
-      description: 'Optional destination folder in workspace. Default "web-clips".',
-      required: false,
-    },
-    {
-      name: 'maxChars',
-      type: 'number',
-      description: 'Maximum chars kept from fetched body. Default 20000, max 100000.',
-      required: false,
-      default: 20000,
-    },
-  ],
-  execute: async (params, context): Promise<ToolResult> => {
-    try {
-      assertNotAborted(context?.abortSignal)
-      const rawUrl = typeof params.url === 'string' ? params.url.trim() : ''
-      if (!rawUrl) {
-        return {
-          success: false,
-          error: 'url is required',
-        }
-      }
-
-      const url = new URL(rawUrl)
-      if (isBlockedUrl(url)) {
-        return {
-          success: false,
-          error: 'Blocked URL. Only public http(s) targets are allowed.',
-        }
-      }
-
-      const maxChars = clampNumber(params.maxChars, 20000, 500, 100000)
-      const folderPathInput = typeof params.folderPath === 'string' ? params.folderPath.trim() : ''
-      const folderPath = folderPathInput ? await ensureSafeWorkspaceRelativePath(folderPathInput) : 'web-clips'
-      await ensureWorkspaceFolder(folderPath)
-
-      const title = collapseWhitespace(
-        typeof params.title === 'string' && params.title.trim()
-          ? params.title
-          : url.hostname.replace(/^www\./, '')
-      )
-      const fileName = sanitizeWebClipFileName(title)
-      const uniqueRelativePath = await resolveUniqueWorkspaceFilePath(`${folderPath}/${fileName}`)
-
-      const paramContent = typeof params.content === 'string' ? params.content : ''
-      const snippet = normalizeWebContent(paramContent).slice(0, 3000)
-      const body = snippet || await fetchWebClipBody(url, maxChars, context?.abortSignal)
-      const tags = buildWebClipTags(url)
-      assertNotAborted(context?.abortSignal)
-
-      const markdown = buildWebClipMarkdown({
-        title,
-        url: url.toString(),
-        tags,
-        snippet,
-        body,
-      })
-
-      const { path, baseDir } = await getFilePathOptions(uniqueRelativePath)
-      if (baseDir) {
-        await writeTextFile(path, markdown, { baseDir })
-      } else {
-        await writeTextFile(path, markdown)
-      }
-      assertNotAborted(context?.abortSignal)
-
-      const articleStore = useArticleStore.getState()
-      const inserted = articleStore.insertLocalEntry(uniqueRelativePath, false)
-      await articleStore.ensurePathExpanded(uniqueRelativePath)
-      if (!inserted) {
-        await articleStore.loadFileTree()
-      }
-
-      const indexed = await processMarkdownFile(uniqueRelativePath, markdown)
-      if (indexed) {
-        const latestState = useArticleStore.getState()
-        const nextMap = new Map(latestState.vectorIndexedFiles)
-        nextMap.set(getVectorDocumentKey(uniqueRelativePath), Date.now())
-        useArticleStore.setState({ vectorIndexedFiles: nextMap })
-      }
-
-      const workspace = await getWorkspacePath()
-      const fullPath = workspace.isCustom
-        ? `${workspace.path}/${uniqueRelativePath}`
-        : `${await appDataDir()}/article/${uniqueRelativePath}`
-
-      return {
-        success: true,
-        data: {
-          url: url.toString(),
-          filePath: uniqueRelativePath,
-          fullPath,
-          indexed,
-          tags,
-        },
-        message: indexed
-          ? `Saved web clip to ${uniqueRelativePath} and updated vector index.`
-          : `Saved web clip to ${uniqueRelativePath}, but vector indexing failed.`,
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to clip web content: ${error instanceof Error ? error.message : String(error)}`,
-      }
-    }
-  },
-}
-
 export const safeTools: Tool[] = [
   safeListFilesTool,
   safeReadFileTool,
@@ -1320,5 +1078,4 @@ export const safeTools: Tool[] = [
   webFetchTool,
   webSearchTool,
   webExtractTool,
-  clipWebContentTool,
 ]

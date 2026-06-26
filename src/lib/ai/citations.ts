@@ -1,4 +1,4 @@
-import type { ToolCall } from '@/lib/agent'
+import type { AgentEvent, AgentPartSnapshot, AgentTurnTelemetry, ReActStep, ToolCall } from '@/lib/agent'
 
 export interface MessageCitationDetail {
   url?: string
@@ -71,11 +71,19 @@ function getHostLabel(url: string): string {
   }
 }
 
-export function parseStoredAgentHistory(value?: string): { toolCalls?: ToolCall[] } | null {
+export type StoredAgentHistory = {
+  steps?: ReActStep[]
+  toolCalls?: ToolCall[]
+  events?: AgentEvent[]
+  telemetry?: AgentTurnTelemetry
+  partSnapshot?: AgentPartSnapshot
+}
+
+export function parseStoredAgentHistory(value?: string): StoredAgentHistory | null {
   if (!value) return null
 
   try {
-    return JSON.parse(value) as { toolCalls?: ToolCall[] }
+    return JSON.parse(value) as StoredAgentHistory
   } catch {
     return null
   }

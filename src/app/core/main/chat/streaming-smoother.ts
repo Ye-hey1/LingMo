@@ -7,17 +7,17 @@ export type SmootherStepResult = SmootherState & {
   charsAdded: number;
 };
 
-const MIN_CHARS_PER_SECOND = 12;
-const SLOW_CHARS_PER_SECOND = 28;
-const MID_CHARS_PER_SECOND = 56;
-const HIGH_CHARS_PER_SECOND = 112;
-const MAX_CHARS_PER_SECOND = 240;
+const MIN_CHARS_PER_SECOND = 40;
+const SLOW_CHARS_PER_SECOND = 96;
+const MID_CHARS_PER_SECOND = 220;
+const HIGH_CHARS_PER_SECOND = 520;
+const MAX_CHARS_PER_SECOND = 1100;
 
 export function getAdaptiveCharsPerSecond(backlog: number): number {
-  if (backlog > 120) return MAX_CHARS_PER_SECOND;
-  if (backlog > 60) return HIGH_CHARS_PER_SECOND;
-  if (backlog > 24) return MID_CHARS_PER_SECOND;
-  if (backlog > 6) return SLOW_CHARS_PER_SECOND;
+  if (backlog > 1000) return MAX_CHARS_PER_SECOND;
+  if (backlog > 480) return HIGH_CHARS_PER_SECOND;
+  if (backlog > 120) return MID_CHARS_PER_SECOND;
+  if (backlog > 24) return SLOW_CHARS_PER_SECOND;
   return MIN_CHARS_PER_SECOND;
 }
 

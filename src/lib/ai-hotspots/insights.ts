@@ -120,6 +120,40 @@ function extractJsonObject(text: string) {
   }
 }
 
+/**
+ * JSON 修复重试（借鉴 TrendRadar analyzer._retry_fix_json）。
+ * AI 偶尔返回含有中文引号、未转义双引号的 JSON，让 AI 自己修复后重试一次。
+ */
+async function repairAndParseJson(
+  rawText: string,
+  aiConfig: NonNullable<Awaited<ReturnType<typeof getAISettings>>>,
+): Promise<Partial<AiHotspotInsightPatch> | null> {
+  if (!aiConfig.model) return null
+  const modelName = aiConfig.model
+  try {
+    const repairPrompt = [
+      '你是一个 JSON 修复助手。用户会提供一段格式有误的 JSON，你需要修复 JSON 格式错误并返回正确的 JSON。',
+      '直接返回纯 JSON，不要包含 markdown 代码块标记（如 ```json）或任何说明文字。',
+      '修复要点：值中的双引号改用中文引号「」或转义 \\\”，补全缺失的逗号/括号。',
+      '',
+      `以下 JSON 解析失败：`,
+      rawText,
+    ].join('\n')
+    const { messages } = await prepareMessages(repairPrompt)
+    const openai = await createOpenAIClient(aiConfig)
+    const completion = await openai.chat.completions.create({
+      model: modelName,
+      messages,
+      temperature: 0,
+      top_p: aiConfig.topP || 1,
+    })
+    const repaired = completion.choices[0]?.message?.content || ''
+    return extractJsonObject(repaired)
+  } catch {
+    return null
+  }
+}
+
 function normalizeAiPatch(
   item: AiHotspotItem,
   localPatch: AiHotspotInsightPatch,
@@ -179,7 +213,12 @@ export async function generateAiHotspotInsight(
       top_p: aiConfig.topP || 1,
     })
     const content = completion.choices[0]?.message?.content || ''
-    return normalizeAiPatch(item, localPatch, extractJsonObject(content))
+    let parsed = extractJsonObject(content)
+    // JSON 解析失败 → 让 AI 修复后重试一次（借鉴 TrendRadar 的鲁棒性设计）
+    if (!parsed && content.trim()) {
+      parsed = await repairAndParseJson(content, aiConfig)
+    }
+    return normalizeAiPatch(item, localPatch, parsed)
   } catch (error) {
     console.warn('[ai-hotspots] insight generation fallback:', error)
     return localPatch

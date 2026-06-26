@@ -48,6 +48,11 @@ import {
   isGithubStarsTabPath,
 } from '../github-stars/github-stars-constants'
 import {
+  AGENT_CENTER_TAB_ID,
+  AGENT_CENTER_TAB_NAME,
+  isAgentCenterTabPath,
+} from '../agent/agent-constants'
+import {
   MEMORY_TAB_ID,
   MEMORY_TAB_NAME,
   isMemoryTabPath,
@@ -70,6 +75,7 @@ const ArtifactStudio = dynamic(() => import('../artifacts/artifact-studio').then
 const FlashcardWorkspace = dynamic(() => import('../flashcard/flashcard-workspace').then(m => m.FlashcardWorkspace), { ssr: false })
 const MemoryWorkspace = dynamic(() => import('../memory/memory-workspace').then(m => m.MemoryWorkspace), { ssr: false })
 const GithubStarsWorkspace = dynamic(() => import('../github-stars/github-stars-workspace').then(m => m.GithubStarsWorkspace), { ssr: false })
+const AgentWorkspace = dynamic(() => import('../agent/agent-workspace').then(m => m.AgentWorkspace), { ssr: false })
 import {
   createDefaultOnboardingProgress,
   getCompletionFeedbackMode,
@@ -348,7 +354,7 @@ export function EditorLayout() {
   }, [])
 
   // Get item type based on path
-  const getItemType = useCallback((path: string): 'knowledgeGraph' | 'artifactStudio' | 'flashcards' | 'memory' | 'githubStars' | 'html' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'mermaid' | 'folder' | 'unknown' => {
+  const getItemType = useCallback((path: string): 'knowledgeGraph' | 'artifactStudio' | 'flashcards' | 'memory' | 'githubStars' | 'agentCenter' | 'html' | 'markdown' | 'image' | 'pdf' | 'diagram' | 'mermaid' | 'folder' | 'unknown' => {
     if (!path) return 'unknown'
 
     // ⭐ 优先检查虚拟路由 - 必须在实际文件系统检查之前
@@ -357,6 +363,7 @@ export function EditorLayout() {
     if (isFlashcardTabPath(path)) return 'flashcards'
     if (isMemoryTabPath(path)) return 'memory'
     if (isGithubStarsTabPath(path)) return 'githubStars'
+    if (isAgentCenterTabPath(path)) return 'agentCenter'
 
     // 然后检查是否是文件夹
     const folder = findFolderInTree(path, fileTree)
@@ -391,7 +398,7 @@ export function EditorLayout() {
 
   const shouldKeepTabMounted = useCallback((tab: TabInfo): boolean => {
     const itemType = getItemType(tab.path)
-    return itemType === 'pdf' || itemType === 'diagram' || itemType === 'mermaid' || itemType === 'knowledgeGraph' || itemType === 'artifactStudio' || itemType === 'flashcards' || itemType === 'memory' || itemType === 'githubStars'
+    return itemType === 'pdf' || itemType === 'diagram' || itemType === 'mermaid' || itemType === 'knowledgeGraph' || itemType === 'artifactStudio' || itemType === 'flashcards' || itemType === 'memory' || itemType === 'githubStars' || itemType === 'agentCenter'
   }, [getItemType])
 
   useEffect(() => {
@@ -482,7 +489,7 @@ export function EditorLayout() {
       let hasInvalid = false
 
       for (const tab of tabs) {
-        if (isKnowledgeGraphTabPath(tab.path) || isArtifactStudioTabPath(tab.path) || isFlashcardTabPath(tab.path) || isMemoryTabPath(tab.path) || isGithubStarsTabPath(tab.path)) {
+        if (isKnowledgeGraphTabPath(tab.path) || isArtifactStudioTabPath(tab.path) || isFlashcardTabPath(tab.path) || isMemoryTabPath(tab.path) || isGithubStarsTabPath(tab.path) || isAgentCenterTabPath(tab.path)) {
           validTabs.push(tab)
           continue
         }
@@ -512,7 +519,7 @@ export function EditorLayout() {
     }
 
     cleanupTabs()
-  }, [fileTree, isFolderInTree, isFileInTree, checkPathExists, setOpenTabs])
+  }, [fileTree, isFolderInTree, isFileInTree, checkPathExists, setOpenTabs, tabs])
 
   // Initialize and update tabs when active path changes
   useEffect(() => {
@@ -525,7 +532,8 @@ export function EditorLayout() {
       const isFlashcardsTab = isFlashcardTabPath(activeFilePath)
       const isMemoryTab = isMemoryTabPath(activeFilePath)
       const isGithubStarsTab = isGithubStarsTabPath(activeFilePath)
-      const isVirtualTab = isGraphTab || isArtifactStudioTab || isFlashcardsTab || isMemoryTab || isGithubStarsTab
+      const isAgentCenterTab = isAgentCenterTabPath(activeFilePath)
+      const isVirtualTab = isGraphTab || isArtifactStudioTab || isFlashcardsTab || isMemoryTab || isGithubStarsTab || isAgentCenterTab
       const isFolder = isVirtualTab ? false : isFolderPath(activeFilePath)
 
       // Check if tab already exists
@@ -550,7 +558,9 @@ export function EditorLayout() {
                   ? MEMORY_TAB_ID
                   : isGithubStarsTab
                     ? GITHUB_STARS_TAB_ID
-                    : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+                    : isAgentCenterTab
+                      ? AGENT_CENTER_TAB_ID
+                      : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
           path: activeFilePath,
           name: isGraphTab
             ? KNOWLEDGE_GRAPH_TAB_NAME
@@ -562,7 +572,9 @@ export function EditorLayout() {
                   ? MEMORY_TAB_NAME
                   : isGithubStarsTab
                     ? GITHUB_STARS_TAB_NAME
-                    : name,
+                    : isAgentCenterTab
+                      ? AGENT_CENTER_TAB_NAME
+                      : name,
           isFolder: isFolder
         }
         await addTab(newTab)
@@ -572,7 +584,7 @@ export function EditorLayout() {
     }
 
     void initializeTabs()
-  }, [activeFilePath, isFolderPath, addTab, setActiveTabId])
+  }, [activeFilePath, isFolderPath, addTab, setActiveTabId, activeTabId])
 
   // Handle tab switch
   const handleTabSwitch = useCallback((path: string) => {
@@ -853,6 +865,13 @@ export function EditorLayout() {
           <Suspense fallback={<div className="flex-1" />}>
             <div className="flex min-h-0 flex-1 overflow-hidden">
               <GithubStarsWorkspace />
+            </div>
+          </Suspense>
+        )}
+        {itemType === 'agentCenter' && (
+          <Suspense fallback={<div className="flex-1" />}>
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <AgentWorkspace />
             </div>
           </Suspense>
         )}

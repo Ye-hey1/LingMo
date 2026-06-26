@@ -1,6 +1,6 @@
 'use client'
 
-import { ThemeProvider } from "@/components/theme-provider"
+import { ThemeProvider as NextThemesProvider } from "next-themes"
 import useSettingStore from "@/stores/setting"
 import { useEffect } from "react"
 import { usePathname } from "next/navigation"
@@ -18,7 +18,6 @@ import useImageStore from "@/stores/imageHosting";
 import { initMcp } from "@/lib/mcp/init"
 import { reportAppStart } from "@/lib/event-report"
 import { MobileStatusBar } from "@/components/mobile-statusbar"
-import { TextSizeProvider } from "@/contexts/text-size-context"
 import { SyncConfirmDialog } from "@/components/sync-confirm-dialog"
 import { ControlText } from "@/app/core/main/mark/control-text"
 import { ControlRecording } from "@/app/core/main/mark/control-recording"
@@ -72,32 +71,30 @@ export default function RootLayout({
   const hideFootbar = pathname.startsWith('/mobile/setting/pages')
 
   return (
-    <ThemeProvider
+    <NextThemesProvider
       attribute="class"
       defaultTheme="system"
       enableSystem
       disableTransitionOnChange
     >
-      <TextSizeProvider>
-        <MobileStatusBar />
-        <TooltipProvider>
-          <div className="flex flex-col h-full">
-            <main className="flex flex-1 w-full overflow-hidden">
-              {children}
-            </main>
-            {!hideFootbar ? <AppFootbar /> : null}
-          </div>
-          {/* 隐藏的记录工具组件，用于监听事件 */}
-          <div className="absolute opacity-0 pointer-events-none -z-50">
-            <ControlText />
-            <ControlRecording />
-            <ControlImage />
-            <ControlLink />
-            <ControlFile />
-          </div>
-        </TooltipProvider>
-        <SyncConfirmDialog />
-      </TextSizeProvider>
-    </ThemeProvider>
+      <MobileStatusBar />
+      <TooltipProvider>
+        <div className="flex flex-col h-full">
+          <main className="flex flex-1 w-full overflow-hidden">
+            {children}
+          </main>
+          {!hideFootbar ? <AppFootbar /> : null}
+        </div>
+        {/* 隐藏的记录工具组件，用于监听事件 */}
+        <div className="absolute opacity-0 pointer-events-none -z-50">
+          <ControlText />
+          <ControlRecording />
+          <ControlImage />
+          <ControlLink />
+          <ControlFile />
+        </div>
+      </TooltipProvider>
+      <SyncConfirmDialog />
+    </NextThemesProvider>
   );
 }

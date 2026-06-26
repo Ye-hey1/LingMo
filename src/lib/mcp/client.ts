@@ -10,6 +10,7 @@ import type {
   CallToolResult,
 } from './types'
 import { normalizeCallToolResult } from './result'
+import { resolveMcpEnv, resolveMcpHeaders } from './config-values'
 
 /**
  * MCP 客户端
@@ -44,7 +45,7 @@ export class MCPClient {
         serverId: this.config.id,
         command: this.config.command,
         args: this.config.args || [],
-        env: this.config.env || {},
+        env: resolveMcpEnv(this.config.env),
       })
     } catch (error) {
       throw new Error(`Failed to start stdio server: ${error}`)
@@ -210,12 +211,12 @@ export class MCPClient {
       const response: JSONRPCResponse = JSON.parse(responseStr)
       
       if (response.error) {
-        throw new Error(response.error.message)
+        throw new Error(formatJsonRpcError(response.error, 'Stdio MCP error'))
       }
       
       return response.result
     } catch (error) {
-      throw new Error(`Stdio request failed: ${error}`)
+      throw new Error(`Stdio request failed: ${formatUnknownError(error)}`)
     }
   }
   
@@ -228,17 +229,7 @@ export class MCPClient {
     }
     
     try {
-      // 解析自定义 headers
-      let customHeaders: Record<string, string> = {}
-      if (this.config.headers) {
-        try {
-          customHeaders = typeof this.config.headers === 'string' 
-            ? JSON.parse(this.config.headers) 
-            : this.config.headers
-        } catch (e) {
-          console.warn('Failed to parse custom headers:', e)
-        }
-      }
+      const customHeaders = this.getHttpHeaders()
       
       const response = await tauriFetch(this.config.url, {
         method: 'POST',
@@ -279,7 +270,7 @@ export class MCPClient {
         if (jsonData) {
           const jsonResponse: JSONRPCResponse = JSON.parse(jsonData)
           if (jsonResponse.error) {
-            throw new Error(jsonResponse.error.message)
+            throw new Error(formatJsonRpcError(jsonResponse.error, 'HTTP MCP SSE error'))
           }
           return jsonResponse.result
         }
@@ -301,7 +292,7 @@ export class MCPClient {
       }
       
       if (jsonResponse.error) {
-        throw new Error(jsonResponse.error.message)
+        throw new Error(formatJsonRpcError(jsonResponse.error, 'HTTP MCP error'))
       }
       
       return jsonResponse.result
@@ -316,16 +307,7 @@ export class MCPClient {
       throw new Error('HTTP server URL is required')
     }
 
-    let customHeaders: Record<string, string> = {}
-    if (this.config.headers) {
-      try {
-        customHeaders = typeof this.config.headers === 'string'
-          ? JSON.parse(this.config.headers)
-          : this.config.headers
-      } catch (error) {
-        console.warn('Failed to parse custom headers:', error)
-      }
-    }
+    const customHeaders = this.getHttpHeaders()
 
     const response = await tauriFetch(this.config.url, {
       method: 'POST',
@@ -342,4 +324,40 @@ export class MCPClient {
       throw new Error(`HTTP ${response.status}: ${errorText}`)
     }
   }
+
+  private getHttpHeaders(): Record<string, string> {
+    try {
+      return resolveMcpHeaders(this.config.headers)
+    } catch (error) {
+      console.warn('Failed to parse custom headers:', error)
+      return {}
+    }
+  }
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message || error.name
+  }
+  if (typeof error === 'string') {
+    return error
+  }
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
+function formatJsonRpcError(
+  error: NonNullable<JSONRPCResponse['error']>,
+  fallback: string,
+): string {
+  const parts = [
+    error.message,
+    error.code != null ? `code=${error.code}` : '',
+    error.data == null ? '' : `data=${formatUnknownError(error.data)}`,
+  ].filter(Boolean)
+
+  return parts.length > 0 ? parts.join('\n') : fallback
 }

@@ -14,16 +14,71 @@ let mockSessionDb = {}
 // 初始化全局 Mock
 globalThis.MOCKS = {
   mcpServerManager: {
-    callTool: async () => ({ isError: false, content: [] }),
-    getServerTools: () => [],
+    callTool: async (serverId) => {
+      if (serverId.includes('anysearch')) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'invalid_api_key\ninvalid API key' }],
+        }
+      }
+      if (serverId.includes('firecrawl')) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: '' }],
+        }
+      }
+      return { isError: false, content: [] }
+    },
+    getServerTools: (serverId) => {
+      if (serverId.includes('anysearch')) {
+        return [{
+          name: 'extract',
+          description: 'AnySearch web query',
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        }]
+      }
+      if (serverId.includes('firecrawl')) {
+        return [{
+          name: 'firecrawl_search',
+          description: 'Search web with Firecrawl',
+          inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] },
+        }]
+      }
+      return []
+    },
     connectServer: async () => {},
   },
   mcpStore: {
     useMcpStore: {
       getState: () => ({
         initialized: true,
-        servers: [],
-        getServerState: () => null,
+        servers: [
+          {
+            id: 'mcp-anysearch',
+            name: 'anysearch',
+            type: 'http',
+            enabled: true,
+            url: 'https://api.anysearch.com/mcp',
+            headers: { Authorization: 'Bearer ${as_sk_mock}' },
+            createdAt: 0,
+          },
+          {
+            id: 'mcp-firecrawl',
+            name: 'firecrawl-mcp',
+            type: 'stdio',
+            enabled: true,
+            command: 'npx',
+            args: ['-y', 'firecrawl-mcp'],
+            env: { FIRECRAWL_API_KEY: 'fc-mock' },
+            createdAt: 0,
+          },
+        ],
+        getServerState: (serverId) => ({
+          id: serverId,
+          status: 'connected',
+          tools: globalThis.MOCKS.mcpServerManager.getServerTools(serverId),
+          resources: [],
+        }),
         initMcpData: async () => {},
         loadMcpConfig: async () => {},
       })
@@ -155,6 +210,7 @@ globalThis.MOCKS = {
     ddgCalled: false,
     shouldFail: false,
   },
+  mcpErrorMessage: {},
   tauriFs: {
     BaseDirectory: { AppData: 'appdata' },
     exists: async () => true,
@@ -234,6 +290,8 @@ globalThis.MOCKS = {
   }
 }
 
+globalThis.MOCKS.mcpServerManager.mcpServerManager = globalThis.MOCKS.mcpServerManager
+
 async function importTsModule(relativePath) {
   const sourcePath = join(repoRoot, relativePath)
   let source = await readFile(sourcePath, 'utf8')
@@ -241,6 +299,7 @@ async function importTsModule(relativePath) {
   // 使用 Mocks 替换掉原有的 imports 逻辑
   source = source.replace(/import\s+OpenAI\s+from\s+['"]openai['"]/g, 'const OpenAI = globalThis.MOCKS.OpenAI;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/lib\/mcp\/server-manager['"]/g, 'const {$1} = globalThis.MOCKS.mcpServerManager;')
+  source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/lib\/mcp\/error-message['"]/g, 'const {$1} = globalThis.MOCKS.mcpErrorMessage;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/stores\/mcp['"]/g, 'const {$1} = globalThis.MOCKS.mcpStore;')
   source = source.replace(/import\s+useSettingStore\s+from\s*['"]@\/stores\/setting['"]/g, 'const useSettingStore = globalThis.MOCKS.settingStore.default;')
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@\/lib\/ai\/utils['"]/g, 'const {$1} = globalThis.MOCKS.aiUtils;')
@@ -273,6 +332,7 @@ async function importTsModule(relativePath) {
 }
 
 try {
+  globalThis.MOCKS.mcpErrorMessage = await importTsModule('src/lib/mcp/error-message.ts')
   // 导入我们要测试的模块
   const researchModule = await importTsModule('src/lib/research/deep-research.ts')
   const { runDeepResearch, searchProviderRegistry, performCrossVerification } = researchModule
@@ -299,6 +359,12 @@ try {
   })
 
   assert.equal(globalThis.MOCKS.tavily.ddgCalled, true, 'Tavily 熔断时，应该自动降级并调用 DuckDuckGo')
+  assert.ok(result.session.providerHealth.some(provider =>
+    provider.name.includes('anysearch') && provider.isBroken
+  ), 'AnySearch MCP API Key 失败时应该快速熔断，避免反复拖慢搜索')
+  assert.ok(result.session.providerHealth.some(provider =>
+    provider.name.includes('firecrawl') && provider.isBroken
+  ), 'Firecrawl MCP 空错误失败时应该快速熔断，后续降级到其他搜索源')
   console.log('✅ 测试 1：Tavily 熔断降级与自动降级成功通过。')
 
   // 2. 验证多源证据交叉验证逻辑 (performCrossVerification)

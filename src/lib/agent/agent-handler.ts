@@ -50,6 +50,11 @@ export interface AgentHandlerConfig {
     to: number
     fullContent?: string
   }
+  /**
+   * Phase 1 #B：透传给 HarnessAgentRunner，最终汇入 buildAgentSystemPrompt 的 contextSections。
+   * 调用方（chat-send）可以把 buildChatContext 的细分结果在这里传进来。
+   */
+  contextSections?: import('@/lib/agent/prompt-assembler').StructuredContextSections
   // 状态访问注入（解耦 store）：可选，默认回退到 useChatStore，便于单元测试注入 mock
   getState?: () => AgentState
   setState?: (patch: Partial<AgentState>) => void
@@ -116,6 +121,14 @@ export class AgentHandler {
 
   constructor(config: AgentHandlerConfig) {
     this.config = config
+  }
+
+  /**
+   * Phase 1 #B：让上游（chat-send）在 buildChatContext 完成后补写结构化上下文段。
+   * 必须在 execute() 之前调用；之后调用不会生效（system prompt 已构建完毕）。
+   */
+  setContextSections(sections: import('@/lib/agent/prompt-assembler').StructuredContextSections): void {
+    this.config = { ...this.config, contextSections: sections }
   }
 
   /** 读取最新 agent 状态（可通过 config.getState 注入，默认回退 useChatStore）。 */
@@ -293,6 +306,20 @@ export class AgentHandler {
       case 'tool.execution.started':
         if (isSupportOnlyToolName(toolName)) return undefined
         return this.createActivity(`Running ${formatToolLabel(toolName) || 'tool'}`, 'tool', summarizeParams(payload.params), { iteration: event.iteration, toolName })
+      case 'tool.batch.started':
+        return this.createActivity(
+          'Preparing tools',
+          'tool',
+          typeof payload.runningCount === 'number' ? `${payload.runningCount} running` : undefined,
+          { iteration: event.iteration, toolName },
+        )
+      case 'tool.batch.finished':
+        return this.createActivity(
+          'Finished tool batch',
+          'tool',
+          typeof payload.finishedCount === 'number' ? `${payload.finishedCount} finished` : undefined,
+          { iteration: event.iteration, toolName },
+        )
       case 'tool.execution.finished':
         if (isSupportOnlyToolName(toolName)) return undefined
         if (['blocked', 'skipped', 'adjusted', 'cached'].includes(String(payload.status || ''))) {
@@ -327,7 +354,30 @@ export class AgentHandler {
         return undefined
       case 'final':
       case 'final.answer.rendered':
+      case 'agent.stream.delta':
         return this.createActivity('Writing answer', 'answering', undefined, { iteration: event.iteration })
+      case 'agent.stream.started':
+        return this.createActivity('Reading model stream', 'thinking', undefined, { iteration: event.iteration })
+      case 'agent.stream.finished':
+        return this.createActivity(
+          typeof payload.contentLength === 'number' && payload.contentLength > 0 ? 'Finished answer stream' : 'Finished model stream',
+          typeof payload.contentLength === 'number' && payload.contentLength > 0 ? 'answering' : 'thinking',
+          undefined,
+          { iteration: event.iteration },
+        )
+      case 'mcp.runtime.warmup':
+        return this.createActivity(
+          payload.timedOut === true
+            ? 'Loading MCP in background'
+            : payload.degraded === true || Number(payload.failedServerCount || 0) > 0
+              ? 'MCP partially unavailable'
+              : 'MCP tools ready',
+          'preparing',
+          typeof payload.connectedServerCount === 'number' && typeof payload.selectedServerCount === 'number'
+            ? `${payload.connectedServerCount}/${payload.selectedServerCount} servers`
+            : undefined,
+          { iteration: event.iteration },
+        )
       case 'final.answer.rejected':
         return this.createActivity(
           'Continuing work',
@@ -364,6 +414,28 @@ export class AgentHandler {
       ? event.iteration
       : store.agentState.currentIteration
     const hiddenEvent = event.payload?.internal === true || event.payload?.visibility === 'hidden'
+
+    let completedSteps = store.agentState.completedSteps || []
+    if (event.type === 'step.completed' && !hiddenEvent) {
+      const payload = event.payload || {}
+      const toolName = typeof payload.toolName === 'string' ? payload.toolName : undefined
+      if (!isSupportOnlyToolName(toolName)) {
+        const stepIndex = typeof payload.stepIndex === 'number' ? payload.stepIndex : undefined
+        const params = payload.action && typeof payload.action === 'object' && typeof payload.action.params === 'object'
+          ? payload.action.params
+          : {}
+        const alreadyRecorded = stepIndex !== undefined && completedSteps.length >= stepIndex
+          && completedSteps[stepIndex - 1]?.action?.tool === toolName
+        if (!alreadyRecorded) {
+          const nextStep: ReActStep = {
+            thought: typeof payload.thought === 'string' ? payload.thought : '',
+            action: toolName ? { tool: toolName, params } : undefined,
+            observation: typeof payload.observation === 'string' ? payload.observation : undefined,
+          }
+          completedSteps = [...completedSteps, nextStep]
+        }
+      }
+    }
 
     // Handle task plan events
     let taskPlan = store.agentState.taskPlan
@@ -441,6 +513,7 @@ export class AgentHandler {
       agentContextSnapshot: snapshot || store.agentState.agentContextSnapshot,
       agentPartSnapshot: partSnapshot,
       agentParts: partSnapshot.parts,
+      completedSteps,
       finalAnswerContent: partSnapshot.finalAnswerContent || store.agentState.finalAnswerContent,
       activity: activity || store.agentState.activity,
       telemetry: partSnapshot.telemetry,
@@ -576,8 +649,9 @@ export class AgentHandler {
       activeSkillMatches: skillMatches,
       forcedSkillIds: forcedActiveSkillIds,
       taskRouteDecision: routeDecision,
+      contextSections: this.config.contextSections,
       onThought: (thought: string) => {
-        const finalAnswerContent = extractVisibleFinalAnswer(thought)
+        const finalAnswerContent = sanitizeVisibleAssistantContent(extractVisibleFinalAnswer(thought) || '')
         const visibleThought = sanitizeVisibleAssistantContent(thought)
 
         if (finalAnswerContent) {
@@ -595,13 +669,12 @@ export class AgentHandler {
           this.config.onFinalAnswerRender?.(finalAnswerContent)
         } else if (visibleThought) {
           this.patchAgentState({
-            currentThought: visibleThought,
+            currentThought: '',
             isThinking: false,
-            activity: this.createActivity('Reasoning', 'thinking', summarizeText(visibleThought), {
+            activity: this.createActivity('Reasoning', 'thinking', undefined, {
               iteration: this.agentState.currentIteration,
             }),
           })
-          this.config.onThought?.(visibleThought)
         }
       },
       onAction: (action: string, params: Record<string, any>) => {
@@ -649,13 +722,14 @@ export class AgentHandler {
         }
       },
       onAnswerDelta: (markdownContent: string) => {
-        if (!markdownContent.trim()) {
+        const visibleMarkdownContent = sanitizeVisibleAssistantContent(markdownContent)
+        if (!visibleMarkdownContent.trim()) {
           return
         }
-        if (markdownContent === this.lastAnswerDeltaContent) {
+        if (visibleMarkdownContent === this.lastAnswerDeltaContent) {
           return
         }
-        this.lastAnswerDeltaContent = markdownContent
+        this.lastAnswerDeltaContent = visibleMarkdownContent
 
         this.stateBatcher.enqueue({
           currentThought: '',
@@ -663,12 +737,12 @@ export class AgentHandler {
           currentObservation: undefined,
           isThinking: false,
           isFinalAnswerMode: true,
-          finalAnswerContent: markdownContent,
+          finalAnswerContent: visibleMarkdownContent,
           activity: this.createActivity('Writing answer', 'answering', undefined, {
             iteration: this.agentState.currentIteration,
           }),
         }, false)
-        this.config.onAnswerDelta?.(markdownContent)
+        this.config.onAnswerDelta?.(visibleMarkdownContent)
       },
       onFinalAnswerRender: (markdownContent: string) => {
         // 检测到 Final Answer 时，触发外部渲染

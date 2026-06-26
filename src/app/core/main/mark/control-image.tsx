@@ -6,7 +6,6 @@ import useTagStore from "@/stores/tag"
 import { BaseDirectory, copyFile, exists, mkdir, readFile, writeFile } from "@tauri-apps/plugin-fs"
 import { ImagePlus } from "lucide-react"
 import useSettingStore from "@/stores/setting"
-import { v4 as uuid } from 'uuid'
 import { open } from '@tauri-apps/plugin-dialog';
 import { uploadImage } from "@/lib/imageHosting"
 import { useRef, useEffect, useCallback } from 'react'
@@ -134,7 +133,7 @@ export function ControlImage() {
   }
 
   async function uploadMobileFile(file: File) {
-    const queueId = uuid()
+    const queueId = crypto.randomUUID()
 
     try {
       addQueue({ queueId, tagId: currentTagId!, progress: t('record.mark.progress.cacheImage'), type: 'image', startTime: Date.now() })
@@ -180,7 +179,7 @@ export function ControlImage() {
   }
 
   async function upload(path: string) {
-    const queueId = uuid()
+    const queueId = crypto.randomUUID()
     addQueue({ queueId, tagId: currentTagId!, progress: t('record.mark.progress.cacheImage'), type: 'image', startTime: Date.now() })
 
     const ext = path.substring(path.lastIndexOf('.') + 1)

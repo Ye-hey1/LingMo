@@ -125,6 +125,7 @@ export function AgentExecutionStatus() {
           steps={agentState.completedSteps}
           toolCalls={agentState.toolCalls}
           events={agentState.agentEvents}
+          partSnapshot={agentState.agentPartSnapshot}
         />
       )
     }
@@ -137,6 +138,7 @@ export function AgentExecutionStatus() {
         currentAction={agentState.currentAction}
         currentObservation={agentState.currentObservation}
         visibleOutput={agentState.finalAnswerContent}
+        steps={agentState.completedSteps}
         toolCalls={agentState.toolCalls}
         agentEvents={agentState.agentEvents}
         activity={agentState.activity}

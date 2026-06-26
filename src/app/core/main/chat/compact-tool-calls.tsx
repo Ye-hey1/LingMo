@@ -189,6 +189,8 @@ function getHarnessResultMeta(result: ToolCall["result"]) {
     errorKind?: string
     warnings?: string[]
     outputEncoding?: string
+    mcpErrorKind?: string
+    skillHint?: string
   }
 
   if (
@@ -197,6 +199,8 @@ function getHarnessResultMeta(result: ToolCall["result"]) {
     !record.artifacts?.length &&
     !record.retryable &&
     !record.errorKind &&
+    !record.mcpErrorKind &&
+    !record.skillHint &&
     !record.warnings?.length &&
     !record.outputEncoding
   ) {
@@ -224,16 +228,39 @@ function getToolDurationLabel(toolCall: ToolCall) {
 }
 
 function getToolRecoveryHint(toolCall: ToolCall) {
+  const data = getResultDataRecord(toolCall.result)
+  if (toolCall.toolName.includes("__") || data?.mcpErrorKind) {
+    switch (data?.mcpErrorKind) {
+      case "auth":
+        return "MCP 凭据无效或已过期，请在 MCP 设置中更新 API Key/环境变量后重连。"
+      case "quota":
+        return "MCP 服务额度或余额不足，请检查该服务商账户。"
+      case "rate_limit":
+        return "MCP 服务正在限流，稍后重试或降低请求频率。"
+      case "timeout":
+        return "MCP 工具响应超时，请确认服务仍在运行后重试。"
+      case "network":
+      case "not_connected":
+        return "MCP 服务连接不可用，请检查进程/HTTP 地址并重新连接。"
+      case "server":
+        return "MCP 上游服务异常，稍后重试或切换工具。"
+      case "outdated_skill":
+        return "该 MCP 服务返回版本提示，请按服务说明更新后重连。"
+      case "invalid_arguments":
+        return "MCP 工具参数不符合要求，请检查入参格式。"
+    }
+  }
+
   const text = [
     toolCall.result?.error,
     toolCall.result?.message,
-    getResultDataRecord(toolCall.result)?.errorKind,
+    data?.errorKind,
   ].filter(Boolean).join("\n")
 
   if (!text) return ""
   if (/rate.?limit|429|限流|too many requests/i.test(text)) return "稍后重试，或降低上下文和请求频率。"
   if (/insufficient.*balance|余额不足|402|payment required|billing/i.test(text)) return "检查账户余额，或切换模型/API Key。"
-  if (/api.?key|unauthorized|401|forbidden|permission/i.test(text)) return "检查凭据和工具权限。"
+  if (/api.?key|unauthorized|401|forbidden|permission/i.test(text)) return "检查对应服务的凭据、环境变量和工具权限。"
   if (/status=5\d\d|upstream error|do_request_failed|server error|service unavailable|bad gateway/i.test(text)) return "上游暂时不可用，可以重试或切换模型。"
   if (/timeout|timed out|network|connect/i.test(text)) return "网络或服务超时，可以重试。"
   if (/blocked|policy|not allowed/i.test(text)) return "当前操作被策略保护，需要换安全路径。"

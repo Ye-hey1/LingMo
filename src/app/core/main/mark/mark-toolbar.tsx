@@ -30,14 +30,11 @@ export function MarkToolbar() {
     setMarksProcessed,
   } = useMarkStore()
   const { tags, currentTagId } = useTagStore()
-  const {
-    activeFilePath,
-    currentArticle,
-    loadFileTree,
-    setActiveFilePath,
-    setCurrentArticle,
-    saveCurrentArticle,
-  } = useArticleStore()
+  const activeFilePath = useArticleStore((state) => state.activeFilePath)
+  const loadFileTree = useArticleStore((state) => state.loadFileTree)
+  const setActiveFilePath = useArticleStore((state) => state.setActiveFilePath)
+  const setCurrentArticle = useArticleStore((state) => state.setCurrentArticle)
+  const saveCurrentArticle = useArticleStore((state) => state.saveCurrentArticle)
   const { setLeftSidebarTab } = useSidebarStore()
   const t = useTranslations('record.mark.toolbar')
 
@@ -147,7 +144,7 @@ export function MarkToolbar() {
 
     try {
       const nextContent = await appendRecordsToNote(activeFilePath, selectedMarks, {
-        currentContent: currentArticle || undefined,
+        currentContent: useArticleStore.getState().currentArticle || undefined,
         tagName: selectedTagName,
       })
       setCurrentArticle(nextContent)

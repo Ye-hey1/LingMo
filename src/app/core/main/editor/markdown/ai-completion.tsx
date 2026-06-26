@@ -94,6 +94,7 @@ export function AICompletionPopup({ items, onSelect, onDismiss }: {
 }
 
 export function useAIAutocomplete({ editor, isEnabled, onComplete }: AICompletionProps) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const popupRef = useRef<any>(null)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_suggestions, setSuggestions] = useState<SuggestionItem[]>([])
@@ -131,6 +132,7 @@ export function useAIAutocomplete({ editor, isEnabled, onComplete }: AICompletio
     })
 
     // Mount React component
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(reactRenderer as any).mount?.(popup)
   }, [editor])
 

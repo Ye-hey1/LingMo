@@ -1,6 +1,5 @@
 import { toast } from '@/hooks/use-toast';
 import { Store } from '@tauri-apps/plugin-store';
-import { v4 as uuid } from 'uuid';
 import { fetch, Proxy } from '@tauri-apps/plugin-http'
 import { buildRepoContentPath, buildRepoContentsEndpoint, pickNestedFileEntry } from './remote-file'
 export { decodeBase64ToString } from './remote-file'
@@ -131,7 +130,7 @@ export async function uploadFile(
   const store = await Store.load('store.json');
   const accessToken = await store.get('giteeAccessToken')
   const giteeUsername = await store.get('giteeUsername')
-  const id = uuid()
+  const id = crypto.randomUUID()
   
   // 获取代理设置
   const proxyUrl = await store.get<string>('proxy')

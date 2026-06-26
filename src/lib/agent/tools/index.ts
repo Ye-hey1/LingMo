@@ -1,6 +1,9 @@
 import { Tool } from '../types'
 import { getToolRiskLevel, isDestructiveTool, isExecuteTool, getBaseToolName } from '../tool-policy'
 import { noteTools } from './note-tools'
+import { knowledgeObjectTools } from './knowledge-object-tools'
+import { knowledgeWorkflowTools } from './knowledge-workflow-tools'
+import { selfEvolutionTools } from './self-evolution-tools'
 import { chatTools } from './chat-tools'
 import { tagTools } from './tag-tools'
 import { markTools } from './mark-tools'
@@ -22,9 +25,13 @@ import { reminderTools } from './reminder-tools'
 import { toolSearchTools } from './tool-search-tools'
 import { gitTools } from './git-tools'
 import { codeNavigationTools } from './code-navigation-tools'
+import { formatMcpToolError, formatMcpToolErrorMessage, mcpErrorKindToToolErrorKind } from '../../mcp/error-message'
 
 export const allTools: Tool[] = [
   ...noteTools,
+  ...knowledgeObjectTools,
+  ...knowledgeWorkflowTools,
+  ...selfEvolutionTools,
   ...chatTools,
   ...tagTools,
   ...markTools,
@@ -54,7 +61,7 @@ export const allTools: Tool[] = [
  * @param tool MCP tool definition
  * @returns Agent tool
  */
-function convertMcpToolToAgentTool(serverId: string, tool: any): Tool {
+function convertMcpToolToAgentTool(serverId: string, tool: any, serverName?: string): Tool {
   // Parse parameters
   const parameters = Object.entries(tool.inputSchema?.properties || {}).map(([name, schema]: [string, any]) => ({
     name,
@@ -95,6 +102,31 @@ function convertMcpToolToAgentTool(serverId: string, tool: any): Tool {
     risk,
     capabilities,
     execute: async (params: Record<string, any>, context) => {
+      const formatExecutionError = (error: unknown) => {
+        const info = formatMcpToolError({
+          toolName: agentToolName,
+          error,
+          serverName,
+        })
+        return {
+          success: false,
+          error: formatMcpToolErrorMessage({
+            toolName: agentToolName,
+            error,
+            serverName,
+          }),
+          data: {
+            rawError: info.rawDetails,
+            retryable: info.retryable,
+            errorKind: mcpErrorKindToToolErrorKind(info.kind),
+            mcpErrorKind: info.kind,
+            skillHint: info.skillHint,
+            serverId,
+            toolName: tool.name,
+          },
+        }
+      }
+
       try {
         if (context?.abortSignal?.aborted) {
           return {
@@ -122,10 +154,8 @@ function convertMcpToolToAgentTool(serverId: string, tool: any): Tool {
         const result = await callTool(serverId, tool.name, params)
 
         if (result.isError) {
-          return {
-            success: false,
-            error: result.content.map((c: any) => c.text).join('\n'),
-          }
+          const errorText = result.content.map((c: any) => c.text).filter(Boolean).join('\n') || 'Unknown MCP tool error'
+          return formatExecutionError(errorText)
         }
 
         return {
@@ -134,10 +164,7 @@ function convertMcpToolToAgentTool(serverId: string, tool: any): Tool {
           message: result.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n'),
         }
       } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-        }
+        return formatExecutionError(error)
       }
     },
   }
@@ -216,6 +243,7 @@ export async function getAllToolsAsync(): Promise<Tool[]> {
 
     for (const serverId of mcpStore.selectedServerIds) {
       let mcpTools: any[]
+      const serverName = mcpStore.servers.find(server => server.id === serverId)?.name
       try {
         mcpTools = mcpServerManager.getServerTools(serverId)
       } catch {
@@ -225,7 +253,7 @@ export async function getAllToolsAsync(): Promise<Tool[]> {
       }
 
       for (const mcpTool of mcpTools) {
-        const agentTool = convertMcpToolToAgentTool(serverId, mcpTool)
+        const agentTool = convertMcpToolToAgentTool(serverId, mcpTool, serverName)
         // Dedup: if same tool name already registered, skip
         if (seenNames.has(agentTool.name)) {
           console.warn(`[Agent MCP] Duplicate tool name ${agentTool.name}, skipping`)
@@ -313,6 +341,9 @@ ${params || '  None'}
 }
 
 export * from './note-tools'
+export * from './knowledge-object-tools'
+export * from './knowledge-workflow-tools'
+export * from './self-evolution-tools'
 export * from './chat-tools'
 export * from './tag-tools'
 export * from './mark-tools'

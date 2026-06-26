@@ -2,7 +2,6 @@ import { Store } from "@tauri-apps/plugin-store";
 import { fetch, Proxy } from '@tauri-apps/plugin-http'
 import { GithubError, GithubRepoInfo } from "../sync/github.types";
 import { toast } from '@/hooks/use-toast';
-import { v4 as uuid } from 'uuid';
 import { fileToBase64 } from "../sync/github";
 import { getImageRepoName } from "../sync/repo-utils";
 
@@ -97,7 +96,7 @@ export async function uploadImageByGithub(file: File) {
     throw new Error('GitHub image hosting not configured: missing accessToken or username')
   }
 
-  const id = uuid()
+  const id = crypto.randomUUID()
 
   // 获取代理设置
   const proxyUrl = await store.get<string>('proxy')

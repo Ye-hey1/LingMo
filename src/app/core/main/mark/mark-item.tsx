@@ -1106,14 +1106,11 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
     setMarksProcessed,
   } = useMarkStore()
   const { tags, currentTagId, fetchTags, getCurrentTag } = useTagStore()
-  const {
-    activeFilePath,
-    currentArticle,
-    loadFileTree,
-    setActiveFilePath,
-    setCurrentArticle,
-    saveCurrentArticle,
-  } = useArticleStore()
+  const activeFilePath = useArticleStore((state) => state.activeFilePath)
+  const loadFileTree = useArticleStore((state) => state.loadFileTree)
+  const setActiveFilePath = useArticleStore((state) => state.setActiveFilePath)
+  const setCurrentArticle = useArticleStore((state) => state.setCurrentArticle)
+  const saveCurrentArticle = useArticleStore((state) => state.saveCurrentArticle)
   const { setLeftSidebarTab } = useSidebarStore()
   const { fetchAllMarks } = useMarkStore()
   const isGitHubProject = isGitHubProjectMark(mark)
@@ -1422,7 +1419,7 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
 
     try {
       const nextContent = await appendRecordsToNote(activeFilePath, targetMarks, {
-        currentContent: currentArticle || undefined,
+        currentContent: useArticleStore.getState().currentArticle || undefined,
         tagName: getActionTagName(targetMarks),
       })
       setCurrentArticle(nextContent)
@@ -1442,7 +1439,7 @@ export const MarkItem = React.memo(({mark, variant = 'list'}: {mark: Mark, varia
         variant: 'destructive',
       })
     }
-  }, [activeFilePath, clearSelection, currentArticle, getActionMarks, getActionTagName, isMultiSelectMode, markRecordsAsProcessed, saveCurrentArticle, setCurrentArticle])
+  }, [activeFilePath, clearSelection, getActionMarks, getActionTagName, isMultiSelectMode, markRecordsAsProcessed, saveCurrentArticle, setCurrentArticle])
 
   // Memoize filtered tags to prevent unnecessary re-renders
   const filteredTags = useMemo(() =>

@@ -57,7 +57,9 @@ export default function MessageControl({chat, children}: {chat: Chat, children: 
           if (text === chat.content) {
             await clear()
           }
-        } catch {}
+        } catch {
+          // 剪贴板操作失败时静默处理
+        }
       }
     }
     deleteChat(chat.id)

@@ -1,4 +1,4 @@
-import { MERMAID_FILE_SUFFIXES, createDefaultMermaidContent } from '@/lib/mermaid'
+import { MERMAID_FILE_SUFFIXES, createDefaultMermaidContent, isMermaidPath } from '@/lib/mermaid'
 
 export const DIAGRAM_FILE_SUFFIXES = [
   '.drawio',
@@ -62,6 +62,8 @@ export function isExcalidrawPath(path: string): boolean {
   const normalized = path.toLowerCase()
   return normalized.endsWith('.excalidraw') || normalized.endsWith('.excalidraw.json') || normalized.endsWith('.diagram.json')
 }
+
+export { isMermaidPath }
 
 export function normalizeDiagramKind(kind: unknown): DiagramKind {
   if (kind === 'mindmap' || kind === 'excalidraw' || kind === 'drawio' || kind === 'mermaid') {
@@ -775,6 +777,67 @@ function createExcalidrawContentFromTree(root: DiagramOutlineNode, layout: Diagr
   )
 }
 
+// ---------------------------------------------------------------------------
+// Mermaid 生成器：把 outline tree 转成 mermaid 文本
+// 两种布局：
+//   - mindmap:   用 mermaid mindmap 语法（缩进表示层级）
+//   - flowchart: 用 flowchart TD + 父子边
+// ---------------------------------------------------------------------------
+
+/** 转义 mermaid 节点 label 里的特殊字符 */
+function sanitizeMermaidLabel(label: string): string {
+  const trimmed = label.replace(/\s+/g, ' ').trim()
+  if (/[|\[\]{}()]/.test(trimmed)) {
+    return `"${trimmed.replace(/"/g, '#quot;')}"`
+  }
+  return trimmed
+}
+
+/** 把树转成 mermaid mindmap 文本（用缩进表示层级） */
+function createMermaidMindmap(root: DiagramOutlineNode): string {
+  const lines: string[] = ['mindmap', `  root((${sanitizeMermaidLabel(root.label)}))`]
+
+  const walk = (node: DiagramOutlineNode, depth: number) => {
+    if (node.children.length === 0) return
+    for (const child of node.children) {
+      const indent = '    '.repeat(depth)
+      const safeLabel = sanitizeMermaidLabel(child.label)
+      const special = /[|\[\]{}()]/.test(child.label.replace(/\s+/g, ' ').trim())
+      lines.push(`${indent}${special ? `[${safeLabel}]` : safeLabel}`)
+      walk(child, depth + 1)
+    }
+  }
+  walk(root, 2)
+
+  return lines.join('\n')
+}
+
+/** 把树转成 mermaid flowchart 文本（每条父子关系一条边） */
+function createMermaidFlowchart(root: DiagramOutlineNode): string {
+  const lines: string[] = ['flowchart TD']
+  const usedIds = new Set<string>([root.id])
+  lines.push(`  ${root.id}[${sanitizeMermaidLabel(root.label)}]`)
+
+  const walk = (node: DiagramOutlineNode) => {
+    for (const child of node.children) {
+      if (!usedIds.has(child.id)) {
+        usedIds.add(child.id)
+        lines.push(`  ${child.id}[${sanitizeMermaidLabel(child.label)}]`)
+      }
+      lines.push(`  ${node.id} --> ${child.id}`)
+      walk(child)
+    }
+  }
+  walk(root)
+
+  return lines.join('\n')
+}
+
+/** 入口：根据 layout 选择 mindmap 或 flowchart */
+function createMermaidContentFromTree(root: DiagramOutlineNode, layout: DiagramOutlineLayout): string {
+  return layout === 'flowchart' ? createMermaidFlowchart(root) : createMermaidMindmap(root)
+}
+
 export function createDiagramContentFromOutline(
   kind: DiagramKind,
   outline: string,
@@ -784,6 +847,10 @@ export function createDiagramContentFromOutline(
   const layout = options.layout === 'flowchart' ? 'flowchart' : 'mindmap'
   const tree = createOutlineTree(outline, options.title)
 
+  if (normalizedKind === 'mermaid') {
+    return createMermaidContentFromTree(tree, layout)
+  }
+
   if (normalizedKind === 'excalidraw') {
     return createExcalidrawContentFromTree(tree, layout)
   }
@@ -792,6 +859,7 @@ export function createDiagramContentFromOutline(
 }
 
 export function createEmptyDiagramContent(path = ''): string {
+  if (isMermaidPath(path)) return createDefaultMermaidContent()
   return isDrawioPath(path) ? createEmptyDrawioContent() : createEmptyExcalidrawContent()
 }
 

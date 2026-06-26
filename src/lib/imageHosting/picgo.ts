@@ -1,7 +1,6 @@
 import { Store } from "@tauri-apps/plugin-store";
 import { appDataDir } from '@tauri-apps/api/path'
 import { mkdir, exists, writeFile, remove } from "@tauri-apps/plugin-fs";
-import { v4 as uuid } from 'uuid';
 import { toast } from "@/hooks/use-toast";
 
 export interface PicgoImageHostingSetting {
@@ -21,7 +20,7 @@ export async function uploadImageByPicgo(image: File) {
   if (!await exists(cachePath)) {
     await mkdir(cachePath)
   }
-  const cacheFile = `${cachePath}/${uuid()}.png`
+  const cacheFile = `${cachePath}/${crypto.randomUUID()}.png`
   const uint8Array = new Uint8Array(await image.arrayBuffer())
   await writeFile(cacheFile, uint8Array)
   const body = {

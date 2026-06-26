@@ -3,8 +3,8 @@
 import * as React from "react"
 import { Coins, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { estimateTokens } from "@/lib/ai/token-counter"
 import useChatStore from "@/stores/chat"
+import { buildLatestContextTokenUsage } from "@/lib/ai/chat-token-usage"
 
 // ============================================================
 // 极简 Token 角标 - 只在 hover 或接近限制时显示
@@ -24,12 +24,11 @@ export const TokenBadge = React.memo(function TokenBadge({
 
   React.useEffect(() => {
     const calculateTokens = () => {
-      const inputTokens = estimateTokens(inputText)
-      const recentChats = chats.slice(-20)
-      const historyTokens = recentChats.reduce((sum, chat) => {
-        return sum + estimateTokens(chat.content || '')
-      }, 0)
-      const totalTokens = inputTokens + historyTokens
+      const totalTokens = buildLatestContextTokenUsage({
+        inputText,
+        chats,
+        maxFallbackHistoryMessages: 20,
+      }).totalTokens
       
       const contextLimit = 32768
       setContextUsage(Math.min((totalTokens / contextLimit) * 100, 100))
@@ -84,12 +83,11 @@ export const TokenBubble = React.memo(function TokenBubble({
 
   React.useEffect(() => {
     const calculateTokens = () => {
-      const inputTokens = estimateTokens(inputText)
-      const recentChats = chats.slice(-20)
-      const historyTokens = recentChats.reduce((sum, chat) => {
-        return sum + estimateTokens(chat.content || '')
-      }, 0)
-      const totalTokens = inputTokens + historyTokens
+      const totalTokens = buildLatestContextTokenUsage({
+        inputText,
+        chats,
+        maxFallbackHistoryMessages: 20,
+      }).totalTokens
       setEstimatedTokens(totalTokens)
       
       const contextLimit = 32768

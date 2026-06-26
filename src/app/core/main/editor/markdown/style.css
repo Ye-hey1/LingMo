@@ -203,6 +203,20 @@
   color: hsl(var(--foreground));
 }
 
+.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > * {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 32px;
+}
+
+.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > h1,
+.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > h2,
+.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > h3,
+.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > pre,
+.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > blockquote,
+.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > .tableWrapper {
+  contain-intrinsic-size: 1px 96px;
+}
+
 .tiptap-editor .ProseMirror p.is-empty::before {
   content: attr(data-placeholder);
   float: left;

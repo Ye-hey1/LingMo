@@ -6,6 +6,7 @@ import { getModelCapabilityProfile } from './model-capabilities'
 import { isVisionContentUnsupportedError, prepareMessagesWithImages } from './vision-bridge'
 import { createAiStreamContentProcessor } from './sanitize'
 import { getAiRateLimitUserMessage, isAiRateLimitError } from './rate-limit'
+import { formatMcpToolErrorMessage } from '../mcp/error-message'
 
 export interface AiStreamFinishMetadata {
   finishReason?: string | null
@@ -14,6 +15,36 @@ export interface AiStreamFinishMetadata {
   aborted: boolean
   contentLength: number
   toolCallCount: number
+}
+
+/**
+ * fetchAiStream 的选项接口
+ */
+export interface FetchAiStreamOptions {
+  /** 请求文本 */
+  text: string
+  /** 每次收到流式内容时的回调函数 */
+  onUpdate: (content: string) => void
+  /** 用于终止请求的信号 */
+  abortSignal?: AbortSignal
+  /** MCP 工具列表 */
+  mcpTools?: any[]
+  /** 翻译函数 */
+  t?: (key: string, params?: Record<string, any>) => string
+  /** 当前chat ID，用于关联MCP工具调用记录 */
+  chatId?: number
+  /** 图片URL数组 */
+  imageUrls?: string[]
+  /** 每次收到思考内容时的回调函数 */
+  onThinkingUpdate?: (thinking: string) => void
+  /** 消息数组（如果提供则忽略 text 参数） */
+  messages?: OpenAI.Chat.ChatCompletionMessageParam[]
+  /** 最大token数限制 */
+  maxTokens?: number
+  /** 流完成时的回调函数 */
+  onStreamFinish?: (metadata: AiStreamFinishMetadata) => void
+  /** 模型store key */
+  modelStoreKey?: string
 }
 
 function isTruncationFinishReason(reason?: string | null) {
@@ -214,15 +245,12 @@ export async function fetchAi(
 
 /**
  * 流式方式获取AI结果
- * @param text 请求文本
- * @param onUpdate 每次收到流式内容时的回调函数
- * @param abortSignal 用于终止请求的信号
- * @param mcpTools MCP 工具列表（可选）
- * @param t 翻译函数（可选）
- * @param chatId 当前chat ID，用于关联MCP工具调用记录（可选）
- * @param imageUrls 图片URL数组（可选）
- * @param onThinkingUpdate 每次收到思考内容时的回调函数（可选）
- * @param messages 消息数组（可选，如果提供则忽略 text 参数）
+ * @param options 选项对象
+ */
+export async function fetchAiStream(options: FetchAiStreamOptions): Promise<string>
+/**
+ * 流式方式获取AI结果（旧版本，保持向后兼容）
+ * @deprecated 请使用对象参数版本
  */
 export async function fetchAiStream(
   text: string,
@@ -237,18 +265,65 @@ export async function fetchAiStream(
   maxTokens?: number,
   onStreamFinish?: (metadata: AiStreamFinishMetadata) => void,
   modelStoreKey?: string,
+): Promise<string>
+export async function fetchAiStream(
+  textOrOptions: string | FetchAiStreamOptions,
+  onUpdate?: (content: string) => void,
+  abortSignal?: AbortSignal,
+  mcpTools?: any[],
+  t?: (key: string, params?: Record<string, any>) => string,
+  chatId?: number,
+  imageUrls?: string[],
+  onThinkingUpdate?: (thinking: string) => void,
+  messages?: OpenAI.Chat.ChatCompletionMessageParam[],
+  maxTokens?: number,
+  onStreamFinish?: (metadata: AiStreamFinishMetadata) => void,
+  modelStoreKey?: string,
 ): Promise<string> {
+  // 统一参数处理
+  const options: FetchAiStreamOptions = typeof textOrOptions === 'string'
+    ? {
+        text: textOrOptions,
+        onUpdate: onUpdate!,
+        abortSignal,
+        mcpTools,
+        t,
+        chatId,
+        imageUrls,
+        onThinkingUpdate,
+        messages,
+        maxTokens,
+        onStreamFinish,
+        modelStoreKey,
+      }
+    : textOrOptions
+
+  const {
+    text,
+    onUpdate: handleUpdate,
+    abortSignal: signal,
+    mcpTools: tools,
+    t: translate,
+    chatId: currentChatId,
+    imageUrls: urls,
+    onThinkingUpdate: handleThinkingUpdate,
+    messages: inputMessages,
+    maxTokens: tokens,
+    onStreamFinish: handleStreamFinish,
+    modelStoreKey: storeKey,
+  } = options
+
   const startedAt = Date.now()
   let aiConfig: AiConfig | undefined
   let preparedMessages: OpenAI.Chat.ChatCompletionMessageParam[] = []
   let totalToolCallCount = 0
-  let usageStoreKey = modelStoreKey?.trim() || 'primaryModel'
+  let usageStoreKey = storeKey?.trim() || 'primaryModel'
   let fullContent = ''
   try {
 
 
     // 获取AI设置
-    aiConfig = modelStoreKey?.trim() ? await getAISettings(modelStoreKey.trim()) : undefined
+    aiConfig = storeKey?.trim() ? await getAISettings(storeKey.trim()) : undefined
     if (!aiConfig) {
       aiConfig = await getAISettings()
       usageStoreKey = 'primaryModel'
@@ -261,7 +336,7 @@ export async function fetchAiStream(
         aiConfig,
         storeKey: usageStoreKey,
         messages: preparedMessages,
-        conversationId: chatId,
+        conversationId: currentChatId,
         success: false,
         errorKind: 'missing_config',
         latencyMs: Date.now() - startedAt,
@@ -270,9 +345,9 @@ export async function fetchAiStream(
     }
 
     // 准备消息 - 如果提供了 messages 数组，使用它；否则用 prepareMessages
-    if (messages && messages.length > 0) {
+    if (inputMessages && inputMessages.length > 0) {
       // 使用提供的消息数组
-      const prepared = await prepareMessages('', messages)
+      const prepared = await prepareMessages('', inputMessages)
       preparedMessages = prepared.messages
     } else {
       const prepared = await prepareMessages(text)
@@ -282,7 +357,7 @@ export async function fetchAiStream(
     const openai = await createOpenAIClient(aiConfig)
     const capabilities = getModelCapabilityProfile(aiConfig)
     const textPreparedMessages = preparedMessages
-    preparedMessages = await prepareMessagesWithImages(textPreparedMessages, aiConfig, imageUrls, abortSignal)
+    preparedMessages = await prepareMessagesWithImages(textPreparedMessages, aiConfig, urls, signal)
 
     // 构建请求参数
     const requestParams: any = {
@@ -294,13 +369,13 @@ export async function fetchAiStream(
     }
 
     // 仅在调用方明确指定时设置 max_tokens，否则由模型自身决定上限
-    if (maxTokens && maxTokens > 0) {
-      requestParams.max_tokens = maxTokens
+    if (tokens && tokens > 0) {
+      requestParams.max_tokens = tokens
     }
 
     // 如果有 MCP 工具，添加到请求中
-    if (mcpTools && mcpTools.length > 0) {
-      requestParams.tools = mcpTools
+    if (tools && tools.length > 0) {
+      requestParams.tools = tools
       if (capabilities.supportsToolChoice) {
         requestParams.tool_choice = 'auto'
       }
@@ -309,19 +384,19 @@ export async function fetchAiStream(
     let stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
     try {
       stream = await openai.chat.completions.create(requestParams, {
-        signal: abortSignal
+        signal
       }) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
     } catch (error) {
-      if (!imageUrls?.length || !isVisionContentUnsupportedError(error)) {
+      if (!urls?.length || !isVisionContentUnsupportedError(error)) {
         throw error
       }
 
-      preparedMessages = await prepareMessagesWithImages(textPreparedMessages, aiConfig, imageUrls, abortSignal, {
+      preparedMessages = await prepareMessagesWithImages(textPreparedMessages, aiConfig, urls, signal, {
         forceBridge: true,
       })
       requestParams.messages = preparedMessages
       stream = await openai.chat.completions.create(requestParams, {
-        signal: abortSignal
+        signal
       }) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
     }
 
@@ -333,7 +408,7 @@ export async function fetchAiStream(
     const finishReasons: Array<string | null> = []
     
     for await (const chunk of stream) {
-      if (abortSignal?.aborted) {
+      if (signal?.aborted) {
         break;
       }
       
@@ -410,19 +485,19 @@ export async function fetchAiStream(
         }
       }
 
-      onUpdate(fullContent)
+      handleUpdate(fullContent)
     }
 
     const remaining = streamProcessor.flush()
     if (remaining.thinking) {
       thinking += remaining.thinking
-      if (onThinkingUpdate) {
-        onThinkingUpdate(thinking)
+      if (handleThinkingUpdate) {
+        handleThinkingUpdate(thinking)
       }
     }
     if (remaining.content) {
       fullContent += remaining.content
-      onUpdate(fullContent)
+      handleUpdate(fullContent)
     }
 
     // 如果有工具调用，执行工具并继续对话（支持多轮工具调用）
@@ -441,18 +516,18 @@ export async function fetchAiStream(
       while (currentToolCalls.length > 0 && iteration < maxIterations) {
         iteration++
 
-        onUpdate('')
+        handleUpdate('')
         
         // 执行所有工具调用
         const toolResults = []
         for (const toolCall of currentToolCalls) {
           let mcpToolCallId: string | undefined
+          const fullName = toolCall.function.name
+          const [serverId, ...toolNameParts] = fullName.split('__')
+          const toolName = toolNameParts.join('__')
+          let serverName = serverId
           try {
             // 解析工具名称（格式：serverId__toolName）
-            const fullName = toolCall.function.name
-            const [serverId, ...toolNameParts] = fullName.split('__')
-            const toolName = toolNameParts.join('__')
-            
             // 解析参数
             let args = {}
             try {
@@ -463,20 +538,21 @@ export async function fetchAiStream(
             }
             
             // 记录 MCP 工具调用（如果提供了 chatId）
-            if (chatId) {
+            if (currentChatId) {
               const { useMcpStore } = await import('@/stores/mcp')
               const { default: useChatStore } = await import('@/stores/chat')
               const mcpStore = useMcpStore.getState()
               const chatStore = useChatStore.getState()
               const server = mcpStore.servers.find(s => s.id === serverId)
+              serverName = server?.name || serverId
               
               mcpToolCallId = `${toolCall.id}-${Date.now()}`
               chatStore.addMcpToolCall({
                 id: mcpToolCallId,
-                chatId,
+                chatId: currentChatId,
                 toolName,
                 serverId,
-                serverName: server?.name || serverId,
+                serverName,
                 params: args,
                 result: '',
                 status: 'calling',
@@ -486,15 +562,39 @@ export async function fetchAiStream(
             
             // 调用 MCP 工具
             const result = await callTool(serverId, toolName, args)
-            
+
             // 格式化结果
             const resultText = result.content
               .filter(c => c.type === 'text')
               .map(c => c.text)
               .join('\n')
-            
+
+            if (result.isError) {
+              const friendlyError = formatMcpToolErrorMessage({
+                toolName: fullName,
+                error: resultText || 'Unknown MCP tool error',
+                serverName,
+              })
+
+              if (currentChatId && mcpToolCallId) {
+                const { default: useChatStore } = await import('@/stores/chat')
+                const chatStore = useChatStore.getState()
+                chatStore.updateMcpToolCall(mcpToolCallId, {
+                  result: friendlyError,
+                  status: 'error'
+                })
+              }
+
+              toolResults.push({
+                tool_call_id: toolCall.id,
+                role: 'tool' as const,
+                content: friendlyError
+              })
+              continue
+            }
+
             // 更新 MCP 工具调用状态为成功
-            if (chatId && mcpToolCallId) {
+            if (currentChatId && mcpToolCallId) {
               const { default: useChatStore } = await import('@/stores/chat')
               const chatStore = useChatStore.getState()
               chatStore.updateMcpToolCall(mcpToolCallId, {
@@ -513,12 +613,16 @@ export async function fetchAiStream(
             console.error('工具调用失败:', error)
             
             // 更新 MCP 工具调用状态为错误
-            if (chatId && mcpToolCallId) {
+            const friendlyError = formatMcpToolErrorMessage({
+              toolName: fullName,
+              error,
+              serverName,
+            })
+            if (currentChatId && mcpToolCallId) {
               const { default: useChatStore } = await import('@/stores/chat')
               const chatStore = useChatStore.getState()
-              const errorMsg = error instanceof Error ? error.message : 'Unknown error'
               chatStore.updateMcpToolCall(mcpToolCallId, {
-                result: `Error: ${errorMsg}`,
+                result: friendlyError,
                 status: 'error'
               })
             }
@@ -526,7 +630,7 @@ export async function fetchAiStream(
             toolResults.push({
               tool_call_id: toolCall.id,
               role: 'tool' as const,
-              content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+              content: friendlyError
             })
           }
         }
@@ -548,11 +652,11 @@ export async function fetchAiStream(
           temperature: aiConfig?.temperature ?? 0.7,
           top_p: aiConfig?.topP ?? 1,
           stream: true,
-          tools: mcpTools,
+          tools: tools,
         }
 
-        if (maxTokens && maxTokens > 0) {
-          nextRequestParams.max_tokens = maxTokens
+        if (tokens && tokens > 0) {
+          nextRequestParams.max_tokens = tokens
         }
 
         if (capabilities.supportsToolChoice) {
@@ -560,7 +664,7 @@ export async function fetchAiStream(
         }
 
         const nextStream = await openai.chat.completions.create(nextRequestParams, {
-          signal: abortSignal
+          signal
         }) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
         
         // 重置工具调用数组
@@ -571,7 +675,7 @@ export async function fetchAiStream(
         
         // 处理响应
         for await (const chunk of nextStream) {
-          if (abortSignal?.aborted) {
+          if (signal?.aborted) {
             break;
           }
           
@@ -629,27 +733,27 @@ export async function fetchAiStream(
             const processed = nextStreamProcessor.push(content)
             if (processed.thinking) {
               thinking += processed.thinking
-              if (onThinkingUpdate) {
-                onThinkingUpdate(thinking)
+              if (handleThinkingUpdate) {
+                handleThinkingUpdate(thinking)
               }
             }
             if (processed.content) {
               fullContent += processed.content
             }
           }
-          onUpdate(fullContent)
+          handleUpdate(fullContent)
         }
 
         const remaining = nextStreamProcessor.flush()
         if (remaining.thinking) {
           thinking += remaining.thinking
-          if (onThinkingUpdate) {
-            onThinkingUpdate(thinking)
+          if (handleThinkingUpdate) {
+            handleThinkingUpdate(thinking)
           }
         }
         if (remaining.content) {
           fullContent += remaining.content
-          onUpdate(fullContent)
+          handleUpdate(fullContent)
         }
         
         // 如果没有新的工具调用，退出循环
@@ -662,16 +766,16 @@ export async function fetchAiStream(
       
       if (iteration >= maxIterations) {
         console.warn('达到最大工具调用次数限制')
-        const maxIterationsText = t ? t('record.mark.mark.chat.mcp.maxIterationsReached') : '⚠️ 达到最大工具调用次数限制'
-        onUpdate(fullContent + '\n\n' + maxIterationsText)
+        const maxIterationsText = translate ? translate('record.mark.mark.chat.mcp.maxIterationsReached') : '⚠️ 达到最大工具调用次数限制'
+        handleUpdate(fullContent + '\n\n' + maxIterationsText)
       }
     }
 
-    onStreamFinish?.({
+    handleStreamFinish?.({
       finishReason: finishReason ?? null,
       finishReasons,
       truncated: finishReasons.some(isTruncationFinishReason),
-      aborted: Boolean(abortSignal?.aborted),
+      aborted: Boolean(signal?.aborted),
       contentLength: fullContent.length,
       toolCallCount: totalToolCallCount,
     })
@@ -680,7 +784,7 @@ export async function fetchAiStream(
       aiConfig,
       storeKey: usageStoreKey,
       messages: preparedMessages,
-      conversationId: chatId,
+      conversationId: currentChatId,
       toolCallCount: totalToolCallCount,
       success: true,
       latencyMs: Date.now() - startedAt,
@@ -688,7 +792,7 @@ export async function fetchAiStream(
 
     return fullContent
   } catch (error) {
-    const aborted = isExpectedAbortError(error, abortSignal)
+    const aborted = isExpectedAbortError(error, signal)
     if (!aborted) {
       console.error('[fetchAiStream] Error:', error)
     }
@@ -696,14 +800,14 @@ export async function fetchAiStream(
       aiConfig,
       storeKey: usageStoreKey,
       messages: preparedMessages,
-      conversationId: chatId,
+      conversationId: currentChatId,
       toolCallCount: totalToolCallCount,
       success: false,
       errorKind: getErrorKind(error),
       latencyMs: Date.now() - startedAt,
     })
     if (aborted) {
-      onStreamFinish?.({
+      handleStreamFinish?.({
         finishReason: null,
         finishReasons: [],
         truncated: false,
@@ -715,8 +819,8 @@ export async function fetchAiStream(
     }
     if (isAiRateLimitError(error) && fullContent.trim()) {
       const fallbackContent = appendRateLimitNotice(fullContent, error)
-      onUpdate(fallbackContent)
-      onStreamFinish?.({
+      handleUpdate(fallbackContent)
+      handleStreamFinish?.({
         finishReason: 'rate_limit',
         finishReasons: ['rate_limit'],
         truncated: false,

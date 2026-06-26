@@ -19,7 +19,6 @@ import { AgentRunSummary } from './agent-run-summary'
 import { MessageCitations } from './message-citations'
 import { TaskPlanProgress, ResearchResumeCard } from './task-plan-progress'
 import { ChatImages } from "./chat-images"
-import type { AgentEvent, AgentTurnTelemetry, ReActStep } from '@/lib/agent'
 import { cleanAssistantGeneratedContent } from '@/lib/ai/assistant-content'
 import {
   extractWebCitationDetails,
@@ -35,6 +34,7 @@ import { motion } from 'framer-motion'
 
 const BOTTOM_THRESHOLD = 24
 const USER_SCROLL_GRACE_MS = 300
+const PENDING_AGENT_CHAT_ID = -1
 
 
 const ChatContent = React.memo(function ChatContent() {
@@ -42,6 +42,25 @@ const ChatContent = React.memo(function ChatContent() {
   const { currentTagId } = useTagStore()
   const [isOnBottom, setIsOnBottom] = useState(true)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
+  const pendingAgentChat = useMemo<Chat | null>(() => {
+    if (!agentState.isRunning || agentState.activeChatId !== undefined) return null
+
+    return {
+      id: PENDING_AGENT_CHAT_ID,
+      tagId: currentTagId,
+      role: 'system',
+      content: '',
+      type: 'chat',
+      inserted: false,
+      createdAt: agentState.currentStepStartTime || agentState.activity?.startedAt || Date.now(),
+    }
+  }, [
+    agentState.activeChatId,
+    agentState.activity?.startedAt,
+    agentState.currentStepStartTime,
+    agentState.isRunning,
+    currentTagId,
+  ])
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   const contentRef = React.useRef<HTMLDivElement>(null)
   const bottomAnchorRef = React.useRef<HTMLDivElement>(null)
@@ -51,6 +70,7 @@ const ChatContent = React.memo(function ChatContent() {
   const lastUserScrollAtRef = React.useRef(0)
   const lastScrollTimeRef = React.useRef(0)
   const isScrollPendingRef = React.useRef(false)
+  const scrollSyncFrameRef = React.useRef<number | null>(null)
 
   const isNearBottom = useCallback((element: Element) => {
     return element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_THRESHOLD
@@ -156,6 +176,24 @@ const ChatContent = React.memo(function ChatContent() {
     }, 400)
   }, [isNearBottom])
 
+  const scheduleScrollStateSync = useCallback(() => {
+    if (scrollSyncFrameRef.current !== null) return
+
+    scrollSyncFrameRef.current = requestAnimationFrame(() => {
+      scrollSyncFrameRef.current = null
+      const md = wrapperRef.current
+      if (!md) return
+
+      const onBottom = isNearBottom(md)
+      if (autoScrollEnabledRef.current) {
+        performAutoScroll()
+        return
+      }
+
+      setIsOnBottom(onBottom)
+    })
+  }, [isNearBottom, performAutoScroll])
+
   // 手动滚动到底部并启用自动滚动
   const handleScrollToBottom = useCallback(() => {
     performAutoScroll()
@@ -199,34 +237,16 @@ const ChatContent = React.memo(function ChatContent() {
     const content = contentRef.current
     if (!md || !content) return
 
-    const syncScrollState = () => {
-      const onBottom = isNearBottom(md)
-
-      if (autoScrollEnabled) {
-        performAutoScroll()
-        return
-      }
-
-      setIsOnBottom(onBottom)
-    }
-
-    const observer = new ResizeObserver(syncScrollState)
-    const mutationObserver = new MutationObserver(() => {
-      syncScrollState()
+    const observer = new ResizeObserver(() => {
+      scheduleScrollStateSync()
     })
 
     observer.observe(content)
-    mutationObserver.observe(content, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    })
 
     return () => {
       observer.disconnect()
-      mutationObserver.disconnect()
     }
-  }, [autoScrollEnabled, isNearBottom, performAutoScroll])
+  }, [scheduleScrollStateSync])
 
   // 监听消息变化，仅在启用自动滚动时才滚动
   useEffect(() => {
@@ -235,17 +255,45 @@ const ChatContent = React.memo(function ChatContent() {
     }
   }, [chats, autoScrollEnabled, performAutoScroll])
 
+  const liveAgentScrollSignal = useMemo(
+    () => [
+      agentState.activeChatId ?? 'pending',
+      agentState.activity?.startedAt || 0,
+      agentState.agentEventCursor || 0,
+      agentState.currentThought?.length || 0,
+      agentState.finalAnswerContent?.length || 0,
+      agentState.agentPartSnapshot?.parts.length || 0,
+      agentState.toolCalls.length,
+      agentState.pendingConfirmation?.toolName || '',
+    ].join(':'),
+    [
+      agentState.activeChatId,
+      agentState.activity?.startedAt,
+      agentState.agentEventCursor,
+      agentState.currentThought,
+      agentState.finalAnswerContent,
+      agentState.agentPartSnapshot?.parts.length,
+      agentState.toolCalls.length,
+      agentState.pendingConfirmation?.toolName,
+    ],
+  )
+
   // Agent 执行时，仅在启用自动滚动时才滚动到底部
-  // 使用 RAF 批处理避免每个 thought 更新都触发滚动（借鉴 claude-code-source 的 yield 批处理模式）
+  // 使用 RAF 批处理，避免流式 thought/final answer 的每次状态更新都触发布局测量。
   useEffect(() => {
-    if (autoScrollEnabled && agentState.isRunning) {
-      // 使用 requestAnimationFrame 合并同一帧内的多次更新
+    if (autoScrollEnabled && (agentState.isRunning || agentState.isFinalAnswerMode)) {
       const rafId = requestAnimationFrame(() => {
         performAutoScroll()
       })
       return () => cancelAnimationFrame(rafId)
     }
-  }, [agentState.currentThought, agentState.thoughtHistory, agentState.pendingConfirmation, agentState.isRunning, autoScrollEnabled, performAutoScroll])
+  }, [
+    agentState.isFinalAnswerMode,
+    agentState.isRunning,
+    autoScrollEnabled,
+    liveAgentScrollSignal,
+    performAutoScroll,
+  ])
 
   // Loading 状态变化时，仅在启用自动滚动时才滚动到底部
   useEffect(() => {
@@ -258,6 +306,10 @@ const ChatContent = React.memo(function ChatContent() {
     return () => {
       if (delayedScrollTimeoutRef.current) {
         clearTimeout(delayedScrollTimeoutRef.current)
+      }
+      if (scrollSyncFrameRef.current !== null) {
+        cancelAnimationFrame(scrollSyncFrameRef.current)
+        scrollSyncFrameRef.current = null
       }
     }
   }, [])
@@ -278,9 +330,16 @@ const ChatContent = React.memo(function ChatContent() {
   return <div ref={wrapperRef} id="chats-wrapper" className="flex-1 relative overflow-y-auto overflow-x-hidden w-full flex flex-col items-end p-4 gap-6 [overflow-anchor:none]">
     <div ref={contentRef} className="w-full flex flex-col items-end gap-6">
       {
-        chats.length ? chats.map((chat) => {
-          return <Message key={chat.id} chat={chat} searchQuery={chatSearchQuery} />
-        }) : <ChatEmpty />
+        chats.length || pendingAgentChat ? (
+          <>
+            {chats.map((chat) => {
+              return <Message key={chat.id} chat={chat} searchQuery={chatSearchQuery} />
+            })}
+            {pendingAgentChat && (
+              <Message key={pendingAgentChat.id} chat={pendingAgentChat} searchQuery={chatSearchQuery} />
+            )}
+          </>
+        ) : <ChatEmpty />
       }
 
       <div ref={bottomAnchorRef} className="h-px w-full" />
@@ -335,7 +394,13 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     () => chat.role === 'system' ? cleanAssistantGeneratedContent(content || '') : content,
     [chat.role, content]
   )
-  const isActiveAgentMessage = chat.role === 'system' && agentState.activeChatId === chat.id
+  const isPendingAgentMessage = chat.role === 'system'
+    && chat.id === PENDING_AGENT_CHAT_ID
+    && agentState.isRunning
+    && agentState.activeChatId === undefined
+  const isActiveAgentMessage = chat.role === 'system' && (
+    agentState.activeChatId === chat.id || isPendingAgentMessage
+  )
   const isLatestSystemMessage = useMemo(() => {
     if (chat.role !== 'system') return false
 
@@ -347,7 +412,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
 
     return false
   }, [chat.id, chat.role, chats])
-  const isResponseStreaming = chat.role === 'system' && loading && (isActiveAgentMessage || isLatestSystemMessage)
+  const isBaseResponseStreaming = chat.role === 'system' && loading && (isActiveAgentMessage || isLatestSystemMessage)
   const liveTextPartContent = useMemo(() => {
     if (!isActiveAgentMessage) return ''
     const textPart = [...(agentState.agentPartSnapshot?.parts || [])]
@@ -360,8 +425,13 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     [agentState.finalAnswerContent, liveTextPartContent]
   )
   const isLiveAgentActive = isActiveAgentMessage && (agentState.isRunning || agentState.isFinalAnswerMode)
+  const isLiveAgentResponseStreaming = isActiveAgentMessage && (
+    agentState.isRunning || (agentState.isFinalAnswerMode && loading)
+  )
+  const isResponseStreaming = chat.role === 'system' && (isBaseResponseStreaming || isLiveAgentResponseStreaming)
   const shouldShowLiveAgentStatus = isActiveAgentMessage && agentState.isRunning && !agentState.isFinalAnswerMode
   const shouldShowLiveFinalAnswer = isActiveAgentMessage && agentState.isFinalAnswerMode && Boolean(liveFinalAnswerContent)
+  const isLiveFinalAnswerStreaming = shouldShowLiveFinalAnswer && (agentState.isRunning || loading)
   const visibleThinkingContent = useMemo(
     () => chat.role === 'system' ? cleanAssistantGeneratedContent(chat.thinking || '') : (chat.thinking || ''),
     [chat.role, chat.thinking],
@@ -411,23 +481,19 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
   )
   const storedRunSummary = useMemo(() => {
     if (!storedAgentHistory) return null
-    const history = storedAgentHistory as typeof storedAgentHistory & {
-      steps?: ReActStep[]
-      events?: AgentEvent[]
-      telemetry?: AgentTurnTelemetry
-    }
-    const steps = history.steps || []
-    const elapsedMs = history.telemetry?.elapsedMs ?? steps.reduce(
+    const steps = storedAgentHistory.steps || []
+    const elapsedMs = storedAgentHistory.telemetry?.elapsedMs ?? steps.reduce(
       (sum: number, step: { duration?: number }) => sum + (typeof step.duration === 'number' ? step.duration : 0),
       0,
     )
 
     return {
       elapsedMs,
-      telemetry: history.telemetry,
+      telemetry: storedAgentHistory.telemetry,
       steps,
       toolCalls: storedAgentHistory.toolCalls || [],
-      events: history.events || [],
+      events: storedAgentHistory.events || [],
+      partSnapshot: storedAgentHistory.partSnapshot,
     }
   }, [storedAgentHistory])
 
@@ -540,8 +606,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
                 {shouldShowLiveFinalAnswer && (
                   <ChatPreview
                     text={liveFinalAnswerContent}
-                    streaming={isResponseStreaming}
-                    clawFormat
+                    streaming={isLiveFinalAnswerStreaming}
                   />
                 )}
               </div>
@@ -556,6 +621,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
                 steps={storedRunSummary.steps}
                 toolCalls={storedRunSummary.toolCalls}
                 events={storedRunSummary.events}
+                partSnapshot={storedRunSummary.partSnapshot}
               />
             )}
             {!isLiveAgentActive && !storedAgentHistory && (
@@ -592,9 +658,11 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
             )}
 
             {/* 6. 统一操作栏：标记、复制、翻译、朗读、重试、删除 */}
-            <MessageControl chat={chat}>
-              <MarkText chat={chat} />
-            </MessageControl>
+            {!isPendingAgentMessage && (
+              <MessageControl chat={chat}>
+                <MarkText chat={chat} />
+              </MessageControl>
+            )}
           </motion.div>
         ) : (
           // 用户消息

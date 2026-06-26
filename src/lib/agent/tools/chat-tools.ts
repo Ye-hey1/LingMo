@@ -1,5 +1,5 @@
 import { Tool, ToolResult } from '../types'
-import { exists, mkdir, writeTextFile } from '@tauri-apps/plugin-fs'
+import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs'
 import { appDataDir } from '@tauri-apps/api/path'
 import { getChats, getChatsByConversation, insertChat, updateChat, deleteChat, clearChatsByTagId, Chat, insertChats, updateChats, deleteChats } from '@/db/chats'
 import useChatStore from '@/stores/chat'
@@ -8,6 +8,7 @@ import { ensureSafeWorkspaceRelativePath, getFilePathOptions, getWorkspacePath }
 import { fetchAi } from '@/lib/ai/chat'
 import { processMarkdownFile } from '@/lib/rag'
 import { getVectorDocumentKey } from '@/lib/vector-document-key'
+import { createUniqueArtifactPath, getArtifactFolderPath } from '@/lib/artifacts/destination'
 
 type ExtractFormat = 'summary' | 'detail' | 'qa'
 
@@ -20,16 +21,6 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 function toIsoTimestamp(timestamp?: number) {
   if (!timestamp || Number.isNaN(timestamp)) return ''
   return new Date(timestamp).toISOString()
-}
-
-function normalizeFolderPath(folderPath: unknown): string | undefined {
-  if (typeof folderPath !== 'string') return undefined
-  const normalized = folderPath
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/^\/+/, '')
-    .replace(/\/+$/, '')
-  return normalized || undefined
 }
 
 function sanitizeTitleToFileName(title: string): string {
@@ -167,30 +158,6 @@ async function ensureFolderExists(relativeFolderPath?: string) {
   } else {
     await mkdir(path, { recursive: true })
   }
-}
-
-async function resolveUniqueFilePath(initialRelativePath: string): Promise<string> {
-  const normalizedInitialPath = await ensureSafeWorkspaceRelativePath(initialRelativePath)
-  const pathParts = normalizedInitialPath.split('/')
-  const fileName = pathParts.pop() || normalizedInitialPath
-  const folderPath = pathParts.join('/')
-  const extIndex = fileName.lastIndexOf('.')
-  const baseName = extIndex > 0 ? fileName.slice(0, extIndex) : fileName
-  const extension = extIndex > 0 ? fileName.slice(extIndex) : ''
-
-  let candidate = normalizedInitialPath
-  for (let index = 1; index <= 99; index += 1) {
-    const { path, baseDir } = await getFilePathOptions(candidate)
-    const alreadyExists = baseDir ? await exists(path, { baseDir }) : await exists(path)
-    if (!alreadyExists) {
-      return candidate
-    }
-
-    const nextFileName = `${baseName}-${index + 1}${extension}`
-    candidate = folderPath ? `${folderPath}/${nextFileName}` : nextFileName
-  }
-
-  throw new Error('无法为笔记生成唯一文件名，请稍后重试')
 }
 
 async function loadConversationChats(params: Record<string, any>): Promise<Chat[]> {
@@ -518,12 +485,14 @@ Use this when valuable conclusions appear in a conversation and should be reusab
 
       const noteTitle = suggestedTitle.replace(/\r?\n/g, ' ').trim()
       const fileName = sanitizeTitleToFileName(noteTitle)
-      const relativeFolder = normalizeFolderPath(params.folderPath) || 'agent-notes'
+      const relativeFolder = await getArtifactFolderPath('agent_note', params.folderPath)
 
       await ensureFolderExists(relativeFolder)
 
-      const initialPath = await ensureSafeWorkspaceRelativePath(`${relativeFolder}/${fileName}`)
-      const uniqueRelativePath = await resolveUniqueFilePath(initialPath)
+      const uniqueRelativePath = await createUniqueArtifactPath({
+        folderPath: relativeFolder,
+        fileName,
+      })
       const transcript = buildTranscript(selectedChats)
       const bodyMarkdown = await generateStructuredMarkdown(noteTitle, format, transcript, selectedChats)
 

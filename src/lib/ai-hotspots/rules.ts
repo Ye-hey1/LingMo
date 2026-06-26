@@ -1,5 +1,11 @@
 import { AI_HOTSPOT_CONFIG } from './config'
 import { normalizeHotspotTitle, normalizeHotspotUrl } from './normalize'
+import {
+  classifyByInterest,
+  DEFAULT_INTEREST_TEXT,
+  parseInterestConfig,
+  type InterestConfig,
+} from './interests'
 import type { AiHotspotItem, AiHotspotTimeRange } from './types'
 
 type AiHotspotRelatedRecord = {
@@ -10,39 +16,26 @@ type AiHotspotRelatedRecord = {
   url?: string | null
 }
 
-const TAG_RULES: Array<{ tag: string, keywords: string[] }> = [
-  { tag: 'AI模型', keywords: [
-    'model', 'gpt', 'llm', 'claude', 'gemini', 'deepseek', 'mistral', 'llama', 'qwen',
-    '模型', '大模型', '发布', '开源模型', '训练', '推理', '微调', 'fine-tune', 'rlhf',
-    'transformer', 'attention', '多模态', 'multimodal', 'vision', '语言模型', 'foundation model',
-    'diffusion', 'stable diffusion', 'midjourney', 'dall-e', 'sora',
-  ] },
-  { tag: '产品应用', keywords: [
-    'product', 'app', 'platform', 'tool', 'agent', 'chatbot', 'copilot',
-    '产品', '应用', '平台', '工具', '智能体', '助手', '插件', 'plugin',
-    'sdk', 'api', 'developer', '开发', '开源', 'github', 'release', 'launch',
-    'chatgpt', 'claude code', 'cursor', 'windsurf', 'v0', 'bolt',
-  ] },
-  { tag: '行业动态', keywords: [
-    'industry', 'startup', 'company', 'enterprise', 'business', 'funding', 'acquisition',
-    '行业', '企业', '公司', '融资', '收购', '商业化', 'market', '市场',
-    'nvidia', 'amd', 'intel', 'google', 'microsoft', 'openai', 'anthropic', 'meta', 'apple',
-    '算力', 'gpu', 'chip', '芯片', '数据中心', 'cloud', 'aws', 'azure',
-    '政策', 'regulation', '监管', '安全', 'safety',
-  ] },
-  { tag: '论文研究', keywords: [
-    'paper', 'research', 'arxiv', 'benchmark', 'eval', 'study', 'academic',
-    '论文', '研究', '评测', '基准', '实验', '突破', '创新', '算法',
-    'neurips', 'icml', 'iclr', 'cvpr', 'acl', 'emnlp', 'aaai',
-    'technique', 'method', 'approach', 'framework', 'architecture',
-  ] },
-  { tag: '技巧经验', keywords: [
-    'tutorial', 'guide', 'tip', 'trick', 'howto', 'how-to', 'best practice', 'workflow',
-    '教程', '技巧', '经验', '实践', '指南', '入门', '进阶', '实战',
-    'prompt', '提示词', '工程', 'engineering', '效率', 'productivity',
-    'case study', '案例', '分享', '总结', '复盘',
-  ] },
-]
+/**
+ * 兴趣配置缓存。修改配置后调用 invalidateInterestConfig() 重置。
+ * 默认使用内置 DSL；运行时可注入用户自定义配置文本。
+ */
+let cachedConfig: InterestConfig | null = null
+let cachedSourceText: string | null = null
+
+export function getInterestConfig(sourceText?: string): InterestConfig {
+  const text = sourceText ?? DEFAULT_INTEREST_TEXT
+  if (cachedConfig && cachedSourceText === text) return cachedConfig
+  cachedConfig = parseInterestConfig(text)
+  cachedSourceText = text
+  return cachedConfig
+}
+
+/** 配置变更后重置缓存（需在 saveSettings 后调用） */
+export function invalidateInterestConfig() {
+  cachedConfig = null
+  cachedSourceText = null
+}
 
 export function isAiHotspotRelated(record: AiHotspotRelatedRecord): boolean {
   const siteId = (record.siteId ?? '').trim().toLowerCase()
@@ -121,45 +114,50 @@ export function dedupeHotspotItems(items: AiHotspotItem[]): AiHotspotItem[] {
     .sort((left, right) => getItemTime(right) - getItemTime(left))
 }
 
-export function classifyHotspotTags(text: string): string[] {
-  const normalized = text.toLowerCase()
-  const tags: string[] = []
-
-  for (const rule of TAG_RULES) {
-    if (rule.keywords.some(keyword => normalized.includes(keyword.toLowerCase()))) {
-      tags.push(rule.tag)
-    }
-  }
-
-  return tags
+/**
+ * 基于兴趣配置对热点文本进行分类。
+ * 若传入 sourceText 则使用该配置，否则用默认配置（缓存）。
+ */
+export function classifyHotspotTags(text: string, sourceText?: string): string[] {
+  const config = getInterestConfig(sourceText)
+  return classifyByInterest(text, config).tags
 }
 
-export function scoreHotspotItem(item: AiHotspotItem): number {
+/**
+ * 热度评分：兴趣词组命中加成 + 可信信源/收藏/沉淀/已读调整。
+ * 评分权重透明可调（来自兴趣配置的 scoring）。
+ */
+export function scoreHotspotItem(item: AiHotspotItem, sourceText?: string): number {
+  const config = getInterestConfig(sourceText)
   const text = [
     item.title,
     item.summary,
     item.sourceName,
     item.feedName,
     item.tags.join(' '),
-  ].filter(Boolean).join(' ').toLowerCase()
+  ].filter(Boolean).join(' ')
 
-  let score = 0
+  const result = classifyByInterest(text, config)
+  const scoring = config.scoring
 
-  for (const keyword of AI_HOTSPOT_CONFIG.filter.aiKeywords) {
-    if (text.includes(keyword.toLowerCase())) score += 8
+  let score = result.groupBonus
+  // 未配置任何词组时，回退到全局 AI/技术关键词加权（保持向后兼容）
+  if (config.wordGroups.length === 0) {
+    const lower = text.toLowerCase()
+    for (const keyword of AI_HOTSPOT_CONFIG.filter.aiKeywords) {
+      if (lower.includes(keyword)) score += 8
+    }
+    for (const keyword of AI_HOTSPOT_CONFIG.filter.techKeywords) {
+      if (lower.includes(keyword)) score += 4
+    }
   }
 
-  for (const keyword of AI_HOTSPOT_CONFIG.filter.techKeywords) {
-    if (text.includes(keyword.toLowerCase())) score += 4
-  }
+  if (AI_HOTSPOT_CONFIG.filter.trustedAiSourceIds.includes(item.sourceId.toLowerCase())) score += scoring.trustedSourceBonus
+  if (item.isFavorite) score += scoring.favoriteBonus
+  if (item.savedNotePath) score += scoring.savedBonus
+  if (item.isRead) score -= scoring.readPenalty
 
-  score += item.tags.length * 6
-  if (AI_HOTSPOT_CONFIG.filter.trustedAiSourceIds.includes(item.sourceId.toLowerCase())) score += 10
-  if (item.isFavorite) score += 5
-  if (item.savedNotePath) score += 3
-  if (item.isRead) score -= 2
-
-  return Math.max(0, score)
+  return Math.max(0, Math.round(score))
 }
 
 export function filterHotspotsByWindow(

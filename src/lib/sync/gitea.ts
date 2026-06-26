@@ -1,6 +1,5 @@
 import { toast } from '@/hooks/use-toast';
 import { Store } from '@tauri-apps/plugin-store';
-import { v4 as uuid } from 'uuid';
 import { fetch, Proxy } from '@tauri-apps/plugin-http';
 import { fetch as encodeFetch } from './encode-fetch'
 import { buildRepoContentPath } from './remote-file'
@@ -94,7 +93,7 @@ export async function uploadFile({
       throw new Error('Gitea 用户名未配置');
     }
 
-    const id = uuid();
+    const id = crypto.randomUUID();
     // path 可能是完整路径（如 "视频文案/03_免费的笔记同步方案.md"）
     // 也可能是目录路径（如 "视频文案"）
     // filename 是文件名（如 "03_免费的笔记同步方案.md"）

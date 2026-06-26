@@ -44,12 +44,32 @@ const EDGE_STYLE_CONFIGS: Record<string, { label: string }> = {
   wikilink: { label: '双链' },
   semantic: { label: '语义' },
   references: { label: '引用' },
+  related: { label: '相关' },
+  extends: { label: '延伸' },
+  supports: { label: '支撑' },
+  contradicts: { label: '矛盾' },
+  analogous: { label: '类比' },
+  'example-of': { label: '示例' },
+  uses: { label: '使用' },
+  'part-of': { label: '属于' },
   contains: { label: '包含' },
   mentions: { label: '提及' },
   has_tag: { label: '标签' },
   'topic-cooccurrence': { label: '共现' },
   'topic-semantic': { label: '语义' },
   'rag-vector': { label: 'RAG' },
+  'topic-note': { label: '归属' },
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  wikilink: '双链',
+  frontmatter: '显式关联',
+  keyword: '关键词',
+  cosine: '向量',
+  llm: 'AI 判定',
+  cross_validated: '交叉验证',
+  topic: '主题',
+  vector: '向量',
 };
 
 export function DetailPanel() {
@@ -306,25 +326,28 @@ function NodeDetail({ node, edges, nodesMapping, selectNode }: NodeDetailProps) 
 
       {relationRows.length > 0 ? (
         <InfoSection title={`关联节点 ${relationRows.length}`}>
-          <div className="space-y-1">
-            {relationRows.slice(0, 10).map(({ edge, relatedNode }) => (
+          <div className="grid grid-cols-2 gap-1.5">
+            {relationRows.slice(0, 18).map(({ edge, relatedNode }) => (
               <button
                 key={`${edge.id}-${relatedNode.id}`}
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                title={`${relatedNode.nodeLabel} · ${getEdgeConfig(edge).label}`}
+                className="min-w-0 rounded-md border border-border/60 bg-background/70 px-2 py-1.5 text-left transition hover:border-border hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 onClick={() => selectNode(relatedNode.id)}
               >
-                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: getNodeColor(relatedNode) }} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm">{relatedNode.nodeLabel}</span>
-                  <span className="text-[11px] text-muted-foreground">{getEdgeConfig(edge).label}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: getNodeColor(relatedNode) }} />
+                  <span className="min-w-0 flex-1 truncate text-sm leading-5">{relatedNode.nodeLabel}</span>
+                  <span className="shrink-0 text-[10px] tabular-nums leading-5 text-muted-foreground">{relatedNode.connections || 0}</span>
                 </span>
-                <span className="text-[11px] tabular-nums text-muted-foreground">{relatedNode.connections || 0}</span>
+                <span className="mt-0.5 block truncate text-[10px] leading-4 text-muted-foreground">
+                  {getEdgeConfig(edge).label}
+                </span>
               </button>
             ))}
-            {relationRows.length > 10 ? (
-              <div className="rounded-md bg-muted/40 px-2 py-1.5 text-center text-xs text-muted-foreground">
-                还有 {relationRows.length - 10} 个关联节点
+            {relationRows.length > 18 ? (
+              <div className="col-span-2 rounded-md bg-muted/40 px-2 py-1.5 text-center text-xs text-muted-foreground">
+                还有 {relationRows.length - 18} 个关联节点
               </div>
             ) : null}
           </div>
@@ -404,12 +427,16 @@ function EdgeDetail({ edge, nodesMapping, selectNode }: EdgeDetailProps) {
   const sourceNode = nodesMapping.get(edge.source);
   const targetNode = nodesMapping.get(edge.target);
   const config = getEdgeConfig(edge);
+  const sourceMethods = getEdgeSources(edge);
+  const relationTypes = getEdgeRelationTypes(edge);
 
   return (
     <>
       <InfoSection title="关系">
         <div className="space-y-3 rounded-md border border-border/70 bg-muted/25 p-3">
           <PlainInfo label="类型" value={config.label} />
+          {relationTypes.length > 1 ? <PlainInfo label="合并类型" value={relationTypes.map(getRelationLabel).join(' / ')} /> : null}
+          {sourceMethods.length > 0 ? <PlainInfo label="来源" value={sourceMethods.map(getSourceLabel).join(' / ')} /> : null}
           {edge.weight !== undefined ? <PlainInfo label="权重" value={`${(edge.weight * 100).toFixed(0)}%`} /> : null}
           {edge.confidence !== undefined ? <PlainInfo label="置信度" value={`${(edge.confidence * 100).toFixed(1)}%`} /> : null}
         </div>
@@ -510,8 +537,43 @@ function formatDate(value: string) {
 }
 
 function getEdgeConfig(edge: GraphEdge) {
-  const label = edge.label.startsWith('semantic:') ? 'semantic' : edge.label;
+  const label = edge.label.startsWith('semantic:') ? 'semantic' : normalizeRelationLabel(String(edge.metadata?.relationType ?? edge.label));
   return EDGE_STYLE_CONFIGS[label] || { label: edge.label };
+}
+
+function normalizeRelationLabel(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'related_to') return 'related';
+  if (normalized === 'part_of') return 'part-of';
+  if (normalized === 'example_of') return 'example-of';
+  if (normalized === 'similar_to') return 'analogous';
+  if (normalized === 'builds_on') return 'extends';
+  return normalized.replace(/_/g, '-');
+}
+
+function getRelationLabel(value: string) {
+  return EDGE_STYLE_CONFIGS[normalizeRelationLabel(value)]?.label ?? value;
+}
+
+function getSourceLabel(value: string) {
+  return SOURCE_LABELS[value] ?? value;
+}
+
+function getEdgeSources(edge: GraphEdge) {
+  return Array.from(new Set([
+    ...(edge.metadata?.sourceMethods ?? []),
+    edge.metadata?.sourceMethod,
+    edge.label === 'wikilink' ? 'wikilink' : undefined,
+    edge.label === 'semantic' ? 'cosine' : undefined,
+  ].filter(Boolean) as string[]));
+}
+
+function getEdgeRelationTypes(edge: GraphEdge) {
+  return Array.from(new Set([
+    ...(edge.metadata?.relationTypes ?? []),
+    edge.metadata?.relationType,
+    edge.label,
+  ].filter(Boolean).map(item => normalizeRelationLabel(String(item)))));
 }
 
 function getNodeColor(node: GraphNode): string {

@@ -3,7 +3,6 @@
 import * as React from "react"
 import { AlertTriangle, Coins } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { estimateTokens } from "@/lib/ai/token-counter"
 import useChatStore from "@/stores/chat"
 import {
   Tooltip,
@@ -12,6 +11,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { resolveModelContextWindow } from "@/lib/ai/context-window"
+import { buildLatestContextTokenUsage } from "@/lib/ai/chat-token-usage"
 
 // ============================================================
 // Helper Functions
@@ -51,17 +51,12 @@ export const ChatTokenDisplay = React.memo(function ChatTokenDisplay({
   // 计算 Token 用量
   React.useEffect(() => {
     const calculateTokens = () => {
-      // 计算输入文本的 token
-      const inputTokens = estimateTokens(inputText)
-
-      // 计算历史消息的 token（最近 20 条）
-      const recentChats = chats.slice(-20)
-      const historyTokens = recentChats.reduce((sum, chat) => {
-        return sum + estimateTokens(chat.content || '')
-      }, 0)
-
-      // 总 token
-      const totalTokens = inputTokens + historyTokens
+      const usage = buildLatestContextTokenUsage({
+        inputText,
+        chats,
+        maxFallbackHistoryMessages: 20,
+      })
+      const totalTokens = usage.totalTokens
 
       setEstimatedTokens(totalTokens)
 
@@ -130,6 +125,7 @@ export const ChatContextRing = React.memo(function ChatContextRing({
   const [tokenStats, setTokenStats] = React.useState({
     inputTokens: 0,
     historyTokens: 0,
+    measuredTokens: 0,
     totalTokens: 0,
   })
   const contextLimit = React.useMemo(
@@ -138,16 +134,24 @@ export const ChatContextRing = React.memo(function ChatContextRing({
   )
 
   React.useEffect(() => {
-    const inputTokens = estimateTokens(inputText)
-    const recentChats = chats.slice(-20)
-    const historyTokens = recentChats.reduce((sum, chat) => {
-      return sum + estimateTokens(chat.content || '')
-    }, 0)
+    const usage = buildLatestContextTokenUsage({
+      inputText,
+      chats,
+      maxFallbackHistoryMessages: 20,
+    })
+    const currentInputTokens = usage.estimatedTokens
+    const measuredTokens = usage.hasMeasuredUsage
+      ? Math.max(usage.totalTokens - currentInputTokens, 0)
+      : 0
+    const historyTokens = usage.hasMeasuredUsage
+      ? measuredTokens
+      : Math.max(usage.totalTokens - currentInputTokens, 0)
 
     setTokenStats({
-      inputTokens,
+      inputTokens: currentInputTokens,
       historyTokens,
-      totalTokens: inputTokens + historyTokens,
+      measuredTokens,
+      totalTokens: usage.totalTokens,
     })
   }, [inputText, chats])
 
@@ -155,7 +159,7 @@ export const ChatContextRing = React.memo(function ChatContextRing({
     return null
   }
 
-  const { inputTokens, historyTokens, totalTokens } = tokenStats
+  const { inputTokens, historyTokens, measuredTokens, totalTokens } = tokenStats
   const usage = contextLimit > 0 ? Math.min(totalTokens / contextLimit, 1) : 0
   const percentage = Math.round(usage * 100)
   const precisePercentage = contextLimit > 0 ? Math.min((totalTokens / contextLimit) * 100, 999) : 0
@@ -250,7 +254,9 @@ export const ChatContextRing = React.memo(function ChatContextRing({
                 <span className="text-foreground">{formatTokenCount(inputTokens)}</span>
               </div>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-muted-foreground">历史</span>
+                <span className="text-muted-foreground">
+                  {measuredTokens > 0 ? '模型上下文' : '历史'}
+                </span>
                 <span className="text-foreground">{formatTokenCount(historyTokens)}</span>
               </div>
               <div className="flex items-center justify-between gap-2">

@@ -14,7 +14,52 @@ import { PanelContainer } from './components/graph-layout-optimized';
 import { Button } from '@/components/ui/button';
 import { AlertCircle, Loader2, RefreshCw, Search, Filter, Maximize, GitBranch, Network, Layers3 } from 'lucide-react';
 import useArticleStore from '@/stores/article';
+import emitter from '@/lib/emitter';
 import { cn } from '@/lib/utils';
+import type { GraphFilters } from './types';
+
+type LegendFilter = Pick<GraphFilters, 'nodeKinds' | 'nodeModes' | 'edgeLabels' | 'edgeSources'>;
+
+interface LegendItem {
+  id: string;
+  label: string;
+  value: number;
+  color: string;
+  filter: LegendFilter;
+}
+
+const NOTE_RELATION_LEGEND: Array<{ id: string; label: string; edgeLabel: string; color: string }> = [
+  { id: 'wikilink', label: '双链', edgeLabel: 'wikilink', color: '#64748b' },
+  { id: 'references', label: '引用', edgeLabel: 'references', color: '#d97706' },
+  { id: 'extends', label: '延伸', edgeLabel: 'extends', color: '#f59e0b' },
+  { id: 'supports', label: '支撑', edgeLabel: 'supports', color: '#16a34a' },
+  { id: 'contradicts', label: '矛盾', edgeLabel: 'contradicts', color: '#ef4444' },
+  { id: 'analogous', label: '类比', edgeLabel: 'analogous', color: '#8b5cf6' },
+  { id: 'example-of', label: '示例', edgeLabel: 'example-of', color: '#06b6d4' },
+  { id: 'uses', label: '使用', edgeLabel: 'uses', color: '#22c55e' },
+  { id: 'part-of', label: '属于', edgeLabel: 'part-of', color: '#6366f1' },
+  { id: 'semantic', label: '向量语义', edgeLabel: 'semantic', color: '#059669' },
+];
+
+const NOTE_SOURCE_LEGEND: Array<{ id: string; label: string; source: string; color: string }> = [
+  { id: 'source-cross', label: '交叉验证', source: 'cross_validated', color: '#0f766e' },
+  { id: 'source-llm', label: 'AI', source: 'llm', color: '#7c3aed' },
+  { id: 'source-keyword', label: '关键词', source: 'keyword', color: '#ca8a04' },
+  { id: 'source-frontmatter', label: '显式', source: 'frontmatter', color: '#d97706' },
+];
+
+function edgeSourcesOf(edge: { label: string; metadata?: { sourceMethod?: string; sourceMethods?: string[] } }) {
+  return Array.from(new Set([
+    ...(edge.metadata?.sourceMethods ?? []),
+    edge.metadata?.sourceMethod,
+    edge.label === 'wikilink' ? 'wikilink' : undefined,
+    edge.label === 'semantic' ? 'cosine' : undefined,
+  ].filter(Boolean) as string[]));
+}
+
+function sameStringArray(left?: readonly string[], right?: readonly string[]) {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
 
 export function KnowledgeGraphECharts() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -34,12 +79,20 @@ export function KnowledgeGraphECharts() {
     edge: any | null;
   } | null>(null);
   const [isGeneratingVectors, setIsGeneratingVectors] = useState(false);
-  const articleStore = useArticleStore();
+  const openTabs = useArticleStore((state) => state.openTabs);
+  const fileTree = useArticleStore((state) => state.fileTree);
+  const newFile = useArticleStore((state) => state.newFile);
+  const setActiveFilePath = useArticleStore((state) => state.setActiveFilePath);
 
   const {
     loadGraph,
+    invalidateCache,
     filteredNodes,
     filteredEdges,
+    filters,
+    setFilters,
+    selectedNode,
+    nodesMapping,
     showDetailPanel,
     showFilterPanel,
     showExportDialog,
@@ -53,52 +106,62 @@ export function KnowledgeGraphECharts() {
     fitView,
     deleteNode,
     nodes,
+    edges,
     graphMode,
     graphView,
     setGraphMode,
     setGraphView,
   } = useGraphStore();
 
-  const activeFilePath = articleStore.activeFilePath;
-  const currentArticle = articleStore.currentArticle;
   const openTabSignature = useMemo(() => {
     const notePaths = [
-      ...(articleStore.openTabs ?? []).filter(tab =>
+      ...(openTabs ?? []).filter(tab =>
         !tab.isFolder &&
         tab.path &&
         !tab.path.startsWith('lingmo://') &&
         /\.(md|markdown|mdx|txt)$/i.test(tab.path),
       ).map(tab => tab.path.replace(/\\/g, '/')),
-      activeFilePath,
     ]
       .filter((path): path is string => Boolean(path))
       .filter(path => !path.startsWith('lingmo://') && /\.(md|markdown|mdx|txt)$/i.test(path));
 
     return Array.from(new Set(notePaths)).sort().join('|');
-  }, [articleStore.openTabs, activeFilePath]);
+  }, [openTabs]);
   const openNoteCount = openTabSignature ? openTabSignature.split('|').length : 0;
 
   const localNodeCount = filteredNodes.length;
   const localEdgeCount = filteredEdges.length;
+  const focusedNode = selectedNode ? nodesMapping.get(selectedNode) || null : null;
 
   useEffect(() => {
-    void loadGraph();
-  }, [loadGraph]);
+    const timer = graphMode === 'local'
+      ? window.setTimeout(() => {
+        void loadGraph();
+      }, 420)
+      : window.setTimeout(() => {
+        void loadGraph();
+      }, 0);
 
-  useEffect(() => {
-    if (graphMode !== 'local') return;
-    const timer = window.setTimeout(() => {
-      void loadGraph();
-    }, 420);
     return () => window.clearTimeout(timer);
-  }, [graphMode, openTabSignature, activeFilePath, currentArticle, loadGraph]);
+  }, [graphMode, graphView, openTabSignature, loadGraph]);
+
+  // Saved content is the only passive event that should invalidate graph snapshots.
+  useEffect(() => {
+    const handleArticleSaved = () => {
+      invalidateCache();
+    };
+    emitter.on('article-saved', handleArticleSaved);
+    return () => {
+      emitter.off('article-saved', handleArticleSaved);
+    };
+  }, [invalidateCache]);
 
   // 检测空状态
   const isLocalWithoutOpenNotes = graphMode === 'local' && openNoteCount === 0;
   const isLocalWithoutTopics = graphMode === 'local' && openNoteCount > 0 && nodes.length === 0;
   const isEmptyGraph = !isLoading && !error && nodes.length === 0 && !isLocalWithoutOpenNotes && !isLocalWithoutTopics;
-  const hasNotes = (articleStore.fileTree?.length ?? 0) > 0;
-  const noteCount = articleStore.fileTree?.reduce((count, item) => {
+  const hasNotes = (fileTree?.length ?? 0) > 0;
+  const noteCount = fileTree?.reduce((count, item) => {
     if (item.isFile && item.name.endsWith('.md')) return count + 1;
     if (item.children) {
       const childCount = item.children.reduce((subCount, child) =>
@@ -110,28 +173,85 @@ export function KnowledgeGraphECharts() {
 
   // 检测是否有向量数据（通过检查是否有图谱节点来判断）
   const hasVectors = nodes.length > 0 || !isLoading;
-  const hubCount = filteredNodes.filter(node => node.kind === 'hub').length;
-  const visibleTopicCount = filteredNodes.filter(node => node.nodeProperties?.mode === 'topic').length;
-  const visibleNoteCount = filteredNodes.filter(node => node.nodeType === 'note').length;
-  const visibleWikilinkCount = filteredEdges.filter(edge => edge.label === 'wikilink').length;
-  const visibleSemanticCount = filteredEdges.filter(edge => edge.label === 'topic-semantic').length;
-  const visibleNoteSemanticCount = filteredEdges.filter(edge => edge.label === 'semantic').length;
-  const visibleCooccurrenceCount = filteredEdges.filter(edge => edge.label === 'topic-cooccurrence').length;
-  const visibleRagCount = filteredEdges.filter(edge => edge.label === 'rag-vector').length;
-  const legendItems = useMemo(() => graphView === 'note'
+  const hubCount = nodes.filter(node => node.kind === 'hub').length;
+  const visibleTopicCount = nodes.filter(node => node.nodeProperties?.mode === 'topic').length;
+  const visibleNoteCount = nodes.filter(node => node.nodeType === 'note').length;
+  const visibleSemanticCount = edges.filter(edge => edge.label === 'topic-semantic').length;
+  const visibleCooccurrenceCount = edges.filter(edge => edge.label === 'topic-cooccurrence').length;
+  const visibleRagCount = edges.filter(edge => edge.label === 'rag-vector').length;
+  const noteRelationCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const edge of edges) {
+      counts.set(String(edge.label), (counts.get(String(edge.label)) ?? 0) + 1);
+    }
+    return counts;
+  }, [edges]);
+  const noteSourceCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const edge of edges) {
+      for (const source of edgeSourcesOf(edge)) {
+        counts.set(source, (counts.get(source) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [edges]);
+  const legendItems = useMemo<LegendItem[]>(() => graphView === 'note'
     ? [
-      { label: '笔记', value: visibleNoteCount, color: '#60a5fa' },
-      { label: '核心', value: hubCount, color: '#f97316' },
-      { label: '双链', value: visibleWikilinkCount, color: '#64748b' },
-      { label: '语义', value: visibleNoteSemanticCount, color: '#059669' },
+      { id: 'notes', label: '笔记', value: visibleNoteCount, color: '#60a5fa', filter: { nodeModes: ['note'] } },
+      { id: 'hub', label: '核心', value: hubCount, color: '#f97316', filter: { nodeKinds: ['hub'] } },
+      ...NOTE_RELATION_LEGEND
+        .map(item => ({
+          id: item.id,
+          label: item.label,
+          value: noteRelationCounts.get(item.edgeLabel) ?? 0,
+          color: item.color,
+          filter: { edgeLabels: [item.edgeLabel] },
+        }))
+        .filter(item => item.value > 0 || item.id === 'wikilink' || item.id === 'semantic'),
+      ...NOTE_SOURCE_LEGEND
+        .map(item => ({
+          id: item.id,
+          label: item.label,
+          value: noteSourceCounts.get(item.source) ?? 0,
+          color: item.color,
+          filter: { edgeSources: [item.source] },
+        }))
+        .filter(item => item.value > 0),
     ]
     : [
-      { label: '主题', value: visibleTopicCount, color: '#10b981' },
-      { label: '核心', value: hubCount, color: '#f59e0b' },
-      { label: '共现', value: visibleCooccurrenceCount, color: '#94a3b8' },
-      { label: '语义', value: visibleSemanticCount, color: '#059669' },
-      { label: '向量', value: visibleRagCount, color: '#0f766e' },
-    ], [graphView, hubCount, visibleCooccurrenceCount, visibleNoteCount, visibleNoteSemanticCount, visibleRagCount, visibleSemanticCount, visibleTopicCount, visibleWikilinkCount]);
+      { id: 'topics', label: '主题', value: visibleTopicCount, color: '#10b981', filter: { nodeModes: ['topic'] } },
+      { id: 'hub', label: '核心', value: hubCount, color: '#f59e0b', filter: { nodeKinds: ['hub'] } },
+      { id: 'cooccurrence', label: '共现', value: visibleCooccurrenceCount, color: '#94a3b8', filter: { edgeLabels: ['topic-cooccurrence'] } },
+      { id: 'semantic', label: '语义', value: visibleSemanticCount, color: '#059669', filter: { edgeLabels: ['topic-semantic'] } },
+      { id: 'vector', label: '向量', value: visibleRagCount, color: '#0f766e', filter: { edgeLabels: ['rag-vector'] } },
+    ], [graphView, hubCount, noteRelationCounts, noteSourceCounts, visibleCooccurrenceCount, visibleNoteCount, visibleRagCount, visibleSemanticCount, visibleTopicCount]);
+
+  const isLegendItemActive = useCallback((item: LegendItem) => {
+    const itemNodeKinds = item.filter.nodeKinds ? [...item.filter.nodeKinds] : undefined;
+    const itemNodeModes = item.filter.nodeModes ? [...item.filter.nodeModes] : undefined;
+    const itemEdgeLabels = item.filter.edgeLabels;
+    const itemEdgeSources = item.filter.edgeSources;
+    return (
+      sameStringArray(filters.nodeKinds, itemNodeKinds) &&
+      sameStringArray(filters.nodeModes, itemNodeModes) &&
+      sameStringArray(filters.edgeLabels, itemEdgeLabels) &&
+      sameStringArray(filters.edgeSources, itemEdgeSources)
+    );
+  }, [filters.edgeLabels, filters.edgeSources, filters.nodeKinds, filters.nodeModes]);
+
+  const toggleLegendFilter = useCallback((item: LegendItem) => {
+    if (isLegendItemActive(item)) {
+      setFilters({ nodeKinds: undefined, nodeModes: undefined, edgeLabels: undefined, edgeSources: undefined });
+      return;
+    }
+
+    setFilters({
+      nodeKinds: item.filter.nodeKinds ? [...item.filter.nodeKinds] : undefined,
+      nodeModes: item.filter.nodeModes ? [...item.filter.nodeModes] : undefined,
+      edgeLabels: item.filter.edgeLabels,
+      edgeSources: item.filter.edgeSources,
+    });
+  }, [isLegendItemActive, setFilters]);
 
   useEffect(() => {
     const element = graphStageRef.current;
@@ -206,7 +326,7 @@ export function KnowledgeGraphECharts() {
       const { processAllMarkdownFiles } = await import('@/lib/rag');
       await processAllMarkdownFiles();
       // 重新加载图谱
-      await loadGraph();
+      await loadGraph({ force: true });
     } catch (error) {
       console.error('Failed to generate vectors:', error);
     } finally {
@@ -217,12 +337,10 @@ export function KnowledgeGraphECharts() {
   // 处理创建笔记
   const handleCreateNote = useCallback(() => {
     // 触发新建笔记
-    const { newFile } = articleStore;
     newFile();
     // 关闭知识图谱标签页，让用户专注于创建笔记
-    const { setActiveFilePath } = articleStore;
     setActiveFilePath('');
-  }, [articleStore]);
+  }, [newFile, setActiveFilePath]);
 
   const handleContextMenuAction = useCallback(async (action: string) => {
     if (!contextMenu) return;
@@ -286,7 +404,7 @@ export function KnowledgeGraphECharts() {
           noteCount={noteCount}
           onGenerateVectors={handleGenerateVectors}
           onCreateNote={handleCreateNote}
-          onRefresh={() => void loadGraph()}
+          onRefresh={() => void loadGraph({ force: true })}
           isLoading={isGeneratingVectors}
         />
       ) : error ? (
@@ -306,7 +424,7 @@ export function KnowledgeGraphECharts() {
               <Button variant="ghost" size="sm" onClick={clearError}>
                 忽略
               </Button>
-              <Button size="sm" onClick={() => { clearError(); void loadGraph(); }}>
+              <Button size="sm" onClick={() => { clearError(); void loadGraph({ force: true }); }}>
                 <RefreshCw className="h-3.5 w-3.5" />
                 重新加载
               </Button>
@@ -410,7 +528,7 @@ export function KnowledgeGraphECharts() {
               <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" title="适应视图" onClick={fitView}>
                 <Maximize className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" title="刷新" onClick={() => void loadGraph()}>
+              <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" title="刷新" onClick={() => void loadGraph({ force: true })}>
                 <RefreshCw className="h-4 w-4" />
               </Button>
               <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" title="路径查找" onClick={() => setShowPathFinder(!showPathFinder)}>
@@ -419,21 +537,52 @@ export function KnowledgeGraphECharts() {
             </div>
           </div>
 
-          {/* 底部图谱统计 */}
-          <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center justify-center gap-3 overflow-hidden text-foreground pointer-events-none select-none sm:gap-4">
-            {legendItems.map(item => (
-              <div
-                key={item.label}
-                className="flex shrink-0 items-center gap-1.5 rounded-full border border-black/5 bg-white/70 px-2 py-1 text-[11px] font-medium text-slate-700 backdrop-blur-sm dark:border-white/10 dark:bg-slate-950/35 dark:text-slate-200"
+          {focusedNode ? (
+            <div className="absolute left-4 top-[58px] z-20 flex max-w-[min(420px,calc(100%-2rem))] items-center gap-2 rounded-md border border-border/60 bg-background/90 px-2.5 py-1.5 text-xs text-foreground shadow-none backdrop-blur-sm">
+              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: focusedNode.nodeColor || '#737373' }} />
+              <span className="min-w-0 truncate">
+                正在聚焦 <span className="font-medium">{focusedNode.nodeLabel}</span> 的一跳邻域
+              </span>
+              <button
+                type="button"
+                className="ml-1 shrink-0 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                onClick={() => selectNode(null)}
               >
-                <span
-                  className="h-2 w-2 rounded-full shadow-none dark:shadow-[0_0_0_2px_rgba(255,255,255,0.08)]"
-                  style={{ backgroundColor: item.color }}
-                />
-                <span>{item.label}</span>
-                <span className="font-semibold tabular-nums text-slate-900 dark:text-slate-50">{item.value}</span>
-              </div>
-            ))}
+                退出
+              </button>
+            </div>
+          ) : null}
+
+          {/* 底部图谱统计 */}
+          <div className="absolute inset-x-3 bottom-4 z-20 flex justify-center overflow-x-auto overflow-y-hidden px-1 text-foreground select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex min-w-max items-center justify-center gap-2 sm:gap-2.5">
+            {legendItems.map(item => {
+              const active = isLegendItemActive(item);
+              return (
+                <button
+                  type="button"
+                  key={item.label}
+                  disabled={item.value === 0}
+                  aria-pressed={active}
+                  title={active ? `取消筛选：${item.label}` : `只看${item.label}`}
+                  onClick={() => toggleLegendFilter(item)}
+                  className={cn(
+                    'pointer-events-auto flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium backdrop-blur-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40',
+                    active
+                      ? 'border-foreground/22 bg-foreground text-background shadow-none'
+                      : 'border-black/5 bg-white/72 text-slate-700 hover:bg-white/90 dark:border-white/10 dark:bg-slate-950/35 dark:text-slate-200 dark:hover:bg-slate-950/55',
+                  )}
+                >
+                  <span
+                    className="h-2 w-2 rounded-full shadow-none dark:shadow-[0_0_0_2px_rgba(255,255,255,0.08)]"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span>{item.label}</span>
+                  <span className={cn('font-semibold tabular-nums', active ? 'text-background' : 'text-slate-900 dark:text-slate-50')}>{item.value}</span>
+                </button>
+              );
+            })}
+            </div>
           </div>
 
           {/* 详情面板 */}

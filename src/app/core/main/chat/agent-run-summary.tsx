@@ -18,11 +18,11 @@ import {
   TerminalSquare,
   Wrench,
 } from "lucide-react"
-import type { AgentActivity, AgentEvent, AgentTurnTelemetry, ReActStep, ToolCall } from "@/lib/agent"
+import type { AgentActivity, AgentEvent, AgentPartSnapshot, AgentTurnTelemetry, ReActStep, ToolCall } from "@/lib/agent"
 import { isSupportOnlyToolName } from "@/lib/agent/support-tools"
 import { cn } from "@/lib/utils"
 import { estimateTokens } from "@/lib/ai/token-counter"
-import { CompactToolCalls } from "./compact-tool-calls"
+import { getClawStatusGlyph } from "./claw-stream-format"
 
 type AgentRunSummaryProps = {
   elapsedMs?: number
@@ -35,6 +35,7 @@ type AgentRunSummaryProps = {
   currentThought?: string
   currentAction?: string
   currentObservation?: string
+  partSnapshot?: AgentPartSnapshot
   live?: boolean
 }
 
@@ -46,6 +47,28 @@ type RunStep = {
   tone: "running" | "done" | "error" | "muted"
   summary?: boolean
   kind?: OperationKind
+}
+
+type TimelineEntry =
+  | {
+      id: string
+      type: "thought"
+      text: string
+      omittedChars?: number
+      tone: "running" | "done" | "error" | "muted"
+      durationLabel?: string
+    }
+  | {
+      id: string
+      type: "tool"
+      step: RunStep
+      toolCall?: StepToolCall
+    }
+
+type TimelineGroup = {
+  id: string
+  thought?: Extract<TimelineEntry, { type: "thought" }>
+  tools: Array<Extract<TimelineEntry, { type: "tool" }>>
 }
 
 type StepToolCall = ToolCall & {
@@ -82,6 +105,25 @@ function formatTokenCount(count?: number) {
   return `${Math.round(count)}`
 }
 
+function useClawFrame(active: boolean) {
+  const [frameIndex, setFrameIndex] = React.useState(0)
+
+  React.useEffect(() => {
+    if (!active) {
+      setFrameIndex(0)
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      setFrameIndex(index => index + 1)
+    }, 90)
+
+    return () => window.clearInterval(timer)
+  }, [active])
+
+  return frameIndex
+}
+
 function compactText(value?: string, maxLength = 100) {
   const cleaned = (value || "")
     .replace(/\s+/g, " ")
@@ -105,17 +147,17 @@ function getBaseToolName(toolName?: string) {
   return (toolName || "tool").split("__").pop() || "tool"
 }
 
-function isRecord(value: unknown): value is Record<string, any> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value))
 }
 
-function getPayloadToolName(payload: Record<string, any>) {
+function getPayloadToolName(payload: Record<string, unknown>) {
   return typeof payload.toolName === "string"
     ? payload.toolName
     : typeof payload.tool === "string"
       ? payload.tool
-      : typeof payload.toolCall?.toolName === "string"
-        ? payload.toolCall.toolName
+      : typeof payload.toolCall === "object" && payload.toolCall !== null && "toolName" in payload.toolCall
+        ? String((payload.toolCall as Record<string, unknown>).toolName)
         : undefined
 }
 
@@ -283,7 +325,6 @@ function classifyToolCall(call: ToolCall): OperationKind {
   if (base === "execute_skill_script" || /(^|_)(command|shell|script|exec|run)(_|$)/.test(base)) return "command"
   if (base.startsWith("git_")) return "git"
   if (base === "select_skill" || base === "load_skill_content" || base.includes("skill")) return "skill"
-  if (base === "clip_web_content") return "create"
   if (base === "web_search") return "web_search"
   if (base.startsWith("web_") || base.includes("fetch") || base.includes("extract")) return "web_read"
   if (base === "tool_search") return "tool"
@@ -368,7 +409,6 @@ function getToolActionLabel(call: ToolCall) {
   if (base === "git_blame") return "查看 Git blame"
   if (base === "web_search") return "搜索网页"
   if (base === "web_fetch" || base === "web_extract") return "读取网页"
-  if (base === "clip_web_content") return "保存网页摘录"
   if (base === "safe_read_file" || base === "read_markdown_file") return "读取文件"
   if (base === "safe_list_files") return "列出文件"
   if (base === "safe_grep") return "搜索文件内容"
@@ -385,6 +425,42 @@ function getToolActionLabel(call: ToolCall) {
   if (base === "select_skill") return "选择技能"
   if (base === "load_skill_content") return "加载技能内容"
   return `调用 ${formatToolName(call.toolName)}`
+}
+
+function getInlineToolActionLabel(call: ToolCall) {
+  const base = getBaseToolName(call.toolName).toLowerCase()
+  const kind = classifyToolCall(call)
+
+  if (kind === "command") return "运行"
+  if (base === "tool_search") return "搜索工具"
+  if (base === "code_search_symbols") return "搜索符号"
+  if (base === "code_find_definition") return "查找定义"
+  if (base === "code_find_references") return "查找引用"
+  if (base === "code_file_outline") return "读取结构"
+  if (base === "code_read_context") return "读取上下文"
+  if (base === "git_status") return "查看 Git 状态"
+  if (base === "git_diff") return "查看 Git diff"
+  if (base === "git_log") return "查看 Git 日志"
+  if (base === "git_show") return "查看 Git 对象"
+  if (base === "git_blame") return "查看 Git blame"
+  if (base === "web_search") return "搜索网页"
+  if (base === "web_fetch" || base === "web_extract") return "读取网页"
+  if (base === "safe_read_file" || base === "read_markdown_file") return "读取"
+  if (base === "safe_list_files") return "列出"
+  if (base === "safe_grep") return "搜索"
+  if (base.includes("search") || base.includes("grep") || base.includes("find")) return "搜索"
+  if (base.includes("fetch") || base.includes("extract")) return "读取网页"
+  if (base.includes("list")) return "列出"
+  if (base.includes("read") || base.includes("get") || base.includes("outline")) return "读取"
+  if (base.includes("rename")) return "重命名"
+  if (base.includes("move")) return "移动"
+  if (base.includes("copy")) return "复制"
+  if (kind === "create") return "创建"
+  if (kind === "update") return "编辑"
+  if (kind === "delete") return "删除"
+  if (base === "select_skill") return "选择技能"
+  if (base === "load_skill_content") return "加载技能"
+  return formatToolName(call.toolName)
 }
 
 function getToolActionDetail(call: ToolCall) {
@@ -533,20 +609,65 @@ function buildToolDurationMap(events: AgentEvent[]) {
 function buildToolActionSteps(toolCalls: ToolCall[], events: AgentEvent[] = []): RunStep[] {
   const durations = buildToolDurationMap(events)
   return toolCalls.map((call, index) => {
-    const resultDetail = getResultDetail(call)
     const detail = getToolActionDetail(call)
-    const statusDetail = call.status === "error" && resultDetail && resultDetail !== detail ? resultDetail : undefined
     const duration = durations.get(call.id)
     const baseName = getBaseToolName(call.toolName)
     return {
       id: `tool-${call.id || index}`,
       label: getToolActionLabel(call),
-      detail: [detail, statusDetail].filter(Boolean).join(" · "),
+      detail,
       meta: [baseName, getToolStatusLabel(call), duration].filter(Boolean).join(" · "),
       tone: getToolTone(call),
       kind: classifyToolCall(call),
     }
   })
+}
+
+function getActivityStep(input: {
+  activity?: AgentActivity
+  partSnapshot?: AgentPartSnapshot
+  currentThought?: string
+  live: boolean
+}): RunStep | undefined {
+  const phase = input.partSnapshot?.activity?.phase || input.partSnapshot?.telemetry?.currentPhase || input.activity?.phase
+  const visibleStatus = input.partSnapshot?.visibleStatus
+  const detail = input.live
+    ? undefined
+    : compactText(input.activity?.detail || visibleStatus?.detail, 160)
+
+  if (phase === "answering" || visibleStatus?.label === "正在写答案") {
+    return {
+      id: "live-answering",
+      label: "正在流式输出回答",
+      detail: input.live ? undefined : detail || "正文会直接显示在下方，前面的动作已收拢为摘要。",
+      tone: input.live ? "running" : "done",
+      kind: "tool",
+    }
+  }
+
+  if (phase === "planning" || phase === "thinking" || visibleStatus?.label === "思考中") return undefined
+
+  if (phase === "waiting-confirmation" || visibleStatus?.label === "等待确认") {
+    return {
+      id: "live-waiting-confirmation",
+      label: "等待操作确认",
+      detail,
+      tone: "running",
+      kind: "tool",
+    }
+  }
+
+  if (visibleStatus?.label && visibleStatus.label !== "准备中") {
+    return {
+      id: `status-${visibleStatus.label}`,
+      label: visibleStatus.label,
+      detail,
+      tone: visibleStatus.tone === "error" ? "error" : visibleStatus.tone === "done" ? "done" : "running",
+      kind: "tool",
+    }
+  }
+
+  return undefined
 }
 
 function parseCurrentActionToolCall(currentAction?: string, currentObservation?: string): ToolCall | undefined {
@@ -580,10 +701,21 @@ function parseCurrentActionToolCall(currentAction?: string, currentObservation?:
   }
 }
 
+function isInternalLifecycleEvent(event: AgentEvent): boolean {
+  return (
+    event.type === "mcp.runtime.warmup" ||
+    event.type === "agent.stream.started" ||
+    event.type === "agent.stream.finished" ||
+    event.type === "agent.context.compacted"
+  )
+}
+
 function buildEventSteps(events: AgentEvent[]): RunStep[] {
   const steps: RunStep[] = []
 
   events.forEach((event, index) => {
+    if (isInternalLifecycleEvent(event)) return
+
     const payload = event.payload || {}
     const toolName = getPayloadToolName(payload)
     const toolLabel = toolName ? formatToolName(toolName) : ""
@@ -622,9 +754,6 @@ function buildEventSteps(events: AgentEvent[]): RunStep[] {
     )
 
     switch (event.type) {
-      case "agent.context.compacted":
-        steps.push({ id: `${index}-context`, label: "压缩上下文", detail, tone: "done", kind: "tool" })
-        break
       case "action.parsed":
         if (toolName) {
           steps.push({
@@ -647,16 +776,35 @@ function buildEventSteps(events: AgentEvent[]): RunStep[] {
           kind: eventToolCall ? classifyToolCall(eventToolCall) : "tool",
         })
         break
+      case "tool.batch.started":
+        steps.push({
+          id: `${index}-tool-batch-start`,
+          label: "准备工具批次",
+          detail: typeof payload.runningCount === "number" ? `本轮 ${payload.runningCount} 个工具进入执行` : detail,
+          tone: "running",
+          kind: "tool",
+        })
+        break
+      case "tool.batch.finished":
+        steps.push({
+          id: `${index}-tool-batch-end`,
+          label: "工具批次完成",
+          detail: typeof payload.finishedCount === "number" ? `已处理 ${payload.finishedCount} 个工具结果` : detail,
+          tone: "done",
+          kind: "tool",
+        })
+        break
       case "tool.updated":
       case "tool.execution.finished": {
         const status = String(payload.status || payload.toolCall?.status || "")
-        const failed = payload.success === false || status === "error"
+        const muted = ["blocked", "skipped", "adjusted", "cached", "cancelled"].includes(status)
+        const failed = !muted && (payload.success === false || status === "error")
         steps.push({
           id: `${index}-tool-finished`,
           label: eventToolCall ? getToolActionLabel(eventToolCall) : toolLabel ? `${failed ? "工具失败" : "工具完成"}：${toolLabel}` : failed ? "工具失败" : "工具完成",
           detail,
           meta: [toolName, formatDurationMs(payload.durationMs)].filter(Boolean).join(" · "),
-          tone: failed ? "error" : "done",
+          tone: failed ? "error" : muted ? "muted" : "done",
           kind: eventToolCall ? classifyToolCall(eventToolCall) : "tool",
         })
         break
@@ -699,6 +847,7 @@ function buildStepSummary(input: {
   currentThought?: string
   currentAction?: string
   currentObservation?: string
+  partSnapshot?: AgentPartSnapshot
   live: boolean
 }): RunStep[] {
   const reactToolCalls = buildToolCallsFromReActSteps(input.steps)
@@ -711,46 +860,32 @@ function buildStepSummary(input: {
         ? [currentToolCall]
         : []
   const toolActionSteps = buildToolActionSteps(effectiveToolCalls, input.events)
+  const activityStep = getActivityStep({
+    activity: input.activity,
+    partSnapshot: input.partSnapshot,
+    currentThought: input.currentThought,
+    live: input.live,
+  })
   if (toolActionSteps.length > 0) {
+    const recentConcreteSteps = activityStep
+      ? [...toolActionSteps, activityStep].slice(-12)
+      : toolActionSteps.slice(-12)
     return [
       ...buildToolSummarySteps(effectiveToolCalls),
-      ...toolActionSteps.slice(-12),
+      ...recentConcreteSteps,
     ]
   }
 
   const eventSteps = buildEventSteps(input.events)
-  if (eventSteps.length > 0) return eventSteps.slice(-8)
-
-  if (input.live && input.activity?.phase === "answering") {
-    return [{
-      id: "live-answering",
-      label: "正在流式输出回答",
-      detail: input.activity.detail || "回答正文会直接显示在下方。",
-      tone: "running",
-      kind: "tool",
-    }]
+  if (eventSteps.length > 0) {
+    return activityStep
+      ? [...eventSteps.slice(-7), activityStep]
+      : eventSteps.slice(-8)
   }
 
-  const visibleThought = compactText(input.currentThought, 140)
-  if (input.live && visibleThought) {
-    return [{
-      id: "live-visible-thought",
-      label: "正在梳理下一步",
-      detail: visibleThought,
-      tone: "running",
-      kind: "tool",
-    }]
-  }
+  if (activityStep) return [activityStep]
 
-  return [{
-    id: input.live ? "no-tool-live" : "no-tool-final",
-    label: input.live ? "等待模型返回下一步操作" : "未调用工具",
-    detail: input.live
-      ? "当前还没有命令、文件、网络或 Git 操作记录。"
-      : "这次只生成了会话回复，没有命令、文件、网络或 Git 操作记录。",
-    tone: input.live ? "running" : "muted",
-    kind: "tool",
-  }]
+  return []
 }
 
 function getStepIcon(kind?: OperationKind, tone?: RunStep["tone"], summary?: boolean) {
@@ -796,9 +931,11 @@ function getVisibleOutputTokens(input: {
   visibleOutput?: string
   live: boolean
 }) {
+  if (input.live) return 0
+  const measuredTokens = (input.telemetry?.inputTokens || 0) + (input.telemetry?.outputTokens || 0)
+  if (measuredTokens > 0) return measuredTokens
   const visibleOutput = input.visibleOutput?.trim() || ""
   if (visibleOutput) return estimateTokens(visibleOutput)
-  if (input.live) return 0
   if (typeof input.telemetry?.outputTokens === "number" && input.telemetry.outputTokens > 0) {
     return input.telemetry.outputTokens
   }
@@ -857,25 +994,247 @@ function getStepToolCall(step: RunStep, toolCalls: ToolCall[], events: AgentEven
   }
 }
 
-function getLiveStepSentence(step: RunStep) {
-  const label = step.label.replace(/[。.]$/, "")
-  if (step.tone === "error") return `${label}失败，正在尝试恢复。`
-  if (step.tone === "done") return `已完成：${label}。`
-  if (/^(正在|等待)/.test(label)) return `${label}。`
-  return `正在${label}。`
+function createThoughtEntry(input: {
+  id: string
+  text: string
+  tone: ThoughtTimelineEntry["tone"]
+  durationLabel?: string
+}): ThoughtTimelineEntry {
+  return {
+    id: input.id,
+    type: "thought",
+    text: input.text,
+    tone: input.tone,
+    durationLabel: input.durationLabel,
+  }
 }
 
-function getLiveDetailLabel(step: RunStep, toolCall?: ToolCall) {
-  if (step.detail) return step.detail
-  if (toolCall) return getToolActionDetail(toolCall)
-  if (step.meta) return step.meta
-  return "查看工具详情"
+function getLiveThoughtText(input: {
+  currentThought?: string
+  activity?: AgentActivity
+  partSnapshot?: AgentPartSnapshot
+}) {
+  // 优先使用 partSnapshot 中最新的 reasoning part 文本（实时思考流）
+  const parts = input.partSnapshot?.parts
+  let reasoningText: string | undefined
+  if (Array.isArray(parts) && parts.length > 0) {
+    let latestUpdatedAt = -1
+    for (const part of parts) {
+      if (part.type !== 'reasoning') continue
+      if (part.visibility === 'hidden') continue
+      if (!part.text) continue
+      if (part.updatedAt > latestUpdatedAt) {
+        latestUpdatedAt = part.updatedAt
+        reasoningText = part.text
+      }
+    }
+  }
+  return compactText(reasoningText || input.currentThought, 360)
 }
 
-function getLiveSteps(runSteps: RunStep[]) {
-  const concreteSteps = runSteps.filter(step => !step.summary)
-  const steps = concreteSteps.length > 0 ? concreteSteps : runSteps
-  return steps.slice(-4)
+function hasLiveActivity(input: {
+  activity?: AgentActivity
+  partSnapshot?: AgentPartSnapshot
+}) {
+  const phase = input.partSnapshot?.activity?.phase || input.partSnapshot?.telemetry?.currentPhase || input.activity?.phase
+  return Boolean(phase && phase !== "idle" && phase !== "completed" && phase !== "error")
+}
+
+function buildThoughtTimeline(input: {
+  runSteps: RunStep[]
+  toolCalls: ToolCall[]
+  events: AgentEvent[]
+  steps: ReActStep[]
+  currentThought?: string
+  activity?: AgentActivity
+  partSnapshot?: AgentPartSnapshot
+  live: boolean
+}): TimelineEntry[] {
+  const entries: TimelineEntry[] = []
+  const toolSteps = input.runSteps.filter(step => (
+    !step.summary &&
+    step.id !== "no-tool-final" &&
+    step.id !== "no-tool-live" &&
+    !step.id.startsWith("live-") &&
+    !step.id.startsWith("status-")
+  ))
+  const stepToolKeys = new Set<string>()
+
+  input.steps.forEach((step, index) => {
+    const durationLabel = formatDurationMs(step.duration)
+
+    const call = step.action?.tool && !isSupportOnlyToolName(step.action.tool)
+      ? ({
+          id: `step-${index}-${step.action.tool}-${JSON.stringify(step.action.params || {})}`,
+          toolName: step.action.tool,
+          params: step.action.params || {},
+          result: step.observation ? { success: true, message: step.observation } : undefined,
+          status: "success" as const,
+          timestamp: Date.now() + index,
+          durationLabel,
+        } satisfies StepToolCall)
+      : undefined
+
+    if (call) {
+      stepToolKeys.add(`${call.toolName}:${JSON.stringify(call.params || {})}`)
+      entries.push({
+        id: `tool-step-${index}`,
+        type: "tool",
+        step: {
+          id: `tool-react-step-${index}`,
+          label: getToolActionLabel(call),
+          detail: getToolActionDetail(call),
+          meta: [getBaseToolName(call.toolName), getToolStatusLabel(call), durationLabel].filter(Boolean).join(" · "),
+          tone: getToolTone(call),
+          kind: classifyToolCall(call),
+        },
+        toolCall: call,
+      })
+    }
+  })
+
+  const knownToolIds = new Set(
+    entries
+      .filter((entry): entry is Extract<TimelineEntry, { type: "tool" }> => entry.type === "tool")
+      .map(entry => entry.toolCall?.id)
+      .filter(Boolean),
+  )
+
+  const liveThoughtText = getLiveThoughtText({
+    currentThought: input.currentThought,
+    activity: input.activity,
+    partSnapshot: input.partSnapshot,
+  })
+  const shouldShowThinking = input.live && (Boolean(liveThoughtText) || hasLiveActivity({
+    activity: input.activity,
+    partSnapshot: input.partSnapshot,
+  }))
+  if (shouldShowThinking) {
+    entries.push(createThoughtEntry({
+      id: "thought-live",
+      text: liveThoughtText,
+      tone: "running",
+    }))
+  }
+
+  for (const step of toolSteps) {
+    const toolCall = getStepToolCall(step, input.toolCalls, input.events)
+    if (toolCall?.id && knownToolIds.has(toolCall.id)) continue
+    if (toolCall) {
+      const toolKey = `${toolCall.toolName}:${JSON.stringify(toolCall.params || {})}`
+      if (stepToolKeys.has(toolKey)) continue
+    }
+    entries.push({
+      id: `timeline-${step.id}`,
+      type: "tool",
+      step,
+      toolCall,
+    })
+  }
+
+  if (entries.length === 0) {
+    const fallback = input.runSteps.find(step => (
+      !step.summary &&
+      !step.id.startsWith("live-") &&
+      !step.id.startsWith("status-") &&
+      step.detail
+    ))
+    if (fallback) {
+      entries.push(createThoughtEntry({
+        id: "thought-status",
+        text: fallback.label,
+        tone: fallback.tone,
+      }))
+    }
+  }
+
+  return entries.slice(-8)
+}
+
+function buildTimelineGroups(entries: TimelineEntry[]): TimelineGroup[] {
+  const groups: TimelineGroup[] = []
+
+  for (const entry of entries) {
+    if (entry.type === "thought") {
+      groups.push({ id: entry.id, thought: entry, tools: [] })
+      continue
+    }
+
+    const current = groups[groups.length - 1]
+    if (current) {
+      current.tools.push(entry)
+    } else {
+      groups.push({ id: `tools-${entry.id}`, tools: [entry] })
+    }
+  }
+
+  const renderableGroups = groups.filter(group => group.thought || group.tools.length > 0)
+  return renderableGroups.slice(-1).map(group => ({
+    ...group,
+    tools: group.tools.slice(-4),
+  }))
+}
+
+function getSummaryTitle(input: {
+  live: boolean
+  partSnapshot?: AgentPartSnapshot
+  activity?: AgentActivity
+}) {
+  if (!input.live) return "已完成"
+  if (input.partSnapshot?.visibleStatus?.label) return input.partSnapshot.visibleStatus.label
+  if (input.activity?.label) return input.activity.label
+  return "正在处理"
+}
+
+function getToolProgressVerb(step: RunStep) {
+  if (step.tone === "error") return "调用失败"
+  if (step.tone === "running") {
+    switch (step.kind) {
+      case "read":
+      case "web_read":
+        return "正在读取"
+      case "list":
+        return "正在列出"
+      case "search":
+      case "web_search":
+        return "正在搜索"
+      case "command":
+        return "正在运行"
+      case "git":
+        return "正在查看"
+      case "create":
+        return "正在创建"
+      case "update":
+        return "正在编辑"
+      case "delete":
+        return "正在删除"
+      default:
+        return "正在调用"
+    }
+  }
+
+  switch (step.kind) {
+    case "read":
+    case "web_read":
+      return "已读取"
+    case "list":
+      return "已列出"
+    case "search":
+    case "web_search":
+      return "已搜索"
+    case "command":
+      return "已运行"
+    case "git":
+      return "已查看"
+    case "create":
+      return "已创建"
+    case "update":
+      return "已编辑"
+    case "delete":
+      return "已删除"
+    default:
+      return "已调用"
+  }
 }
 
 function StepRow({
@@ -947,97 +1306,159 @@ function RunStepList({ steps }: { steps: RunStep[] }) {
   )
 }
 
-function LiveStepDetails({
-  step,
-  toolCall,
+function TimelineToolDetails({
+  tools,
 }: {
-  step: RunStep
-  toolCall?: StepToolCall
+  tools: Array<Extract<TimelineEntry, { type: "tool" }>>
 }) {
-  const detailLabel = getLiveDetailLabel(step, toolCall)
-  const hasDetail = Boolean(detailLabel || step.meta || toolCall)
-  if (!hasDetail) return null
+  if (tools.length === 0) return null
 
   return (
-    <details className="group/details mt-1.5 rounded-md border border-border/12 bg-muted/8 px-2 py-1">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[11px] text-muted-foreground/55 marker:hidden">
-        <ChevronDown className="size-3 shrink-0 text-muted-foreground/45 transition-transform group-open/details:rotate-180" />
-        <span
-          className={cn(
-            "min-w-0 truncate",
-            step.kind === "command" || step.kind === "git" ? "font-mono" : "",
-          )}
-          title={detailLabel}
-        >
-          {detailLabel}
-        </span>
-        {toolCall?.durationLabel && (
-          <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/35">
-            {toolCall.durationLabel}
-          </span>
-        )}
-      </summary>
-      <div className="mt-1.5 space-y-1.5 border-t border-border/10 pt-1.5">
-        {step.meta && (
-          <div className="truncate font-mono text-[10px] text-muted-foreground/40" title={step.meta}>
-            {step.meta}
-          </div>
-        )}
-        {toolCall ? (
-          <CompactToolCalls
-            toolCalls={[toolCall]}
-            grouped={false}
-            defaultExpanded={false}
-            isStreaming={toolCall.status === "running" || toolCall.status === "pending"}
-          />
-        ) : step.detail ? (
-          <div className="whitespace-pre-wrap break-words rounded border border-border/10 bg-background/30 px-2 py-1 font-mono text-[10px] text-muted-foreground/55">
-            {step.detail}
-          </div>
-        ) : null}
-      </div>
-    </details>
+    <div className="mt-1.5 space-y-1">
+      {tools.map(tool => (
+        <TimelineToolRow key={tool.id} entry={tool} />
+      ))}
+    </div>
   )
 }
 
-function LiveRunBody({
-  runSteps,
-  toolCalls,
-  events,
+type ThoughtTimelineEntry = Extract<TimelineEntry, { type: "thought" }>
+
+function getThoughtStatusTone(tone: ThoughtTimelineEntry["tone"]): "running" | "done" | "error" {
+  if (tone === "error") return "error"
+  if (tone === "running") return "running"
+  return "done"
+}
+
+function TimelineThought({
+  thought,
+  frameIndex,
 }: {
-  runSteps: RunStep[]
-  toolCalls: ToolCall[]
-  events: AgentEvent[]
+  thought: ThoughtTimelineEntry
+  frameIndex: number
 }) {
-  const liveSteps = getLiveSteps(runSteps)
-  if (liveSteps.length === 0) return null
+  const statusTone = getThoughtStatusTone(thought.tone)
+  const running = statusTone === "running"
+  const failed = statusTone === "error"
+  const label = failed ? "思考受阻" : running ? "思考中" : "思路"
 
   return (
-    <div className="mt-2 space-y-2 border-l border-border/20 pl-3">
-      {liveSteps.map((step) => {
-        const StepIcon = getStepIcon(step.kind, step.tone, step.summary)
-        const toolCall = getStepToolCall(step, toolCalls, events)
+    <div className="min-w-0">
+      <div
+        className={cn(
+          "flex h-4 min-w-0 items-center gap-1.5 text-[10px] leading-none",
+          failed ? "text-destructive/70" : "text-muted-foreground/48",
+        )}
+        aria-label={label}
+      >
+        <span
+          className={cn(
+            "inline-flex w-3 shrink-0 justify-center font-mono text-[11px] leading-none",
+            failed ? "text-destructive/70" : running ? "text-primary/65" : "text-muted-foreground/38",
+          )}
+        >
+          {getClawStatusGlyph(statusTone, frameIndex)}
+        </span>
+        <span
+          className={cn(
+            "shrink-0 text-[10px] font-medium leading-none tracking-normal",
+            running ? "agent-thinking-label-active" : "text-muted-foreground/42",
+            failed && "text-destructive/70",
+          )}
+        >
+          {label}
+        </span>
+        {thought.durationLabel && (
+          <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground/32">
+            {thought.durationLabel}
+          </span>
+        )}
+        {thought.omittedChars ? (
+          <span className="shrink-0 text-[9px] text-muted-foreground/32">
+            已压缩
+          </span>
+        ) : null}
+        {running && (
+          <span
+            className="agent-thinking-thread h-px w-8 shrink-0 rounded-full"
+            aria-hidden="true"
+          />
+        )}
+      </div>
+      {thought.text && (
+        <div
+          className={cn(
+            "mt-1 whitespace-pre-wrap break-words text-[13px] leading-relaxed",
+            failed ? "text-destructive/80" : "text-foreground/76",
+          )}
+        >
+          {thought.text}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TimelineToolRow({
+  entry,
+}: {
+  entry: Extract<TimelineEntry, { type: "tool" }>
+}) {
+  const call = entry.toolCall
+  const label = call ? getInlineToolActionLabel(call) : entry.step.label
+  const detail = call ? getToolActionDetail(call) : entry.step.detail
+  const failed = entry.step.tone === "error"
+  const verb = getToolProgressVerb(entry.step)
+
+  return (
+    <div className="flex min-w-0 items-baseline gap-1.5 font-mono text-[10.5px] leading-5 text-muted-foreground/52">
+      <span className={cn("shrink-0", failed && "text-destructive/70")}>→</span>
+      <span className={cn("shrink-0", failed ? "text-destructive/75" : "text-muted-foreground/58")}>
+        {verb}
+      </span>
+      <span className={cn("shrink-0 font-semibold", failed ? "text-destructive/75" : "text-muted-foreground/70")}>
+        {label}
+      </span>
+      {detail && (
+        <span className="min-w-0 truncate text-muted-foreground/55" title={detail}>
+          {detail}
+        </span>
+      )}
+      {entry.toolCall?.durationLabel && (
+        <span className="shrink-0 text-[10px] text-muted-foreground/38">
+          {entry.toolCall.durationLabel}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function LiveTimeline({
+  groups,
+  partSnapshot,
+}: {
+  groups: TimelineGroup[]
+  partSnapshot?: AgentPartSnapshot
+}) {
+  const frameIndex = useClawFrame(groups.some(group => group.thought?.tone === "running"))
+  if (groups.length === 0) return null
+
+  return (
+    <div
+      className="space-y-2"
+      data-agent-stream-status={partSnapshot?.status}
+    >
+      {groups.map(group => {
+        const thought = group.thought
         return (
-          <div key={`live-${step.id}`} className="min-w-0">
-            <div className="grid min-w-0 grid-cols-[16px_1fr] gap-2 text-xs leading-relaxed">
-              <span className="mt-0.5 flex size-4 items-center justify-center">
-                <StepIcon
-                  className={cn(
-                    "size-3.5",
-                    step.tone === "running" && "animate-spin",
-                    getStepIconClassName(step),
-                  )}
-                />
-              </span>
-              <div className="min-w-0">
-                <div className={cn(
-                  "text-foreground/78",
-                  step.tone === "error" && "text-destructive/80",
-                )}>
-                  {getLiveStepSentence(step)}
-                </div>
-                <LiveStepDetails step={step} toolCall={toolCall} />
-              </div>
+          <div key={group.id} className="min-w-0">
+            {thought ? (
+              <TimelineThought thought={thought} frameIndex={frameIndex} />
+            ) : null}
+            <div className="mt-1.5 pl-5">
+              {group.tools.length > 0 && (
+                <TimelineToolDetails tools={group.tools} />
+              )}
             </div>
           </div>
         )
@@ -1057,6 +1478,7 @@ export function AgentRunSummary({
   currentThought,
   currentAction,
   currentObservation,
+  partSnapshot,
   live = false,
 }: AgentRunSummaryProps) {
   const [expanded, setExpanded] = React.useState(false)
@@ -1068,27 +1490,53 @@ export function AgentRunSummary({
     [toolCalls],
   )
   const runSteps = React.useMemo(
-    () => buildStepSummary({ steps, toolCalls: visibleToolCalls, events, activity, currentThought, currentAction, currentObservation, live }),
-    [activity, currentAction, currentObservation, currentThought, events, live, steps, visibleToolCalls],
+    () => buildStepSummary({ steps, toolCalls: visibleToolCalls, events, activity, currentThought, currentAction, currentObservation, partSnapshot, live }),
+    [activity, currentAction, currentObservation, currentThought, events, live, partSnapshot, steps, visibleToolCalls],
+  )
+  const timelineEntries = React.useMemo(
+    () => buildThoughtTimeline({ runSteps, toolCalls: visibleToolCalls, events, steps, currentThought, activity, partSnapshot, live }),
+    [activity, currentThought, events, live, partSnapshot, runSteps, steps, visibleToolCalls],
+  )
+  const timelineGroups = React.useMemo(
+    () => buildTimelineGroups(timelineEntries),
+    [timelineEntries],
   )
 
-  const hasSummary = Boolean(elapsedLabel || tokenLabel || runSteps.length > 0 || visibleToolCalls.length > 0)
+  const hasSummary = Boolean(elapsedLabel || tokenLabel || runSteps.length > 0 || timelineGroups.length > 0 || visibleToolCalls.length > 0)
   if (!hasSummary) return null
 
-  const title = live ? "正在处理" : "已思考"
+  const title = getSummaryTitle({ live, partSnapshot, activity })
   const meta = [elapsedLabel, tokenLabel ? `${tokenLabel} tokens` : ""].filter(Boolean)
+  const canExpand = !live
+
+  if (live) {
+    if (timelineGroups.length === 0) return null
+    return (
+      <div className="w-full" data-agent-run-summary="live">
+        <LiveTimeline
+          groups={timelineGroups}
+          partSnapshot={partSnapshot}
+        />
+      </div>
+    )
+  }
 
   return (
-    <div className="w-full">
+    <div className="w-full" data-agent-run-summary="folded">
       <button
         type="button"
         className={cn(
           "inline-flex max-w-full items-center gap-1.5 rounded-md border border-transparent px-1.5 py-0.5",
-          "text-xs text-muted-foreground transition-colors hover:border-border/30 hover:bg-muted/20 hover:text-foreground",
-          expanded && "border-border/35 bg-muted/20 text-foreground",
+          "text-xs text-muted-foreground transition-colors",
+          canExpand && "hover:border-border/30 hover:bg-muted/20 hover:text-foreground",
+          expanded && canExpand && "border-border/35 bg-muted/20 text-foreground",
         )}
-        onClick={() => setExpanded(value => !value)}
+        onClick={() => {
+          if (!canExpand) return
+          setExpanded(value => !value)
+        }}
         aria-label={expanded ? "收起运行步骤" : "展开运行步骤"}
+        aria-disabled={!canExpand}
       >
         <span className="shrink-0">{title}</span>
         {meta.length > 0 && (
@@ -1098,30 +1546,13 @@ export function AgentRunSummary({
         )}
         <ChevronDown className={cn(
           "size-3.5 shrink-0 text-muted-foreground/60 transition-transform",
-          expanded && "rotate-180",
+          expanded && canExpand && "rotate-180",
         )} />
       </button>
-
-      {!expanded && live && (
-        <LiveRunBody
-          runSteps={runSteps}
-          toolCalls={visibleToolCalls}
-          events={events}
-        />
-      )}
 
       {expanded && (
         <div className="mt-2 max-h-80 overflow-auto rounded-md border border-border/15 bg-muted/10 px-3 py-2.5">
           <RunStepList steps={runSteps} />
-          {visibleToolCalls.length > 0 && (
-            <div className={runSteps.length > 0 ? "mt-2 border-t border-border/10 pt-2" : undefined}>
-              <CompactToolCalls
-                toolCalls={visibleToolCalls.slice(-8)}
-                grouped={false}
-                defaultExpanded={false}
-              />
-            </div>
-          )}
         </div>
       )}
     </div>

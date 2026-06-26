@@ -14,6 +14,57 @@ export type TodoDraftPayload = {
   tagId?: number
 }
 
+export interface DrawioCurrentXmlResult {
+  success: boolean
+  filePath?: string
+  xml?: string
+  status?: string
+  error?: string
+}
+
+export interface DrawioLoadXmlResult {
+  success: boolean
+  error?: string
+}
+
+export type DrawioExportFormat = 'png' | 'svg' | 'xmlpng' | 'xmlsvg'
+
+export interface DrawioExportResult {
+  success: boolean
+  filePath?: string
+  format?: DrawioExportFormat | string
+  data?: string
+  xml?: string
+  svg?: string
+  error?: string
+}
+
+export interface DrawioGetCurrentXmlPayload {
+  filePath?: string
+  resolve: (data: DrawioCurrentXmlResult) => void
+}
+
+export interface DrawioLoadXmlPayload {
+  filePath?: string
+  xml: string
+  modified?: boolean
+  resolve?: (result: DrawioLoadXmlResult) => void
+}
+
+export interface DrawioExportPayload {
+  filePath?: string
+  format?: DrawioExportFormat
+  xml?: string
+  scale?: number
+  border?: number
+  background?: string
+  transparent?: boolean
+  embedImages?: boolean
+  shadow?: boolean
+  currentPage?: boolean
+  resolve: (result: DrawioExportResult) => void
+}
+
 // 定义事件类型
 interface Events {
   'searchAndScroll': string;
@@ -71,9 +122,13 @@ interface Events {
     deletions?: number;
   };
   'sync-success': unknown;
+  'article-saved': { path: string; content?: string; largeMarkdown?: boolean };
   'sync-content-updated': { path: string; content: string };
   'sync-push-completed': { path: string; success: boolean; sha?: string };
   'sync-sha-mismatch': { path: string; localSha?: string; remoteSha?: string; force?: boolean };
+  'drawio-get-current-xml': DrawioGetCurrentXmlPayload;
+  'drawio-load-xml': DrawioLoadXmlPayload;
+  'drawio-export': DrawioExportPayload;
   'revertChat': unknown;
   'fileSelected': {
     name: string;

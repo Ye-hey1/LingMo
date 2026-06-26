@@ -36,8 +36,12 @@ function isRecoverableWriteToolLocally(toolName: string, tool: Tool | undefined)
     'move_files_batch',
     'copy_files_batch',
     'create_diagram_file',
+    'create_drawio_diagram_from_cells',
     'create_diagram_from_outline',
+    'append_drawio_diagram_cells',
+    'edit_drawio_diagram',
     'update_diagram_file',
+    'export_drawio_diagram',
     'create_visual_report',
     'safe_write_file',
   ].includes(toolName)

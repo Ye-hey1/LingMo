@@ -8,6 +8,7 @@ import { toast } from '@/hooks/use-toast'
 import { createEmptyDrawioContent } from '@/lib/diagram'
 import { readDiagramFileContent, saveDiagramFileContent } from '@/lib/diagram-file-content'
 import emitter from '@/lib/emitter'
+import useArticleStore from '@/stores/article'
 
 interface DrawioCanvasProps {
   filePath: string
@@ -19,8 +20,14 @@ interface DrawioMessage {
   event?: string
   action?: string
   xml?: string
+  data?: string
+  format?: string
+  svg?: string
   error?: string
   modified?: boolean
+  message?: {
+    lingmoRequestId?: string
+  }
 }
 
 const DRAWIO_SRC = '/drawio/index.html?embed=1&proto=json&spin=1&libraries=1&ui=min&lang=zh&configure=1&noExitBtn=1&noSaveBtn=1&saveAndExit=0'
@@ -54,6 +61,10 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
   const latestXmlRef = useRef('')
   const saveTimerRef = useRef<number | null>(null)
   const hasInitializedRef = useRef(false)
+  const exportRequestsRef = useRef(new Map<string, {
+    resolve: (result: { success: boolean; filePath?: string; format?: string; data?: string; xml?: string; svg?: string; error?: string }) => void
+    timer: number
+  }>())
 
   const postToDrawio = useCallback((message: Record<string, unknown>) => {
     const origin = typeof window !== 'undefined' ? window.location.origin : '*'
@@ -83,6 +94,7 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
             saveAndExit: 0,
             title: '',
             libs: DRAWIO_DEFAULT_LIBRARIES,
+            exportProtocol: true,
           })
           setStatus('ready')
         }
@@ -102,6 +114,7 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
             saveAndExit: 0,
             title: '',
             libs: DRAWIO_DEFAULT_LIBRARIES,
+            exportProtocol: true,
           })
           setStatus('ready')
         }
@@ -151,6 +164,171 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
     [saveXml],
   )
 
+  const loadXmlIntoCanvas = useCallback(
+    (xml: string, modified = false) => {
+      latestXmlRef.current = xml
+      postToDrawio({
+        action: 'load',
+        xml,
+        autosave: 1,
+        modified,
+        noExitBtn: 1,
+        noSaveBtn: 1,
+        saveAndExit: 0,
+        title: '',
+        libs: DRAWIO_DEFAULT_LIBRARIES,
+        exportProtocol: true,
+      })
+      setStatus('ready')
+    },
+    [postToDrawio],
+  )
+
+  useEffect(() => {
+    const handleGetCurrentXml = (payload: unknown) => {
+      if (!payload || typeof payload !== 'object') return
+      const request = payload as {
+        filePath?: string
+        resolve?: (data: { success: boolean; filePath?: string; xml?: string; status?: string; error?: string }) => void
+      }
+
+      if (request.filePath && request.filePath !== filePath) {
+        return
+      }
+
+      request.resolve?.({
+        success: true,
+        filePath,
+        xml: latestXmlRef.current || createEmptyDrawioContent(),
+        status,
+      })
+    }
+
+    const handleLoadXml = (payload: unknown) => {
+      if (!payload || typeof payload !== 'object') return
+      const request = payload as {
+        filePath?: string
+        xml?: unknown
+        modified?: boolean
+        resolve?: (result: { success: boolean; error?: string }) => void
+      }
+
+      if (request.filePath && request.filePath !== filePath) {
+        return
+      }
+
+      if (typeof request.xml !== 'string') {
+        request.resolve?.({ success: false, error: 'Missing draw.io XML.' })
+        return
+      }
+
+      if (hasInitializedRef.current) {
+        loadXmlIntoCanvas(request.xml, request.modified !== false)
+      } else {
+        latestXmlRef.current = request.xml
+      }
+      request.resolve?.({ success: true })
+    }
+
+    const handleExternalContentUpdate = (content: unknown) => {
+      if (typeof content !== 'string') return
+      if (useArticleStore.getState().activeFilePath !== filePath) return
+      if (!content.trim().startsWith('<mxfile')) return
+      if (content === latestXmlRef.current) return
+
+      if (hasInitializedRef.current) {
+        loadXmlIntoCanvas(content, false)
+      } else {
+        latestXmlRef.current = content
+      }
+    }
+
+    emitter.on('drawio-get-current-xml', handleGetCurrentXml)
+    emitter.on('drawio-load-xml', handleLoadXml)
+    emitter.on('external-content-update', handleExternalContentUpdate)
+    return () => {
+      emitter.off('drawio-get-current-xml', handleGetCurrentXml)
+      emitter.off('drawio-load-xml', handleLoadXml)
+      emitter.off('external-content-update', handleExternalContentUpdate)
+    }
+  }, [filePath, loadXmlIntoCanvas, status])
+
+  useEffect(() => {
+    const exportRequests = exportRequestsRef.current
+    const handleExport = (payload: unknown) => {
+      if (!payload || typeof payload !== 'object') return
+      const request = payload as {
+        filePath?: string
+        format?: 'png' | 'svg' | 'xmlpng' | 'xmlsvg'
+        xml?: string
+        scale?: number
+        border?: number
+        background?: string
+        transparent?: boolean
+        embedImages?: boolean
+        shadow?: boolean
+        currentPage?: boolean
+        resolve?: (result: { success: boolean; filePath?: string; format?: string; data?: string; xml?: string; svg?: string; error?: string }) => void
+      }
+
+      if (request.filePath && request.filePath !== filePath) {
+        return
+      }
+
+      if (!request.resolve) {
+        return
+      }
+
+      if (!hasInitializedRef.current) {
+        request.resolve({ success: false, filePath, error: 'Draw.io editor is not ready.' })
+        return
+      }
+
+      const requestId = `lingmo-export-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const timer = window.setTimeout(() => {
+        const pending = exportRequestsRef.current.get(requestId)
+        if (!pending) return
+
+        exportRequestsRef.current.delete(requestId)
+        pending.resolve({
+          success: false,
+          filePath,
+          format: request.format || 'svg',
+          error: 'Draw.io export timed out.',
+        })
+      }, 20000)
+
+      exportRequests.set(requestId, {
+        resolve: request.resolve,
+        timer,
+      })
+
+      postToDrawio({
+        action: 'export',
+        format: request.format || 'svg',
+        xml: request.xml || latestXmlRef.current || createEmptyDrawioContent(),
+        scale: request.scale || 1,
+        border: request.border ?? 8,
+        background: request.background,
+        transparent: request.transparent,
+        embedImages: request.embedImages,
+        shadow: request.shadow,
+        currentPage: request.currentPage,
+        spin: '正在导出图表...',
+        lingmoRequestId: requestId,
+      })
+    }
+
+    emitter.on('drawio-export', handleExport)
+    return () => {
+      emitter.off('drawio-export', handleExport)
+      for (const pending of exportRequests.values()) {
+        window.clearTimeout(pending.timer)
+      }
+      exportRequests.clear()
+    }
+  }, [filePath, postToDrawio])
+
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const origin = typeof window !== 'undefined' ? window.location.origin : ''
@@ -160,6 +338,32 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
 
       const message = parseDrawioMessage(event.data)
       if (!message) {
+        return
+      }
+
+      if (message.event === 'export') {
+        const requestId = message.message?.lingmoRequestId
+        const fallbackRequestId = requestId
+          ? undefined
+          : exportRequestsRef.current.size === 1
+            ? Array.from(exportRequestsRef.current.keys())[0]
+            : undefined
+        const matchedRequestId = requestId || fallbackRequestId
+        const pending = matchedRequestId ? exportRequestsRef.current.get(matchedRequestId) : undefined
+        if (pending) {
+          const exportData = message.data || message.svg
+          window.clearTimeout(pending.timer)
+          exportRequestsRef.current.delete(matchedRequestId as string)
+          pending.resolve({
+            success: Boolean(exportData),
+            filePath,
+            format: message.format,
+            data: exportData,
+            xml: message.xml,
+            svg: message.svg,
+            error: exportData ? undefined : 'Draw.io export returned no data.',
+          })
+        }
         return
       }
 
@@ -183,19 +387,20 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
         hasInitializedRef.current = true
         globalHasInitialized = true
         if (latestXmlRef.current !== '') {
-          postToDrawio({
-            action: 'load',
-            xml: latestXmlRef.current,
-            autosave: 1,
-            modified: false,
-            noExitBtn: 1,
-            noSaveBtn: 1,
-            saveAndExit: 0,
-            title: '',
-            libs: DRAWIO_DEFAULT_LIBRARIES,
-          })
-          setStatus('ready')
-        }
+        postToDrawio({
+          action: 'load',
+          xml: latestXmlRef.current,
+          autosave: 1,
+          modified: false,
+          noExitBtn: 1,
+          noSaveBtn: 1,
+          saveAndExit: 0,
+          title: '',
+          libs: DRAWIO_DEFAULT_LIBRARIES,
+          exportProtocol: true,
+        })
+        setStatus('ready')
+      }
         return
       }
 
@@ -210,6 +415,7 @@ export function DrawioCanvas({ filePath }: DrawioCanvasProps) {
           xml: message.xml,
           autosave: 1,
           modified: true,
+          exportProtocol: true,
         })
         void saveXml(message.xml)
         return

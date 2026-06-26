@@ -43,6 +43,7 @@ export function buildXiaoMoFreshnessPrompt(date = new Date()) {
       'For latest/recent/current/news/trending questions, do not rely on model memory alone.',
       'Use current dated search/context when it is available. If no current dated evidence is present, say that current evidence is missing instead of presenting old or undated material as latest.',
       'When source URLs are available, every source mention should be a clickable Markdown link like [Source Title](https://example.com).',
+      'When naming a specific project, repository, website, paper, dataset, product, company, or article and a URL is available in context, make the visible name itself a clickable Markdown link. In lists and tables, link the item/project name cell, for example [owner/repo](https://github.com/owner/repo), instead of leaving a bare name plus a separate plain URL.',
       'For hot/latest summaries, include source dates when available and make the answer read like a clear human briefing: what changed, why it matters, what to watch next.',
     ].join('\n'),
   ].join('\n')
@@ -68,6 +69,7 @@ export function buildXiaoMoDeepResearchSystemPrompt(language = DEFAULT_LANGUAGE)
       'Use Feynman-style explanations for hard ideas: simple terms, concrete examples, and no needless jargon.',
       'Do not sound academic, bureaucratic, or like a press release. Keep the voice human and direct.',
       'Cite sources with clickable Markdown links whenever a URL exists. Do not leave source names as plain text when a URL is available.',
+      'When the answer lists concrete projects, repositories, websites, papers, datasets, products, companies, or articles, link the visible item name whenever its URL is known.',
       'For current/news/latest topics, compare publication dates against the current date and avoid calling old evidence "latest".',
     ].join('\n'),
     buildXiaoMoFreshnessPrompt(),

@@ -43,23 +43,6 @@ interface HotspotFilterBarProps {
   onViewModeChange?: (mode: HotspotViewMode) => void
 }
 
-const TOPIC_COLORS: Record<string, { bg: string; text: string; activeBg: string; activeText: string }> = {
-  'AI模型': { bg: 'bg-[#F0F5FF]', text: 'text-[#2B5FD9]', activeBg: 'bg-[#2B5FD9]', activeText: 'text-white' },
-  '产品应用': { bg: 'bg-[#F6FFED]', text: 'text-[#389E0D]', activeBg: 'bg-[#389E0D]', activeText: 'text-white' },
-  '行业动态': { bg: 'bg-[#FFF7E6]', text: 'text-[#D46B08]', activeBg: 'bg-[#D46B08]', activeText: 'text-white' },
-  '论文研究': { bg: 'bg-[#F9F0FF]', text: 'text-[#531DAB]', activeBg: 'bg-[#531DAB]', activeText: 'text-white' },
-  '技巧经验': { bg: 'bg-[#E6FFFB]', text: 'text-[#08979C]', activeBg: 'bg-[#08979C]', activeText: 'text-white' },
-}
-
-const DEFAULT_COLOR = { bg: 'bg-[#F5F5F5]', text: 'text-[#595959]', activeBg: 'bg-[#1D2129]', activeText: 'text-white' }
-
-function getTopicColor(label: string, isActive: boolean) {
-  const color = TOPIC_COLORS[label] || DEFAULT_COLOR
-  return isActive
-    ? `${color.activeBg} ${color.activeText} shadow-sm`
-    : `${color.bg} ${color.text} hover:opacity-80`
-}
-
 function buildSourceOptions(items: AiHotspotItem[]) {
   const counts = new Map<string, number>()
   for (const item of items) {
@@ -103,22 +86,22 @@ export function HotspotFilterBar({
   )
 
   return (
-    <div className="shrink-0 border-b border-[#E5E7EB] bg-white">
+    <div className="shrink-0 border-b border-border bg-background">
       {/* 第一行：搜索框 + 工具按钮 */}
       <div className="flex items-center gap-2 px-3 py-2">
         <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-[#C9CDD4]" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/50" />
           <input
             type="text"
             value={filters.query}
             placeholder="搜索资讯标题、来源..."
-            className="h-8 w-full rounded-lg border border-[#E5E7EB] bg-[#F7F8FA] pl-8 pr-7 text-sm text-[#1D2129] placeholder:text-[#C9CDD4] focus:border-[#165DFF] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#165DFF]/20 transition-colors"
+            className="h-8 w-full rounded-md border border-input bg-muted/50 pl-8 pr-7 text-sm text-foreground transition-colors placeholder:text-muted-foreground/70 focus:border-primary focus:bg-background focus:outline-none focus:ring-1 focus:ring-primary/30"
             onChange={(e) => onFiltersChange({ query: e.target.value })}
           />
           {hasSearch && (
             <button
               type="button"
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[#C9CDD4] hover:bg-[#F2F3F5] hover:text-[#4E5968]"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
               onClick={() => onFiltersChange({ query: '' })}
             >
               <X className="size-3.5" />
@@ -131,7 +114,7 @@ export function HotspotFilterBar({
           <Button
             variant="ghost"
             size="sm"
-            className="h-8 gap-1 px-2 text-xs text-[#86909C] shadow-none hover:bg-[#F2F3F5]"
+            className="h-8 gap-1 rounded-md px-2 text-xs text-muted-foreground shadow-none hover:bg-muted"
             onClick={() => {
               onFiltersChange({ query: '', timeRange: '24h', sourceId: 'all', feedName: 'all', status: 'all' })
               onTopicChange?.('all')
@@ -143,12 +126,12 @@ export function HotspotFilterBar({
         )}
 
         {/* 视图切换 */}
-        <div className="flex items-center rounded-lg border border-[#E5E7EB] p-0.5">
+        <div className="flex items-center rounded-md border border-input p-0.5">
           <button
             type="button"
             className={cn(
-              'flex size-7 items-center justify-center rounded-md transition-colors',
-              viewMode === 'list' ? 'bg-[#165DFF] text-white' : 'text-[#86909C] hover:bg-[#F2F3F5]',
+              'flex size-7 items-center justify-center rounded transition-colors',
+              viewMode === 'list' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
             )}
             onClick={() => onViewModeChange?.('list')}
             title="列表视图"
@@ -158,8 +141,8 @@ export function HotspotFilterBar({
           <button
             type="button"
             className={cn(
-              'flex size-7 items-center justify-center rounded-md transition-colors',
-              viewMode === 'grid' ? 'bg-[#165DFF] text-white' : 'text-[#86909C] hover:bg-[#F2F3F5]',
+              'flex size-7 items-center justify-center rounded transition-colors',
+              viewMode === 'grid' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
             )}
             onClick={() => onViewModeChange?.('grid')}
             title="卡片视图"
@@ -168,13 +151,13 @@ export function HotspotFilterBar({
           </button>
         </div>
 
-        <div className="h-5 w-px bg-[#E5E7EB]" />
+        <div className="h-5 w-px bg-border" />
 
         {/* 刷新按钮 */}
         <Button
           variant="ghost"
           size="icon"
-          className="size-8 rounded text-[#4E5968] shadow-none hover:bg-[#F2F3F5]"
+          className="size-8 rounded-md text-muted-foreground shadow-none hover:bg-muted hover:text-foreground"
           disabled={isRefreshing}
           title="刷新"
           onClick={onRefresh}
@@ -186,7 +169,7 @@ export function HotspotFilterBar({
         <Button
           variant="ghost"
           size="icon"
-          className="size-8 rounded text-[#4E5968] shadow-none hover:bg-[#F2F3F5]"
+          className="size-8 rounded-md text-muted-foreground shadow-none hover:bg-muted hover:text-foreground"
           title="设置"
           onClick={onOpenSettings}
         >
@@ -198,7 +181,7 @@ export function HotspotFilterBar({
           <Button
             variant="ghost"
             size="icon"
-            className="size-8 rounded text-[#86909C] shadow-none hover:bg-[#F2F3F5] hover:text-[#1D2129]"
+            className="size-8 rounded-md text-muted-foreground shadow-none hover:bg-muted hover:text-foreground"
             title="关闭"
             onClick={onClose}
           >
@@ -215,8 +198,8 @@ export function HotspotFilterBar({
             className={cn(
               'shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition-colors',
               activeTopic === 'all'
-                ? 'bg-[#1D2129] text-white shadow-sm'
-                : 'text-[#86909C] hover:bg-[#F2F3F5]',
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-muted',
             )}
             onClick={() => onTopicChange('all')}
           >
@@ -229,7 +212,9 @@ export function HotspotFilterBar({
               type="button"
               className={cn(
                 'shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition-colors',
-                getTopicColor(topic.label, activeTopic === topic.key),
+                activeTopic === topic.key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
               onClick={() => onTopicChange(topic.key)}
             >
@@ -241,15 +226,15 @@ export function HotspotFilterBar({
       )}
 
       {/* 第三行：订阅源筛选 */}
-      <div className="border-t border-[#F0F0F0] px-3 py-1.5">
+      <div className="border-t border-border px-3 py-1.5">
         <button
           type="button"
-          className="flex items-center gap-1 text-[11px] text-[#86909C] hover:text-[#4E5968] transition-colors"
+          className="flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
           onClick={() => setShowSources(!showSources)}
         >
           订阅源筛选
           {showSources ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
-          <span className="text-[#C9CDD4]">({sourceOptions.length})</span>
+          <span className="text-muted-foreground/50">({sourceOptions.length})</span>
         </button>
 
         {showSources && (
@@ -261,15 +246,15 @@ export function HotspotFilterBar({
                 className={cn(
                   'rounded-full border px-2 py-0.5 text-[11px] transition-colors',
                   filters.feedName === source.name
-                    ? 'border-[#165DFF] bg-[#E8F3FF] text-[#165DFF]'
-                    : 'border-[#E5E7EB] bg-[#FAFAFA] text-[#4E5968] hover:border-[#C9CDD4] hover:bg-[#F2F3F5]',
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
                 onClick={() => onFiltersChange({
                   feedName: filters.feedName === source.name ? 'all' : source.name,
                 })}
               >
                 {source.name}
-                <span className="ml-0.5 text-[#C9CDD4]">{source.count}</span>
+                <span className="ml-0.5 text-muted-foreground/50">{source.count}</span>
               </button>
             ))}
           </div>

@@ -26,7 +26,6 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { BaseDirectory, exists, mkdir, remove, writeFile } from '@tauri-apps/plugin-fs'
 import { hasImage, hasText, readImageBase64, readText } from 'tauri-plugin-clipboard-api'
-import { v4 as uuid } from 'uuid'
 
 import { Input } from '@/components/ui/input'
 import {
@@ -393,7 +392,7 @@ async function ensureAppDataDir(path: string) {
 
 async function writeTempImageFile(image: DraftImage) {
   await ensureAppDataDir(TEMP_RECOGNITION_DIR)
-  const tempPath = `${TEMP_RECOGNITION_DIR}/${uuid()}.${image.extension}`
+  const tempPath = `${TEMP_RECOGNITION_DIR}/${crypto.randomUUID()}.${image.extension}`
   await writeFile(tempPath, image.bytes, { baseDir: BaseDirectory.AppData })
   return tempPath
 }
@@ -493,7 +492,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
     const snapshot = buildWorkbenchSnapshot()
     setUndoStack((current) => [
       {
-        id: uuid(),
+        id: crypto.randomUUID(),
         step,
         label,
         timestamp: Date.now(),
@@ -550,7 +549,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
       const saved = window.localStorage.getItem(HISTORY_KEY)
       const history = saved ? JSON.parse(saved) as RecognitionHistoryItem[] : []
       const item: RecognitionHistoryItem = {
-        id: uuid(),
+        id: crypto.randomUUID(),
         timestamp: Date.now(),
         type,
         sourceOrigin: itemSourceOrigin,
@@ -1268,7 +1267,7 @@ export function EnhancedClipboard({ className }: EnhancedClipboardProps) {
       setLastError(null)
 
       if (draftImage) {
-        const queueId = uuid()
+        const queueId = crypto.randomUUID()
         const filename = `${queueId}.${draftImage.extension}`
         addQueue({
           queueId,

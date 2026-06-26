@@ -43,7 +43,7 @@ import {
   ContextMenuSubContent,
 } from "@/components/ui/enhanced-context-menu"
 import { TagMobileActions } from './tag-mobile-actions'
-import { useTextSize } from "@/contexts/text-size-context"
+import useSettingStore from "@/stores/setting"
 import {
   DndContext,
   closestCenter,
@@ -134,14 +134,14 @@ function SortableTagItem({ tag, children }: { tag: Tag; children: React.ReactNod
 
 export function TagManage() {
   const t = useTranslations();
-  const { getContextMenuTextSize } = useTextSize()
+  const { recordTextSize } = useSettingStore()
   const [newTagName, setNewTagName] = React.useState<string>("")
   const [isAdding, setIsAdding] = React.useState(false)
   const [editingTagId, setEditingTagId] = React.useState<number | null>(null)
   const [editingName, setEditingName] = React.useState<string>("")
   const [hasInitialized, setHasInitialized] = React.useState(false)
   const { init } = useChatStore()
-  const textSize = getContextMenuTextSize('record')
+  const textSize = recordTextSize
 
   // 自定义传感器：使用轻量位移触发，点击不拖拽、移动即可拖拽
   const customPointerSensor = useSensor(PointerSensor, {

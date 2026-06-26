@@ -86,7 +86,8 @@ class SkillManager {
    * 发现并加载所有 Skills
    */
   async discoverSkills(): Promise<void> {
-    // 加载工作区 Skills
+    // 先加载全局 Skills，再加载项目 Skills；同名项目 Skill 覆盖全局 Skill。
+    await this.discoverGlobalSkills()
     await this.discoverProjectSkills()
   }
 

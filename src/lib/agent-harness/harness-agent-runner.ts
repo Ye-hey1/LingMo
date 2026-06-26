@@ -26,6 +26,7 @@ import { validateFinalAnswer } from '@/lib/agent/final-answer'
 import type { LinkedResource } from '@/lib/files'
 import { AgentLifecycleController } from './turn-lifecycle'
 import { getAiRateLimitUserMessage, isAiRateLimitError } from '@/lib/ai/rate-limit'
+import type { StructuredContextSections } from '@/lib/agent/prompt-assembler'
 
 export interface HarnessAgentRunnerConfig {
   runId?: string
@@ -45,6 +46,12 @@ export interface HarnessAgentRunnerConfig {
   }
   linkedResources?: LinkedResource[]
   taskRouteDecision?: AgentTaskRouteDecision
+  /**
+   * Phase 1 #B：上游（chat-send / 工作流）可显式注入结构化上下文段。
+   * 这些段会与 unifiedContextLoader 的输出合并后传给 buildAgentSystemPrompt。
+   * 显式传入的 currentDoc / linkedFiles / rag / webSearch 会覆盖 loader 的同名字段。
+   */
+  contextSections?: StructuredContextSections
   requestConfirmation?: (toolName: string, params: Record<string, any>, context?: any) => Promise<boolean>
   onThought?: (thought: string) => void
   onAction?: (action: string, params: Record<string, any>) => void
@@ -62,8 +69,12 @@ interface ModelToolCall {
 }
 
 const THOUGHT_UPDATE_MIN_INTERVAL_MS = 180
+const AGENT_ANSWER_DELTA_MIN_INTERVAL_MS = 34
+const AGENT_STREAM_EVENT_MIN_INTERVAL_MS = 120
 const FINAL_ANSWER_RESERVE_ITERATIONS = 1
 const REPEATED_TOOL_CALL_THRESHOLD = 3
+const CONSECUTIVE_SAME_TOOL_ARG_FAILURE_THRESHOLD = 3
+const CONSECUTIVE_TOOL_FAILURE_THRESHOLD = 6
 const OUTPUT_LENGTH_CONTINUATION_LIMIT = 3
 const INVALID_OUTPUT_CONTINUATION_LIMIT = 2
 const MAX_DYNAMIC_REACT_ITERATIONS = 42
@@ -427,6 +438,81 @@ function countRecentMatchingToolSteps(steps: ReActStep[], signature: string) {
   return count
 }
 
+function isFailedStepObservation(step: ReActStep) {
+  return Boolean(step.observation && /失败|错误|出错|阻止|取消|failed|error|blocked|cancelled|skipped|repeated/i.test(step.observation))
+}
+
+function countRecentMatchingToolFailures(steps: ReActStep[], signature: string) {
+  let count = 0
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index]
+    const stepSignature = buildToolStepSignature(step.action?.tool, step.action?.params)
+    if (!stepSignature || stepSignature !== signature) break
+    if (!isFailedStepObservation(step)) break
+    count += 1
+  }
+  return count
+}
+
+function countRecentSameToolFailures(steps: ReActStep[], toolName: string) {
+  let count = 0
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index]
+    if (step.action?.tool !== toolName) break
+    if (!isFailedStepObservation(step)) break
+    count += 1
+  }
+  return count
+}
+
+function getToolLoopGuardDecision(input: {
+  tool?: Tool
+  toolName: string
+  params: Record<string, any>
+  steps: ReActStep[]
+}) {
+  const signature = buildToolStepSignature(input.toolName, input.params)
+  if (!signature || isSupportOnlyToolName(input.toolName)) return null
+
+  const recentSameArgFailures = countRecentMatchingToolFailures(input.steps, signature)
+  if (recentSameArgFailures >= CONSECUTIVE_SAME_TOOL_ARG_FAILURE_THRESHOLD - 1) {
+    return {
+      error: 'REPEATED_TOOL_FAILURE',
+      retryable: false,
+      reason: [
+        `已停止重复失败路径：${input.toolName} 使用相同参数连续失败 ${recentSameArgFailures} 次。`,
+        '请换一种策略，或把失败原因直接说明给用户。',
+      ].join(' '),
+    }
+  }
+
+  const recentSameArgs = countRecentMatchingToolSteps(input.steps, signature)
+  if (recentSameArgs >= REPEATED_TOOL_CALL_THRESHOLD - 1) {
+    return {
+      error: 'REPEATED_TOOL_CALL',
+      retryable: true,
+      reason: [
+        `已跳过重复工具调用：${input.toolName} 使用相同参数连续出现，继续调用大概率不会带来新信息。`,
+        '请改用不同参数/工具，或基于已有 Observation 直接收尾。',
+      ].join(' '),
+    }
+  }
+
+  const recentToolFailures = countRecentSameToolFailures(input.steps, input.toolName)
+  if (recentToolFailures >= CONSECUTIVE_TOOL_FAILURE_THRESHOLD - 1) {
+    return {
+      error: 'CONSECUTIVE_TOOL_FAILURE',
+      retryable: false,
+      reason: [
+        `已停止连续失败工具：${input.toolName} 已连续失败 ${recentToolFailures} 次。`,
+        '不要继续尝试同一个工具，请总结已确认信息并给出替代方案。',
+      ].join(' '),
+    }
+  }
+
+  return null
+}
+
 function estimateInformationLookupDensity(userInput: string, taskPlan: TaskPlan | null) {
   let density = 0
   if (isInformationQueryRequest(userInput)) density += 1
@@ -500,6 +586,53 @@ function buildQuickAnswerSystemPrompt() {
   ].join('\n')
 }
 
+function looksLikeInternalProgressText(value: string) {
+  const asciiLetters = (value.match(/[A-Za-z]/g) || []).length
+  const cjkChars = (value.match(/[\u4e00-\u9fff]/g) || []).length
+  const englishDominant = asciiLetters > 40 && asciiLetters > cjkChars * 3
+  return englishDominant && /(skill|instruction|provided|proceed|fetch|api|tool|schema|main skill|let me)/i.test(value)
+}
+
+function compactProgressTarget(value: unknown, maxLength = 48) {
+  if (typeof value !== 'string') return ''
+  const cleaned = value.replace(/\s+/g, ' ').trim()
+  if (!cleaned) return ''
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned
+}
+
+function getProgressTarget(params: Record<string, any>) {
+  const keys = [
+    'query',
+    'pattern',
+    'searchQuery',
+    'filePath',
+    'path',
+    'folderPath',
+    'url',
+    'topic',
+    'command',
+  ]
+  for (const key of keys) {
+    const target = compactProgressTarget(params[key])
+    if (target) return target
+  }
+  return ''
+}
+
+function buildFallbackToolLeadIn(toolName: string, params: Record<string, any>) {
+  const base = getBaseToolNameForRunner(toolName).toLowerCase()
+  const target = getProgressTarget(params)
+  const suffix = target ? `：${target}` : ''
+
+  if (/search|grep|find|query|lookup/.test(base)) return `我先搜索相关内容${suffix}。`
+  if (/web|fetch|extract|read|get|outline|status|show/.test(base)) return `我先读取关键信息${suffix}。`
+  if (/list|folder|directory/.test(base)) return `我先查看可用文件${suffix}。`
+  if (/git/.test(base)) return `我先查看当前变更状态${suffix}。`
+  if (/command|shell|script|exec|run/.test(base)) return `我先运行必要命令${suffix}。`
+  if (/create|write|update|replace|modify|rename|move|copy|insert/.test(base)) return `我先处理需要修改的内容${suffix}。`
+  return `我先调用必要工具确认信息${suffix}。`
+}
+
 function isReadOnlyHarnessTool(tool?: Tool) {
   if (!tool) return false
   const baseName = getBaseToolNameForRunner(tool.name)
@@ -542,7 +675,13 @@ function resolveReadOnlyBatchLimit(input: {
   return Math.max(1, Math.min(requestedCap, limit))
 }
 
-function getToolSubset(allTools: Tool[], steps: ReActStep[], forcedSkillIds: string[], selectedSkillIds: Set<string>) {
+function getToolSubset(
+  allTools: Tool[],
+  steps: ReActStep[],
+  forcedSkillIds: string[],
+  selectedSkillIds: Set<string>,
+  userInput?: string,
+) {
   const forceInclude = new Set<string>()
   for (const skillId of [...forcedSkillIds, ...selectedSkillIds]) {
     const skill = skillManager.findSkill(skillId)
@@ -553,6 +692,7 @@ function getToolSubset(allTools: Tool[], steps: ReActStep[], forcedSkillIds: str
 
   return filterToolsWithCache(allTools, steps, {
     maxTools: 48,
+    userInput,
     forceInclude: Array.from(forceInclude),
     alwaysInclude: [
       'select_skill',
@@ -570,8 +710,13 @@ function getToolSubset(allTools: Tool[], steps: ReActStep[], forcedSkillIds: str
       'list_reminders',
       'web_search',
       'web_extract',
+      // Phase 1 #B：把 star/trending 主入口也放进 alwaysInclude，避免被 48 上限挤出
+      'github_list_starred',
+      'github_sync_starred',
       'github_summarize_recent_stars',
       'github_search_my_stars',
+      'github_trending',
+      'github_search',
     ],
   })
 }
@@ -588,7 +733,9 @@ export class HarnessAgentRunner {
   private visibleToolsByName = new Map<string, Tool>()
   private outputLengthContinuations = 0
   private invalidOutputContinuations = 0
+  private latestThinking = ''
   private lifecycle: AgentLifecycleController
+  private streamSegmentCounter = 0
 
   constructor(private config: HarnessAgentRunnerConfig) {
     this.eventBus = createAgentEventBus({ runId: config.runControl?.runId || config.runId || createRunId() })
@@ -662,14 +809,54 @@ export class HarnessAgentRunner {
   }
 
   private async buildSystemPrompt(userInput: string, intentPolicy: IntentPolicy) {
-    let memoryPrompt = ''
+    // Phase 1 #B：把 unifiedContextLoader 的输出与 config.contextSections 合并，
+    // 按语义层填入 buildAgentSystemPrompt 的 contextSections，让预算控制器看到真实分级。
+    const mergedSections: StructuredContextSections = { ...(this.config.contextSections || {}) }
     try {
       const { unifiedContextLoader } = await import('@/lib/context/unified-loader')
-      const activeFilePath = this.config.currentQuote?.fileName
+      const activeFilePath = this.config.currentQuote?.fileName || await this.getActiveNotePathForContext()
       const unifiedContext = await unifiedContextLoader.getContextForAgent(userInput, { activeFilePath })
-      memoryPrompt = unifiedContext.prompt || ''
+      const sections = unifiedContext.sections || {}
+
+      // memories + workingMemory 都属于"长期记忆"，合并到 memory 槽
+      const memoryParts = [sections.memories, sections.workingMemory].filter(Boolean)
+      if (memoryParts.length > 0) {
+        const existing = mergedSections.memory ? `${mergedSections.memory}\n\n` : ''
+        mergedSections.memory = existing + memoryParts.join('\n\n')
+      }
+
+      // graph 作为临时段（不在 6 层标准里），按 extras 注入
+      if (sections.graph) {
+        const existingExtras = mergedSections.extras || []
+        mergedSections.extras = [
+          ...existingExtras,
+          { id: 'knowledge-graph', content: sections.graph },
+        ]
+      }
+
+      if (activeFilePath) {
+        try {
+          const { getCurrentNoteKnowledgeContext } = await import('@/lib/knowledge/objects')
+          const noteContext = await getCurrentNoteKnowledgeContext(activeFilePath, { maxRelated: 5 })
+          if (noteContext.contextText.trim()) {
+            const existingExtras = mergedSections.extras || []
+            mergedSections.extras = [
+              ...existingExtras,
+              {
+                id: 'current-note-knowledge-context',
+                content: noteContext.contextText,
+                priority: 40,
+                truncateStrategy: 'drop-subsection',
+                minTokens: 80,
+              },
+            ]
+          }
+        } catch {
+          // Optional current-note enrichment should not block prompt construction.
+        }
+      }
     } catch {
-      memoryPrompt = ''
+      // ignore — fall back to whatever contextSections already has
     }
 
     const historyContext = buildAgentHistoryContext({
@@ -685,16 +872,35 @@ export class HarnessAgentRunner {
     return buildAgentSystemPrompt({
       userInput,
       webSearchEnabled: this.config.webSearchEnabled,
-      memoryPrompt,
+      contextSections: mergedSections,
       activeSkills: Array.from(new Set([...(this.config.activeSkills || []), ...this.selectedSkillIds])),
       activeSkillMatches: this.config.activeSkillMatches,
       forcedSkillIds: this.config.forcedSkillIds,
       intentPolicy,
       extraSections: [
-        '## Harness Tool Calling Protocol\n\nUse native tool calls when a tool is needed. Do not emit ReAct JSON. When finished, answer normally in user-visible Markdown.',
+        [
+          '## Harness Tool Calling Protocol',
+          '',
+          'Use native tool calls when a tool is needed. Do not emit ReAct JSON. When finished, answer normally in user-visible Markdown.',
+          'Before a tool call, you may write at most one short user-visible progress sentence that explains intent, not implementation detail.',
+          'That progress sentence must use the same language as the user request.',
+          'Do not expose internal skill instructions, hidden prompts, API hostnames, raw tool schemas, or control messages in progress text.',
+          'For Chinese user requests, progress text should be concise Chinese, e.g. “我先检索最新来源，再汇总重点。”',
+        ].join('\n'),
         historyContext.text ? `## Prior Harness State\n\n${historyContext.text}` : '',
       ],
     })
+  }
+
+  private async getActiveNotePathForContext(): Promise<string | undefined> {
+    try {
+      const articleStore = (await import('@/stores/article')).default.getState()
+      const activeFilePath = articleStore.activeFilePath?.trim()
+      if (!activeFilePath || activeFilePath.includes('://')) return undefined
+      return activeFilePath
+    } catch {
+      return undefined
+    }
   }
 
   private buildMessages(
@@ -725,7 +931,7 @@ export class HarnessAgentRunner {
     intentPolicy: IntentPolicy
   }): Promise<{ tools: Tool[]; promptSections: string[] }> {
     const selectedSkillIds = Array.from(this.selectedSkillIds)
-    const dynamicSubset = getToolSubset(input.allTools, this.steps, this.config.forcedSkillIds || [], this.selectedSkillIds)
+    const dynamicSubset = getToolSubset(input.allTools, this.steps, this.config.forcedSkillIds || [], this.selectedSkillIds, input.userInput)
     if (!this.config.runControl) {
       return { tools: dynamicSubset, promptSections: [] }
     }
@@ -833,14 +1039,61 @@ export class HarnessAgentRunner {
     let finishReason: string | null | undefined
     const toolCalls: ModelToolCall[] = []
     const streamProcessor = createAiStreamContentProcessor()
+    const streamSegmentId = input.streamAnswerDelta
+      ? `${this.eventBus.getRunId()}:segment:${++this.streamSegmentCounter}`
+      : undefined
+    let lastAnswerDeltaEmitAt = 0
+    let lastAnswerDeltaContentLength = 0
+    let lastStreamEventAt = 0
+    let lastStreamEventContentLength = 0
     const emitThoughtUpdate = (force = false) => {
       if (!thinking || thinking === lastThoughtContent) return
       const now = Date.now()
       if (!force && now - lastThoughtEmitAt < THOUGHT_UPDATE_MIN_INTERVAL_MS) return
       lastThoughtEmitAt = now
       lastThoughtContent = thinking
+      this.latestThinking = thinking
       this.config.onThought?.(thinking)
       this.emitEvent('thought.updated', { content: thinking, streaming: !force, throttled: !force })
+    }
+    const emitStreamProgressEvent = (force = false) => {
+      if (!streamSegmentId) return
+      const now = Date.now()
+      if (!force && now - lastStreamEventAt < AGENT_STREAM_EVENT_MIN_INTERVAL_MS) return
+      const deltaLength = Math.max(0, content.length - lastStreamEventContentLength)
+      lastStreamEventAt = now
+      lastStreamEventContentLength = content.length
+      this.emitEvent('agent.stream.delta', {
+        segmentId: streamSegmentId,
+        contentLength: content.length,
+        deltaLength,
+        streaming: !force,
+      })
+    }
+    const emitAnswerDelta = (force = false) => {
+      if (!input.streamAnswerDelta || !content) return
+      const now = Date.now()
+      const firstVisibleChunk = lastAnswerDeltaContentLength === 0
+      const boundary = /(?:\n\s*\n|[.!?。！？]\s*)$/.test(content)
+      const shouldEmit = force ||
+        firstVisibleChunk ||
+        now - lastAnswerDeltaEmitAt >= AGENT_ANSWER_DELTA_MIN_INTERVAL_MS ||
+        boundary
+      if (!shouldEmit || content.length === lastAnswerDeltaContentLength) return
+
+      lastAnswerDeltaEmitAt = now
+      lastAnswerDeltaContentLength = content.length
+      this.config.onAnswerDelta?.(content)
+      emitStreamProgressEvent(force)
+    }
+
+    if (streamSegmentId) {
+      this.emitEvent('agent.stream.started', {
+        segmentId: streamSegmentId,
+        kind: 'content',
+        source: 'model',
+        startedAt: modelStartedAt,
+      })
     }
 
     try {
@@ -880,9 +1133,7 @@ export class HarnessAgentRunner {
           }
           if (processed.content) {
             content += processed.content
-            if (input.streamAnswerDelta) {
-              this.config.onAnswerDelta?.(content)
-            }
+            emitAnswerDelta()
           }
         }
       }
@@ -895,7 +1146,8 @@ export class HarnessAgentRunner {
           emitThoughtUpdate(true)
         }
         if (partialContent && input.streamAnswerDelta) {
-          this.config.onAnswerDelta?.(partialContent)
+          content = partialContent
+          emitAnswerDelta(true)
         }
         this.emitEvent('model.response.received', {
           contentLength: partialContent.length,
@@ -906,6 +1158,16 @@ export class HarnessAgentRunner {
           durationMs: Date.now() - modelStartedAt,
           error: getAiRateLimitUserMessage(error),
         })
+        if (streamSegmentId) {
+          this.emitEvent('agent.stream.finished', {
+            segmentId: streamSegmentId,
+            contentLength: partialContent.length,
+            finishReason: 'rate_limit',
+            toolCallCount: toolCalls.length,
+            durationMs: Date.now() - modelStartedAt,
+            error: getAiRateLimitUserMessage(error),
+          })
+        }
         throw new AiRateLimitRunError(error, partialContent)
       }
       throw error
@@ -918,10 +1180,8 @@ export class HarnessAgentRunner {
     emitThoughtUpdate(true)
     if (remaining.content) {
       content += remaining.content
-      if (input.streamAnswerDelta) {
-        this.config.onAnswerDelta?.(content)
-      }
     }
+    emitAnswerDelta(true)
 
     this.emitEvent('model.response.received', {
       contentLength: content.length,
@@ -931,6 +1191,15 @@ export class HarnessAgentRunner {
       toolCallCount: toolCalls.length,
       durationMs: Date.now() - modelStartedAt,
     })
+    if (streamSegmentId) {
+      this.emitEvent('agent.stream.finished', {
+        segmentId: streamSegmentId,
+        contentLength: content.length,
+        finishReason,
+        toolCallCount: toolCalls.length,
+        durationMs: Date.now() - modelStartedAt,
+      })
+    }
 
     return { content, toolCalls: normalizeToolCalls(toolCalls), finishReason }
   }
@@ -983,6 +1252,13 @@ export class HarnessAgentRunner {
     const { toolCall, userInput, intentPolicy } = input
     const tool = this.getVisibleToolByName(toolCall.name)
     const params = parseToolArguments(toolCall)
+    let stepThought = this.latestThinking.trim()
+    if (!stepThought || looksLikeInternalProgressText(stepThought)) {
+      stepThought = buildFallbackToolLeadIn(toolCall.name, params)
+      this.latestThinking = stepThought
+      this.config.onThought?.(stepThought)
+      this.emitEvent('thought.updated', { content: stepThought, streaming: false, source: 'tool_fallback_lead_in' })
+    }
     this.config.onAction?.(toolCall.name, params)
     this.emitEvent('action.parsed', { tool: toolCall.name, params })
 
@@ -1001,7 +1277,7 @@ export class HarnessAgentRunner {
       this.emitToolCall(uiToolCall)
       const observation = `错误：未找到工具 "${toolCall.name}"。请使用可用工具列表中的工具。`
       this.emitObservation(observation, { toolName: toolCall.name })
-      this.completeStep({ thought: `Tool call: ${toolCall.name}`, action: { tool: toolCall.name, params }, observation })
+      this.completeStep({ thought: stepThought, action: { tool: toolCall.name, params }, observation })
       return buildToolResultMessage(toolCall.id, uiToolCall.result, observation)
     }
 
@@ -1124,7 +1400,7 @@ export class HarnessAgentRunner {
 
     this.emitObservation(governed.observationText, { toolName: tool.name })
     this.completeStep({
-      thought: `Tool call: ${tool.name}`,
+      thought: stepThought,
       action: { tool: tool.name, params: governed.params },
       observation: governed.observationText,
     })
@@ -1194,6 +1470,8 @@ export class HarnessAgentRunner {
     this.currentIteration = 0
     this.outputLengthContinuations = 0
     this.invalidOutputContinuations = 0
+    this.latestThinking = ''
+    this.streamSegmentCounter = 0
     this.selectedSkillIds = new Set((this.config.forcedSkillIds || []).filter(Boolean))
     const forcedSkillIds = Array.from(this.selectedSkillIds)
     const intentPolicy = deriveIntentPolicy(userInput)
@@ -1232,7 +1510,8 @@ export class HarnessAgentRunner {
     try {
       try {
         const { ensureMcpReadyForAgent } = await import('@/lib/mcp/agent-ready')
-        await ensureMcpReadyForAgent()
+        const mcpWarmup = await ensureMcpReadyForAgent({ timeoutMs: 1200, background: true })
+        this.emitEvent('mcp.runtime.warmup', mcpWarmup as unknown as Record<string, any>)
       } catch {
         await reloadMcpTools().catch(() => {})
       }
@@ -1420,6 +1699,16 @@ export class HarnessAgentRunner {
         break
       }
 
+      const toolLeadIn = sanitizeFinalAnswerContent(response.content).trim()
+      if (toolLeadIn) {
+        const visibleLeadIn = looksLikeInternalProgressText(toolLeadIn)
+          ? '我先确认关键信息，再继续处理。'
+          : toolLeadIn
+        this.latestThinking = visibleLeadIn
+        this.config.onThought?.(visibleLeadIn)
+        this.emitEvent('thought.updated', { content: visibleLeadIn, streaming: false, source: 'tool_lead_in' })
+      }
+
       messages.push({
         role: 'assistant',
         content: response.content || null,
@@ -1445,28 +1734,34 @@ export class HarnessAgentRunner {
       })
       const callsToRun = readOnlyBatch ? response.toolCalls.slice(0, readOnlyBatchLimit) : response.toolCalls.slice(0, 1)
       const callsToSkip = response.toolCalls.slice(callsToRun.length)
+      this.emitEvent('tool.batch.started', {
+        requestedCount: response.toolCalls.length,
+        runningCount: callsToRun.length,
+        skippedCount: callsToSkip.length,
+        mode: readOnlyBatch ? 'read_only_batch' : 'single_step',
+        toolNames: response.toolCalls.map(call => call.name).filter(Boolean),
+      })
+      let finishedToolCount = 0
       for (const toolCall of callsToRun) {
         const params = parseToolArguments(toolCall)
-        const signature = buildToolStepSignature(toolCall.name, params)
         const tool = this.getVisibleToolByName(toolCall.name)
-        const repeatedTool = tool
-          && isReadOnlyHarnessTool(tool)
-          && signature
-          && countRecentMatchingToolSteps(this.steps, signature) >= REPEATED_TOOL_CALL_THRESHOLD - 1
-        if (repeatedTool) {
-          const reason = [
-            'Skipped repeated tool call because the same tool and arguments have already been used repeatedly without progress.',
-            'Change strategy, use a different query/tool, or answer from the existing observations.',
-          ].join(' ')
-          messages.push(buildSkippedToolResultMessage(toolCall, reason))
+        const loopGuard = getToolLoopGuardDecision({
+          tool,
+          toolName: toolCall.name,
+          params,
+          steps: this.steps,
+        })
+        if (loopGuard) {
+          messages.push(buildSkippedToolResultMessage(toolCall, loopGuard.reason))
           this.emitEvent('tool.execution.finished', {
             toolName: toolCall.name,
             toolCallId: toolCall.id,
             success: false,
             status: 'skipped',
-            message: reason,
-            error: 'REPEATED_TOOL_CALL',
-            retryable: true,
+            message: loopGuard.reason,
+            error: loopGuard.error,
+            retryable: loopGuard.retryable,
+            loopGuard: true,
             toolCall: {
               id: toolCall.id,
               toolName: toolCall.name,
@@ -1476,9 +1771,9 @@ export class HarnessAgentRunner {
               result: {
                 success: false,
                 status: 'skipped',
-                error: 'REPEATED_TOOL_CALL',
-                message: reason,
-                data: { retryable: true },
+                error: loopGuard.error,
+                message: loopGuard.reason,
+                data: { retryable: loopGuard.retryable, loopGuard: true },
               },
             },
           })
@@ -1489,14 +1784,16 @@ export class HarnessAgentRunner {
             toolCallId: toolCall.id,
             success: false,
             status: 'skipped',
-            summary: reason,
-            retryable: true,
+            summary: loopGuard.reason,
+            retryable: loopGuard.retryable,
           })
-          this.completeStep({ thought: `Skipped repeated tool call: ${toolCall.name}`, action: { tool: toolCall.name, params }, observation: reason })
+          this.completeStep({ thought: `Skipped repeated tool call: ${toolCall.name}`, action: { tool: toolCall.name, params }, observation: loopGuard.reason })
+          finishedToolCount += 1
           continue
         }
         this.lifecycle.enterToolPhase()
         messages.push(await this.executeModelToolCall({ toolCall, userInput, intentPolicy }))
+        finishedToolCount += 1
         if (this.stopped) throw new Error('USER_STOPPED')
       }
       for (const toolCall of callsToSkip) {
@@ -1537,7 +1834,14 @@ export class HarnessAgentRunner {
           summary: reason,
           retryable: true,
         })
+        finishedToolCount += 1
       }
+      this.emitEvent('tool.batch.finished', {
+        requestedCount: response.toolCalls.length,
+        finishedCount: finishedToolCount,
+        skippedCount: callsToSkip.length,
+        mode: readOnlyBatch ? 'read_only_batch' : 'single_step',
+      })
       this.lifecycle.savePoint()
     }
 

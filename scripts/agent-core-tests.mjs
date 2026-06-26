@@ -216,8 +216,22 @@ try {
     normalizeClawNestedFences,
   } = await importTsModule('src/app/core/main/chat/claw-stream-format.ts')
   const {
+    advanceStreamingSmoother,
+    getAdaptiveCharsPerSecond,
+  } = await importTsModule('src/app/core/main/chat/streaming-smoother.ts')
+  const {
     normalizeCallToolResult,
   } = await importTsModule('src/lib/mcp/result.ts')
+  const {
+    resolveMcpConfigValue,
+    resolveMcpHeaders,
+  } = await importTsModule('src/lib/mcp/config-values.ts')
+  const {
+    classifyMcpToolError,
+    formatMcpToolError,
+    formatMcpToolErrorMessage,
+    parseMcpToolName,
+  } = await importTsModule('src/lib/mcp/error-message.ts')
   const {
     buildResearchHistoryIndex,
     evaluateResearchBenchmark,
@@ -241,6 +255,14 @@ try {
     buildDreamCandidates,
   } = await importTsModule('src/lib/agent/dream.ts')
   const {
+    buildSelfEvolutionCandidatePlan,
+    shouldRunSelfEvolutionReview,
+  } = await importTsModule('src/lib/agent/self-evolution.ts')
+  const {
+    formatWorkflowTemplatesForPrompt,
+    scoreWorkflowTemplateForGoal,
+  } = await importTsModule('src/lib/agent/workflow-templates.ts')
+  const {
     appendAgentSessionEntry,
     createAgentSessionLog,
     getAgentSessionBranch,
@@ -255,6 +277,18 @@ try {
     getToolMutationTargets,
     withMutationQueue,
   } = await importTsModule('src/lib/agent-harness/mutation-queue.ts')
+  const {
+    normalizeCodeBlockLanguage,
+    normalizeMarkdownCodeFenceLanguages,
+  } = await importTsModule('src/lib/markdown-code-language.ts')
+  const {
+    LARGE_MARKDOWN_CODE_FENCE_THRESHOLD,
+    LARGE_MARKDOWN_CHAR_THRESHOLD,
+    LARGE_MARKDOWN_LINE_LENGTH_THRESHOLD,
+    LARGE_MARKDOWN_LINE_THRESHOLD,
+    getMarkdownDocumentProfile,
+    isLargeMarkdownContentFast,
+  } = await importTsModule('src/lib/editor-document-profile.ts')
 
   assert.equal(deriveIntentPolicy('帮我完善当前图表').allowWrite, true)
   assert.equal(deriveIntentPolicy('AI 能进行操作吗？').allowWrite, false)
@@ -265,6 +299,8 @@ try {
   assert.equal(deriveIntentPolicy('organize these notes into archive folder').allowWrite, true)
   assert.equal(deriveIntentPolicy('根据上面3天行程重新规划旅游攻略，并输出到笔记中').allowWrite, true)
   assert.equal(deriveIntentPolicy('帮我设计一份19日到21日出行方案并保存到笔记').allowWrite, true)
+  assert.equal(deriveIntentPolicy('请优化当前项目中 agent 的提示词').allowWrite, true)
+  assert.equal(deriveIntentPolicy('如何优化提示词？').allowWrite, false)
   assert.equal(deriveIntentPolicy('删除这个文件').allowDestructive, true)
   assert.equal(deriveIntentPolicy('不要删除，只总结一下').allowDestructive, false)
   assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowWrite, true)
@@ -275,14 +311,50 @@ try {
     allowDestructive: false,
     allowExecute: false,
   })
-  assert.match(disabledWritePrompt, /did not contain a clear write\/move\/edit intent/)
-  assert.match(disabledWritePrompt, /explicit write or move target is needed/)
-  assert.match(disabledWritePrompt, /normal confirmation flow/)
+  assert.match(disabledWritePrompt, /Modes: write=disabled; destructive=disabled; execute=disabled\./)
+  assert.match(disabledWritePrompt, /No clear write\/move\/edit target was detected/)
+  assert.match(disabledWritePrompt, /Do not delete or clear content; ask for explicit destructive confirmation first\./)
+  assert.match(disabledWritePrompt, /Do not run commands or scripts; ask for explicit execution confirmation first\./)
   assert.doesNotMatch(disabledWritePrompt, /Agent cannot write files/)
   assert.doesNotMatch(disabledWritePrompt, /system policy/i)
   assert.equal(classifyError('STALE_MCP_TOOL_REGISTRY'), 'mcp_registry')
   assert.equal(classifyError('Final Answer 内容不能为空'), 'model_output')
   assert.equal(classifyError('TypeError: Cannot read properties of undefined'), 'runtime')
+  assert.equal(classifyMcpToolError('invalid_api_key\ninvalid API key'), 'auth')
+  assert.equal(parseMcpToolName('mcp-1779759485088-r43rb12__extract').toolName, 'extract')
+  const mcpAuthError = formatMcpToolError({
+    toolName: 'mcp-1779759485088-r43rb12__extract',
+    error: 'invalid_api_key\ninvalid API key\nThe error may be caused by an outdated MCP Skill version. Please update your Skill from: https://github.com/anysearch-ai/anysearch-skill',
+    serverName: 'AnySearch',
+  })
+  assert.equal(mcpAuthError.kind, 'auth')
+  assert.equal(mcpAuthError.retryable, false)
+  assert.match(mcpAuthError.message, /AnySearch\/extract/)
+  const mcpAuthMessage = formatMcpToolErrorMessage({
+    toolName: 'mcp-1779759485088-r43rb12__extract',
+    error: 'invalid_api_key\ninvalid API key\nThe error may be caused by an outdated MCP Skill version. Please update your Skill from: https://github.com/anysearch-ai/anysearch-skill',
+    serverName: 'AnySearch',
+  })
+  assert.match(mcpAuthMessage, /API Key/)
+  assert.match(mcpAuthMessage, /先修复 API Key/)
+  assert.doesNotMatch(mcpAuthMessage, /未知错误/)
+  const mcpUnknownMessage = formatMcpToolErrorMessage({
+    toolName: 'mcp-1778814828490-4nh9c90__firecrawl_scrape',
+    error: '{}',
+    serverName: 'Firecrawl',
+  })
+  assert.match(mcpUnknownMessage, /MCP 工具执行失败/)
+  assert.match(mcpUnknownMessage, /Firecrawl\/firecrawl_scrape/)
+  assert.match(mcpUnknownMessage, /服务日志/)
+  const mcpEmptyObjectMessage = formatMcpToolErrorMessage({
+    toolName: 'mcp-1778814828490-4nh9c90__firecrawl_scrape',
+    error: {},
+    serverName: 'Firecrawl',
+  })
+  assert.doesNotMatch(mcpEmptyObjectMessage, /Unknown MCP tool error/)
+  assert.match(mcpEmptyObjectMessage, /没有返回可解析的错误详情/)
+  assert.equal(resolveMcpConfigValue('${as_sk_e08b326dea256bb11a261e373e615e44}'), 'as_sk_e08b326dea256bb11a261e373e615e44')
+  assert.equal(resolveMcpHeaders({ Authorization: 'Bearer ${as_sk_e08b326dea256bb11a261e373e615e44}' }).Authorization, 'Bearer as_sk_e08b326dea256bb11a261e373e615e44')
   assert.equal(classifyError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}'), 'billing')
   const agentBillingError = formatFriendlyError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}')
   assert.equal(agentBillingError.title, '余额不足')
@@ -304,6 +376,117 @@ try {
   assert.match(getAiRateLimitUserMessage(tpmError), /TPM/)
   const generic429 = 'AI_HTTP_ERROR status=429 retryable=true body={"message":"Too many requests"}'
   assert.equal(isRetryableTransientError(new Error(generic429)).retryable, true)
+
+  const editorLanguageRegistry = {
+    supportedLanguages: ['bash', 'javascript', 'markdown', 'plaintext', 'powershell', 'typescript'],
+    passthroughLanguages: ['mermaid'],
+  }
+  assert.equal(normalizeCodeBlockLanguage('powershell', editorLanguageRegistry), 'powershell')
+  assert.equal(normalizeCodeBlockLanguage('pwsh', editorLanguageRegistry), 'powershell')
+  assert.equal(normalizeCodeBlockLanguage('ps1', editorLanguageRegistry), 'powershell')
+  assert.equal(normalizeCodeBlockLanguage('js', editorLanguageRegistry), 'javascript')
+  assert.equal(normalizeCodeBlockLanguage('unknownlang', editorLanguageRegistry), null)
+  assert.equal(
+    normalizeMarkdownCodeFenceLanguages('```pwsh\nGet-ChildItem\n```', editorLanguageRegistry),
+    '```powershell\nGet-ChildItem\n```',
+  )
+  assert.equal(
+    normalizeMarkdownCodeFenceLanguages('```mermaid\ngraph TD\n```', editorLanguageRegistry),
+    '```mermaid\ngraph TD\n```',
+  )
+  assert.equal(
+    normalizeMarkdownCodeFenceLanguages('```unknownlang\nx\n```', editorLanguageRegistry),
+    '```unknownlang\nx\n```',
+  )
+  assert.equal(
+    normalizeMarkdownCodeFenceLanguages('```unknownlang\nx\n```', editorLanguageRegistry, { fallbackLanguage: 'text' }),
+    '```text\nx\n```',
+  )
+  assert.equal(getMarkdownDocumentProfile('a\nb').lineCount, 2)
+  assert.equal(getMarkdownDocumentProfile('x'.repeat(LARGE_MARKDOWN_CHAR_THRESHOLD)).isLarge, true)
+  assert.equal(getMarkdownDocumentProfile(`${'x\n'.repeat(LARGE_MARKDOWN_LINE_THRESHOLD - 1)}x`).isLarge, true)
+  assert.equal(getMarkdownDocumentProfile('```\nx\n```\n'.repeat(LARGE_MARKDOWN_CODE_FENCE_THRESHOLD)).isLarge, true)
+  assert.equal(getMarkdownDocumentProfile('x'.repeat(LARGE_MARKDOWN_LINE_LENGTH_THRESHOLD)).isLarge, true)
+  assert.equal(isLargeMarkdownContentFast('x'.repeat(LARGE_MARKDOWN_CHAR_THRESHOLD)), true)
+  assert.equal(isLargeMarkdownContentFast(`${'x\n'.repeat(LARGE_MARKDOWN_LINE_THRESHOLD - 1)}x`), true)
+
+  const markdownSourceEditorSource = await readFile(join(repoRoot, 'src/app/core/main/editor/markdown/markdown-source-editor.tsx'), 'utf8')
+  assert.match(markdownSourceEditorSource, /minimalSetup/)
+  assert.doesNotMatch(markdownSourceEditorSource, /basicSetup/)
+  assert.doesNotMatch(markdownSourceEditorSource, /update\.state\.doc\.toString\(\)/)
+  assert.doesNotMatch(markdownSourceEditorSource, /state\.doc\.toString\(\)/)
+  assert.match(markdownSourceEditorSource, /contentRef/)
+  assert.match(markdownSourceEditorSource, /iterChanges/)
+
+  const markdownWrapperSource = await readFile(join(repoRoot, 'src/app/core/main/editor/markdown/md-editor-wrapper.tsx'), 'utf8')
+  assert.match(markdownWrapperSource, /<TipTapEditor/)
+  assert.match(markdownWrapperSource, /isLargeMarkdownContentFast/)
+  assert.match(markdownWrapperSource, /performanceMode=\{performanceMode\}/)
+  assert.doesNotMatch(markdownWrapperSource, /LargeMarkdownReader/)
+  assert.doesNotMatch(markdownWrapperSource, /LargeMarkdownOutline/)
+  assert.doesNotMatch(markdownWrapperSource, /const useLargeReader/)
+  assert.doesNotMatch(markdownWrapperSource, /LargeMarkdownMode/)
+  assert.doesNotMatch(markdownWrapperSource, /largeMode/)
+  assert.doesNotMatch(markdownWrapperSource, /MarkdownSourceEditor/)
+  assert.doesNotMatch(markdownWrapperSource, /源码编辑|富文本编辑|阅读预览/)
+  assert.doesNotMatch(markdownWrapperSource, /Code2|PencilLine|Eye/)
+  assert.doesNotMatch(markdownWrapperSource, /快速阅读/)
+  assert.doesNotMatch(markdownWrapperSource, /快速目录/)
+  assert.doesNotMatch(markdownWrapperSource, /pt-14/)
+
+  const tiptapEditorSource = await readFile(join(repoRoot, 'src/app/core/main/editor/markdown/tiptap-editor.tsx'), 'utf8')
+  assert.match(tiptapEditorSource, /const richInteractionsEnabled = true/)
+  assert.match(tiptapEditorSource, /const documentEnhancementsEnabled = !performanceMode/)
+  assert.match(tiptapEditorSource, /const highFrequencyDecorationsEnabled = !performanceMode/)
+  assert.doesNotMatch(tiptapEditorSource, /heavyEnhancementsEnabled/)
+  assert.match(tiptapEditorSource, /shouldRerenderOnTransaction:\s*false/)
+  assert.match(tiptapEditorSource, /performanceMode \? initialContent : normalizeEditorMarkdown\(initialContent\)/)
+  assert.match(tiptapEditorSource, /StableCodeBlockLowlight\.configure\(\{/)
+  assert.match(tiptapEditorSource, /documentEnhancementsEnabled[\s\S]*UniqueId\.configure/)
+  assert.match(tiptapEditorSource, /documentEnhancementsEnabled[\s\S]*MermaidDiagram/)
+  assert.match(tiptapEditorSource, /GhostTextExtension\.configure\(\{/)
+  assert.match(tiptapEditorSource, /enabled:\s*aiCompletionEnabled && !performanceMode/)
+  assert.match(tiptapEditorSource, /const ghostTextEnabled = aiCompletionEnabled && !performanceMode/)
+  assert.match(tiptapEditorSource, /name:\s*'diffReview'/)
+  assert.match(tiptapEditorSource, /documentEnhancementsEnabled[\s\S]*FilePreviewExtension/)
+  assert.match(tiptapEditorSource, /emitMarkdownChange\(editor\)/)
+  assert.match(tiptapEditorSource, /pendingMarkdownChangeTimerRef/)
+  assert.match(tiptapEditorSource, /runWhenIdle/)
+  assert.match(tiptapEditorSource, /LARGE_MARKDOWN_CHANGE_DEBOUNCE_MS/)
+  assert.match(tiptapEditorSource, /data-performance-mode/)
+  assert.match(tiptapEditorSource, /transaction\?\.docChanged/)
+  assert.match(tiptapEditorSource, /<BubbleMenuComponent/)
+  assert.match(tiptapEditorSource, /<FooterBar/)
+  assert.doesNotMatch(tiptapEditorSource, /const richInteractionsEnabled = !performanceMode/)
+
+  const footerBarSource = await readFile(join(repoRoot, 'src/app/core/main/editor/markdown/footer-bar/index.tsx'), 'utf8')
+  assert.match(footerBarSource, /<VectorCalc aiCompletionEnabled=\{aiCompletionEnabled\}/)
+  assert.match(footerBarSource, /<OutlineToggle editor=\{editor\}/)
+  assert.doesNotMatch(footerBarSource, /performanceMode/)
+  const wordCountSource = await readFile(join(repoRoot, 'src/app/core/main/editor/markdown/footer-bar/word-count.tsx'), 'utf8')
+  assert.match(wordCountSource, /editor\.state\.doc\.content\.size - 2/)
+  assert.match(wordCountSource, /setTimeout/)
+
+  const outlineSource = await readFile(join(repoRoot, 'src/app/core/main/editor/markdown/outline.tsx'), 'utf8')
+  assert.match(outlineSource, /OUTLINE_EXTRACT_DEBOUNCE_MS/)
+  assert.match(outlineSource, /if \(!isOpen\) return/)
+  assert.match(outlineSource, /editor\.state\.doc\.forEach/)
+  assert.match(outlineSource, /requestAnimationFrame/)
+
+  const articleStoreSource = await readFile(join(repoRoot, 'src/stores/article.ts'), 'utf8')
+  assert.match(articleStoreSource, /isLargeMarkdownContentFast/)
+  assert.match(articleStoreSource, /setCachedLargeMarkdownContent/)
+  assert.match(articleStoreSource, /largeMarkdownContentCache/)
+  assert.match(articleStoreSource, /shouldSkipRealtimeMarkdownPipelines/)
+  assert.match(articleStoreSource, /pendingSaveContentRef/)
+  assert.doesNotMatch(articleStoreSource, /pendingSaveContent:\s*content/)
+  assert.match(articleStoreSource, /largeMarkdown/)
+  assert.match(articleStoreSource, /isLargeLocalMarkdown/)
+
+  const eventReportSource = await readFile(join(repoRoot, 'src/lib/event-report.ts'), 'utf8')
+  assert.match(eventReportSource, /isEventReportConfigured/)
+  assert.match(eventReportSource, /logEventReportDebug/)
+  assert.doesNotMatch(eventReportSource, /console\.error\('Failed to report event/)
 
   const tauriClientSource = await readFile(join(repoRoot, 'src/lib/ai/tauri-client.ts'), 'utf8')
   assert.match(tauriClientSource, /extractHttpErrorMessage/)
@@ -445,6 +628,16 @@ try {
   assert.equal(getClawStreamVisibleMarkdown('```ts\nconst x = 1\n', true), '')
   assert.equal(getClawStreamVisibleMarkdown('```ts\nconst x = 1\n```\n', true), '```ts\nconst x = 1\n```\n')
   assert.match(normalizeClawNestedFences('```markdown\n```ts\nx\n```\n```'), /^````markdown/)
+  assert.equal(getAdaptiveCharsPerSecond(4), 40)
+  assert.equal(getAdaptiveCharsPerSecond(20), 40)
+  assert.equal(getAdaptiveCharsPerSecond(80), 96)
+  assert.equal(getAdaptiveCharsPerSecond(180), 220)
+  assert.equal(getAdaptiveCharsPerSecond(600), 520)
+  assert.equal(getAdaptiveCharsPerSecond(1200), 1100)
+  assert.equal(
+    advanceStreamingSmoother({ carryChars: 0, displayedLength: 0 }, 500, 1000).charsAdded,
+    500,
+  )
   assert.equal(isConcreteArtifactRequest('使用 aihot 技能获取最新 AI 信息并直接输出文字', true), false)
   assert.equal(isConcreteArtifactRequest('根据上面3天行程重新规划旅游攻略，并输出到笔记中', true), true)
   assert.equal(isConcreteArtifactRequest('规划设计一份19日-21日出行方案', true), true)
@@ -501,6 +694,104 @@ try {
   assert.deepEqual(combinedRuntimeSnapshot.visibleToolNames, ['safe_read_file'])
   assert.equal(combinedRuntimeSnapshot.skills.selectedSkillIds[0], 'daily-report')
   assert.equal(combinedRuntimeSnapshot.mcp.toolGeneration, 7)
+
+  const agentDbSource = await readFile(join(repoRoot, 'src/db/agent.ts'), 'utf8')
+  assert.match(agentDbSource, /create table if not exists agent_runs/)
+  assert.match(agentDbSource, /create table if not exists agent_steps/)
+  assert.match(agentDbSource, /create table if not exists agent_events/)
+  assert.match(agentDbSource, /create table if not exists agent_tool_calls/)
+  assert.match(agentDbSource, /create table if not exists agent_approvals/)
+  assert.match(agentDbSource, /create table if not exists agent_artifacts/)
+  assert.match(agentDbSource, /create table if not exists agent_memory_candidates/)
+  assert.match(agentDbSource, /create table if not exists agent_workflow_templates/)
+  assert.match(agentDbSource, /create table if not exists agent_self_evolution_reviews/)
+  assert.match(agentDbSource, /export async function persistAgentRuntimeEvent/)
+  assert.match(agentDbSource, /export async function listAgentRunsFromDb/)
+  assert.match(agentDbSource, /export async function listAgentStepsFromDb/)
+  assert.match(agentDbSource, /export async function getAgentRunDetailFromDb/)
+  assert.match(agentDbSource, /export async function upsertAgentMemoryCandidatesInDb/)
+  assert.match(agentDbSource, /export async function reviewAgentMemoryCandidateInDb/)
+  assert.match(agentDbSource, /export async function insertAgentWorkflowTemplateInDb/)
+  assert.match(agentDbSource, /export async function upsertAgentSelfEvolutionReviewInDb/)
+  assert.match(agentDbSource, /export async function listAgentSelfEvolutionReviewsFromDb/)
+  const dbIndexSource = await readFile(join(repoRoot, 'src/db/index.ts'), 'utf8')
+  assert.match(dbIndexSource, /initAgentDb/)
+  const snapshotStoreSource = await readFile(join(repoRoot, 'src/lib/agent-harness/run-snapshot-store.ts'), 'utf8')
+  assert.match(snapshotStoreSource, /upsertAgentRunFromSnapshot/)
+  assert.match(snapshotStoreSource, /AgentRunPersistenceInput/)
+  const orchestratorPersistenceSource = await readFile(join(repoRoot, 'src/lib/agent-harness/orchestrator.ts'), 'utf8')
+  assert.match(orchestratorPersistenceSource, /persistAgentRuntimeEvent/)
+  assert.match(orchestratorPersistenceSource, /conversationId/)
+  const agentRunsStoreSource = await readFile(join(repoRoot, 'src/stores/agent-runs.ts'), 'utf8')
+  assert.match(agentRunsStoreSource, /listAgentRunsFromDb/)
+  assert.match(agentRunsStoreSource, /getAgentRunDetailFromDb/)
+  const agentMemoryCandidatesStoreSource = await readFile(join(repoRoot, 'src/stores/agent-memory-candidates.ts'), 'utf8')
+  assert.match(agentMemoryCandidatesStoreSource, /generateAgentMemoryCandidates/)
+  assert.match(agentMemoryCandidatesStoreSource, /approveAgentMemoryCandidate/)
+  assert.match(agentMemoryCandidatesStoreSource, /rejectAgentMemoryCandidate/)
+  const agentWorkspaceSource = await readFile(join(repoRoot, 'src/app/core/main/agent/agent-workspace.tsx'), 'utf8')
+  assert.match(agentWorkspaceSource, /Agent 调度/)
+  assert.match(agentWorkspaceSource, /useAgentRunsStore/)
+  assert.match(agentWorkspaceSource, /审查/)
+  assert.match(agentWorkspaceSource, /Run/)
+  assert.match(agentWorkspaceSource, /运行/)
+  assert.match(agentWorkspaceSource, /上下文/)
+  assert.match(agentWorkspaceSource, /执行树/)
+  assert.match(agentWorkspaceSource, /概览/)
+  assert.match(agentWorkspaceSource, /实时/)
+  assert.match(agentWorkspaceSource, /失败/)
+  assert.match(agentWorkspaceSource, /知识库/)
+  assert.match(agentWorkspaceSource, /KnowledgeHealthPanel/)
+  assert.match(agentWorkspaceSource, /知识库健康检查/)
+  assert.match(agentWorkspaceSource, /刷新索引/)
+  assert.match(agentWorkspaceSource, /残留清理/)
+  assert.match(agentWorkspaceSource, /上下文拼接/)
+  assert.match(agentWorkspaceSource, /失败聚合/)
+  const agentMemoryToolsQueueSource = await readFile(join(repoRoot, 'src/lib/agent/tools/agent-memory-tools.ts'), 'utf8')
+  assert.match(agentMemoryToolsQueueSource, /distillWorkflowRecommendationsTool/)
+  assert.match(agentMemoryToolsQueueSource, /generateAgentMemoryCandidates/)
+  assert.match(agentMemoryToolsQueueSource, /approveAgentMemoryCandidate/)
+  assert.match(agentMemoryToolsQueueSource, /rejectAgentMemoryCandidate/)
+  assert.match(agentMemoryToolsQueueSource, /workflow templates/)
+  assert.match(agentMemoryToolsQueueSource, /list_agent_workflow_templates/)
+  assert.match(agentMemoryToolsQueueSource, /list_self_evolution_reviews/)
+  assert.match(agentMemoryToolsQueueSource, /run_self_evolution_review/)
+  assert.match(agentDbSource, /listAgentWorkflowTemplatesFromDb/)
+  assert.match(agentDbSource, /listAgentSelfEvolutionReviewsFromDb/)
+  const agentConstantsSource = await readFile(join(repoRoot, 'src/app/core/main/agent/agent-constants.ts'), 'utf8')
+  assert.match(agentConstantsSource, /lingmo:\/\/agent-center/)
+  const editorLayoutSourceForAgentCenter = await readFile(join(repoRoot, 'src/app/core/main/editor/editor-layout.tsx'), 'utf8')
+  assert.match(editorLayoutSourceForAgentCenter, /isAgentCenterTabPath/)
+  assert.match(editorLayoutSourceForAgentCenter, /AgentWorkspace/)
+  const leftSidebarSourceForAgentCenter = await readFile(join(repoRoot, 'src/app/core/main/left-sidebar.tsx'), 'utf8')
+  assert.match(leftSidebarSourceForAgentCenter, /AGENT_CENTER_TAB_PATH/)
+  const agentResumeSource = await readFile(join(repoRoot, 'src/lib/agent/resume.ts'), 'utf8')
+  assert.match(agentResumeSource, /listSqliteAgentRunSummaries/)
+  assert.match(agentResumeSource, /getAgentRunDetailFromDb/)
+  assert.match(agentResumeSource, /buildAgentRunSummaryFromDetail/)
+  const agentMemoryCandidatesSource = await readFile(join(repoRoot, 'src/lib/agent/memory-candidates.ts'), 'utf8')
+  assert.match(agentMemoryCandidatesSource, /buildDreamCandidates/)
+  assert.match(agentMemoryCandidatesSource, /buildDistillRecommendations/)
+  assert.match(agentMemoryCandidatesSource, /upsertAgentMemoryCandidatesInDb/)
+  assert.match(agentMemoryCandidatesSource, /upsertMemory/)
+  assert.match(agentMemoryCandidatesSource, /insertAgentWorkflowTemplateInDb/)
+  const agentSelfEvolutionSource = await readFile(join(repoRoot, 'src/lib/agent/self-evolution.ts'), 'utf8')
+  assert.match(agentSelfEvolutionSource, /export async function runPostSessionSelfEvolution/)
+  assert.match(agentSelfEvolutionSource, /upsertAgentMemoryCandidatesInDb/)
+  assert.match(agentSelfEvolutionSource, /upsertAgentSelfEvolutionReviewInDb/)
+  assert.match(agentSelfEvolutionSource, /selected-skill-failure/)
+  const workflowTemplatesSource = await readFile(join(repoRoot, 'src/lib/agent/workflow-templates.ts'), 'utf8')
+  assert.match(workflowTemplatesSource, /export async function findRelevantWorkflowTemplates/)
+  assert.match(workflowTemplatesSource, /formatWorkflowTemplatesForPrompt/)
+  const agentMemoryToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/agent-memory-tools.ts'), 'utf8')
+  assert.match(agentMemoryToolsSource, /get_agent_run_detail/)
+  assert.match(agentMemoryToolsSource, /getAgentRunDetailFromDb/)
+  assert.match(agentMemoryToolsSource, /generate_memory_review_queue/)
+  assert.match(agentMemoryToolsSource, /list_memory_review_queue/)
+  assert.match(agentMemoryToolsSource, /approve_memory_candidate/)
+  assert.match(agentMemoryToolsSource, /reject_memory_candidate/)
+  assert.match(agentMemoryToolsSource, /run_self_evolution_review/)
+  assert.match(agentMemoryToolsSource, /agentMemoryTools:\s*Tool\[\]/)
 
   let sessionLog = createAgentSessionLog('session-run')
   sessionLog = appendAgentSessionEntry(sessionLog, {
@@ -822,6 +1113,22 @@ try {
   assert.equal(partSnapshot.status, 'running')
   assert.equal(partSnapshot.visibleStatus.label, '思考中')
   partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'agent.stream.started',
+    runId: 'tool-run',
+    sequence: 4.1,
+    timestamp: 155,
+    payload: { segmentId: 'seg-1' },
+  })
+  assert.equal(partSnapshot.visibleStatus.label, '思考中')
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'agent.stream.delta',
+    runId: 'tool-run',
+    sequence: 4.2,
+    timestamp: 156,
+    payload: { segmentId: 'seg-1', contentLength: 2, deltaLength: 2 },
+  })
+  assert.equal(partSnapshot.visibleStatus.label, '正在写答案')
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
     type: 'tool.execution.finished',
     runId: 'tool-run',
     sequence: 5,
@@ -868,6 +1175,15 @@ try {
     payload: { userInput: 'late duplicate start' },
   })
   assert.equal(partSnapshot.visibleStatus.label, '正在写答案')
+  partSnapshot = reduceAgentPartSnapshot(partSnapshot, {
+    type: 'agent.completed',
+    runId: 'tool-run',
+    sequence: 6.1,
+    timestamp: 170,
+    payload: { result: '基础策略规定：当证据足够时，停止调用工具并直接输出最终回答。' },
+  })
+  assert.equal(partSnapshot.finalAnswerContent, '日报正文')
+  assert.equal(partSnapshot.parts.find(part => part.type === 'text')?.text, '日报正文')
   const repeatedSummary = {
     id: 'agent-run-1',
     userGoal: '生成 AI 日报',
@@ -896,6 +1212,62 @@ try {
   })
   assert.equal(distillRecommendations.length, 1)
   assert.deepEqual(distillRecommendations[0].requiredTools, ['execute_skill_script'])
+
+  assert.equal(shouldRunSelfEvolutionReview({ summary: repeatedSummary }), true)
+  assert.equal(shouldRunSelfEvolutionReview({
+    summary: {
+      id: 'chatty-run',
+      userGoal: '你好',
+      result: '你好',
+      stopped: false,
+      completedAt: Date.now(),
+      iterations: 0,
+      toolsUsed: [],
+      filesTouched: [],
+      failures: [],
+    },
+  }), false)
+  const selfEvolutionPlan = buildSelfEvolutionCandidatePlan({
+    currentSummary: repeatedSummary,
+    recentSummaries: [repeatedSummary, { ...repeatedSummary, id: 'agent-run-2' }],
+    state: { skills: { forcedSkillIds: [], activeSkillIds: [], selectedSkillIds: ['daily-report'], activeSkillMatches: [] } },
+    recommendations: distillRecommendations,
+  })
+  assert.ok(selfEvolutionPlan.candidates.some(candidate => candidate.kind === 'workflow'))
+  assert.ok(selfEvolutionPlan.findings.some(finding => finding.kind === 'workflow'))
+  const failedSelfEvolutionPlan = buildSelfEvolutionCandidatePlan({
+    currentSummary: {
+      ...repeatedSummary,
+      id: 'failed-skill-run',
+      stopped: true,
+      failures: [{ toolName: 'execute_skill_script', error: 'missing dependency' }],
+    },
+    recentSummaries: [],
+    state: { skills: { forcedSkillIds: ['daily-report'], activeSkillIds: ['daily-report'], selectedSkillIds: ['daily-report'], activeSkillMatches: [] } },
+  })
+  assert.ok(failedSelfEvolutionPlan.candidates.some(candidate => candidate.kind === 'failure'))
+  assert.ok(failedSelfEvolutionPlan.findings.some(finding => finding.kind === 'skill_followup'))
+  const workflowTemplateScore = scoreWorkflowTemplateForGoal('帮我生成日报并执行脚本', {
+    id: 'tpl-1',
+    title: '日报生成',
+    summary: '复用 execute_skill_script 生成日报',
+    triggerExamples: ['帮我生成日报'],
+    reusableSteps: ['读取需求', '执行脚本', '保存结果'],
+    requiredTools: ['execute_skill_script'],
+    riskNotes: ['执行前确认脚本权限'],
+    sourceRunIds: ['agent-run-1'],
+    updatedAt: Date.now(),
+  })
+  assert.ok(workflowTemplateScore >= 2)
+  assert.match(formatWorkflowTemplatesForPrompt([{
+    id: 'tpl-1',
+    title: '日报生成',
+    summary: '复用 execute_skill_script 生成日报',
+    reusableSteps: ['读取需求', '执行脚本'],
+    requiredTools: ['execute_skill_script'],
+    riskNotes: ['执行前确认脚本权限'],
+    score: workflowTemplateScore,
+  }]), /Approved Workflow Templates/)
 
 
   assert.equal(getToolRiskLevel('read_markdown_file', 'note'), 'low')
@@ -1067,6 +1439,18 @@ try {
   )
   assert.equal(
     sanitizeVisibleAssistantContent('尚未获得创建/编辑/图表/导出类工具成功结果，不能把文件、图表、导出或可视化任务判定为已完成。对于图表/思维导图/Excalidraw 任务，请继续输出 JSON Action，优先使用 create_diagram_from_outline；需要空白或自定义画布时使用 create_diagram_file。'),
+    '',
+  )
+  assert.equal(
+    sanitizeVisibleAssistantContent('基础策略规定：当证据足够时，停止调用工具并直接输出最终回答。'),
+    '',
+  )
+  assert.equal(
+    sanitizeVisibleAssistantContent('错误恢复方案：两个搜索引擎都不可用，请换一种策略。'),
+    '',
+  )
+  assert.equal(
+    sanitizeVisibleAssistantContent('抓取工具持续异常，先不要输出正式回答。'),
     '',
   )
   assert.equal(isSupportOnlyToolName('select_skill'), true)
@@ -1410,7 +1794,7 @@ contextPolicy:
 
   const skillManagerSource = await readFile(join(repoRoot, 'src/lib/skills/manager.ts'), 'utf8')
   assert.match(skillManagerSource, /await this\.discoverProjectSkills\(\)/)
-  assert.doesNotMatch(skillManagerSource, /await this\.discoverGlobalSkills\(\)/)
+  assert.match(skillManagerSource, /await this\.discoverGlobalSkills\(\)/)
   assert.match(skillManagerSource, /generateSkillId\(existingSkill\.metadata\.name\) === generateSkillId\(skill\.metadata\.name\)/)
   assert.match(skillManagerSource, /this\.unregisterSkill\(nameDuplicate\.metadata\.id\)/)
   assert.match(skillManagerSource, /getSkillCompletenessWeight/)
@@ -1456,6 +1840,7 @@ contextPolicy:
   assert.match(harnessTypesSource, /export interface AgentRunMetrics/)
   assert.match(harnessTypesSource, /export interface ToolObservation/)
   assert.match(harnessTypesSource, /export interface ApprovalRequest/)
+  assert.match(harnessTypesSource, /workflowTemplates/)
   assert.match(harnessTypesSource, /export interface AgentHarnessMiddleware/)
   assert.match(harnessTypesSource, /beforeRun/)
   assert.match(harnessTypesSource, /beforeModel/)
@@ -1480,7 +1865,13 @@ contextPolicy:
   assert.match(middlewareSource, /matchRelevantSkillScores/)
   assert.match(middlewareSource, /Visible tools/)
   assert.match(middlewareSource, /Harness Skill Scope/)
+  assert.match(middlewareSource, /formatWorkflowTemplatesForPrompt/)
+  assert.match(middlewareSource, /findRelevantWorkflowTemplates/)
+  assert.match(middlewareSource, /runPostSessionSelfEvolution/)
   assert.match(middlewareSource, /SUPPORT_TOOL_NAMES[\s\S]*tool_search/)
+  assert.match(middlewareSource, /DRAWIO_TOOL_NAMES[\s\S]*validate_drawio_diagram[\s\S]*export_drawio_diagram/)
+  assert.match(middlewareSource, /DRAWIO_INTENT_RE/)
+  assert.match(middlewareSource, /\.\.\.getIntentForcedToolNames\(input\.userInput\)/)
   const runIdSource = await readFile(join(repoRoot, 'src/lib/agent-harness/run-id.ts'), 'utf8')
   assert.match(runIdSource, /export function createAgentRunId/)
   const vfsSource = await readFile(join(repoRoot, 'src/lib/agent-harness/vfs.ts'), 'utf8')
@@ -1550,6 +1941,9 @@ contextPolicy:
   assert.match(harnessRunnerSource, /setSessionLog/)
   assert.match(harnessRunnerSource, /buildContextPack/)
   assert.match(harnessRunnerSource, /contextPackRef/)
+  assert.match(harnessRunnerSource, /getCurrentNoteKnowledgeContext/)
+  assert.match(harnessRunnerSource, /current-note-knowledge-context/)
+  assert.match(harnessRunnerSource, /getActiveNotePathForContext/)
   assert.match(harnessRunnerSource, /tool_call_started/)
   assert.match(harnessRunnerSource, /tool_result/)
   assert.match(harnessRunnerSource, /getGlobalToolCache|cached/)
@@ -1558,6 +1952,15 @@ contextPolicy:
   assert.match(harnessRunnerSource, /onAnswerDelta\?:/)
   assert.match(harnessRunnerSource, /this\.config\.onAnswerDelta\?\.\(content\)/)
   assert.match(harnessRunnerSource, /streamAnswerDelta:\s*true/)
+  assert.match(harnessRunnerSource, /agent\.stream\.started/)
+  assert.match(harnessRunnerSource, /agent\.stream\.delta/)
+  assert.match(harnessRunnerSource, /agent\.stream\.finished/)
+  assert.match(harnessRunnerSource, /AGENT_ANSWER_DELTA_MIN_INTERVAL_MS/)
+  assert.match(harnessRunnerSource, /tool\.batch\.started/)
+  assert.match(harnessRunnerSource, /tool\.batch\.finished/)
+  assert.match(harnessRunnerSource, /getToolLoopGuardDecision/)
+  assert.match(harnessRunnerSource, /CONSECUTIVE_SAME_TOOL_ARG_FAILURE_THRESHOLD/)
+  assert.match(harnessRunnerSource, /mcp\.runtime\.warmup/)
   assert.match(harnessRunnerSource, /getFinalAnswerRejectionDisplayReason/)
   assert.match(harnessRunnerSource, /buildFinalAnswerRecoveryPrompt/)
   assert.match(harnessRunnerSource, /buildMaxIterationFallback/)
@@ -1619,6 +2022,31 @@ contextPolicy:
     'web access must be checked before cache lookup'
   )
 
+  const mcpAgentReadySource = await readFile(join(repoRoot, 'src/lib/mcp/agent-ready.ts'), 'utf8')
+  assert.match(mcpAgentReadySource, /DEFAULT_AGENT_MCP_WARMUP_TIMEOUT_MS/)
+  assert.match(mcpAgentReadySource, /warmMcpRuntimeForAgent/)
+  assert.match(mcpAgentReadySource, /waitForWarmup/)
+  assert.match(mcpAgentReadySource, /AgentMcpWarmupResult/)
+  assert.match(mcpAgentReadySource, /ready:\s*!timedOut && !degraded && pendingServerCount === 0/)
+  assert.match(mcpAgentReadySource, /needs_auth/)
+  assert.match(mcpAgentReadySource, /needs_permission/)
+
+  const agentRunSummarySourceForRuntimeEvents = await readFile(join(repoRoot, 'src/app/core/main/chat/agent-run-summary.tsx'), 'utf8')
+  assert.match(agentRunSummarySourceForRuntimeEvents, /function isInternalLifecycleEvent/)
+  assert.match(agentRunSummarySourceForRuntimeEvents, /event\.type === "mcp\.runtime\.warmup"/)
+  assert.match(agentRunSummarySourceForRuntimeEvents, /tool\.batch\.started/)
+  assert.match(agentRunSummarySourceForRuntimeEvents, /agent\.stream\.started/)
+  assert.doesNotMatch(agentRunSummarySourceForRuntimeEvents, /payload\.degraded === true/)
+
+  const agentPartReducerSourceForRuntimeEvents = await readFile(join(repoRoot, 'src/lib/agent/part-reducer.ts'), 'utf8')
+  assert.match(agentPartReducerSourceForRuntimeEvents, /payload\.degraded === true/)
+  assert.match(agentPartReducerSourceForRuntimeEvents, /agent\.stream\.delta/)
+  assert.match(agentPartReducerSourceForRuntimeEvents, /tool\.batch\.finished/)
+
+  const skillManagerRuntimeSource = await readFile(join(repoRoot, 'src/lib/skills/manager.ts'), 'utf8')
+  assert.match(skillManagerRuntimeSource, /discoverGlobalSkills\(\)/)
+  assert.match(skillManagerRuntimeSource, /discoverProjectSkills\(\)/)
+
   const xiaomoPromptSource = await readFile(join(repoRoot, 'src/lib/ai/xiaomo-prompt.ts'), 'utf8')
   assert.match(xiaomoPromptSource, /Role name: 小墨/)
   assert.match(xiaomoPromptSource, /first principles/)
@@ -1656,9 +2084,15 @@ contextPolicy:
   const promptAssemblerSource = await readFile(join(repoRoot, 'src/lib/agent/prompt-assembler.ts'), 'utf8')
   assert.match(promptAssemblerSource, /Harness Output Format/)
   assert.match(promptAssemblerSource, /buildXiaoMoIdentityPrompt/)
+  assert.match(promptAssemblerSource, /Candidate Skills/)
+  assert.match(promptAssemblerSource, /Agent Decision Loop/)
   assert.match(promptAssemblerSource, /clickable Markdown link/)
   assert.match(promptAssemblerSource, /sharp human briefing/)
   assert.match(promptAssemblerSource, /Do not emit ReAct JSON/)
+  assert.match(promptAssemblerSource, /search_knowledge_objects/)
+  assert.match(promptAssemblerSource, /get_knowledge_object_overview/)
+  assert.match(promptAssemblerSource, /get_current_note_context/)
+  assert.match(promptAssemblerSource, /reindex_knowledge_objects/)
   assert.doesNotMatch(promptAssemblerSource, /ReAct Output Format/)
 
   const agentHandlerSource = await readFile(join(repoRoot, 'src/lib/agent/agent-handler.ts'), 'utf8')
@@ -1670,6 +2104,10 @@ contextPolicy:
   assert.match(agentHandlerSource, /HarnessAgentRunner/)
   assert.match(agentHandlerSource, /new HarnessAgentRunner/)
   assert.match(agentHandlerSource, /onAnswerDelta/)
+  assert.match(agentHandlerSource, /const visibleMarkdownContent = sanitizeVisibleAssistantContent\(markdownContent\)/)
+  assert.match(agentHandlerSource, /finalAnswerContent:\s*visibleMarkdownContent/)
+  assert.doesNotMatch(agentHandlerSource, /finalAnswerContent:\s*markdownContent/)
+  assert.match(agentHandlerSource, /const finalAnswerContent = sanitizeVisibleAssistantContent\(extractVisibleFinalAnswer\(thought\) \|\| ''\)/)
   assert.match(agentHandlerSource, /currentAction:\s*undefined/)
   assert.match(agentHandlerSource, /currentObservation:\s*undefined/)
   assert.match(agentHandlerSource, /isFinalAnswerMode:\s*false/)
@@ -1698,6 +2136,7 @@ contextPolicy:
   assert.match(chatInputSource, /const isAgentSkill = slashCommand\.executionMode === 'agent'/)
   assert.match(chatInputSource, /forcedSkillIds:\s*\[slashCommand\.skillContent\.metadata\.id\]/)
   assert.match(chatInputSource, /modeOverride:\s*isAgentSkill \? 'agent' : 'chat'/)
+  assert.match(chatInputSource, /const isModelRunning = researchRunning \|\| \(isAgentMode \? agentState\.isRunning : loading\)/)
 
   const writerChatSendSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-send.tsx'), 'utf8')
   assert.match(writerChatSendSource, /buildWriterSkillInstruction/)
@@ -1726,6 +2165,17 @@ contextPolicy:
   assert.match(chatSendSource, /handleClarifiedResearchMode\(effectiveInstruction, options\)/)
   assert.match(chatSendSource, /buildHarnessContextItems/)
   assert.match(chatSendSource, /agentExecutor:\s*async \(runControl\)/)
+  assert.match(chatSendSource, /finishVisibleAgentRun/)
+  assert.match(chatSendSource, /const isRunning = researchRunning \|\| \(isAgentMode \? agentState\.isRunning : loading\)/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,240}setAgentState\(\{\s*agentRunId:\s*undefined/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,900}toolCalls:\s*\[\]/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,900}agentEvents:\s*\[\]/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,1200}agentPartSnapshot:\s*undefined/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,1400}finalAnswerContent:\s*undefined/)
+  assert.match(chatSendSource, /const shouldPrimeAgentRunStatus = effectiveRoute === 'agent' \|\| effectiveRoute === 'workflow'/)
+  assert.match(chatSendSource, /primeAgentRunStatus\(undefined, Date\.now\(\)\)/)
+  assert.match(chatSendSource, /primeAgentRunStatus\(\s*placeholderMessage\.id,[\s\S]{0,160}currentStepStartTime/)
+  assert.match(chatSendSource, /void triggerAutoExtractSuggestion/)
   assert.doesNotMatch(chatSendSource, /legacyAgentExecutor:\s*async \(runControl\)/)
   assert.match(chatSendSource, /runControl\.setContextPack/)
   assert.match(chatSendSource, /runControl\.writeDraft\('final-answer\.md'/)
@@ -1764,6 +2214,17 @@ contextPolicy:
   assert.match(chatContentSource, /import \{ AgentRunSummary \}/)
   assert.match(chatContentSource, /shouldShowLiveAgentStatus/)
   assert.match(chatContentSource, /shouldShowLiveFinalAnswer/)
+  assert.match(chatContentSource, /scheduleScrollStateSync/)
+  assert.match(chatContentSource, /liveAgentScrollSignal/)
+  assert.match(chatContentSource, /PENDING_AGENT_CHAT_ID/)
+  assert.match(chatContentSource, /pendingAgentChat/)
+  assert.match(chatContentSource, /agentState\.activeChatId === undefined/)
+  assert.match(chatContentSource, /!isPendingAgentMessage && \(/)
+  assert.match(chatContentSource, /const isLiveFinalAnswerStreaming/)
+  assert.match(chatContentSource, /streaming=\{isLiveFinalAnswerStreaming\}/)
+  assert.doesNotMatch(chatContentSource, /new MutationObserver/)
+  assert.doesNotMatch(chatContentSource, /characterData:\s*true/)
+  assert.doesNotMatch(chatContentSource, /text=\{liveFinalAnswerContent\}[\s\S]{0,160}clawFormat/)
   assert.match(chatContentSource, /Agent 状态以 Codex 风格轻摘要展示/)
   assert.match(chatContentSource, /storedRunSummary/)
   assert.match(chatContentSource, /<AgentRunSummary/)
@@ -1775,6 +2236,14 @@ contextPolicy:
   assert.doesNotMatch(chatContentSource, /McpToolCallCard/)
   assert.doesNotMatch(chatContentSource, /mcpToolCalls/)
   assert.doesNotMatch(chatContentSource, /<AgentRunView/)
+
+  const streamingPreviewSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-preview.tsx'), 'utf8')
+  assert.match(streamingPreviewSource, /STREAMING_MARKDOWN_RENDER_INTERVAL_MS/)
+  assert.match(streamingPreviewSource, /STREAMING_MAX_DEFER_MS/)
+  assert.match(streamingPreviewSource, /pendingRenderTextRef/)
+  assert.match(streamingPreviewSource, /schedulePendingMarkdownRender/)
+  assert.match(streamingPreviewSource, /hasStableStreamingBoundary/)
+  assert.doesNotMatch(streamingPreviewSource, /renderDisplayedText\(targetTextRef\.current,\s*true\)/)
 
   const chatStoreSource = await readFile(join(repoRoot, 'src/stores/chat.ts'), 'utf8')
   assert.match(chatStoreSource, /ResearchRuntimeState/)
@@ -1810,8 +2279,9 @@ contextPolicy:
 
   const agentRunSummarySource = await readFile(join(repoRoot, 'src/app/core/main/chat/agent-run-summary.tsx'), 'utf8')
   assert.match(agentRunSummarySource, /export function AgentRunSummary/)
-  assert.match(agentRunSummarySource, /已思考/)
-  assert.match(agentRunSummarySource, /正在处理/)
+  assert.match(agentRunSummarySource, /data-agent-run-summary="live"/)
+  assert.match(agentRunSummarySource, /function LiveTimeline/)
+  assert.match(agentRunSummarySource, /thought/)
   assert.match(agentRunSummarySource, /tokens/)
   assert.match(agentRunSummarySource, /formatElapsed/)
   assert.match(agentRunSummarySource, /formatTokenCount/)
@@ -1820,14 +2290,46 @@ contextPolicy:
   assert.match(agentRunSummarySource, /estimateTokens\(visibleOutput\)/)
   assert.match(agentRunSummarySource, /if \(input\.live\) return 0/)
   assert.doesNotMatch(agentRunSummarySource, /inputTokens \+ outputTokens/)
-  assert.match(agentRunSummarySource, /function LiveRunBody/)
-  assert.match(agentRunSummarySource, /getLiveStepSentence/)
-  assert.match(agentRunSummarySource, /function LiveStepDetails/)
-  assert.match(agentRunSummarySource, /<LiveRunBody/)
-  assert.match(agentRunSummarySource, /<summary className=/)
+  assert.match(agentRunSummarySource, /buildThoughtTimeline/)
+  assert.match(agentRunSummarySource, /getLiveThoughtText/)
+  assert.doesNotMatch(agentRunSummarySource, /正在准备 Agent。/)
+  assert.doesNotMatch(agentRunSummarySource, /正在理解需求与上下文。/)
+  assert.doesNotMatch(agentRunSummarySource, /正在加载可用技能。/)
+  assert.doesNotMatch(agentRunSummarySource, /正在规划执行步骤。/)
+  assert.doesNotMatch(agentRunSummarySource, /正在准备可用工具。/)
+  assert.doesNotMatch(agentRunSummarySource, /正在整理最终回答。/)
+  assert.doesNotMatch(agentRunSummarySource, /等待你确认下一步操作。/)
+  assert.match(agentRunSummarySource, /activity\?: AgentActivity/)
+  assert.doesNotMatch(agentRunSummarySource, /REASONING_RENDER_CAP_CHARS/)
+  assert.doesNotMatch(agentRunSummarySource, /compactReasoningForDisplay/)
+  assert.doesNotMatch(agentRunSummarySource, /getLatestReasoningText/)
+  assert.doesNotMatch(agentRunSummarySource, /partSnapshot\?\.visibleStatus\?\.detail/)
+  assert.doesNotMatch(agentRunSummarySource, /text:\s*input\.currentThought/)
+  assert.match(agentRunSummarySource, /omittedChars/)
+  assert.match(agentRunSummarySource, /liveThoughtText/)
+  assert.match(agentRunSummarySource, /function hasLiveActivity/)
+  assert.match(agentRunSummarySource, /Boolean\(liveThoughtText\) \|\| hasLiveActivity/)
+  assert.match(agentRunSummarySource, /thought\.text && \(/)
+  assert.doesNotMatch(agentRunSummarySource, /正在整理上下文和下一步动作。/)
+  assert.match(agentRunSummarySource, /group\.thought \|\| group\.tools\.length > 0/)
+  assert.match(agentRunSummarySource, /function isInternalLifecycleEvent/)
+  assert.match(agentRunSummarySource, /event\.type === "mcp\.runtime\.warmup"/)
+  assert.match(agentRunSummarySource, /event\.type === "agent\.stream\.started"/)
+  assert.doesNotMatch(agentRunSummarySource, /MCP 工具已就绪/)
+  assert.doesNotMatch(agentRunSummarySource, /开始流式写作/)
+  assert.match(agentRunSummarySource, /TimelineToolRow/)
+  assert.match(agentRunSummarySource, /getToolProgressVerb/)
+  assert.match(agentRunSummarySource, /正在读取/)
+  assert.match(agentRunSummarySource, /正在调用/)
+  assert.match(agentRunSummarySource, /if \(live\) \{/)
+  assert.doesNotMatch(agentRunSummarySource, /function LiveRunBody/)
+  assert.doesNotMatch(agentRunSummarySource, /getLiveStepSentence/)
+  assert.doesNotMatch(agentRunSummarySource, /function LiveStepDetails/)
+  assert.doesNotMatch(agentRunSummarySource, /<LiveRunBody/)
+  assert.doesNotMatch(agentRunSummarySource, /<summary className=/)
   assert.match(agentRunSummarySource, /parseCurrentActionToolCall/)
   assert.match(agentRunSummarySource, /展开运行步骤/)
-  assert.match(agentRunSummarySource, /CompactToolCalls/)
+  assert.doesNotMatch(agentRunSummarySource, /CompactToolCalls/)
   assert.match(agentRunSummarySource, /buildToolActionSteps/)
   assert.match(agentRunSummarySource, /buildToolSummarySteps/)
   assert.match(agentRunSummarySource, /classifyToolCall/)
@@ -1838,11 +2340,24 @@ contextPolicy:
   assert.match(agentRunSummarySource, /运行命令/)
   assert.match(agentRunSummarySource, /搜索可用工具/)
   assert.match(agentRunSummarySource, /搜索网页/)
+  assert.doesNotMatch(agentRunSummarySource, /当前还没有/)
+  assert.doesNotMatch(agentRunSummarySource, /等待模型返回/)
+  assert.doesNotMatch(agentRunSummarySource, /未调用工具/)
   assert.doesNotMatch(agentRunSummarySource, /过程详情/)
   assert.doesNotMatch(agentRunSummarySource, /理解需求/)
   assert.doesNotMatch(agentRunSummarySource, /请求模型/)
   assert.doesNotMatch(agentRunSummarySource, /读取模型响应/)
   assert.doesNotMatch(agentRunSummarySource, /整理最终回答/)
+
+  const chatTokenDisplaySource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-token-display.tsx'), 'utf8')
+  assert.match(chatTokenDisplaySource, /buildLatestContextTokenUsage/)
+  assert.doesNotMatch(chatTokenDisplaySource, /estimateTokens\(chat\.content/)
+  assert.doesNotMatch(chatTokenDisplaySource, /recentChats\.reduce/)
+
+  const chatTokenBadgeSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-token-badge.tsx'), 'utf8')
+  assert.match(chatTokenBadgeSource, /buildLatestContextTokenUsage/)
+  assert.doesNotMatch(chatTokenBadgeSource, /estimateTokens\(chat\.content/)
+  assert.doesNotMatch(chatTokenBadgeSource, /recentChats\.reduce/)
 
   const compactToolCallsSource = await readFile(join(repoRoot, 'src/app/core/main/chat/compact-tool-calls.tsx'), 'utf8')
   assert.match(compactToolCallsSource, /getClawStatusGlyph/)
@@ -1864,6 +2379,10 @@ contextPolicy:
 
   const agentPartReducerSource = await readFile(join(repoRoot, 'src/lib/agent/part-reducer.ts'), 'utf8')
   assert.match(agentPartReducerSource, /invalid\[_\\s-\]\?api/)
+  assert.match(agentPartReducerSource, /sanitizeFinalAnswerPartContent/)
+  assert.match(agentPartReducerSource, /sanitizeVisibleAssistantContent/)
+  assert.match(agentPartReducerSource, /extractVisibleFinalAnswer/)
+  assert.match(agentPartReducerSource, /基础策略规定/)
   assert.doesNotMatch(agentPartReducerSource, /truncated\|firecrawl\|web_fetch\|stale/)
   assert.doesNotMatch(agentPartReducerSource, /status:\s*status === 'error' && !recoverable \? 'error' : 'running'/)
   assert.doesNotMatch(agentPartReducerSource, /fatalErrors:\s*status === 'error' && !recoverable/)
@@ -1919,6 +2438,19 @@ contextPolicy:
   assert.match(safeToolsSource, /date-unverified/)
   assert.match(safeToolsSource, /sourceLink/)
   assert.match(safeToolsSource, /\$\{index \+ 1\}\. \$\{sourceLink\}/)
+  assert.match(safeToolsSource, /registerNoteFromSave/)
+  assert.match(safeToolsSource, /registerMarkdownKnowledgeObject\(filePath, nextContent, 'safe_write_file'\)/)
+
+  const noteToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/note-tools.ts'), 'utf8')
+  assert.match(noteToolsSource, /registerNoteFromSave/)
+  assert.match(noteToolsSource, /registerMarkdownKnowledgeObject\(filePath, finalContent, 'create_file'\)/)
+  assert.match(noteToolsSource, /registerMarkdownKnowledgeObject\(normalizedFilePath, finalContent, 'update_markdown_file'\)/)
+  assert.match(noteToolsSource, /registerMarkdownKnowledgeObject\(newRelativePath, copiedContent, 'copy_file'\)/)
+  assert.match(noteToolsSource, /registerMarkdownKnowledgeObject\(newRelativePath, copiedContent, 'copy_files_batch'\)/)
+
+  const fileTrashSource = await readFile(join(repoRoot, 'src/lib/file-trash.ts'), 'utf8')
+  assert.match(fileTrashSource, /objectRegistry/)
+  assert.match(fileTrashSource, /objectRegistry\.softDelete\('note', path\)/)
 
   const tavilySource = await readFile(join(repoRoot, 'src/lib/tavily.ts'), 'utf8')
   assert.match(tavilySource, /body\.time_range = timeRange/)
@@ -1999,7 +2531,90 @@ contextPolicy:
   assert.doesNotMatch(codeNavigationToolsSource, /Command\.create/)
   assert.doesNotMatch(codeNavigationToolsSource, /writeTextFile/)
 
+  const knowledgeObjectsSource = await readFile(join(repoRoot, 'src/lib/knowledge/objects.ts'), 'utf8')
+  assert.match(knowledgeObjectsSource, /export type UnifiedKnowledgeObjectType/)
+  assert.match(knowledgeObjectsSource, /isUserKnowledgeFilePath/)
+  assert.match(knowledgeObjectsSource, /ai_hotspot/)
+  assert.match(knowledgeObjectsSource, /memory/)
+  assert.match(knowledgeObjectsSource, /agent_run/)
+  assert.match(knowledgeObjectsSource, /export async function buildKnowledgeObjectIndex/)
+  assert.match(knowledgeObjectsSource, /export async function searchKnowledgeObjects/)
+  assert.match(knowledgeObjectsSource, /export async function getKnowledgeObjectOverview/)
+  assert.match(knowledgeObjectsSource, /export async function getCurrentNoteKnowledgeContext/)
+  assert.match(knowledgeObjectsSource, /collectGraphContext/)
+  assert.match(knowledgeObjectsSource, /getCrossValidatedRelations/)
+
+  const knowledgeReindexSource = await readFile(join(repoRoot, 'src/lib/knowledge/reindex.ts'), 'utf8')
+  const filesSource = await readFile(join(repoRoot, 'src/lib/files.ts'), 'utf8')
+  assert.match(filesSource, /export function isUserKnowledgeFilePath/)
+  assert.match(filesSource, /!isInSkillsFolder/)
+  assert.match(filesSource, /!isSkillsFolder/)
+  const ragSource = await readFile(join(repoRoot, 'src/lib/rag.ts'), 'utf8')
+  assert.match(ragSource, /isUserKnowledgeFilePath/)
+  assert.doesNotMatch(ragSource, /pathParts\.some\(part => isSkillsFolder\(part\)\)/)
+  assert.match(knowledgeReindexSource, /registerNoteFromSave/)
+  assert.match(knowledgeReindexSource, /getAllMarkdownFiles/)
+  assert.match(knowledgeReindexSource, /isUserKnowledgeFilePath/)
+  assert.match(knowledgeReindexSource, /await registerNoteFromSave\(filePath, content\)/)
+  assert.match(knowledgeReindexSource, /await registerNoteFromSave\(newPath, content/)
+  const knowledgeNoteSyncSource = await readFile(join(repoRoot, 'src/lib/knowledge/note-sync.ts'), 'utf8')
+  assert.match(knowledgeNoteSyncSource, /isUserKnowledgeFilePath/)
+  const outputFilesSource = await readFile(join(repoRoot, 'src/hooks/use-output-files.ts'), 'utf8')
+  assert.match(outputFilesSource, /isUserKnowledgeFilePath/)
+  assert.match(outputFilesSource, /Skill 模板与参考资料不作为智能排版素材/)
+
+  const knowledgeObjectToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/knowledge-object-tools.ts'), 'utf8')
+  for (const toolName of [
+    'search_knowledge_objects',
+    'get_knowledge_object_overview',
+    'get_current_note_context',
+  ]) {
+    assert.match(knowledgeObjectToolsSource, new RegExp(`name:\\s*['"]${toolName}['"]`))
+  }
+  assert.match(knowledgeObjectToolsSource, /searchKnowledgeObjects/)
+  assert.match(knowledgeObjectToolsSource, /getKnowledgeObjectOverview/)
+  assert.match(knowledgeObjectToolsSource, /getCurrentNoteKnowledgeContext/)
+  assert.match(knowledgeObjectToolsSource, /export const knowledgeObjectTools/)
+  assert.match(knowledgeObjectToolsSource, /requiresConfirmation:\s*false/)
+  assert.match(knowledgeObjectToolsSource, /capabilities:\s*\[\s*['"]read['"]\s*\]/)
+
+  const knowledgeWorkflowToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/knowledge-workflow-tools.ts'), 'utf8')
+  assert.match(knowledgeWorkflowToolsSource, /name:\s*['"]reindex_knowledge_objects['"]/)
+  assert.match(knowledgeWorkflowToolsSource, /incrementalReindex/)
+  assert.match(knowledgeWorkflowToolsSource, /reindexFile/)
+  assert.match(knowledgeWorkflowToolsSource, /export const reindexKnowledgeObjectsTool/)
+  assert.match(knowledgeWorkflowToolsSource, /requiresConfirmation:\s*false/)
+  assert.match(knowledgeWorkflowToolsSource, /capabilities:\s*\[\s*['"]read['"]\s*\]/)
+
+  assert.match(knowledgeReindexSource, /export interface KnowledgeIndexHealth/)
+  assert.match(knowledgeReindexSource, /export async function getKnowledgeIndexHealth/)
+  assert.match(knowledgeReindexSource, /orphanNotes/)
+  assert.match(knowledgeReindexSource, /staleNotes/)
+  assert.match(knowledgeReindexSource, /objectRegistry\.query/)
+  assert.match(knowledgeReindexSource, /objectRegistry\.count/)
+  assert.match(knowledgeReindexSource, /contentHash|content_hash/)
+  assert.match(knowledgeReindexSource, /vectorIndexedAt|vector_indexed_at/)
+
+  const toolPolicySource = await readFile(join(repoRoot, 'src/lib/agent/tool-policy.ts'), 'utf8')
+  assert.match(toolPolicySource, /search_knowledge_objects/)
+  assert.match(toolPolicySource, /get_knowledge_object_overview/)
+  assert.match(toolPolicySource, /get_current_note_context/)
+  assert.match(toolPolicySource, /reindex_knowledge_objects/)
+
+  const dynamicToolFilterSource = await readFile(join(repoRoot, 'src/lib/agent/dynamic-tool-filter.ts'), 'utf8')
+  assert.match(dynamicToolFilterSource, /get_current_note_context/)
+  assert.match(dynamicToolFilterSource, /search_knowledge_objects/)
+  assert.match(dynamicToolFilterSource, /get_knowledge_object_overview/)
+  assert.match(dynamicToolFilterSource, /reindex_knowledge_objects/)
+  assert.match(dynamicToolFilterSource, /知识库/)
+  assert.match(dynamicToolFilterSource, /重建索引/)
+  assert.match(dynamicToolFilterSource, /当前笔记/)
+  assert.match(dynamicToolFilterSource, /alwaysInclude/)
+
   const toolIndexSource = await readFile(join(repoRoot, 'src/lib/agent/tools/index.ts'), 'utf8')
+  assert.match(toolIndexSource, /import \{ knowledgeObjectTools \} from '\.\/knowledge-object-tools'/)
+  assert.match(toolIndexSource, /\.\.\.knowledgeObjectTools/)
+  assert.match(toolIndexSource, /export \* from '\.\/knowledge-object-tools'/)
   assert.match(toolIndexSource, /import \{ githubStarTools \} from '\.\/github-star-tools'/)
   assert.match(toolIndexSource, /\.\.\.githubStarTools/)
   assert.match(toolIndexSource, /export \* from '\.\/github-star-tools'/)

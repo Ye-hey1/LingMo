@@ -1,7 +1,7 @@
 ﻿'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { format, subDays } from 'date-fns'
+import dayjs from 'dayjs'
 import { confirm as confirmDialog, open as openDialog, type OpenDialogOptions } from '@tauri-apps/plugin-dialog'
 import { Store } from '@tauri-apps/plugin-store'
 import { exists, mkdir, writeTextFile } from '@tauri-apps/plugin-fs'
@@ -24,6 +24,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/hooks/use-toast'
 import { MemoryList } from '@/components/memories/memory-list'
+import { CandidateQueue } from '@/components/memories/candidate-queue'
 import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
 import { createOpenAIClient, getAISettings, validateAIService } from '@/lib/ai/utils'
 import { estimateTokens } from '@/lib/ai/token-counter'
@@ -990,7 +991,7 @@ export function MemoryWorkspace() {
     opencodeDbPath: '',
     lingmoHome: '',
   })
-  const [viewMode, setViewMode] = useState<'sessions' | 'ai-memories'>('sessions')
+  const [viewMode, setViewMode] = useState<'sessions' | 'ai-memories' | 'candidates'>('sessions')
   const [pathsReady, setPathsReady] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
 
@@ -1353,7 +1354,7 @@ export function MemoryWorkspace() {
   }, [paths, appliedPaths])
 
   useEffect(() => {
-    if (platform !== 'lingmo' && viewMode === 'ai-memories') {
+    if (platform !== 'lingmo' && (viewMode === 'ai-memories' || viewMode === 'candidates')) {
       setViewMode('sessions')
       return
     }
@@ -2339,7 +2340,9 @@ export function MemoryWorkspace() {
   const supportsLingmoMemories = platform === 'lingmo'
   const headerDescription = viewMode === 'ai-memories'
     ? '管理偏好与长期记忆，供 AI 在后续对话中自动引用。'
-    : '查看 LingMo 内部 AI 会话、摘要与引用记录。'
+    : viewMode === 'candidates'
+      ? '审核 Agent 运行中提炼的候选知识，确认后沉淀为长期记忆。'
+      : '查看 LingMo 内部 AI 会话、摘要与引用记录。'
   const sessionListTitle = supportsLingmoMemories ? '会话列表' : `${platformDisplayName(platform)} 会话`
 
   return (
@@ -2358,7 +2361,7 @@ export function MemoryWorkspace() {
               <p className="mt-1 text-xs text-muted-foreground">{headerDescription}</p>
             </div>
 
-            <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'sessions' | 'ai-memories')}>
+            <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'sessions' | 'ai-memories' | 'candidates')}>
               <TabsList className="h-8 shrink-0 rounded-md border bg-background p-0.5 shadow-sm">
                 <TabsTrigger value="sessions" className="h-7 gap-1.5 rounded px-3 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                   <History className="size-3.5" />
@@ -2368,6 +2371,10 @@ export function MemoryWorkspace() {
                   <Brain className="size-3.5" />
                   <span>长期记忆</span>
                 </TabsTrigger>
+                <TabsTrigger value="candidates" className="h-7 gap-1.5 rounded px-3 text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                  <Sparkles className="size-3.5" />
+                  <span>AI 沉淀</span>
+                </TabsTrigger>
               </TabsList>
             </Tabs>
           </div>
@@ -2376,6 +2383,10 @@ export function MemoryWorkspace() {
       {viewMode === 'ai-memories' ? (
         <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-auto p-4">
           <MemoryList />
+        </div>
+      ) : viewMode === 'candidates' ? (
+        <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-auto p-4">
+          <CandidateQueue />
         </div>
       ) : (
         <>
@@ -2472,12 +2483,12 @@ export function MemoryWorkspace() {
                   <div className="p-2 space-y-2">
                     <div className="grid grid-cols-3 gap-1">
                       {(() => {
-                        const today = new Date()
-                        const f = (d: Date) => format(d, 'yyyy-MM-dd')
+                        const today = dayjs()
+                        const f = (d: dayjs.Dayjs) => d.format('YYYY-MM-DD')
                         const presets: { label: string; from: string; to: string }[] = [
                           { label: '今天', from: f(today), to: f(today) },
-                          { label: '近 7 天', from: f(subDays(today, 6)), to: f(today) },
-                          { label: '近 30 天', from: f(subDays(today, 29)), to: f(today) },
+                          { label: '近 7 天', from: f(today.subtract(6, 'day')), to: f(today) },
+                          { label: '近 30 天', from: f(today.subtract(29, 'day')), to: f(today) },
                         ]
                         return presets.map((p) => {
                           const active = dateFrom === p.from && dateTo === p.to

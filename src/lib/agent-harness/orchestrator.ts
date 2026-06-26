@@ -8,11 +8,13 @@ import { writeAgentVfsText } from './vfs'
 import { reduceAgentSessionLogFromEvents, type AgentSessionLog } from './session-log'
 import type { AgentEvent } from '@/lib/agent/types'
 import type { AgentHarnessMiddleware, AgentRoute, AgentRunControl, AgentRunMetrics, AgentRunSnapshot, ContextPack, ToolExposureRecord, VfsRef } from './types'
+import { persistAgentRuntimeEvent } from '@/db/agent'
 
 export interface AgentOrchestratorInput {
   userInput: string
   route: AgentRoute
   runId?: string
+  conversationId?: number | null
   forcedSkillIds?: string[]
   webSearchEnabled?: boolean
   middlewares?: AgentHarnessMiddleware[]
@@ -35,7 +37,7 @@ export class AgentOrchestrator {
       updatedAt: Date.now(),
     }
 
-    await saveRunSnapshot(snapshot)
+    await saveRunSnapshot(snapshot, { conversationId: input.conversationId })
     let eventWriteQueue: Promise<void> = Promise.resolve()
     const recordedEvents: AgentEvent[] = []
     let latestSessionLog: AgentSessionLog | undefined
@@ -49,7 +51,7 @@ export class AgentOrchestrator {
         ...patch,
         updatedAt: Date.now(),
       }
-      await saveRunSnapshot(snapshot)
+      await saveRunSnapshot(snapshot, { conversationId: input.conversationId })
     }
 
     const recordEvent = (event: AgentEvent) => {
@@ -300,6 +302,11 @@ export class AgentOrchestrator {
     save: (patch: Partial<AgentRunSnapshot>) => Promise<void>,
   ) {
     await save({ metrics: reduceRunMetrics(current().metrics, event) })
+    try {
+      await persistAgentRuntimeEvent(runId, event)
+    } catch (error) {
+      console.warn('[AgentHarness] Failed to persist runtime event:', error)
+    }
 
     if (event.type === 'observation.created') {
       const content = typeof event.payload?.observation === 'string'

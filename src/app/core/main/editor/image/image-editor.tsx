@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Cropper, CropperRef, Priority } from 'react-advanced-cropper'
 import 'react-advanced-cropper/dist/style.css'
 import './image-editor.css'
@@ -68,6 +68,27 @@ function formatFileSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(2)} MB`
 }
 
+function getImageMimeType(filePath: string) {
+  const extension = filePath.split('.').pop()?.toLowerCase()
+  switch (extension) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+    case 'png':
+      return 'image/png'
+    case 'gif':
+      return 'image/gif'
+    case 'bmp':
+      return 'image/bmp'
+    case 'webp':
+      return 'image/webp'
+    case 'svg':
+      return 'image/svg+xml;charset=utf-8'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
 export function ImageEditor({ filePath }: ImageEditorProps) {
   const cropperRef = useRef<CropperRef>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -99,10 +120,47 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
   const canPanImage = !cropMode && previewScale > 1
   const zoomLabel = `${Math.round(previewScale * 100)}%`
   const imageName = filePath.split('/').pop() || filePath
+  const isSvg = /\.svg$/i.test(filePath)
+
+  const loadImage = useCallback(async () => {
+    if (!filePath) return
+    
+    try {
+      setLoading(true)
+      const imageData = await readWorkspaceBinaryFile(filePath)
+      
+      setOriginalImageData(imageData)
+      
+      const blob = new Blob([imageData as unknown as BlobPart], { type: getImageMimeType(filePath) })
+      const url = URL.createObjectURL(blob)
+      setImageSrc(url)
+      setHasChanges(false)
+      setPreviewScale(1)
+      setPanOffset({ x: 0, y: 0 })
+      setCropMode(false)
+      
+      // 加载图片尺寸
+      const img = new Image()
+      img.onload = () => {
+        setImageWidth(img.naturalWidth || img.width)
+        setImageHeight(img.naturalHeight || img.height)
+      }
+      img.src = url
+    } catch (error) {
+      console.error('Failed to load image:', error)
+      toast({
+        title: '加载图片失败',
+        description: String(error),
+        variant: 'destructive'
+      })
+    } finally {
+      setLoading(false)
+    }
+  }, [filePath])
 
   useEffect(() => {
-    loadImage()
-  }, [filePath])
+    void loadImage()
+  }, [loadImage])
 
   useEffect(() => {
     const element = viewportRef.current
@@ -124,42 +182,9 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
     }
   }, [loading, imageSrc])
 
-  async function loadImage() {
-    if (!filePath) return
-    
-    try {
-      setLoading(true)
-      const imageData = await readWorkspaceBinaryFile(filePath)
-      
-      setOriginalImageData(imageData)
-      
-      const blob = new Blob([imageData as unknown as BlobPart])
-      const url = URL.createObjectURL(blob)
-      setImageSrc(url)
-      setHasChanges(false)
-      setPreviewScale(1)
-      setPanOffset({ x: 0, y: 0 })
-      
-      // 加载图片尺寸
-      const img = new Image()
-      img.onload = () => {
-        setImageWidth(img.naturalWidth)
-        setImageHeight(img.naturalHeight)
-      }
-      img.src = url
-    } catch (error) {
-      console.error('Failed to load image:', error)
-      toast({
-        title: '加载图片失败',
-        description: String(error),
-        variant: 'destructive'
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
-
   const applyImageTransform = async (transformFn: (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, img: HTMLImageElement) => void) => {
+    if (isSvg) return
+
     try {
       const img = new Image()
       img.crossOrigin = 'anonymous'
@@ -256,7 +281,7 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
 
   const handleReset = () => {
     if (originalImageData) {
-      const blob = new Blob([originalImageData as unknown as BlobPart])
+      const blob = new Blob([originalImageData as unknown as BlobPart], { type: getImageMimeType(filePath) })
       const url = URL.createObjectURL(blob)
       setImageSrc(url)
       setHasChanges(false)
@@ -267,6 +292,14 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
   }
 
   const handleSave = async () => {
+    if (isSvg) {
+      toast({
+        title: 'SVG 保持原始文件',
+        description: '请使用导出菜单转换为 PNG/JPG/WebP。',
+      })
+      return
+    }
+
     try {
       let blob: Blob
 
@@ -319,7 +352,7 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
   }
 
   const handleCropComplete = async () => {
-    if (!cropMode || !cropperRef.current) return
+    if (isSvg || !cropMode || !cropperRef.current) return
     
     try {
       // 获取裁切后的图片
@@ -436,7 +469,7 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
   }
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!canPanImage || event.button !== 0) return
+    if (isSvg || !canPanImage || event.button !== 0) return
 
     panStartRef.current = {
       pointerId: event.pointerId,
@@ -550,53 +583,9 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
     <div className="image-editor-shell flex h-full min-h-0 flex-1 flex-col">
       {/* Toolbar */}
       <div className="image-editor-toolbar-surface">
-        <div className="image-editor-toolbar-scroll">
-          <div className="image-editor-toolbar-side image-editor-toolbar-left">
-            <div className="image-editor-tool-group">
-              <Toggle
-                pressed={cropMode}
-                onPressedChange={setCropMode}
-                aria-label="裁切模式"
-                size="sm"
-                className="image-editor-icon-button"
-              >
-                <Crop className="h-4 w-4" />
-              </Toggle>
-              {cropMode ? (
-                <Button className="image-editor-text-button" variant="secondary" size="sm" onClick={handleCropComplete}>
-                  <Check className="h-4 w-4" />
-                  应用
-                </Button>
-              ) : null}
-              <TooltipButton
-                icon={<RotateCw className="h-4 w-4" />}
-                tooltipText="旋转"
-                onClick={handleRotate}
-                size="sm"
-                side="bottom"
-                buttonClassName="image-editor-icon-button"
-              />
-              <TooltipButton
-                icon={<FlipHorizontal className="h-4 w-4" />}
-                tooltipText="水平翻转"
-                onClick={handleFlipHorizontal}
-                size="sm"
-                side="bottom"
-                buttonClassName="image-editor-icon-button"
-              />
-              <TooltipButton
-                icon={<FlipVertical className="h-4 w-4" />}
-                tooltipText="垂直翻转"
-                onClick={handleFlipVertical}
-                size="sm"
-                side="bottom"
-                buttonClassName="image-editor-icon-button"
-              />
-            </div>
-          </div>
-
-          <div className="image-editor-toolbar-center">
-            <div className="image-editor-tool-group image-editor-zoom-group">
+        {isSvg ? (
+          <div className="image-editor-svg-toolbar">
+            <div className="image-editor-toolbar-cluster">
               <TooltipButton
                 icon={<ZoomOut className="h-4 w-4" />}
                 tooltipText="缩小"
@@ -620,10 +609,8 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
                 适应
               </Button>
             </div>
-          </div>
 
-          <div className="image-editor-toolbar-side image-editor-toolbar-right">
-            <div className="image-editor-tool-group">
+            <div className="image-editor-toolbar-cluster image-editor-svg-actions">
               <TooltipButton
                 icon={<Bot className="h-4 w-4" />}
                 tooltipText="发送给 AI 分析"
@@ -648,6 +635,7 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
                 side="bottom"
                 buttonClassName="image-editor-icon-button"
               />
+              <div className="image-editor-toolbar-divider" />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button className="image-editor-text-button" variant="ghost" size="sm">
@@ -680,20 +668,152 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
               </DropdownMenu>
             </div>
           </div>
-
-          {hasChanges ? (
-            <div className="image-editor-tool-group image-editor-save-group">
-              <Button className="image-editor-text-button" variant="ghost" size="sm" onClick={handleReset}>
-                <Undo className="h-4 w-4" />
-                重置
-              </Button>
-              <Button className="image-editor-save-button" variant="default" size="sm" onClick={handleSave}>
-                <Save className="h-4 w-4" />
-                保存
-              </Button>
+        ) : (
+          <div className="image-editor-toolbar-scroll">
+            <div className="image-editor-toolbar-side image-editor-toolbar-left">
+              <div className="image-editor-tool-group">
+                <Toggle
+                  pressed={cropMode}
+                  onPressedChange={setCropMode}
+                  aria-label="裁切模式"
+                  size="sm"
+                  className="image-editor-icon-button"
+                >
+                  <Crop className="h-4 w-4" />
+                </Toggle>
+                {cropMode ? (
+                  <Button className="image-editor-text-button" variant="secondary" size="sm" onClick={handleCropComplete}>
+                    <Check className="h-4 w-4" />
+                    应用
+                  </Button>
+                ) : null}
+                <TooltipButton
+                  icon={<RotateCw className="h-4 w-4" />}
+                  tooltipText="旋转"
+                  onClick={handleRotate}
+                  size="sm"
+                  side="bottom"
+                  buttonClassName="image-editor-icon-button"
+                />
+                <TooltipButton
+                  icon={<FlipHorizontal className="h-4 w-4" />}
+                  tooltipText="水平翻转"
+                  onClick={handleFlipHorizontal}
+                  size="sm"
+                  side="bottom"
+                  buttonClassName="image-editor-icon-button"
+                />
+                <TooltipButton
+                  icon={<FlipVertical className="h-4 w-4" />}
+                  tooltipText="垂直翻转"
+                  onClick={handleFlipVertical}
+                  size="sm"
+                  side="bottom"
+                  buttonClassName="image-editor-icon-button"
+                />
+              </div>
             </div>
-          ) : null}
-        </div>
+
+            <div className="image-editor-toolbar-center">
+              <div className="image-editor-tool-group image-editor-zoom-group">
+                <TooltipButton
+                  icon={<ZoomOut className="h-4 w-4" />}
+                  tooltipText="缩小"
+                  onClick={handleZoomOut}
+                  size="sm"
+                  side="bottom"
+                  buttonClassName="image-editor-icon-button"
+                />
+                <Button className="image-editor-zoom-button" variant="ghost" size="sm" onClick={handleActualSize}>
+                  {zoomLabel}
+                </Button>
+                <TooltipButton
+                  icon={<ZoomIn className="h-4 w-4" />}
+                  tooltipText="放大"
+                  onClick={handleZoomIn}
+                  size="sm"
+                  side="bottom"
+                  buttonClassName="image-editor-icon-button"
+                />
+                <Button className="image-editor-text-button" variant="ghost" size="sm" onClick={handleFitToWindow}>
+                  适应
+                </Button>
+              </div>
+            </div>
+
+            <div className="image-editor-toolbar-side image-editor-toolbar-right">
+              <div className="image-editor-tool-group">
+                <TooltipButton
+                  icon={<Bot className="h-4 w-4" />}
+                  tooltipText="发送给 AI 分析"
+                  onClick={handleSendToAi}
+                  size="sm"
+                  side="bottom"
+                  buttonClassName="image-editor-icon-button"
+                />
+                <TooltipButton
+                  icon={<ClipboardPlus className="h-4 w-4" />}
+                  tooltipText="插入到 Markdown"
+                  onClick={handleInsertToMarkdown}
+                  size="sm"
+                  side="bottom"
+                  buttonClassName="image-editor-icon-button"
+                />
+                <TooltipButton
+                  icon={<FileOutput className="h-4 w-4" />}
+                  tooltipText="复制图片"
+                  onClick={handleCopyImage}
+                  size="sm"
+                  side="bottom"
+                  buttonClassName="image-editor-icon-button"
+                />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button className="image-editor-text-button" variant="ghost" size="sm">
+                      <Download className="h-4 w-4" />
+                      导出
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-64">
+                    <DropdownMenuLabel>压缩质量 {Math.round(exportQuality * 100)}%</DropdownMenuLabel>
+                    <div className="px-2 py-2">
+                      <Slider
+                        min={0.35}
+                        max={1}
+                        step={0.05}
+                        value={[exportQuality]}
+                        onValueChange={(value) => setExportQuality(value[0] ?? 0.82)}
+                      />
+                    </div>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => void handleExportVariant('jpeg', 'compressed')}>
+                      导出 JPG
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void handleExportVariant('webp', 'compressed')}>
+                      导出 WebP
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void handleExportVariant('png', 'converted')}>
+                      导出 PNG
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+
+            {hasChanges ? (
+              <div className="image-editor-tool-group image-editor-save-group">
+                <Button className="image-editor-text-button" variant="ghost" size="sm" onClick={handleReset}>
+                  <Undo className="h-4 w-4" />
+                  重置
+                </Button>
+                <Button className="image-editor-save-button" variant="default" size="sm" onClick={handleSave}>
+                  <Save className="h-4 w-4" />
+                  保存
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {/* Image Display / Cropper */}
@@ -706,7 +826,7 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
         onPointerCancel={handlePointerEnd}
         onWheel={handleWheelZoom}
       >
-        {cropMode ? (
+        {cropMode && !isSvg ? (
           <div 
             ref={cropperContainerRef}
             className="flex min-h-0 min-w-0 items-center justify-center overflow-hidden"
@@ -732,6 +852,16 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
             />
           </div>
         ) : (
+          isSvg ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imageSrc}
+              alt={imageName}
+              className="image-editor-preview-image"
+              style={previewStyle}
+              draggable={false}
+            />
+          ) : (
             <NextImage 
               src={imageSrc} 
               alt={imageName}
@@ -741,7 +871,7 @@ export function ImageEditor({ filePath }: ImageEditorProps) {
               unoptimized
               draggable={false}
             />
-          )}
+          ))}
       </div>
 
       {/* Footer */}

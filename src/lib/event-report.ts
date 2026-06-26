@@ -9,12 +9,44 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 
-// 配置常量
+// 配置常量 - 从环境变量读取，避免硬编码泄露
 const API_CONFIG = {
-  baseURL: 'https://api.upgrade.toolsetlink.com',
-  accessKey: 'wHi8Tkuc5i6v1UCAuVk48A',
-  secretKey: 'eg4upYo7ruJgaDVOtlHJGj4lyzG4Oh9IpLGwOc6Oehw',
-  appKey: 'tyEi-iLVFxnRhGc9c_xApw',
+  baseURL: process.env.NEXT_PUBLIC_UPGRADE_API_URL || 'https://api.upgrade.toolsetlink.com',
+  accessKey: process.env.NEXT_PUBLIC_UPGRADE_ACCESS_KEY || '',
+  secretKey: process.env.UPGRADE_SECRET_KEY || '',
+  appKey: process.env.NEXT_PUBLIC_UPGRADE_APP_KEY || '',
+}
+
+function isEventReportConfigured(): boolean {
+  return Boolean(
+    API_CONFIG.baseURL &&
+    API_CONFIG.accessKey &&
+    API_CONFIG.secretKey &&
+    API_CONFIG.appKey
+  )
+}
+
+function logEventReportDebug(message: string, detail?: unknown) {
+  if (process.env.NODE_ENV !== 'development') {
+    return
+  }
+
+  if (detail !== undefined) {
+    // eslint-disable-next-line no-console
+    console.debug(`[event-report] ${message}`, detail)
+  } else {
+    // eslint-disable-next-line no-console
+    console.debug(`[event-report] ${message}`)
+  }
+}
+
+function isSuccessfulReportResponse(result: unknown): result is { code: number } {
+  return Boolean(
+    result &&
+    typeof result === 'object' &&
+    'code' in result &&
+    (result as { code?: unknown }).code === 0
+  )
 }
 
 // 事件类型枚举
@@ -117,7 +149,7 @@ async function getVersionCode(): Promise<number> {
     // 转换为数字: major * 1000000 + minor * 1000 + patch
     return major * 1000000 + minor * 1000 + patch
   } catch (error) {
-    console.error('Failed to get version code:', error)
+    logEventReportDebug('Failed to get version code', error)
     return 1
   }
 }
@@ -132,7 +164,7 @@ async function getDeviceId(): Promise<string | undefined> {
     const deviceId = await invoke<string>('get_device_id')
     return deviceId
   } catch (error) {
-    console.error('Failed to get device ID:', error)
+    logEventReportDebug('Failed to get device ID', error)
     return undefined
   }
 }
@@ -152,7 +184,7 @@ async function getDeviceInfo() {
       devKey: deviceId,
     }
   } catch (error) {
-    console.error('Failed to get device info:', error)
+    logEventReportDebug('Failed to get device info', error)
     return {
       target: undefined,
       arch: undefined,
@@ -168,6 +200,11 @@ export async function reportEvent(
   eventType: EventType,
   eventData: EventData
 ): Promise<boolean> {
+  if (!isEventReportConfigured()) {
+    logEventReportDebug('Skipped event report because upgrade API credentials are incomplete', { eventType })
+    return false
+  }
+
   try {
     const timestamp = generateRFC3339Timestamp()
     const nonce = generateNonce()
@@ -206,21 +243,25 @@ export async function reportEvent(
       return response.ok
     }
 
-    let result: any
+    let result: unknown
     try {
       result = JSON.parse(responseText)
     } catch {
       return false
     }
 
-    if (response.ok && result.code === 0) {
+    if (response.ok && isSuccessfulReportResponse(result)) {
       return true
     } else {
-      console.error('Failed to report event:', result)
+      logEventReportDebug('Failed to report event', {
+        eventType,
+        status: response.status,
+        result,
+      })
       return false
     }
   } catch (error) {
-    console.error('Error reporting event:', error)
+    logEventReportDebug('Error reporting event', { eventType, error })
     return false
   }
 }
@@ -229,6 +270,11 @@ export async function reportEvent(
  * 上报应用启动事件
  */
 export async function reportAppStart(): Promise<boolean> {
+  if (!isEventReportConfigured()) {
+    logEventReportDebug('Skipped app start report because upgrade API credentials are incomplete')
+    return false
+  }
+
   try {
     const versionCode = await getVersionCode()
     const deviceInfo = await getDeviceInfo()
@@ -244,7 +290,7 @@ export async function reportAppStart(): Promise<boolean> {
     
     return await reportEvent(EventType.APP_START, eventData)
   } catch (error) {
-    console.error('Failed to report app start:', error)
+    logEventReportDebug('Failed to report app start', error)
     return false
   }
 }
@@ -256,6 +302,11 @@ export async function reportAppUpgradeDownload(
   downloadVersionCode: number,
   code: number
 ): Promise<boolean> {
+  if (!isEventReportConfigured()) {
+    logEventReportDebug('Skipped app upgrade download report because upgrade API credentials are incomplete')
+    return false
+  }
+
   try {
     const versionCode = await getVersionCode()
     const deviceInfo = await getDeviceInfo()
@@ -271,7 +322,7 @@ export async function reportAppUpgradeDownload(
     
     return await reportEvent(EventType.APP_UPGRADE_DOWNLOAD, eventData)
   } catch (error) {
-    console.error('Failed to report app upgrade download:', error)
+    logEventReportDebug('Failed to report app upgrade download', error)
     return false
   }
 }
@@ -283,6 +334,11 @@ export async function reportAppUpgradeUpgrade(
   upgradeVersionCode: number,
   code: number
 ): Promise<boolean> {
+  if (!isEventReportConfigured()) {
+    logEventReportDebug('Skipped app upgrade report because upgrade API credentials are incomplete')
+    return false
+  }
+
   try {
     const versionCode = await getVersionCode()
     const deviceInfo = await getDeviceInfo()
@@ -298,7 +354,7 @@ export async function reportAppUpgradeUpgrade(
     
     return await reportEvent(EventType.APP_UPGRADE_UPGRADE, eventData)
   } catch (error) {
-    console.error('Failed to report app upgrade:', error)
+    logEventReportDebug('Failed to report app upgrade', error)
     return false
   }
 }

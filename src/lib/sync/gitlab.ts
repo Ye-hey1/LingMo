@@ -1,6 +1,5 @@
 import { toast } from '@/hooks/use-toast';
 import { Store } from '@tauri-apps/plugin-store';
-import { v4 as uuid } from 'uuid';
 import { fetch, Proxy } from '@tauri-apps/plugin-http';
 import { fetch as encodeFetch } from './encode-fetch'
 import { 
@@ -95,7 +94,7 @@ export async function uploadFile({
       throw new Error('Gitlab 用户名或项目 ID 未配置');
     }
 
-    const id = uuid();
+    const id = crypto.randomUUID();
     let _filename = filename || id;
     // 将空格转换成下划线
     _filename = _filename.replace(/\s/g, '_');

@@ -158,76 +158,57 @@ export function formatErrorMessage(error: unknown): string {
 }
 
 // ============================================================
-// Error Handler
+// Error Handler (模块级变量)
 // ============================================================
 
-export class ErrorHandler {
-  private static instance: ErrorHandler
-  private errorLog: AppError[] = []
-  private maxLogSize = 100
+// ponytail: 模块级变量替代单例类
+let errorLog: AppError[] = []
+const maxLogSize = 100
 
-  static getInstance(): ErrorHandler {
-    if (!ErrorHandler.instance) {
-      ErrorHandler.instance = new ErrorHandler()
-    }
-    return ErrorHandler.instance
+export function handleAIError(error: unknown, options: ErrorHandlerOptions = {}): AppError {
+  const {
+    showToast: _showToast = true,
+    logToConsole = true,
+    throwError = false,
+  } = options
+
+  const appError = formatError(error)
+
+  // 记录到日志
+  errorLog.push(appError)
+  if (errorLog.length > maxLogSize) {
+    errorLog.shift()
   }
 
-  handle(error: unknown, options: ErrorHandlerOptions = {}): AppError {
-    const {
-      showToast: _showToast = true,
-      logToConsole = true,
-      throwError = false,
-    } = options
-
-    const appError = formatError(error)
-
-    // 记录到日志
-    this.errorLog.push(appError)
-    if (this.errorLog.length > this.maxLogSize) {
-      this.errorLog.shift()
-    }
-
-    // 控制台输出
-    if (logToConsole) {
-      const logMethod = appError.kind === 'unknown' ? 'error' : 'warn'
-      console[logMethod](`[${appError.kind}] ${appError.title}:`, appError.message, appError.details || '')
-    }
-
-    // 抛出错误
-    if (throwError) {
-      throw appError
-    }
-
-    return appError
+  // 控制台输出
+  if (logToConsole) {
+    const logMethod = appError.kind === 'unknown' ? 'error' : 'warn'
+    console[logMethod](`[${appError.kind}] ${appError.title}:`, appError.message, appError.details || '')
   }
 
-  getErrorLog(): AppError[] {
-    return [...this.errorLog]
+  // 抛出错误
+  if (throwError) {
+    throw appError
   }
 
-  clearErrorLog(): void {
-    this.errorLog = []
-  }
+  return appError
+}
 
-  getRecentErrors(count: number = 10): AppError[] {
-    return this.errorLog.slice(-count)
-  }
+export function getErrorLog(): AppError[] {
+  return [...errorLog]
+}
+
+export function clearErrorLog(): void {
+  errorLog = []
+}
+
+export function getRecentErrors(count: number = 10): AppError[] {
+  return errorLog.slice(-count)
 }
 
 // ============================================================
 // Convenience Functions
 // ============================================================
-
-export function handleAIError(error: unknown): string {
-  const handler = ErrorHandler.getInstance()
-  const appError = handler.handle(error, {
-    showToast: false,
-    logToConsole: true,
-    throwError: false,
-  })
-  return formatErrorMessage(appError)
-}
 
 export function isRetryableError(error: unknown): boolean {
   const kind = classifyError(error)

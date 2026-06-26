@@ -27,7 +27,6 @@ import './crop.css'
 import Image from 'next/image'
 import useTagStore from "@/stores/tag"
 import useMarkStore from "@/stores/mark"
-import { v4 as uuid } from "uuid"
 import useSettingStore from "@/stores/setting"
 import { insertMark } from "@/db/marks"
 import emitter from '@/lib/emitter'
@@ -103,7 +102,7 @@ export function ControlScan() {
 
   const cropEnd = useCallback(async () => {
     setOpen(false)
-    const queueId = uuid()
+    const queueId = crypto.randomUUID()
     if (!cropperRef.current) return
     const canvas = cropperRef.current.getCroppedCanvas();
     canvas.toBlob(async (blob) => {

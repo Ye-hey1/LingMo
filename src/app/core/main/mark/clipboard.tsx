@@ -8,7 +8,6 @@ import { save } from '@tauri-apps/plugin-dialog';
 import useTagStore from "@/stores/tag";
 import useSettingStore from "@/stores/setting";
 import useMarkStore from "@/stores/mark";
-import { v4 as uuid } from 'uuid'
 import { insertMark, Mark } from "@/db/marks";
 import { uint8ArrayToBase64, uploadFile } from "@/lib/sync/github";
 import { RepoNames } from "@/lib/sync/github.types";
@@ -68,7 +67,7 @@ export function Clipboard() {
     try {
       await clear()
       setImage('')
-      const queueId = uuid()
+      const queueId = crypto.randomUUID()
       addQueue({ queueId, tagId: currentTagId!, progress: t('record.mark.progress.saveImage'), type: 'image', startTime: Date.now() })
 
       await ensureImageDir()

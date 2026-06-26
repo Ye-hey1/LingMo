@@ -27,6 +27,7 @@ import { buildVectorIndexedMap, getVectorDocumentKey } from '@/lib/vector-docume
 import { buildRemotePathsToLoad } from './article-remote-sync'
 import { useNoteIndexStore } from './note-index'
 import { insertNoteHistory } from '@/db/history'
+import { LARGE_MARKDOWN_CHAR_THRESHOLD, isLargeMarkdownContentFast } from '@/lib/editor-document-profile'
 
 // 缓存 Store 实例，避免每次都重新加载
 let storeInstance: Store | null = null
@@ -35,6 +36,68 @@ async function getStore(): Promise<Store> {
     storeInstance = await Store.load('store.json')
   }
   return storeInstance
+}
+
+let pendingSaveTimerRef: NodeJS.Timeout | null = null
+let pendingSaveContentRef: string | null = null
+let pendingSavePathRef: string | null = null
+const LARGE_MARKDOWN_CONTENT_CACHE_LIMIT = 3
+const largeMarkdownContentCache = new Map<string, string>()
+
+export function getCachedLargeMarkdownContent(path: string): string | null {
+  const content = largeMarkdownContentCache.get(path)
+  if (content == null) {
+    return null
+  }
+
+  largeMarkdownContentCache.delete(path)
+  largeMarkdownContentCache.set(path, content)
+  return content
+}
+
+export function setCachedLargeMarkdownContent(path: string, content: string) {
+  if (!path || !/\.(md|markdown)$/i.test(path)) {
+    return
+  }
+
+  largeMarkdownContentCache.delete(path)
+  largeMarkdownContentCache.set(path, content)
+
+  while (largeMarkdownContentCache.size > LARGE_MARKDOWN_CONTENT_CACHE_LIMIT) {
+    const oldestPath = largeMarkdownContentCache.keys().next().value
+    if (!oldestPath) break
+    largeMarkdownContentCache.delete(oldestPath)
+  }
+}
+
+export function clearCachedLargeMarkdownContent(path: string) {
+  largeMarkdownContentCache.delete(path)
+}
+
+function isLargeMarkdownContent(path: string, content: string): boolean {
+  if (!/\.(md|markdown)$/i.test(path)) {
+    return false
+  }
+
+  return isLargeMarkdownContentFast(content)
+}
+
+async function isPotentialLargeLocalMarkdown(path: string): Promise<boolean> {
+  if (!/\.(md|markdown)$/i.test(path)) {
+    return false
+  }
+
+  try {
+    const workspace = await getWorkspacePath()
+    const pathOptions = await getFilePathOptions(path)
+    const metadata = workspace.isCustom
+      ? await stat(pathOptions.path)
+      : await stat(pathOptions.path, { baseDir: pathOptions.baseDir })
+
+    return typeof metadata.size === 'number' && metadata.size >= LARGE_MARKDOWN_CHAR_THRESHOLD
+  } catch {
+    return false
+  }
 }
 
 const VIRTUAL_WORKSPACE_TABS = {
@@ -899,6 +962,12 @@ const useArticleStore = create<NoteState>((set, get) => ({
     }
 
     get().setFileTree(cacheTree)
+    // 同步清理向量索引与 KO 记录（不阻塞，失败只记录）
+    if (/\.(md|markdown)$/i.test(relativePath)) {
+      void import('@/lib/knowledge/reindex')
+        .then(({ unindexFile }) => unindexFile(relativePath))
+        .catch(error => console.error('[knowledge] unindexFile on remove failed:', error))
+    }
     return true
   },
   moveLocalEntry: (oldPath: string, newPath: string) => {
@@ -915,6 +984,12 @@ const useArticleStore = create<NoteState>((set, get) => ({
     }
 
     get().setFileTree(cacheTree)
+    // 迁移向量索引与 KO 路径（不阻塞，失败只记录）
+    if (/\.(md|markdown)$/i.test(oldPath) || /\.(md|markdown)$/i.test(newPath)) {
+      void import('@/lib/knowledge/reindex')
+        .then(({ moveFileIndex }) => moveFileIndex(oldPath, newPath))
+        .catch(error => console.error('[knowledge] moveFileIndex on move failed:', error))
+    }
     return true
   },
   syncOpenTabsForPathChange: async (oldPath: string, newPath: string) => {
@@ -1393,9 +1468,11 @@ const useArticleStore = create<NoteState>((set, get) => ({
           get().setFileTree(dirs)
         }
       } catch {
+        // Remote tree loading is best-effort; keep the local tree usable.
       }
     }
   } catch {
+    // Initial file tree loading is best-effort; callers can retry via refresh.
   }
 },
   // 加载文件夹内部的本地和远程文件（按需加载）
@@ -1712,6 +1789,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
       cacheTree.unshift(node as DirTree)
       set({ fileTree: cacheTree })
     } catch {
+      // The draft node is optional UI state; ignore stale tree mutation failures.
     }
   },
   newFile: async () => {
@@ -1815,6 +1893,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
       set({ fileTree: cacheTree })
       get().setActiveFilePath(fullPath)
     } catch {
+      // The draft node is optional UI state; ignore stale tree mutation failures.
     }
   },
   newFolderInFolder: async (path: string) => {
@@ -1845,6 +1924,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
       currentFolder?.children?.unshift(node as DirTree)
       set({ fileTree: cacheTree })
     } catch {
+      // The draft node is optional UI state; ignore stale tree mutation failures.
     }
   },
 
@@ -2014,8 +2094,6 @@ const useArticleStore = create<NoteState>((set, get) => ({
     }
 
     try {
-      localContent = await readWorkspaceTextFile(actualPath)
-
       // 检查是否是远程文件且本地内容为空
       const fileTree = get().fileTree
       const fileInfo = findFileInTree(fileTree, actualPath)
@@ -2024,6 +2102,17 @@ const useArticleStore = create<NoteState>((set, get) => ({
         ? await exists(pathOptions.path, { baseDir: pathOptions.baseDir })
         : await exists(pathOptions.path)
       const isRemoteFile = fileInfo && !fileInfo.isLocale && !localFileExists
+
+      const shouldLetEditorLoadLargeMarkdown =
+        !isRemoteFile && localFileExists && await isPotentialLargeLocalMarkdown(actualPath)
+
+      if (shouldLetEditorLoadLargeMarkdown) {
+        set({ currentArticle: '', loading: false, readFilePath: '' })
+        void get().checkFileVectorIndexed(actualPath)
+        return
+      }
+
+      localContent = await readWorkspaceTextFile(actualPath)
 
       // 如果是远程文件且本地内容为空，先显示编辑器（禁用），再异步拉取
       if (isRemoteFile && (!localContent || localContent.trim() === '')) {
@@ -2042,8 +2131,14 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
             // 再次检查当前是否还是同一个文件
             if (get().activeFilePath === actualPath) {
-              set({ currentArticle: remoteContent })
-              emitter.emit('editor-content-from-remote', { content: remoteContent })
+              const isLargeRemoteMarkdown = isLargeMarkdownContent(actualPath, remoteContent)
+              if (isLargeRemoteMarkdown) {
+                setCachedLargeMarkdownContent(actualPath, remoteContent)
+                emitter.emit('sync-content-updated', { path: actualPath, content: remoteContent })
+              } else {
+                set({ currentArticle: remoteContent })
+                emitter.emit('editor-content-from-remote', { content: remoteContent })
+              }
             }
 
             // 拉取成功后，更新文件树的 isLocale 状态为本地文件
@@ -2070,7 +2165,13 @@ const useArticleStore = create<NoteState>((set, get) => ({
       }
 
       // 正常的本地文件，显示内容（即使是空文件也正确显示）
-      set({ currentArticle: localContent })
+      const isLargeLocalMarkdown = isLargeMarkdownContent(actualPath, localContent)
+      if (!isLargeLocalMarkdown) {
+        set({ currentArticle: localContent })
+      } else {
+        setCachedLargeMarkdownContent(actualPath, localContent)
+        emitter.emit('sync-content-updated', { path: actualPath, content: localContent })
+      }
       // 本地内容加载完成，解除加载状态
       get().setLoading(false)
       // 检查文件的向量索引状态
@@ -2103,8 +2204,14 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
             // 再次检查当前是否还是同一个文件
             if (get().activeFilePath === actualPath) {
-              set({ currentArticle: remoteContent })
-              emitter.emit('editor-content-from-remote', { content: remoteContent })
+              const isLargeRemoteMarkdown = isLargeMarkdownContent(actualPath, remoteContent)
+              if (isLargeRemoteMarkdown) {
+                setCachedLargeMarkdownContent(actualPath, remoteContent)
+                emitter.emit('sync-content-updated', { path: actualPath, content: remoteContent })
+              } else {
+                set({ currentArticle: remoteContent })
+                emitter.emit('editor-content-from-remote', { content: remoteContent })
+              }
             }
 
             // 拉取成功后，更新文件树的 isLocale 状态为本地文件
@@ -2161,11 +2268,18 @@ const useArticleStore = create<NoteState>((set, get) => ({
           const result = await syncOnOpen(actualPath)
           // 在设置 content 前再次确认路径没有变化
           if (result?.updated && result.content && get().activeFilePath === actualPath) {
-            // 拉取了新内容，更新 currentArticle
-            set({ currentArticle: result.content })
+            const isLargeSyncedMarkdown = isLargeMarkdownContent(actualPath, result.content)
+            if (isLargeSyncedMarkdown) {
+              setCachedLargeMarkdownContent(actualPath, result.content)
+              emitter.emit('sync-content-updated', { path: actualPath, content: result.content })
+            } else {
+              // 拉取了新内容，更新 currentArticle
+              set({ currentArticle: result.content })
+            }
           }
         }
       } catch {
+        // Sync-on-open is opportunistic; local content remains the source of truth.
       }
     }
 
@@ -2260,32 +2374,43 @@ const useArticleStore = create<NoteState>((set, get) => ({
       }
 
       // 清除之前的防抖定时器
-      const existingTimer = get().debounceSaveTimer
-      if (existingTimer) {
-        clearTimeout(existingTimer)
+      if (pendingSaveTimerRef) {
+        clearTimeout(pendingSaveTimerRef)
+        pendingSaveTimerRef = null
       }
 
-      // 设置新的防抖定时器，500ms 后执行保存
+      const isLargeMarkdown = isLargeMarkdownContent(path, content)
+      const saveDelayMs = isLargeMarkdown ? 1800 : 500
+
+      // 设置新的防抖定时器后执行保存
       // 这样可以合并短时间内多次 content change
-      // 保存 pendingContent 用于防抖检查
-      set({ pendingSaveContent: content, debounceSaveTimer: undefined })
+      // 大文档正文保存在非响应式引用中，避免每次输入都触发全局 store 订阅者重渲染。
+      pendingSaveContentRef = content
+      pendingSavePathRef = path
       const timer = setTimeout(async () => {
         const state = get()
-        const debouncedContent = state.pendingSaveContent || content
+        const debouncedContent = pendingSavePathRef === path
+          ? pendingSaveContentRef ?? content
+          : content
 
         // Bug fix: 检查路径是否仍然匹配，避免文件切换时保存到错误的文件
         const currentActivePath = state.activeFilePath
         if (currentActivePath !== path) {
           // 文件已切换，取消保存
-          set({ debounceSaveTimer: null, pendingSaveContent: null })
+          pendingSaveTimerRef = null
+          pendingSaveContentRef = null
+          pendingSavePathRef = null
           return
         }
 
-        set({ debounceSaveTimer: null, pendingSaveContent: null })
+        pendingSaveTimerRef = null
+        pendingSaveContentRef = null
+        pendingSavePathRef = null
 
         // 执行实际保存操作
         const savePath = path
         const saveContent = debouncedContent
+        const shouldSkipRealtimeMarkdownPipelines = isLargeMarkdownContent(savePath, saveContent)
         const workspace = await getWorkspacePath()
 
         // 检查文件是否存在
@@ -2327,13 +2452,15 @@ const useArticleStore = create<NoteState>((set, get) => ({
           await writeTextFile(pathOptions.path, saveContent, { baseDir: pathOptions.baseDir })
         }
 
-        // 异步保存笔记历史增量快照
-        void insertNoteHistory(savePath, saveContent).catch(console.error)
+        if (!shouldSkipRealtimeMarkdownPipelines) {
+          // 异步保存笔记历史增量快照
+          void insertNoteHistory(savePath, saveContent).catch(console.error)
+        }
 
         // 更新缓存树
         const cacheTree = cloneDeep(get().fileTree)
         const current = savePath.includes('/') ? getCurrentFolder(savePath, cacheTree) : cacheTree.find(item => item.name === savePath)
-        if (current) {
+        if (current && (!shouldSkipRealtimeMarkdownPipelines || !isLocale)) {
           const now = new Date().toISOString()
           if (!isLocale) {
             current.isLocale = true
@@ -2378,31 +2505,39 @@ const useArticleStore = create<NoteState>((set, get) => ({
         }
 
         // 触发防抖向量计算
-        if (savePath.endsWith('.md')) {
+        if (/\.(md|markdown)$/i.test(savePath) && !shouldSkipRealtimeMarkdownPipelines) {
           get().scheduleVectorCalculation(savePath, saveContent)
           // 增量更新反向链接索引
           useNoteIndexStore.getState().updateFileIndex(savePath, saveContent)
           // 异步提取关键词主题
           get().scheduleTopicExtraction(savePath, saveContent)
+          // 同步到统一知识对象注册表（不阻塞主流程，失败只记录）
+          void import('@/lib/knowledge/note-sync')
+            .then(({ registerNoteFromSave }) => registerNoteFromSave(savePath, saveContent))
+            .catch(error => console.error('[knowledge] registerNoteFromSave failed:', error))
         }
 
         // 更新 currentArticle
-        set({ currentArticle: saveContent })
-
-        // 记录写作活动（独立事件日志，不受后续删除影响）
-        try {
-          const { recordWritingActivity } = await import('@/db/activity')
-          const fileName = savePath.split('/').pop() || savePath
-          await recordWritingActivity({
-            path: savePath,
-            title: fileName,
-            description: savePath,
-          })
-        } catch (error) {
-          console.error('记录写作活动失败:', error)
+        if (!shouldSkipRealtimeMarkdownPipelines) {
+          set({ currentArticle: saveContent })
         }
 
-        if (savePath.endsWith('.md')) {
+        // 记录写作活动（独立事件日志，不受后续删除影响）
+        if (!shouldSkipRealtimeMarkdownPipelines) {
+          try {
+            const { recordWritingActivity } = await import('@/db/activity')
+            const fileName = savePath.split('/').pop() || savePath
+            await recordWritingActivity({
+              path: savePath,
+              title: fileName,
+              description: savePath,
+            })
+          } catch (error) {
+            console.error('记录写作活动失败:', error)
+          }
+        }
+
+        if (/\.(md|markdown)$/i.test(savePath) && !shouldSkipRealtimeMarkdownPipelines) {
           void import('@/db/note-intelligence')
             .then(({ recordNoteUsageEvent }) => recordNoteUsageEvent(savePath, 'edit'))
             .catch(console.error)
@@ -2414,24 +2549,30 @@ const useArticleStore = create<NoteState>((set, get) => ({
         // 通知文件已保存，触发同步推送（除非设置了 skipSyncOnSave）
         const shouldSkipSync = get().skipSyncOnSave
         if (!shouldSkipSync) {
-          emitter.emit('article-saved', { path: savePath, content: saveContent })
+          emitter.emit('article-saved', {
+            path: savePath,
+            content: shouldSkipRealtimeMarkdownPipelines ? undefined : saveContent,
+            largeMarkdown: shouldSkipRealtimeMarkdownPipelines,
+          })
         }
-      }, 500)
+      }, saveDelayMs)
 
-      // 保存待处理的内容（最新的内容）
-      set({ debounceSaveTimer: timer as any, pendingSaveContent: content })
+      pendingSaveTimerRef = timer as any
     }
   },
 
   flushPendingSaveForPath: async (path: string) => {
     const state = get()
-    if (state.debounceSaveTimer && state.pendingSaveContent !== null) {
-      const activePath = state.activeFilePath
+    if (pendingSaveTimerRef && pendingSaveContentRef !== null) {
+      const activePath = pendingSavePathRef || state.activeFilePath
       // 只有当待保存的路径匹配或者没有传具体路径时执行
       if (!path || activePath === path) {
-        clearTimeout(state.debounceSaveTimer)
-        const pendingContent = state.pendingSaveContent
-        set({ debounceSaveTimer: null, pendingSaveContent: null })
+        clearTimeout(pendingSaveTimerRef)
+        const pendingContent = pendingSaveContentRef
+        const shouldSkipRealtimeMarkdownPipelines = isLargeMarkdownContent(activePath, pendingContent)
+        pendingSaveTimerRef = null
+        pendingSaveContentRef = null
+        pendingSavePathRef = null
         // 直接触发实际的保存操作
         const workspace = await getWorkspacePath()
         const pathOptions = await getFilePathOptions(activePath)
@@ -2473,13 +2614,15 @@ const useArticleStore = create<NoteState>((set, get) => ({
           await writeTextFile(pathOptions.path, pendingContent, { baseDir: pathOptions.baseDir })
         }
 
-        // 异步保存笔记历史增量快照
-        void insertNoteHistory(activePath, pendingContent).catch(console.error)
+        if (!shouldSkipRealtimeMarkdownPipelines) {
+          // 异步保存笔记历史增量快照
+          void insertNoteHistory(activePath, pendingContent).catch(console.error)
+        }
 
         // 更新缓存树
         const cacheTree = cloneDeep(get().fileTree)
         const current = activePath.includes('/') ? getCurrentFolder(activePath, cacheTree) : cacheTree.find(item => item.name === activePath)
-        if (current) {
+        if (current && (!shouldSkipRealtimeMarkdownPipelines || !isLocale)) {
           const now = new Date().toISOString()
           if (!isLocale) {
             current.isLocale = true
@@ -2518,29 +2661,37 @@ const useArticleStore = create<NoteState>((set, get) => ({
         }
 
         // 触发防抖向量计算
-        if (activePath.endsWith('.md')) {
+        if (/\.(md|markdown)$/i.test(activePath) && !shouldSkipRealtimeMarkdownPipelines) {
           get().scheduleVectorCalculation(activePath, pendingContent)
           useNoteIndexStore.getState().updateFileIndex(activePath, pendingContent)
           get().scheduleTopicExtraction(activePath, pendingContent)
         }
 
-        set({ currentArticle: pendingContent })
+        if (!shouldSkipRealtimeMarkdownPipelines) {
+          set({ currentArticle: pendingContent })
+        }
 
-        try {
-          const { recordWritingActivity } = await import('@/db/activity')
-          const fileName = activePath.split('/').pop() || activePath
-          await recordWritingActivity({
-            path: activePath,
-            title: fileName,
-            description: activePath,
-          })
-        } catch (error) {
-          console.error('记录写作活动失败:', error)
+        if (!shouldSkipRealtimeMarkdownPipelines) {
+          try {
+            const { recordWritingActivity } = await import('@/db/activity')
+            const fileName = activePath.split('/').pop() || activePath
+            await recordWritingActivity({
+              path: activePath,
+              title: fileName,
+              description: activePath,
+            })
+          } catch (error) {
+            console.error('记录写作活动失败:', error)
+          }
         }
 
         const shouldSkipSync = get().skipSyncOnSave
         if (!shouldSkipSync) {
-          emitter.emit('article-saved', { path: activePath, content: pendingContent })
+          emitter.emit('article-saved', {
+            path: activePath,
+            content: shouldSkipRealtimeMarkdownPipelines ? undefined : pendingContent,
+            largeMarkdown: shouldSkipRealtimeMarkdownPipelines,
+          })
         }
       }
     }
@@ -2718,6 +2869,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
 
       set({ vectorIndexedFiles: vectorIndexedMap })
     } catch {
+      // Vector index metadata is optional and can be rebuilt later.
     }
   },
 

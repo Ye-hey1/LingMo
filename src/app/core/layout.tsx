@@ -1,7 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { ThemeProvider } from "@/components/theme-provider"
+import { ThemeProvider as NextThemesProvider } from "next-themes"
 import useSettingStore from "@/stores/setting"
 import { useEffect, useState } from "react";
 import { initAllDatabases } from "@/db"
@@ -20,7 +20,6 @@ import { initMcp } from "@/lib/mcp/init"
 import { reportAppStart } from "@/lib/event-report"
 import { TitleBar } from "@/components/title-bar"
 import { Store } from '@tauri-apps/plugin-store'
-import { TextSizeProvider } from "@/contexts/text-size-context"
 import { applyThemeColors } from "@/lib/theme-utils"
 import emitter from "@/lib/emitter"
 import { isEditableKeyboardTarget } from "@/lib/is-editable-keyboard-target"
@@ -88,6 +87,8 @@ export default function RootLayout({
     redirectOldPaths()
   }, [isTauri, pathname, router])
 
+  // 初始化应用核心功能
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!isTauri) {
       return
@@ -248,32 +249,30 @@ export default function RootLayout({
   }, [isTauri])
 
   return (
-    <ThemeProvider
+    <NextThemesProvider
       attribute="class"
       defaultTheme="system"
       enableSystem
       disableTransitionOnChange
     >
-      <TextSizeProvider>
-        {isTauri ? (
-          <>
-            <TitleBar
-              onSearchClick={() => setSearchOpen(true)}
-              onActivityClick={() => setActivityOpen(open => !open)}
-              activityOpen={activityOpen}
-            />
-            <main className="flex flex-1 flex-col overflow-hidden w-full h-[calc(100vh-36px)] mt-9">
-              {children}
-            </main>
-            <ActivityDrawer open={activityOpen} onOpenChange={setActivityOpen} />
-            <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
-            <SettingsDialog />
-            <SyncConfirmDialog />
-          </>
-        ) : (
-          <WebRuntimeNotice compact />
-        )}
-      </TextSizeProvider>
-    </ThemeProvider>
+      {isTauri ? (
+        <>
+          <TitleBar
+            onSearchClick={() => setSearchOpen(true)}
+            onActivityClick={() => setActivityOpen(open => !open)}
+            activityOpen={activityOpen}
+          />
+          <main className="flex flex-1 flex-col overflow-hidden w-full h-[calc(100vh-36px)] mt-9">
+            {children}
+          </main>
+          <ActivityDrawer open={activityOpen} onOpenChange={setActivityOpen} />
+          <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+          <SettingsDialog />
+          <SyncConfirmDialog />
+        </>
+      ) : (
+        <WebRuntimeNotice compact />
+      )}
+    </NextThemesProvider>
   );
 }

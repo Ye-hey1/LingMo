@@ -22,6 +22,46 @@ import {
   normalizeClawNestedFences,
 } from './claw-stream-format';
 
+const GITHUB_REPO_REFERENCE_RE = /(^|[^\w./@-])([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100})(?=$|[^\w./-])/g;
+const GITHUB_REPO_SKIP_OWNERS = new Set([
+  'api',
+  'app',
+  'assets',
+  'build',
+  'components',
+  'dist',
+  'docs',
+  'lib',
+  'node_modules',
+  'pages',
+  'public',
+  'scripts',
+  'src',
+  'styles',
+  'test',
+  'tests',
+  'types',
+]);
+const GITHUB_REPO_SKIP_REPOS = new Set([
+  'api',
+  'app',
+  'assets',
+  'build',
+  'components',
+  'dist',
+  'docs',
+  'lib',
+  'node_modules',
+  'pages',
+  'public',
+  'scripts',
+  'src',
+  'styles',
+  'test',
+  'tests',
+  'types',
+]);
+
 // 平衡行内标记（`, **, ~~）：流式时孤立的开始标记会把后续文本错误格式化，
 // 奇数个则在末尾补一个配对。仅在代码围栏外统计，避免误伤代码块内容。
 function balanceInlineMarks(text: string): string {
@@ -74,6 +114,100 @@ function getFenceLanguage(info: string): string {
   return info.trim().split(/\s+/)[0]?.replace(/^language-/, '').toLowerCase() || '';
 }
 
+function isLikelyGitHubRepoReference(reference: string): boolean {
+  const [owner = '', repo = ''] = reference.split('/');
+  if (!owner || !repo) return false;
+  if (owner.startsWith('-') || owner.endsWith('-')) return false;
+  if (repo.startsWith('.') || repo.endsWith('.')) return false;
+  if (/^\d+$/.test(owner) || /^\d+$/.test(repo)) return false;
+
+  const ownerLower = owner.toLowerCase();
+  const repoLower = repo.toLowerCase();
+  if (GITHUB_REPO_SKIP_OWNERS.has(ownerLower)) return false;
+  if (GITHUB_REPO_SKIP_REPOS.has(repoLower)) return false;
+
+  return true;
+}
+
+function installGitHubRepoAutolinks(markdown: MarkdownIt) {
+  markdown.core.ruler.after('linkify', 'github_repo_autolink', (state) => {
+    for (const blockToken of state.tokens) {
+      if (blockToken.type !== 'inline' || !blockToken.children?.length) continue;
+
+      const nextChildren: typeof blockToken.children = [];
+      let linkLevel = 0;
+
+      for (const child of blockToken.children) {
+        if (child.type === 'link_open') {
+          linkLevel += 1;
+          nextChildren.push(child);
+          continue;
+        }
+
+        if (child.type === 'link_close') {
+          linkLevel = Math.max(0, linkLevel - 1);
+          nextChildren.push(child);
+          continue;
+        }
+
+        if (linkLevel > 0 || child.type !== 'text' || !child.content.includes('/')) {
+          nextChildren.push(child);
+          continue;
+        }
+
+        const content = child.content;
+        GITHUB_REPO_REFERENCE_RE.lastIndex = 0;
+        let lastIndex = 0;
+        let matched = false;
+        let match: RegExpExecArray | null;
+
+        while ((match = GITHUB_REPO_REFERENCE_RE.exec(content)) !== null) {
+          const prefix = match[1] || '';
+          const repoReference = match[2] || '';
+          const repoStart = match.index + prefix.length;
+          const repoEnd = repoStart + repoReference.length;
+
+          if (!isLikelyGitHubRepoReference(repoReference)) continue;
+
+          if (repoStart > lastIndex) {
+            const token = new state.Token('text', '', 0);
+            token.content = content.slice(lastIndex, repoStart);
+            nextChildren.push(token);
+          }
+
+          const open = new state.Token('link_open', 'a', 1);
+          open.attrs = [
+            ['href', `https://github.com/${repoReference}`],
+            ['data-autolink-kind', 'github-repo'],
+          ];
+          nextChildren.push(open);
+
+          const text = new state.Token('text', '', 0);
+          text.content = repoReference;
+          nextChildren.push(text);
+
+          nextChildren.push(new state.Token('link_close', 'a', -1));
+          lastIndex = repoEnd;
+          matched = true;
+        }
+
+        if (!matched) {
+          nextChildren.push(child);
+          continue;
+        }
+
+        if (lastIndex < content.length) {
+          const token = new state.Token('text', '', 0);
+          token.content = content.slice(lastIndex);
+          nextChildren.push(token);
+        }
+      }
+
+      blockToken.children = nextChildren;
+    }
+  });
+}
+
 function renderClawCodeBlockHtml(
   source: string,
   language: string,
@@ -91,89 +225,6 @@ function renderClawCodeBlockHtml(
     '<span class="claw-code-block-border">╰─</span>',
     '</code></pre>',
   ].join('');
-}
-
-function visibleTextWidth(value: string) {
-  return Array.from(value).length;
-}
-
-function renderClawTableRow(row: string[], widths: number[]) {
-  return `│${widths.map((width, index) => {
-    const cell = row[index] || '';
-    const padding = ' '.repeat(Math.max(0, width - visibleTextWidth(cell)) + 1);
-    return ` ${cell}${padding}`;
-  }).join('│')}│`;
-}
-
-function renderClawTableHtml(rows: string[][], escapeHtml: (value: string) => string) {
-  if (rows.length === 0) return '';
-  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
-  const widths = Array.from({ length: columnCount }, (_, column) => {
-    return rows.reduce((max, row) => Math.max(max, visibleTextWidth(row[column] || '')), 0);
-  });
-  const separator = `│${widths.map(width => '─'.repeat(width + 2)).join('┼')}│`;
-  const lines = [
-    renderClawTableRow(rows[0], widths),
-    separator,
-    ...rows.slice(1).map(row => renderClawTableRow(row, widths)),
-  ];
-  return `<pre class="claw-table"><code>${escapeHtml(lines.join('\n'))}</code></pre>\n\n`;
-}
-
-function extractClawTableRows(tokens: any[]) {
-  const rows: string[][] = [];
-  let row: string[] | null = null;
-  let cell = '';
-  let inCell = false;
-
-  for (const token of tokens) {
-    if (token.type === 'tr_open') {
-      row = [];
-      continue;
-    }
-    if (token.type === 'th_open' || token.type === 'td_open') {
-      cell = '';
-      inCell = true;
-      continue;
-    }
-    if (token.type === 'inline' && inCell) {
-      cell += token.content || '';
-      continue;
-    }
-    if (token.type === 'th_close' || token.type === 'td_close') {
-      row?.push(cell.trim());
-      inCell = false;
-      cell = '';
-      continue;
-    }
-    if (token.type === 'tr_close') {
-      if (row && row.length > 0) rows.push(row);
-      row = null;
-    }
-  }
-
-  return rows;
-}
-
-function installClawTableRule(markdown: MarkdownIt) {
-  markdown.core.ruler.after('inline', 'claw_table_format', (state: any) => {
-    const tokens = state.tokens;
-    for (let index = 0; index < tokens.length; index += 1) {
-      if (tokens[index].type !== 'table_open') continue;
-
-      let endIndex = index + 1;
-      while (endIndex < tokens.length && tokens[endIndex].type !== 'table_close') {
-        endIndex += 1;
-      }
-      if (endIndex >= tokens.length) continue;
-
-      const tableTokens = tokens.slice(index, endIndex + 1);
-      const rows = extractClawTableRows(tableTokens);
-      const token = new state.Token('html_block', '', 0);
-      token.content = renderClawTableHtml(rows, state.md.utils.escapeHtml);
-      tokens.splice(index, endIndex - index + 1, token);
-    }
-  });
 }
 
 type MermaidRenderCacheEntry = {
@@ -441,8 +492,30 @@ type ChatPreviewProps = {
 };
 
 const MIN_RENDER_INTERVAL_MS = 33;
+const STREAMING_MARKDOWN_RENDER_INTERVAL_MS = 56;
+const STREAMING_BOUNDARY_RENDER_INTERVAL_MS = 42;
+const STREAMING_MAX_DEFER_MS = 120;
+const STREAMING_LARGE_BACKLOG_CHARS = 1200;
+const STREAMING_HUGE_BACKLOG_CHARS = 3600;
 const MIN_CONTENT_TEXT_SCALE = 75;
 const MAX_CONTENT_TEXT_SCALE = 150;
+
+function hasOpenMarkdownFence(text: string): boolean {
+  return (text.match(/```/g) || []).length % 2 !== 0;
+}
+
+function hasStableStreamingBoundary(text: string, previousText: string): boolean {
+  if (text.length <= previousText.length || hasOpenMarkdownFence(text)) {
+    return false;
+  }
+  return /(?:\n\s*\n|[.!?。！？]\s*)$/.test(text);
+}
+
+function getStreamingMarkdownRenderInterval(backlog: number): number {
+  if (backlog > STREAMING_HUGE_BACKLOG_CHARS) return 120;
+  if (backlog > STREAMING_LARGE_BACKLOG_CHARS) return 88;
+  return STREAMING_MARKDOWN_RENDER_INTERVAL_MS;
+}
 
 function getContentTextScaleRatio(scale: number): number {
   if (!Number.isFinite(scale)) return 1;
@@ -455,13 +528,18 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
   const [mdTheme, setMdTheme] = useState<ThemeType>('light')
   const { codeTheme, contentTextScale } = useSettingStore()
   const [htmlContent, setHtmlContent] = useState<string>('');
-  const [, setDisplayedText] = useState<string>('');
   const animationRef = useRef<number | null>(null);
   const displayedTextRef = useRef('');
   const targetTextRef = useRef('');
   const carryCharsRef = useRef(0);
   const lastFrameTimeRef = useRef<number | null>(null);
   const lastRenderTimeRef = useRef(0);
+  const lastCommittedTextRef = useRef('');
+  const pendingRenderTextRef = useRef<string | null>(null);
+  const pendingRenderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRenderRafRef = useRef<number | null>(null);
+  const pendingRenderStartedAtRef = useRef(0);
+  const scheduledRenderAtRef = useRef(0);
   const md = useRef<MarkdownIt | null>(null);
   const mermaidRenderCacheRef = useRef<Map<string, MermaidRenderCacheEntry>>(new Map());
   const mermaidViewStateRef = useRef<WeakMap<HTMLDivElement, MermaidViewState>>(new WeakMap());
@@ -511,7 +589,9 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
             return `<pre class="hljs ${themeClass}"><code>` +
               highlighted +
               '</code></pre>';
-          } catch {}
+          } catch {
+            // 语法高亮失败时静默处理，使用普通代码块
+          }
         }
         if (clawFormat) {
           return renderClawCodeBlockHtml(str, lang, markdown.utils.escapeHtml(str), themeClass, markdown.utils.escapeHtml);
@@ -524,10 +604,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       throwOnError: false,
       errorColor: '#cc0000'
     });
-
-    if (clawFormat) {
-      installClawTableRule(markdown);
-    }
+    installGitHubRepoAutolinks(markdown);
 
     const defaultFence = markdown.renderer.rules.fence!;
     markdown.renderer.rules.fence = function (tokens, idx, options, env, self) {
@@ -547,22 +624,20 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       return defaultFence(tokens, idx, options, env, self);
     };
 
-    const linkStack: string[] = [];
-    markdown.renderer.rules.link_open = function (tokens, idx, options, _env, self) {
+    const defaultTableOpen = markdown.renderer.rules.table_open || function (tokens, idx, options, _env, self) {
+      return self.renderToken(tokens, idx, options);
+    };
+    markdown.renderer.rules.table_open = function (tokens, idx, options, env, self) {
       if (clawFormat) {
-        const href = tokens[idx].attrGet('href') || '';
-        linkStack.push(href);
-        const escapedHref = markdown.utils.escapeHtml(href);
-        return `<a href="${escapedHref}" target="_blank" rel="noopener noreferrer">[`;
+        tokens[idx].attrJoin('class', 'claw_table_format');
       }
+      return defaultTableOpen(tokens, idx, options, env, self);
+    };
+
+    markdown.renderer.rules.link_open = function (tokens, idx, options, _env, self) {
       tokens[idx].attrSet('target', '_blank');
       tokens[idx].attrSet('rel', 'noopener noreferrer');
       return self.renderToken(tokens, idx, options);
-    }
-    markdown.renderer.rules.link_close = function () {
-      if (!clawFormat) return '</a>';
-      const href = linkStack.pop() || '';
-      return `](${markdown.utils.escapeHtml(href)})</a>`;
     }
 
     const defaultImage = markdown.renderer.rules.image || function (tokens, idx, options, _env, self) {
@@ -579,34 +654,138 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     };
 
     md.current = markdown;
+    pendingRenderTextRef.current = null;
+    pendingRenderStartedAtRef.current = 0;
+    scheduledRenderAtRef.current = 0;
 
     if (displayedTextRef.current) {
+      lastCommittedTextRef.current = displayedTextRef.current;
       setHtmlContent(md.current.render(preprocessMarkdown(displayedTextRef.current, clawFormat)));
     } else {
+      lastCommittedTextRef.current = '';
       setHtmlContent('');
     }
   }, [clawFormat, mdTheme, streaming]);
 
-  const renderDisplayedText = useCallback((nextText: string, force = false) => {
-    displayedTextRef.current = nextText;
-
-    if (!force) {
-      const now = performance.now();
-      if (now - lastRenderTimeRef.current < MIN_RENDER_INTERVAL_MS) {
-        return;
-      }
-      lastRenderTimeRef.current = now;
-    } else {
-      lastRenderTimeRef.current = performance.now();
-    }
-
-    setDisplayedText(nextText);
+  const commitDisplayedText = useCallback((nextText: string) => {
+    lastCommittedTextRef.current = nextText;
+    lastRenderTimeRef.current = performance.now();
+    pendingRenderTextRef.current = null;
+    pendingRenderStartedAtRef.current = 0;
+    scheduledRenderAtRef.current = 0;
     if (md.current) {
       setHtmlContent(md.current.render(preprocessMarkdown(nextText, clawFormat)));
     } else {
       setHtmlContent(nextText);
     }
   }, [clawFormat]);
+
+  const cancelScheduledMarkdownRender = useCallback(() => {
+    if (pendingRenderTimeoutRef.current) {
+      clearTimeout(pendingRenderTimeoutRef.current);
+      pendingRenderTimeoutRef.current = null;
+    }
+    if (pendingRenderRafRef.current !== null) {
+      cancelAnimationFrame(pendingRenderRafRef.current);
+      pendingRenderRafRef.current = null;
+    }
+    scheduledRenderAtRef.current = 0;
+  }, []);
+
+  const flushPendingMarkdownRender = useCallback(() => {
+    const nextText = pendingRenderTextRef.current;
+    pendingRenderTextRef.current = null;
+    pendingRenderStartedAtRef.current = 0;
+    scheduledRenderAtRef.current = 0;
+    if (nextText === null || nextText === lastCommittedTextRef.current) {
+      return;
+    }
+    commitDisplayedText(nextText);
+  }, [commitDisplayedText]);
+
+  const schedulePendingMarkdownRender = useCallback((delayMs: number) => {
+    const now = performance.now();
+    const safeDelay = Math.max(0, delayMs);
+    const scheduledAt = now + safeDelay;
+
+    if (
+      scheduledRenderAtRef.current > 0 &&
+      scheduledRenderAtRef.current <= scheduledAt + 1
+    ) {
+      return;
+    }
+
+    cancelScheduledMarkdownRender();
+    scheduledRenderAtRef.current = scheduledAt;
+
+    const scheduleRaf = () => {
+      pendingRenderTimeoutRef.current = null;
+      pendingRenderRafRef.current = requestAnimationFrame(() => {
+        pendingRenderRafRef.current = null;
+        flushPendingMarkdownRender();
+      });
+    };
+
+    if (safeDelay <= 0) {
+      scheduleRaf();
+    } else {
+      pendingRenderTimeoutRef.current = setTimeout(scheduleRaf, safeDelay);
+    }
+  }, [cancelScheduledMarkdownRender, flushPendingMarkdownRender]);
+
+  const renderDisplayedText = useCallback((nextText: string, force = false) => {
+    displayedTextRef.current = nextText;
+
+    if (force) {
+      cancelScheduledMarkdownRender();
+      commitDisplayedText(nextText);
+      return;
+    }
+
+    if (nextText === lastCommittedTextRef.current) {
+      pendingRenderTextRef.current = null;
+      pendingRenderStartedAtRef.current = 0;
+      return;
+    }
+
+    const now = performance.now();
+    const sinceLastRender = now - lastRenderTimeRef.current;
+    pendingRenderTextRef.current = nextText;
+    if (pendingRenderStartedAtRef.current === 0) {
+      pendingRenderStartedAtRef.current = now;
+    }
+
+    if (!streaming) {
+      schedulePendingMarkdownRender(Math.max(0, MIN_RENDER_INTERVAL_MS - sinceLastRender));
+      return;
+    }
+
+    const pendingForMs = now - pendingRenderStartedAtRef.current;
+    const backlog = Math.max(0, nextText.length - lastCommittedTextRef.current.length);
+    const renderInterval = getStreamingMarkdownRenderInterval(backlog);
+    const shouldRenderNow =
+      lastCommittedTextRef.current.length === 0 ||
+      sinceLastRender >= renderInterval ||
+      pendingForMs >= STREAMING_MAX_DEFER_MS ||
+      (
+        sinceLastRender >= STREAMING_BOUNDARY_RENDER_INTERVAL_MS &&
+        hasStableStreamingBoundary(nextText, lastCommittedTextRef.current)
+      );
+
+    if (shouldRenderNow) {
+      schedulePendingMarkdownRender(0);
+      return;
+    }
+
+    const intervalDelay = renderInterval - sinceLastRender;
+    const maxDeferDelay = STREAMING_MAX_DEFER_MS - pendingForMs;
+    schedulePendingMarkdownRender(Math.min(intervalDelay, maxDeferDelay));
+  }, [
+    cancelScheduledMarkdownRender,
+    commitDisplayedText,
+    schedulePendingMarkdownRender,
+    streaming,
+  ]);
 
   const stopAnimation = useCallback(() => {
     if (animationRef.current !== null) {
@@ -643,7 +822,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       animationRef.current = null;
       lastFrameTimeRef.current = null;
       carryCharsRef.current = 0;
-      renderDisplayedText(targetTextRef.current, true);
+      renderDisplayedText(targetTextRef.current);
       return;
     }
 
@@ -695,8 +874,9 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
   useEffect(() => {
     return () => {
       stopAnimation();
+      cancelScheduledMarkdownRender();
     };
-  }, [stopAnimation]);
+  }, [cancelScheduledMarkdownRender, stopAnimation]);
 
   useEffect(() => {
     if (theme === 'system') {

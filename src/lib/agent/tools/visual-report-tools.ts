@@ -1,4 +1,4 @@
-import { BaseDirectory, exists, mkdir, readDir, readTextFile, stat, writeTextFile } from '@tauri-apps/plugin-fs'
+import { BaseDirectory, mkdir, readDir, readTextFile, stat, writeTextFile } from '@tauri-apps/plugin-fs'
 import { appDataDir, join } from '@tauri-apps/api/path'
 
 import { Tool, ToolResult } from '../types'
@@ -7,6 +7,7 @@ import useArticleStore from '@/stores/article'
 import { recordFileActivity } from '@/lib/file-activity'
 import { buildVisualReportHtml, ensureVisualReportFileName, type VisualReportType } from '@/lib/visual-report'
 import { getArtifactTemplate, summarizeArtifactInput, type ArtifactInputFormat, type ArtifactTemplateId } from '@/lib/artifacts'
+import { createUniqueArtifactPath, getArtifactFolderPath } from '@/lib/artifacts/destination'
 import { VISUAL_REPORTS_ROOT, isVisualReportPath } from '@/lib/visual-report-constants'
 
 interface VisualReportEntry {
@@ -42,12 +43,6 @@ function buildVisualReportReferenceBlock(options: {
     `> - 生成时间：${formatGeneratedAt(options.generatedAt)}`,
     '',
   ].join('\n')
-}
-
-function normalizeOptionalFolderPath(folderPath: unknown): string | undefined {
-  return typeof folderPath === 'string' && folderPath.trim()
-    ? folderPath.trim().replace(/\\/g, '/')
-    : undefined
 }
 
 function normalizeOptionalText(value: unknown): string | undefined {
@@ -88,10 +83,6 @@ function normalizeSourceFormat(value: unknown, content: string | undefined): Art
   return content ? summarizeArtifactInput(content).format : undefined
 }
 
-function joinRelativePath(folderPath: string | undefined, fileName: string): string {
-  return folderPath ? `${folderPath}/${fileName}` : fileName
-}
-
 async function ensureParentFolder(relativePath: string): Promise<void> {
   const parentFolderPath = relativePath.split('/').slice(0, -1).join('/')
   if (!parentFolderPath) {
@@ -104,26 +95,6 @@ async function ensureParentFolder(relativePath: string): Promise<void> {
   } else {
     await mkdir(path, { recursive: true })
   }
-}
-
-async function pathExists(relativePath: string): Promise<boolean> {
-  const { path, baseDir } = await getFilePathOptions(relativePath)
-  return baseDir ? await exists(path, { baseDir }) : await exists(path)
-}
-
-async function createUniqueVisualReportPath(folderPath: string | undefined, fileName: string): Promise<string> {
-  const extension = fileName.toLowerCase().endsWith('.htm') ? '.htm' : '.html'
-  const stem = fileName.slice(0, -extension.length)
-  let candidate = await ensureSafeWorkspaceRelativePath(joinRelativePath(folderPath, fileName))
-
-  for (let index = 1; index <= 99; index += 1) {
-    if (!await pathExists(candidate)) {
-      return candidate
-    }
-    candidate = await ensureSafeWorkspaceRelativePath(joinRelativePath(folderPath, `${stem}-${index + 1}${extension}`))
-  }
-
-  throw new Error('Unable to create a unique visual report file path.')
 }
 
 async function getAbsoluteWorkspacePath(relativePath: string): Promise<string> {
@@ -366,11 +337,9 @@ export const createVisualReportTool: Tool = {
         }
       }
 
-      const folderPath = normalizeOptionalFolderPath(params.folderPath)
-        ? await ensureSafeWorkspaceRelativePath(normalizeOptionalFolderPath(params.folderPath) as string)
-        : VISUAL_REPORTS_ROOT
+      const folderPath = await getArtifactFolderPath('visual_report', params.folderPath)
       const fileName = ensureVisualReportFileName(normalizeOptionalText(params.fileName), title)
-      const filePath = await createUniqueVisualReportPath(folderPath, fileName)
+      const filePath = await createUniqueArtifactPath({ folderPath, fileName })
       const content = normalizeOptionalText(params.content)
       const templateId = normalizeTemplateId(params.templateId)
       const templateName = getArtifactTemplate(templateId).name

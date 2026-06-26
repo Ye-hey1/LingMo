@@ -28,7 +28,6 @@ import useTagStore from "@/stores/tag"
 import { CircleX, Link, Sparkles, FolderOpen } from "lucide-react"
 import { useState, useEffect, useCallback, useRef } from "react"
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
-import { v4 as uuidv4 } from 'uuid'
 import emitter from '@/lib/emitter'
 import { useRouter } from 'next/navigation'
 import { handleRecordComplete } from '@/lib/record-navigation'
@@ -725,7 +724,7 @@ export function ControlLink() {
   async function handleSuccess() {
     if (!url || loading) return
     const targetTagId = await resolveTargetTagId()
-    const queueId = uuidv4()
+    const queueId = crypto.randomUUID()
 
     if (isLocalMedia) {
       // 本地多媒体文件识别流程

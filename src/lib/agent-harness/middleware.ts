@@ -1,4 +1,5 @@
 import type { Tool } from '@/lib/agent/types'
+import { formatWorkflowTemplatesForPrompt, type AgentWorkflowTemplatePromptItem } from '@/lib/agent/workflow-templates'
 import { buildAgentRuntimeSnapshot, buildSkillRuntimeSnapshot, buildToolExposureSnapshot, createRuntimeWarning } from '@/lib/agent/runtime-snapshot'
 import type { McpRuntimeServerSnapshot, McpRuntimeStatus } from '@/lib/agent/runtime-snapshot'
 import type { SkillContent, SkillMatchSummary } from '@/lib/skills/types'
@@ -30,6 +31,19 @@ const BASE_ALWAYS_VISIBLE = [
   'create_reminder',
   'list_reminders',
 ]
+const DRAWIO_TOOL_NAMES = [
+  'list_diagram_files',
+  'read_diagram_file',
+  'create_diagram_file',
+  'create_diagram_from_outline',
+  'create_drawio_diagram_from_cells',
+  'get_drawio_shape_library',
+  'append_drawio_diagram_cells',
+  'edit_drawio_diagram',
+  'validate_drawio_diagram',
+  'export_drawio_diagram',
+]
+const DRAWIO_INTENT_RE = /draw\.?io|图表|流程图|架构图|云架构|思维导图|导图|白板|diagram|flowchart|architecture|mind\s*map|mindmap|预览|导出|svg|png/i
 
 function uniqueStrings(values: Array<string | undefined | null>): string[] {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value?.trim()))))
@@ -69,6 +83,13 @@ function mergeMiddlewareState(
           tools: patch.runtime.tools || current.runtime?.tools,
         }
       : current.runtime,
+    workflowTemplates: patch.workflowTemplates
+      ? {
+          activeTemplateIds: patch.workflowTemplates.activeTemplateIds || current.workflowTemplates?.activeTemplateIds || [],
+          activeTemplates: patch.workflowTemplates.activeTemplates || current.workflowTemplates?.activeTemplates || [],
+          warnings: patch.workflowTemplates.warnings || current.workflowTemplates?.warnings || [],
+        }
+      : current.workflowTemplates,
     visibleToolNames: patch.visibleToolNames || current.visibleToolNames,
     toolExposureReasons: patch.toolExposureReasons || current.toolExposureReasons,
     promptSectionIds: uniqueStrings([...(current.promptSectionIds || []), ...(patch.promptSectionIds || [])]),
@@ -317,6 +338,14 @@ function explainToolExposure(tool: Tool, input: AgentBeforeModelInput, state: Ag
   return { score, reasons: uniqueStrings(reasons) }
 }
 
+function getIntentForcedToolNames(userInput: string): string[] {
+  if (DRAWIO_INTENT_RE.test(userInput)) {
+    return DRAWIO_TOOL_NAMES
+  }
+
+  return []
+}
+
 function buildToolScopeSection(tools: Tool[], state: AgentRunMiddlewareState) {
   const names = tools.map(tool => tool.name)
   const mcpTools = tools.filter(tool => tool.category === 'mcp').map(tool => tool.name)
@@ -366,6 +395,19 @@ function buildSkillSection(input: AgentBeforeModelInput, state: AgentRunMiddlewa
   }
 
   return lines.join('\n')
+}
+
+function buildWorkflowTemplateSection(state: AgentRunMiddlewareState) {
+  const templates = state.workflowTemplates?.activeTemplates || []
+  const section = formatWorkflowTemplatesForPrompt(templates)
+  if (!section && state.workflowTemplates?.warnings?.length) {
+    return [
+      '## Approved Workflow Templates',
+      '',
+      `Template warnings: ${state.workflowTemplates.warnings.join('; ')}`,
+    ].join('\n')
+  }
+  return section
 }
 
 function mapMcpRuntimeStatus(status?: string): McpRuntimeStatus {
@@ -443,6 +485,18 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
         activeSkillMatches = [...matchesById.values()]
       } catch (error) {
         warnings.push(`Skill load failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+
+      const workflowWarnings: string[] = []
+      let activeWorkflowTemplates: AgentWorkflowTemplatePromptItem[] = []
+      try {
+        const { findRelevantWorkflowTemplates } = await import('@/lib/agent/workflow-templates')
+        activeWorkflowTemplates = await findRelevantWorkflowTemplates(input.userInput, {
+          limit: 3,
+          minScore: 2,
+        })
+      } catch (error) {
+        workflowWarnings.push(`Workflow template load failed: ${error instanceof Error ? error.message : String(error)}`)
       }
 
       const mcpWarnings: string[] = []
@@ -533,6 +587,11 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
             toolNames: mcpToolNames,
             warnings: mcpWarnings,
           },
+          workflowTemplates: {
+            activeTemplateIds: activeWorkflowTemplates.map(template => template.id),
+            activeTemplates: activeWorkflowTemplates,
+            warnings: workflowWarnings,
+          },
           runtime: {
             skills: buildSkillRuntimeSnapshot({
               skills: runtimeSkills,
@@ -572,6 +631,7 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
       const forcedToolNames = new Set([
         ...SUPPORT_TOOL_NAMES,
         ...BASE_ALWAYS_VISIBLE,
+        ...getIntentForcedToolNames(input.userInput),
       ])
 
       for (const tool of input.tools) {
@@ -633,6 +693,7 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
       const promptSections = [
         buildToolScopeSection(selected, currentState),
         buildSkillSection(input, currentState),
+        buildWorkflowTemplateSection(currentState),
       ].filter(Boolean)
       const toolExposure = buildToolExposureSnapshot({
         tools: input.tools,
@@ -655,7 +716,7 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
             hidden: hiddenReasons,
             maxVisibleTools: maxTools,
           },
-          promptSectionIds: ['tool-scope', 'skill-scope'],
+          promptSectionIds: ['tool-scope', 'skill-scope', 'workflow-templates'],
           runtime: {
             tools: toolExposure,
             snapshot: buildAgentRuntimeSnapshot({
@@ -739,6 +800,18 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
         }
       } catch {
         // Persistence is best-effort.
+      }
+
+      try {
+        const { runPostSessionSelfEvolution } = await import('@/lib/agent/self-evolution')
+        await runPostSessionSelfEvolution({
+          runId: input.runId,
+          snapshot: input.snapshot,
+          state: input.state,
+          trigger: 'harness-after-run',
+        })
+      } catch (error) {
+        console.warn('[AgentHarness] Self-evolution review failed:', error)
       }
     },
   }

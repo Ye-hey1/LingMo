@@ -1,6 +1,7 @@
 import type { AgentEvent, ReActStep, Tool, ToolExecutionContext, ToolResult } from '@/lib/agent/types'
 import type { AgentRuntimeSnapshot, McpRuntimeSnapshot, SkillRuntimeSnapshot, ToolExposureSnapshot } from '@/lib/agent/runtime-snapshot'
 import type { IntentPolicy } from '@/lib/agent/tool-policy'
+import type { AgentWorkflowTemplatePromptItem } from '@/lib/agent/workflow-templates'
 import type { SkillMatchSummary } from '@/lib/skills/types'
 import type { AgentSessionLog } from './session-log'
 
@@ -148,6 +149,11 @@ export interface AgentRunMiddlewareState {
     connectedServerIds: string[]
     toolNames: string[]
     warnings: string[]
+  }
+  workflowTemplates?: {
+    activeTemplateIds: string[]
+    activeTemplates: AgentWorkflowTemplatePromptItem[]
+    warnings?: string[]
   }
   visibleToolNames?: string[]
   toolExposureReasons?: {

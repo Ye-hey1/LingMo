@@ -1,5 +1,5 @@
 import { mcpIntegration } from './integration'
-import { refreshMcpToolsForAgent } from './agent-ready'
+import { ensureMcpReadyForAgent } from './agent-ready'
 import { useMcpStore } from '@/stores/mcp'
 
 /**
@@ -8,14 +8,8 @@ import { useMcpStore } from '@/stores/mcp'
  */
 export async function initMcp() {
   try {
-    // 加载 MCP 数据
     await useMcpStore.getState().initMcpData()
-    
-    // 初始化 MCP 集成（连接启用的服务器）
-    await mcpIntegration.initialize()
-    await refreshMcpToolsForAgent()
-    
-    // MCP 初始化成功
+    await ensureMcpReadyForAgent({ timeoutMs: 600, background: true })
   } catch {
     // 静默处理初始化错误
   }

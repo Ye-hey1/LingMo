@@ -5,7 +5,7 @@
   "identifier": "com.lingmo.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
-    "devUrl": "http://127.0.0.1:3456",
+    "devUrl": "http://127.0.0.1:3457",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../out"
   },
@@ -38,7 +38,7 @@
       "icons/icon.ico"
     ],
     "iOS": {
-      "bundleVersion": "0.27.7",
+      "bundleVersion": "1.0.0",
       "developmentTeam": "RGZC4ZTJMU"
     },
     "macOS": {

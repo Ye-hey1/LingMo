@@ -123,6 +123,7 @@ export function extractResources(toolName: string, params: Record<string, any>):
     toolName === 'suggest_links_for_note' ||
     toolName === 'analyze_note_topics' ||
     toolName === 'read_diagram_file' ||
+    toolName === 'validate_drawio_diagram' ||
     toolName === 'read_visual_report_file'
   ) {
     if (typeof params.filePath === 'string') {
@@ -226,6 +227,10 @@ export class ToolResultCache {
   // ---------------------------------------------------------------------------
 
   isCacheable(toolName: string): boolean {
+    if (toolName === 'read_diagram_file' || toolName === 'validate_drawio_diagram') {
+      return false
+    }
+
     return READ_ONLY_TOOLS.has(toolName)
   }
 

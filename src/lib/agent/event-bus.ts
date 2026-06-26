@@ -173,6 +173,24 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
       case 'agent.planning':
         currentPhase = 'planning'
         break
+      case 'mcp.runtime.warmup':
+        currentPhase = 'preparing'
+        break
+      case 'agent.stream.delta':
+        currentPhase = 'answering'
+        if (typeof payload.contentLength === 'number') {
+          outputChars = Math.max(outputChars, payload.contentLength)
+        }
+        break
+      case 'agent.stream.started':
+        currentPhase = 'thinking'
+        break
+      case 'agent.stream.finished':
+        if (typeof payload.contentLength === 'number' && payload.contentLength > 0) {
+          currentPhase = 'answering'
+          outputChars = Math.max(outputChars, payload.contentLength)
+        }
+        break
       case 'iteration.started':
         currentPhase = 'thinking'
         break
@@ -287,6 +305,7 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
         })
         break
       case 'tool.execution.started':
+      case 'tool.batch.started':
         if (isSupportOnlyToolName(payload.toolName)) {
           break
         }
@@ -300,6 +319,7 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
         })
         break
       case 'tool.execution.finished':
+      case 'tool.batch.finished':
         if (isSupportOnlyToolName(payload.toolName)) {
           break
         }

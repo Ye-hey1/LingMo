@@ -20,6 +20,32 @@ import { cn } from '@/lib/utils';
 import { useGraphStore } from '../store/graph-store';
 
 const NEON_COLORS = ['#38bdf8', '#ec4899', '#f59e0b', '#22c55e', '#a855f7', '#ef4444'];
+const NOTE_EDGE_FILTERS = [
+  { id: 'wikilink', label: '双链', color: '#64748b' },
+  { id: 'references', label: '引用', color: '#d97706' },
+  { id: 'related', label: '相关', color: '#64748b' },
+  { id: 'extends', label: '延伸', color: '#f59e0b' },
+  { id: 'supports', label: '支撑', color: '#16a34a' },
+  { id: 'contradicts', label: '矛盾', color: '#ef4444' },
+  { id: 'analogous', label: '类比', color: '#8b5cf6' },
+  { id: 'example-of', label: '示例', color: '#06b6d4' },
+  { id: 'uses', label: '使用', color: '#22c55e' },
+  { id: 'part-of', label: '属于', color: '#6366f1' },
+  { id: 'semantic', label: '语义', color: '#059669' },
+];
+const TOPIC_EDGE_FILTERS = [
+  { id: 'topic-cooccurrence', label: '共现', color: '#94a3b8' },
+  { id: 'topic-semantic', label: '语义', color: '#64748b' },
+  { id: 'rag-vector', label: '向量', color: '#0f766e' },
+];
+const EDGE_SOURCE_FILTERS = [
+  { id: 'cross_validated', label: '交叉验证', color: '#0f766e' },
+  { id: 'llm', label: 'AI', color: '#7c3aed' },
+  { id: 'keyword', label: '关键词', color: '#ca8a04' },
+  { id: 'cosine', label: '向量', color: '#059669' },
+  { id: 'wikilink', label: '双链', color: '#64748b' },
+  { id: 'frontmatter', label: '显式', color: '#d97706' },
+];
 
 type TypePreset = 'all' | 'note' | 'concept' | 'person-project' | 'tag' | 'custom';
 type RelationPreset = 'all' | 'hub' | 'isolated' | 'custom';
@@ -39,6 +65,7 @@ export function FilterPanel() {
   } = useGraphStore();
 
   const [rangeExpanded, setRangeExpanded] = useState(false);
+  const [edgeFiltersExpanded, setEdgeFiltersExpanded] = useState(false);
   const [physicsExpanded, setPhysicsExpanded] = useState(false);
   const [colorGroupsExpanded, setColorGroupsExpanded] = useState(false);
   const [newGroupQuery, setNewGroupQuery] = useState('');
@@ -48,6 +75,10 @@ export function FilterPanel() {
   const hasActiveFilters = Boolean(
     filters.search ||
     hasConnectionFilter ||
+    filters.nodeKinds?.length ||
+    filters.nodeModes?.length ||
+    filters.edgeLabels?.length ||
+    filters.edgeSources?.length ||
     filters.includeNoisyTopics,
   );
 
@@ -71,6 +102,10 @@ export function FilterPanel() {
   const clearFilters = () => {
     setFilters({
       types: undefined,
+      nodeKinds: undefined,
+      nodeModes: undefined,
+      edgeLabels: undefined,
+      edgeSources: undefined,
       search: '',
       minConnections: undefined,
       maxConnections: undefined,
@@ -90,6 +125,20 @@ export function FilterPanel() {
     if (preset === 'all') setFilters({ minConnections: undefined, maxConnections: undefined });
     if (preset === 'hub') setFilters({ minConnections: 4, maxConnections: undefined });
     if (preset === 'isolated') setFilters({ minConnections: 0, maxConnections: 0 });
+  };
+
+  const toggleEdgeLabel = (edgeLabel: string) => {
+    const current = new Set(filters.edgeLabels ?? []);
+    if (current.has(edgeLabel)) current.delete(edgeLabel);
+    else current.add(edgeLabel);
+    setFilters({ edgeLabels: current.size ? Array.from(current) : undefined });
+  };
+
+  const toggleEdgeSource = (source: string) => {
+    const current = new Set(filters.edgeSources ?? []);
+    if (current.has(source)) current.delete(source);
+    else current.add(source);
+    setFilters({ edgeSources: current.size ? Array.from(current) : undefined });
   };
 
   return (
@@ -164,6 +213,31 @@ export function FilterPanel() {
         ) : null}
 
         <div className="mt-2.5 space-y-1 border-t border-border/45 pt-2">
+          <CompactDisclosure
+            icon={<Network className="h-3.5 w-3.5" />}
+            label={`关系筛选${(filters.edgeLabels?.length ?? 0) + (filters.edgeSources?.length ?? 0) ? ` · ${(filters.edgeLabels?.length ?? 0) + (filters.edgeSources?.length ?? 0)}` : ''}`}
+            open={edgeFiltersExpanded}
+            onToggle={() => setEdgeFiltersExpanded(!edgeFiltersExpanded)}
+          />
+          {edgeFiltersExpanded ? (
+            <div className="space-y-3 rounded-md bg-muted/20 p-2">
+              <ChipGroup
+                label="类型"
+                items={graphView === 'note' ? NOTE_EDGE_FILTERS : TOPIC_EDGE_FILTERS}
+                selected={filters.edgeLabels ?? []}
+                onToggle={toggleEdgeLabel}
+              />
+              {graphView === 'note' ? (
+                <ChipGroup
+                  label="来源"
+                  items={EDGE_SOURCE_FILTERS}
+                  selected={filters.edgeSources ?? []}
+                  onToggle={toggleEdgeSource}
+                />
+              ) : null}
+            </div>
+          ) : null}
+
           <CompactDisclosure
             icon={<Network className="h-3.5 w-3.5" />}
             label={hasConnectionFilter ? `关系范围 · ${filters.minConnections ?? 0}-${filters.maxConnections ?? '∞'}` : '关系范围'}
@@ -350,6 +424,46 @@ function NumberField({
         placeholder={placeholder}
       />
     </label>
+  );
+}
+
+function ChipGroup({
+  label,
+  items,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  items: Array<{ id: string; label: string; color: string }>;
+  selected: string[];
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[10px] font-medium text-muted-foreground">{label}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map(item => {
+          const active = selected.includes(item.id);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onToggle(item.id)}
+              className={cn(
+                'inline-flex h-6 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                active
+                  ? 'border-foreground/20 bg-foreground text-background'
+                  : 'border-border/55 bg-background/65 text-muted-foreground hover:bg-background hover:text-foreground',
+              )}
+            >
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: item.color }} />
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

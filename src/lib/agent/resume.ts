@@ -96,6 +96,7 @@ function getInterruptReasonText(reason?: string): string {
 import { Store } from '@tauri-apps/plugin-store'
 import type { AgentEvent, ReActStep, ToolCall } from './types'
 import type { AgentPart, AgentPartSnapshot } from './part-reducer'
+import type { AgentRunDetail, AgentToolCallRecord } from '@/db/agent'
 
 export interface AgentRunSummary {
   id: string
@@ -119,6 +120,40 @@ const MAX_SUMMARIES = 80
 function extractFilePath(params: Record<string, any>) {
   const value = params.filePath || params.path || params.folderPath || params.targetPath
   return typeof value === 'string' ? value.replace(/\\/g, '/') : ''
+}
+
+function parseJsonRecord(value?: string | null): Record<string, any> {
+  if (!value) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, any>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function getToolRecordStatus(call: AgentToolCallRecord) {
+  if (call.success === 1) return 'success'
+  if (call.success === 0) return 'error'
+  return call.status
+}
+
+function extractFilePathFromToolRecord(call: AgentToolCallRecord) {
+  const paramsPath = extractFilePath(parseJsonRecord(call.paramsJson))
+  if (paramsPath) return paramsPath
+
+  const result = parseJsonRecord(call.resultJson)
+  const resultPath = extractFilePath(result)
+  if (resultPath) return resultPath
+
+  const data = result.data
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    return extractFilePath(data as Record<string, any>)
+  }
+
+  return ''
 }
 
 function getToolCallsFromEvents(events: AgentEvent[]): ToolCall[] {
@@ -190,7 +225,7 @@ export async function saveAgentRunSummary(summary: AgentRunSummary) {
   }
 }
 
-export async function listAgentRunSummaries(limit = 20): Promise<AgentRunSummary[]> {
+async function listStoreAgentRunSummaries(limit: number): Promise<AgentRunSummary[]> {
   try {
     const store = await Store.load(STORE_FILE)
     const existing = await store.get<AgentRunSummary[]>(STORE_KEY) || []
@@ -198,6 +233,85 @@ export async function listAgentRunSummaries(limit = 20): Promise<AgentRunSummary
   } catch {
     return []
   }
+}
+
+function buildAgentRunSummaryFromDetail(detail: AgentRunDetail): AgentRunSummary {
+  const toolStats = new Map<string, { toolName: string; count: number; success: number; error: number }>()
+  const filesTouched = new Set<string>()
+  const failures: AgentRunSummary['failures'] = []
+
+  for (const call of detail.toolCalls) {
+    const stat = toolStats.get(call.toolName) || { toolName: call.toolName, count: 0, success: 0, error: 0 }
+    const status = getToolRecordStatus(call)
+    stat.count += 1
+    if (status === 'success') stat.success += 1
+    if (status === 'error' || status === 'blocked') stat.error += 1
+    toolStats.set(call.toolName, stat)
+
+    const path = extractFilePathFromToolRecord(call)
+    if (path) filesTouched.add(path)
+    if (status === 'error' || status === 'blocked') {
+      failures.push({
+        toolName: call.toolName,
+        error: call.error || call.message || status,
+      })
+    }
+  }
+
+  for (const artifact of detail.artifacts) {
+    if (artifact.path) filesTouched.add(artifact.path.replace(/\\/g, '/'))
+  }
+
+  const maxIteration = Math.max(
+    detail.steps.length,
+    ...detail.toolCalls.map(call => call.iteration || 0),
+    ...detail.events.map(event => event.iteration || 0),
+  )
+
+  return {
+    id: detail.run.id,
+    userGoal: detail.run.userGoal.slice(0, 800),
+    result: (detail.run.finalAnswer || detail.run.error || '').slice(0, 1200),
+    stopped: detail.run.status === 'paused',
+    startedAt: detail.run.startedAt,
+    completedAt: detail.run.endedAt || detail.run.updatedAt,
+    iterations: maxIteration,
+    toolsUsed: [...toolStats.values()].sort((a, b) => b.count - a.count),
+    filesTouched: [...filesTouched].slice(0, 40),
+    failures: failures.slice(0, 12),
+  }
+}
+
+async function listSqliteAgentRunSummaries(limit: number): Promise<AgentRunSummary[]> {
+  try {
+    const { getAgentRunDetailFromDb, listAgentRunsFromDb } = await import('@/db/agent')
+    const runs = await listAgentRunsFromDb(limit)
+    const details = await Promise.all(runs.map(run => getAgentRunDetailFromDb(run.id)))
+    return details
+      .filter((detail): detail is AgentRunDetail => Boolean(detail))
+      .map(buildAgentRunSummaryFromDetail)
+  } catch (error) {
+    console.warn('[AgentRunSummary] Failed to load SQLite summaries:', error)
+    return []
+  }
+}
+
+export async function listAgentRunSummaries(limit = 20): Promise<AgentRunSummary[]> {
+  const normalizedLimit = Math.min(80, Math.max(1, Math.floor(limit)))
+  const [sqliteSummaries, storeSummaries] = await Promise.all([
+    listSqliteAgentRunSummaries(normalizedLimit),
+    listStoreAgentRunSummaries(normalizedLimit),
+  ])
+
+  const seen = new Set<string>()
+  return [...sqliteSummaries, ...storeSummaries]
+    .sort((a, b) => b.completedAt - a.completedAt)
+    .filter(summary => {
+      if (seen.has(summary.id)) return false
+      seen.add(summary.id)
+      return true
+    })
+    .slice(0, normalizedLimit)
 }
 
 export interface SearchAgentRunSummariesOptions {

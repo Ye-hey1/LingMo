@@ -12,7 +12,6 @@ import emitter from '@/lib/emitter'
 import { useRouter } from 'next/navigation'
 import { handleRecordComplete } from '@/lib/record-navigation'
 import { extractTextFromPDF } from '@/lib/pdf'
-import { v4 as uuid } from 'uuid'
 
 // 常见的代码格式
 const codeExtensions = [
@@ -100,7 +99,7 @@ export function ControlFile() {
 
     // 处理 PDF 文件
     if (pdfExtensions.includes(ext)) {
-      const queueId = uuid()
+      const queueId = crypto.randomUUID()
       try {
         addQueue({ queueId, tagId: targetTagId, progress: t('record.mark.progress.cacheFile'), type: 'file', startTime: Date.now() })
         content = await extractTextFromPDF(path, (progress) => {

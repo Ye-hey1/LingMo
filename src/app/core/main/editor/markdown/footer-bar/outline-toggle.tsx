@@ -21,16 +21,17 @@ export function OutlineToggle({
 
   return (
     <button
+      type="button"
       onClick={onToggleOutline}
-      className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[hsl(var(--muted))] transition-colors"
+      className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       title={outlineOpen ? t('outline.close') : t('outline.open')}
+      aria-label={outlineOpen ? t('outline.close') : t('outline.open')}
     >
       {outlineOpen ? (
-        <ListCollapse size={14} />
+        <ListCollapse className="size-3" />
       ) : (
-        <List size={14} />
+        <List className="size-3" />
       )}
-      <span>{t('outline.title')}</span>
     </button>
   )
 }

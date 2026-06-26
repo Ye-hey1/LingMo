@@ -12,7 +12,7 @@ import {
   CornerDownLeft
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { estimateTokens } from "@/lib/ai/token-counter"
+import { buildLatestContextTokenUsage } from "@/lib/ai/chat-token-usage"
 import useChatStore from "@/stores/chat"
 import { motion } from "framer-motion"
 import type { LinkedResource } from "@/lib/files"
@@ -39,12 +39,11 @@ export const TokenUsage = React.memo(function TokenUsage({
 
   React.useEffect(() => {
     const calculateTokens = () => {
-      const inputTokens = estimateTokens(inputText)
-      const recentChats = chats.slice(-20)
-      const historyTokens = recentChats.reduce((sum, chat) => {
-        return sum + estimateTokens(chat.content || '')
-      }, 0)
-      const totalTokens = inputTokens + historyTokens
+      const totalTokens = buildLatestContextTokenUsage({
+        inputText,
+        chats,
+        maxFallbackHistoryMessages: 20,
+      }).totalTokens
       setEstimatedTokens(totalTokens)
       
       // 简化的上下文窗口计算

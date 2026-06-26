@@ -55,20 +55,23 @@ const FOLLOW_UP_PATTERNS = [
 
 const TOOL_OR_CONTEXT_PATTERNS = [
   /查看|查询|获取|检索|搜索|读取|列出|打开|定位|引用|来源|证据|网页|联网|地图|路线|导航|天气|股票|价格|新闻|热点|最新|今天|昨天|明天|近期|实时|202[5-9]|203\d/,
+  /分析|梳理|审视|排查|诊断|调研|对照|参考|借鉴|复盘|盘点|检查|评估|审计/,
   /\b(search|find|fetch|get|read|list|open|source|cite|citation|web|latest|today|yesterday|tomorrow|recent|real-time|realtime|weather|price|stock|route|map)\b/i,
+  /\b(analyze|analyse|inspect|audit|diagnose|review|compare|reference|borrow|study|investigate|evaluate)\b/i,
 ]
 
 const WRITE_OR_ACTION_PATTERNS = [
-  /创建|新建|新增|写入|输出|输出到|改写|修改|编辑|更新|修复|重构|优化|删除|移动|复制|重命名|保存|导出|生成|制作|绘制|画出|整理成|运行|执行|安装|配置|迁移|部署|测试|提交/,
+  /创建|新建|新增|写入|输出|输出到|改写|修改|编辑|更新|修复|重构|优化|改进|精简|省token|省 token|删除|移动|复制|重命名|保存|导出|生成|制作|绘制|画出|整理成|运行|执行|安装|配置|迁移|部署|测试|提交/,
   /(规划|设计|制定|重新规划).{0,30}(攻略|方案|行程|路线|计划|旅游|旅行|笔记|文档|文件)/,
+  /(优化|改进|精简|完善|重写|调整).{0,30}(提示词|prompt|系统提示词|agent|运行逻辑|意图识别)/i,
   /\b(?:plan|design|draft|write|create|generate|produce).{0,40}(?:itinerary|travel plan|trip plan|route|note|document|file|guide|proposal|report)\b/i,
-  /\b(create|write|edit|modify|update|fix|repair|refactor|delete|move|copy|rename|save|export|generate|draw|run|execute|install|configure|migrate|deploy|test|commit)\b/i,
+  /\b(create|write|edit|modify|update|fix|repair|refactor|optimize|improve|polish|simplify|delete|move|copy|rename|save|export|generate|draw|run|execute|install|configure|migrate|deploy|test|commit)\b/i,
 ]
 
 const COMPLEXITY_PATTERNS = [
-  /先.*再|然后|接着|之后|并且|同时|还有|逐步|完整|全面|仔细|深入|所有|全部|每个|批量|多轮|规划|方案|攻略|行程|路线|输出到笔记|架构|排查|根因|复刻|借鉴|对比.*并/,
+  /先.*再|然后|接着|之后|并且|同时|还有|逐步|完整|全面|仔细|深入|所有|全部|每个|批量|多轮|规划|方案|攻略|行程|路线|输出到笔记|架构|排查|根因|复刻|借鉴|参考|对照|对比.*并|省token|省 token|系统提示词|运行逻辑|意图识别/,
   /\d+[、.．)]\s*\S+/,
-  /\b(first.*then|step by step|comprehensive|deep|all|every|batch|architecture|root cause|compare.*and)\b/i,
+  /\b(first.*then|step by step|comprehensive|deep|all|every|batch|architecture|root cause|compare.*and|system prompt|token saving|intent recognition)\b/i,
 ]
 
 function compactSemanticText(value: string) {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEditor, EditorContent } from '@tiptap/react'
+import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import Link from '@tiptap/extension-link'
@@ -21,6 +21,7 @@ import { TableCell } from '@tiptap/extension-table-cell'
 import { TableHeader } from '@tiptap/extension-table-header'
 import Image from '@tiptap/extension-image'
 import { common, createLowlight } from 'lowlight'
+import powershell from 'highlight.js/lib/languages/powershell'
 import { Markdown } from '@tiptap/markdown'
 import { SearchAndReplace } from '@sereneinserenade/tiptap-search-and-replace'
 import UniqueId from '@tiptap/extension-unique-id'
@@ -32,7 +33,7 @@ import { MermaidDiagram } from './mermaid-extension'
 import { DiagramLink } from './diagram-link-extension'
 import { MathEditorDialog } from './math-editor-dialog'
 import { SearchReplacePanel } from './search-replace-panel'
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { handleImageUpload } from '@/lib/image-handler'
 import useArticleStore from '@/stores/article'
@@ -82,9 +83,113 @@ import { InlineAIPanel } from './inline-ai-panel'
 import { DiffReviewUI, createDiffPlugin, diffPluginKey, type DiffSession } from './diff-review-ui'
 import { BookmarkExtension } from './bookmark-extension'
 import { FilePreviewExtension } from './file-preview-extension'
+import {
+  normalizeCodeBlockLanguage,
+  normalizeMarkdownCodeFenceLanguages,
+  type CodeBlockLanguageRegistry,
+} from '@/lib/markdown-code-language'
 import './style.css'
 
-const lowlight = createLowlight(common)
+type EditorLowlight = ReturnType<typeof createLowlight>
+
+const baseLowlight = createLowlight(common)
+baseLowlight.register({ powershell })
+
+try {
+  baseLowlight.registerAlias({
+    powershell: ['ps', 'ps1', 'pwsh'],
+    plaintext: ['text', 'txt', 'plain'],
+  })
+} catch (error) {
+  console.warn('[TipTap Editor] Failed to register lowlight aliases:', error)
+}
+
+const LOWLIGHT_PASSTHROUGH_LANGUAGES = ['mermaid']
+const LARGE_MARKDOWN_CHANGE_DEBOUNCE_MS = 1200
+const LARGE_MARKDOWN_FLUSH_AFTER_MS = 4500
+const LARGE_EDITOR_VIEW_STATE_SAVE_MS = 250
+
+function getLowlightLanguageRegistry(): CodeBlockLanguageRegistry {
+  return {
+    supportedLanguages: baseLowlight.listLanguages(),
+    isRegistered: (language) => baseLowlight.registered(language),
+    passthroughLanguages: LOWLIGHT_PASSTHROUGH_LANGUAGES,
+  }
+}
+
+function normalizeEditorMarkdown(markdown: string, fallbackLanguage: string | null = null): string {
+  return normalizeMarkdownCodeFenceLanguages(
+    markdown,
+    getLowlightLanguageRegistry(),
+    { fallbackLanguage },
+  )
+}
+
+function createSafeLowlight(instance: EditorLowlight): EditorLowlight {
+  return {
+    ...instance,
+    highlight(language, value, options) {
+      const normalizedLanguage = normalizeCodeBlockLanguage(language, getLowlightLanguageRegistry())
+
+      if (!normalizedLanguage) {
+        return instance.highlightAuto(value, options as Parameters<EditorLowlight['highlightAuto']>[1])
+      }
+
+      try {
+        return instance.highlight(normalizedLanguage, value, options)
+      } catch (error) {
+        if (error instanceof Error && /Unknown language/.test(error.message)) {
+          return instance.highlightAuto(value, options as Parameters<EditorLowlight['highlightAuto']>[1])
+        }
+
+        throw error
+      }
+    },
+  }
+}
+
+const lowlight = createSafeLowlight(baseLowlight)
+
+function setEditorMarkdownContent(
+  editor: any,
+  content: string,
+  options: { normalize?: boolean } = {},
+) {
+  const shouldNormalize = options.normalize !== false
+  const normalized = shouldNormalize ? normalizeEditorMarkdown(content) : content
+
+  try {
+    editor.commands.setContent(normalized, { contentType: 'markdown' })
+  } catch (error) {
+    if (!shouldNormalize) {
+      throw error
+    }
+
+    const fallback = normalizeEditorMarkdown(content, 'text')
+    if (fallback !== normalized) {
+      editor.commands.setContent(fallback, { contentType: 'markdown' })
+      return
+    }
+
+    throw error
+  }
+}
+
+function insertEditorMarkdownContent(editor: any, content: string) {
+  const normalized = normalizeEditorMarkdown(content)
+
+  try {
+    editor.commands.insertContent(normalized, { contentType: 'markdown' })
+  } catch (error) {
+    const fallback = normalizeEditorMarkdown(content, 'text')
+    if (fallback !== normalized) {
+      editor.commands.insertContent(fallback, { contentType: 'markdown' })
+      return
+    }
+
+    throw error
+  }
+}
 
 const tableCellAttributes = {
   align: {
@@ -160,7 +265,7 @@ const PasteMarkdown = Extension.create({
             // 检查文本是否看起来像 Markdown
             if (looksLikeMarkdown(markdownText)) {
               // 使用 editor.commands.insertContent 插入 Markdown 内容
-              editor.commands.insertContent(markdownText, { contentType: 'markdown' })
+              insertEditorMarkdownContent(editor, markdownText)
               return true
             }
 
@@ -546,6 +651,22 @@ function runDeferredEditorCommand(onSuccess: () => void, onError: (error: unknow
   }, 0)
 }
 
+function runWhenIdle(callback: () => void, timeout = 1500): () => void {
+  if (typeof window === 'undefined') {
+    callback()
+    return () => {}
+  }
+
+  const requestIdle = window.requestIdleCallback
+  if (requestIdle) {
+    const idleId = requestIdle(callback, { timeout })
+    return () => window.cancelIdleCallback?.(idleId)
+  }
+
+  const timerId = window.setTimeout(callback, Math.min(timeout, 300))
+  return () => window.clearTimeout(timerId)
+}
+
 interface TipTapEditorProps {
   initialContent: string
   onChange?: (content: string) => void
@@ -561,6 +682,7 @@ interface TipTapEditorProps {
   autoScroll?: boolean
   showOverlay?: boolean
   onTerminate?: () => void
+  performanceMode?: boolean
 }
 
 interface FlashcardSelectionContext {
@@ -663,6 +785,7 @@ export function TipTapEditor({
   autoScroll = false,
   showOverlay = false,
   onTerminate,
+  performanceMode = false,
 }: TipTapEditorProps) {
   const t = useTranslations('editor')
   const tMermaid = useTranslations('editor.mermaid.templates')
@@ -675,6 +798,13 @@ export function TipTapEditor({
 
   const placeholderText = placeholder || t('placeholder')
   const isMobile = isMobileDevice()
+  const richInteractionsEnabled = true
+  const documentEnhancementsEnabled = !performanceMode
+  const highFrequencyDecorationsEnabled = !performanceMode
+  const editorInitialContent = useMemo(
+    () => performanceMode ? initialContent : normalizeEditorMarkdown(initialContent),
+    [initialContent, performanceMode],
+  )
 
   // Use ref for autoScroll to avoid infinite re-render loop
   const autoScrollRef = useRef(autoScroll)
@@ -719,6 +849,7 @@ export function TipTapEditor({
   const pendingSyncUpdateRef = useRef<{ path: string; content: string } | null>(null)
   const restoredViewPathRef = useRef<string | null>(null)
   const lastViewStateRef = useRef<{ path: string; selectionFrom: number; selectionTo: number; scrollTop: number } | null>(null)
+  const viewStateSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Bug fix: Track when editor is ready (has caught up with content)
   const isReadyRef = useRef(false)
@@ -727,6 +858,74 @@ export function TipTapEditor({
 
   // Content version ref for race condition prevention between editor and agent
   const contentVersionRef = useRef(0)
+  const onChangeRef = useRef(onChange)
+  const performanceModeRef = useRef(performanceMode)
+  const pendingMarkdownChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingMarkdownChangeEditorRef = useRef<Editor | null>(null)
+  const pendingMarkdownIdleCancelRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => {
+    onChangeRef.current = onChange
+  }, [onChange])
+
+  useEffect(() => {
+    performanceModeRef.current = performanceMode
+  }, [performanceMode])
+
+  const flushPendingMarkdownChange = useCallback(() => {
+    if (pendingMarkdownChangeTimerRef.current) {
+      clearTimeout(pendingMarkdownChangeTimerRef.current)
+      pendingMarkdownChangeTimerRef.current = null
+    }
+    if (pendingMarkdownIdleCancelRef.current) {
+      pendingMarkdownIdleCancelRef.current()
+      pendingMarkdownIdleCancelRef.current = null
+    }
+
+    const pendingEditor = pendingMarkdownChangeEditorRef.current
+    pendingMarkdownChangeEditorRef.current = null
+
+    if (!pendingEditor || pendingEditor.isDestroyed) {
+      return
+    }
+
+    const markdown = normalizeMarkdownPlaceholders(pendingEditor.getMarkdown())
+    onChangeRef.current?.(markdown)
+    isFirstUpdateRef.current = false
+  }, [])
+
+  const emitMarkdownChange = useCallback((updatedEditor: Editor) => {
+    contentVersionRef.current++
+
+    if (!performanceModeRef.current) {
+      if (pendingMarkdownChangeTimerRef.current) {
+        flushPendingMarkdownChange()
+      }
+
+      const markdown = normalizeMarkdownPlaceholders(updatedEditor.getMarkdown())
+      onChangeRef.current?.(markdown)
+      isFirstUpdateRef.current = false
+      return
+    }
+
+    pendingMarkdownChangeEditorRef.current = updatedEditor
+
+    if (pendingMarkdownChangeTimerRef.current) {
+      clearTimeout(pendingMarkdownChangeTimerRef.current)
+    }
+    if (pendingMarkdownIdleCancelRef.current) {
+      pendingMarkdownIdleCancelRef.current()
+      pendingMarkdownIdleCancelRef.current = null
+    }
+
+    pendingMarkdownChangeTimerRef.current = setTimeout(() => {
+      pendingMarkdownChangeTimerRef.current = null
+      pendingMarkdownIdleCancelRef.current = runWhenIdle(
+        () => flushPendingMarkdownChange(),
+        LARGE_MARKDOWN_FLUSH_AFTER_MS,
+      )
+    }, LARGE_MARKDOWN_CHANGE_DEBOUNCE_MS)
+  }, [flushPendingMarkdownChange])
 
   // When file path changes, reset initialization state to avoid old file content overwriting new file
   useEffect(() => {
@@ -742,12 +941,13 @@ export function TipTapEditor({
 
   const editor = useEditor({
     immediatelyRender: false,
+    shouldRerenderOnTransaction: false,
     extensions: [
       StarterKit.configure({
         heading: {
           levels: [1, 2, 3, 4, 5, 6],
         },
-        codeBlock: false,
+        codeBlock: performanceMode ? {} : false,
         link: false,
         paragraph: false,
         underline: false,
@@ -766,10 +966,20 @@ export function TipTapEditor({
       TaskItem.configure({
         nested: true,
       }),
-      StableCodeBlockLowlight.configure({
-        lowlight,
-      }),
-      CharacterCount,
+      ...(
+        performanceMode
+          ? []
+          : [
+            StableCodeBlockLowlight.configure({
+              lowlight,
+            }),
+          ]
+      ),
+      ...(
+        performanceMode
+          ? []
+          : [CharacterCount]
+      ),
       TextStyle,
       Color,
       Highlight.configure({
@@ -780,7 +990,11 @@ export function TipTapEditor({
         types: ['heading', 'paragraph'],
       }),
       Typography,
-      SearchAndReplace,
+      ...(
+        richInteractionsEnabled
+          ? [SearchAndReplace]
+          : []
+      ),
       Dropcursor,
       Table.configure({
         resizable: true,
@@ -797,20 +1011,38 @@ export function TipTapEditor({
           size: 2,
         },
       }),
-      SlashCommand.configure({
-        suggestion: suggestionOptions,
-      }),
+      ...(
+        richInteractionsEnabled
+          ? [
+            SlashCommand.configure({
+              suggestion: suggestionOptions,
+            }),
+          ]
+          : []
+      ),
       QuoteMark,
       AISuggestion,
-      UniqueId.configure({
-        attributeName: 'data-id',
-        types: ['paragraph', 'heading', 'blockquote', 'codeBlock', 'listItem', 'bulletList', 'orderedList', 'taskItem', 'table', 'tableRow', 'tableCell', 'tableHeader'],
-      }),
-      HeadingCollapse,
+      ...(
+        documentEnhancementsEnabled
+          ? [
+            UniqueId.configure({
+              attributeName: 'data-id',
+              types: ['paragraph', 'heading', 'blockquote', 'codeBlock', 'listItem', 'bulletList', 'orderedList', 'taskItem', 'table', 'tableRow', 'tableCell', 'tableHeader'],
+            }),
+            HeadingCollapse,
+          ]
+          : []
+      ),
       InlineMath,
       BlockMath,
-      MermaidDiagram,
-      DiagramLink,
+      ...(
+        documentEnhancementsEnabled
+          ? [
+            MermaidDiagram,
+            DiagramLink,
+          ]
+          : []
+      ),
       WikiLinkExtension.configure({
         onClick: (target) => {
           // 在文件树中查找匹配的文件并打开
@@ -831,25 +1063,31 @@ export function TipTapEditor({
           if (found) setActiveFilePath(found)
         },
       }),
-      WikiLinkSuggestionExtension.configure({
-        getFiles: () => {
-          const { fileTree } = useArticleStore.getState()
-          const files: Array<{ path: string; name: string }> = []
-          const collectFiles = (items: any[], prefix = '') => {
-            for (const item of items) {
-              const itemPath = prefix ? `${prefix}/${item.name}` : item.name
-              if (item.isFile && item.name.endsWith('.md')) {
-                files.push({ path: itemPath, name: item.name.replace(/\.md$/, '') })
-              }
-              if (item.children) {
-                collectFiles(item.children, itemPath)
-              }
-            }
-          }
-          collectFiles(fileTree)
-          return files
-        },
-      }),
+      ...(
+        richInteractionsEnabled && !performanceMode
+          ? [
+            WikiLinkSuggestionExtension.configure({
+              getFiles: () => {
+                const { fileTree } = useArticleStore.getState()
+                const files: Array<{ path: string; name: string }> = []
+                const collectFiles = (items: any[], prefix = '') => {
+                  for (const item of items) {
+                    const itemPath = prefix ? `${prefix}/${item.name}` : item.name
+                    if (item.isFile && item.name.endsWith('.md')) {
+                      files.push({ path: itemPath, name: item.name.replace(/\.md$/, '') })
+                    }
+                    if (item.children) {
+                      collectFiles(item.children, itemPath)
+                    }
+                  }
+                }
+                collectFiles(fileTree)
+                return files
+              },
+            }),
+          ]
+          : []
+      ),
       Image.extend({
         addAttributes() {
           return {
@@ -934,7 +1172,8 @@ export function TipTapEditor({
       // 自定义粘贴 Markdown 扩展
       PasteMarkdown,
       GhostTextExtension.configure({
-        enabled: aiCompletionEnabled,
+        debounceTime: performanceMode ? 900 : 500,
+        enabled: aiCompletionEnabled && !performanceMode,
       }),
       Extension.create({
         name: 'diffReview',
@@ -943,21 +1182,20 @@ export function TipTapEditor({
         }
       }),
       BookmarkExtension,
-      FilePreviewExtension,
+      ...(
+        documentEnhancementsEnabled
+          ? [FilePreviewExtension]
+          : []
+      ),
     ],
-    content: initialContent,
+    content: editorInitialContent,
     contentType: 'markdown',
     editable,
     onUpdate: ({ editor }) => {
       // Bug fix: Only trigger onChange if editor is ready (not during initialization)
       // Using counter to handle rapid successive updates
       if (externalUpdateCounterRef.current === 0 && isReadyRef.current) {
-        const markdown = normalizeMarkdownPlaceholders(editor.getMarkdown())
-        onChange?.(markdown)
-        // Mark that we've processed the first update
-        isFirstUpdateRef.current = false
-        // Increment version on user content changes
-        contentVersionRef.current++
+        emitMarkdownChange(editor)
       } else if (isFirstUpdateRef.current) {
         // Skip the very first update during initialization
       } else {
@@ -967,13 +1205,34 @@ export function TipTapEditor({
   })
 
   useEffect(() => {
+    return () => {
+      flushPendingMarkdownChange()
+    }
+  }, [activeFilePath, flushPendingMarkdownChange])
+
+  useEffect(() => {
     if (!editor) return
 
-    getGhostTextStorage(editor).enabled = aiCompletionEnabled
-    if (!aiCompletionEnabled) {
+    const handleBlur = () => {
+      flushPendingMarkdownChange()
+    }
+
+    editor.on('blur', handleBlur)
+    return () => {
+      editor.off('blur', handleBlur)
+      flushPendingMarkdownChange()
+    }
+  }, [editor, flushPendingMarkdownChange])
+
+  useEffect(() => {
+    if (!editor) return
+
+    const ghostTextEnabled = aiCompletionEnabled && !performanceMode
+    getGhostTextStorage(editor).enabled = ghostTextEnabled
+    if (!ghostTextEnabled) {
       editor.view.dispatch(editor.state.tr.setMeta(ghostTextPluginKey, { type: 'CLEAR' }))
     }
-  }, [aiCompletionEnabled, editor])
+  }, [aiCompletionEnabled, editor, performanceMode])
 
   // AI可视化Diff的三个核心操作回调
   const handleAcceptDiff = useCallback(() => {
@@ -998,7 +1257,7 @@ export function TipTapEditor({
 
   // 绑定全局 Ctrl+J 键盘快捷键唤起行内 AI 面板
   useEffect(() => {
-    if (!editor) return
+    if (!editor || !richInteractionsEnabled) return
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       // 快捷键 Ctrl+J (Windows) / Cmd+J (Mac)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
@@ -1008,7 +1267,7 @@ export function TipTapEditor({
     }
     window.addEventListener('keydown', handleGlobalKeyDown)
     return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-  }, [editor])
+  }, [editor, richInteractionsEnabled])
 
   const persistEditorViewState = useCallback(() => {
     if (!editor || !activeFilePath || !scrollContainerRef.current) {
@@ -1046,20 +1305,36 @@ export function TipTapEditor({
     })
   }, [activeFilePath, editor, setEditorViewState])
 
+  const schedulePersistEditorViewState = useCallback(() => {
+    if (!performanceModeRef.current) {
+      persistEditorViewState()
+      return
+    }
+
+    if (viewStateSaveTimerRef.current) {
+      return
+    }
+
+    viewStateSaveTimerRef.current = setTimeout(() => {
+      viewStateSaveTimerRef.current = null
+      persistEditorViewState()
+    }, LARGE_EDITOR_VIEW_STATE_SAVE_MS)
+  }, [persistEditorViewState])
+
   useEffect(() => {
     if (!editor || !activeFilePath) {
       return
     }
 
     const handleSelectionUpdate = () => {
-      persistEditorViewState()
+      schedulePersistEditorViewState()
     }
 
     editor.on('selectionUpdate', handleSelectionUpdate)
     return () => {
       editor.off('selectionUpdate', handleSelectionUpdate)
     }
-  }, [activeFilePath, editor, persistEditorViewState])
+  }, [activeFilePath, editor, schedulePersistEditorViewState])
 
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current
@@ -1068,17 +1343,21 @@ export function TipTapEditor({
     }
 
     const handleScroll = () => {
-      persistEditorViewState()
+      schedulePersistEditorViewState()
     }
 
     scrollContainer.addEventListener('scroll', handleScroll, { passive: true })
     return () => {
       scrollContainer.removeEventListener('scroll', handleScroll)
     }
-  }, [activeFilePath, persistEditorViewState])
+  }, [activeFilePath, schedulePersistEditorViewState])
 
   useEffect(() => {
     return () => {
+      if (viewStateSaveTimerRef.current) {
+        clearTimeout(viewStateSaveTimerRef.current)
+        viewStateSaveTimerRef.current = null
+      }
       persistEditorViewState()
     }
   }, [persistEditorViewState])
@@ -2150,34 +2429,20 @@ export function TipTapEditor({
     }
   }, [handleAIPolish, handleAIConcise, handleAIExpand, handleAIExplain, handleAITranslate])
 
-  // Initialize content only once - preserves undo/redo history when switching tabs
-  // Bug fix: Only initialize if the editor is for the current file path
+  // Initialize editor readiness once. The initial Markdown is already parsed by useEditor's content option;
+  // parsing it again here is especially expensive for large notes.
   useEffect(() => {
     if (!editor || !activeFilePath) return
 
-    // Check if this is still the correct file path (handle race conditions)
     const currentPath = activeFilePath
 
-    // Only initialize on first mount - subsequent content changes should not overwrite
-    // user edits (e.g., when switching back to a previously edited tab)
-    // Bug fix: Also check that we're initializing for the correct file path
     if (!isInitializedRef.current) {
-      // Use setTimeout to avoid flushSync conflict during React render
       setTimeout(() => {
-        // Check if the file path is still the same (handle race condition)
         if (activeFilePath !== currentPath) return
 
-        if (initialContent) {
-          editor.commands.setContent(initialContent || '', { contentType: 'markdown' })
-        }
-        // Mark as initialized to allow subsequent content updates
         isInitializedRef.current = true
-        // Bug fix: Mark editor as ready AFTER content is set
-        // This prevents onUpdate from firing with empty content during init
         isReadyRef.current = true
-        // Notify mobile editor that editor is ready
         onReady?.()
-        // Notify parent component about editor instance
         onEditorReady?.(editor)
         restoreEditorViewState(currentPath)
       }, 0)
@@ -2188,8 +2453,11 @@ export function TipTapEditor({
   useEffect(() => {
     if (!editor || !editor.view) return
 
+    let transformTimer: ReturnType<typeof setTimeout> | null = null
+    let cancelIdleTransform: (() => void) | null = null
+
     const transformImagePaths = () => {
-      // 获取编辑器 DOM 中的所有图片
+      cancelIdleTransform = null
       const editorDom = editor.view.dom
       const images = editorDom.querySelectorAll('img')
 
@@ -2223,25 +2491,44 @@ export function TipTapEditor({
       }
     }
 
-    // 监听 transaction 事件 - 在文档更新时立即转换
-    const handleTransaction = () => {
-      transformImagePaths()
+    const scheduleTransformImagePaths = () => {
+      if (transformTimer) {
+        clearTimeout(transformTimer)
+      }
+      if (cancelIdleTransform) {
+        cancelIdleTransform()
+        cancelIdleTransform = null
+      }
+
+      transformTimer = setTimeout(() => {
+        transformTimer = null
+        if (performanceModeRef.current) {
+          cancelIdleTransform = runWhenIdle(transformImagePaths, 3000)
+        } else {
+          transformImagePaths()
+        }
+      }, performanceModeRef.current ? 700 : 80)
     }
 
-    // 监听 selectionUpdate 事件
-    const handleSelectionUpdate = () => {
-      transformImagePaths()
+    const handleTransaction = ({ transaction }: { transaction: any }) => {
+      if (!transaction?.docChanged) {
+        return
+      }
+      scheduleTransformImagePaths()
     }
 
     editor.on('transaction', handleTransaction)
-    editor.on('selectionUpdate', handleSelectionUpdate)
 
-    // 初始执行
-    transformImagePaths()
+    scheduleTransformImagePaths()
 
     return () => {
+      if (transformTimer) {
+        clearTimeout(transformTimer)
+      }
+      if (cancelIdleTransform) {
+        cancelIdleTransform()
+      }
       editor.off('transaction', handleTransaction)
-      editor.off('selectionUpdate', handleSelectionUpdate)
     }
   }, [editor])
 
@@ -2283,6 +2570,8 @@ export function TipTapEditor({
 
   // Listen for search trigger from layout (Ctrl+F / Cmd+F)
   useEffect(() => {
+    if (!richInteractionsEnabled) return
+
     const handleSearchTrigger = () => {
       setSearchReplaceOpen(true)
     }
@@ -2291,10 +2580,10 @@ export function TipTapEditor({
     return () => {
       emitter.off('editor-search-trigger' as any, handleSearchTrigger)
     }
-  }, [])
+  }, [richInteractionsEnabled])
 
   useEffect(() => {
-    if (!editor || !activeFilePath || !pendingSearchKeyword.trim()) {
+    if (!editor || !richInteractionsEnabled || !activeFilePath || !pendingSearchKeyword.trim()) {
       return
     }
 
@@ -2368,7 +2657,7 @@ export function TipTapEditor({
       if (readyRetryTimer) clearTimeout(readyRetryTimer)
       if (focusTimer) clearTimeout(focusTimer)
     }
-  }, [editor, activeFilePath, pendingSearchKeyword, setPendingSearchKeyword, initialContent])
+  }, [editor, richInteractionsEnabled, activeFilePath, pendingSearchKeyword, setPendingSearchKeyword, initialContent])
 
   // Handle remote file pull updates via event (instead of initialContent change)
   // This fixes cursor jump issue caused by unnecessary setContent during local saves
@@ -2384,7 +2673,7 @@ export function TipTapEditor({
         isReadyRef.current = false
         externalUpdateCounterRef.current++
         setTimeout(() => {
-          editor.commands.setContent(newContent, { contentType: 'markdown' })
+          setEditorMarkdownContent(editor, newContent)
           isReadyRef.current = true
           setTimeout(() => {
             externalUpdateCounterRef.current = Math.max(0, externalUpdateCounterRef.current - 1)
@@ -2421,7 +2710,7 @@ export function TipTapEditor({
       externalUpdateCounterRef.current++
       // Use setTimeout to avoid flushSync conflict during React render
       setTimeout(() => {
-        editor.commands.setContent(event.content, { contentType: 'markdown' })
+        setEditorMarkdownContent(editor, event.content)
         // Bug fix: Mark editor as ready after content is set
         isReadyRef.current = true
         // Reset the counter and pending update after a short delay
@@ -2456,7 +2745,7 @@ export function TipTapEditor({
         // Use setTimeout to avoid flushSync conflict during React render
         setTimeout(() => {
           // Set content in editor with Markdown parsing
-          editor.commands.setContent(newContent, { contentType: 'markdown' })
+          setEditorMarkdownContent(editor, newContent)
           // Bug fix: Mark editor as ready after content is set
           isReadyRef.current = true
           // Reset the counter after a short delay to handle rapid updates
@@ -2480,6 +2769,8 @@ export function TipTapEditor({
 
   // Handle AI continue writing
   useEffect(() => {
+    if (!richInteractionsEnabled) return
+
     let abortController: AbortController | null = null
 
     const handleAIContinue = async () => {
@@ -2540,7 +2831,7 @@ export function TipTapEditor({
 
         editor.chain()
           .deleteRange({ from: startPosition, to: startPosition + accumulatedResult.length })
-          .insertContent(accumulatedResult, { contentType: 'markdown' })
+          .insertContent(normalizeEditorMarkdown(accumulatedResult), { contentType: 'markdown' })
           .run()
       } catch (error) {
         if (!accumulatedResult) {
@@ -2562,7 +2853,7 @@ export function TipTapEditor({
       document.removeEventListener('tiptap-ai-continue', handleAIContinue)
       abortController?.abort()
     }
-  }, [editor])
+  }, [editor, richInteractionsEnabled])
 
   // Handle drag and drop from marks
   const handleEditorDrop = useCallback((e: React.DragEvent) => {
@@ -2599,7 +2890,9 @@ export function TipTapEditor({
         if (mark && mark.id !== undefined) {
           import('@/lib/mark-to-markdown').then(({ markToMarkdown }) => {
             const markdown = markToMarkdown(mark)
-            editor?.commands.insertContent(markdown, { contentType: 'markdown' })
+            if (editor) {
+              insertEditorMarkdownContent(editor, markdown)
+            }
             toast({
               title: '已插入记录',
               description: mark.desc || mark.content?.slice(0, 50) || '记录内容'
@@ -2719,7 +3012,7 @@ export function TipTapEditor({
         // Insert content with markdown parsing
         // Wrap in setTimeout to avoid React lifecycle flushSync conflict
         runDeferredEditorCommand(() => {
-          editor.commands.insertContent(content, { contentType: 'markdown' })
+          insertEditorMarkdownContent(editor, content)
 
           // Use the actual cursor position after transaction
           const newPosition = editor.state.selection.from
@@ -2874,12 +3167,12 @@ export function TipTapEditor({
               newContent.split('\n')
             )
 
-            editor.commands.setContent(updatedMarkdown, { contentType: 'markdown' })
+            setEditorMarkdownContent(editor, updatedMarkdown)
           } else {
             editor.chain()
               .focus()
               .deleteRange({ from, to })
-              .insertContent(newContent, { contentType: 'markdown' })
+              .insertContent(normalizeEditorMarkdown(newContent), { contentType: 'markdown' })
               .run()
           }
 
@@ -3182,8 +3475,12 @@ export function TipTapEditor({
     return null
   }
 
-  const effectiveOutlineOpen = isMobile ? mobileOutlineOpen : outlineOpen
+  const effectiveOutlineOpen = richInteractionsEnabled && (isMobile ? mobileOutlineOpen : outlineOpen)
   const handleOutlineToggle = () => {
+    if (!richInteractionsEnabled) {
+      return
+    }
+
     if (isMobile) {
       setMobileOutlineOpen((prev) => !prev)
       return
@@ -3197,8 +3494,9 @@ export function TipTapEditor({
       id="aritcle-md-editor"
       className="tiptap-editor relative flex h-full flex-col"
       data-code-theme={codeTheme || 'github'}
+      data-performance-mode={performanceMode ? 'large-markdown' : undefined}
     >
-      {isMobile && mobileContext && (
+      {richInteractionsEnabled && isMobile && mobileContext && (
         <MobileEditorContextBar
           mode={mobileContext.mode}
           previewText={mobileContext.mode === 'text' ? mobileContext.previewText : undefined}
@@ -3223,32 +3521,36 @@ export function TipTapEditor({
           })}
         >
         <EditorContent editor={editor} className="h-full relative">
-          {!isMobile && <ImageBubbleMenu editor={editor} />}
+          {richInteractionsEnabled && !isMobile && <ImageBubbleMenu editor={editor} />}
 
-          <AISuggestionFloating editor={editor} />
+          {richInteractionsEnabled && <AISuggestionFloating editor={editor} />}
 
-          <InlineAIPanel
-            editor={editor}
-            isOpen={isInlineAIOpen}
-            onClose={() => setIsInlineAIOpen(false)}
-            onDiffSessionStart={handleDiffSessionStart}
-          />
+          {richInteractionsEnabled && (
+            <InlineAIPanel
+              editor={editor}
+              isOpen={isInlineAIOpen}
+              onClose={() => setIsInlineAIOpen(false)}
+              onDiffSessionStart={handleDiffSessionStart}
+            />
+          )}
 
-          <DiffReviewUI
-            editor={editor}
-            session={diffSession}
-            onAccept={handleAcceptDiff}
-            onReject={handleRejectDiff}
-          />
+          {richInteractionsEnabled && (
+            <DiffReviewUI
+              editor={editor}
+              session={diffSession}
+              onAccept={handleAcceptDiff}
+              onReject={handleRejectDiff}
+            />
+          )}
 
 
-          {!isMobile && <EmptyLineBlockMenu editor={editor} />}
+          {richInteractionsEnabled && highFrequencyDecorationsEnabled && !isMobile && <EmptyLineBlockMenu editor={editor} />}
 
-          {!isMobile && <FloatingTableMenu editor={editor} />}
+          {richInteractionsEnabled && highFrequencyDecorationsEnabled && !isMobile && <FloatingTableMenu editor={editor} />}
 
-          {!isMobile && <WikiLinkDiagramBubbleMenu editor={editor} />}
+          {richInteractionsEnabled && highFrequencyDecorationsEnabled && !isMobile && <WikiLinkDiagramBubbleMenu editor={editor} />}
 
-          {!isMobile && (
+          {richInteractionsEnabled && !isMobile && (
             <BubbleMenuComponent
               editor={editor}
               onAIPolish={handleAIPolish}
@@ -3262,15 +3564,17 @@ export function TipTapEditor({
           )}
         </EditorContent>
 
-        <SearchReplacePanel
-          editor={editor}
-          open={searchReplaceOpen}
-          onOpenChange={setSearchReplaceOpen}
-        />
+        {richInteractionsEnabled && (
+          <SearchReplacePanel
+            editor={editor}
+            open={searchReplaceOpen}
+            onOpenChange={setSearchReplaceOpen}
+          />
+        )}
         </div>
       </div>
 
-      {isMobile && (
+      {richInteractionsEnabled && isMobile && (
         <MobileEditorMoreSheet
           open={mobileSheetMode !== null}
           mode={mobileSheetMode}
@@ -3289,7 +3593,7 @@ export function TipTapEditor({
         />
       )}
 
-      {isMobile && (
+      {richInteractionsEnabled && isMobile && (
         <Outline
           editor={editor}
           isOpen={mobileOutlineOpen}
@@ -3325,7 +3629,7 @@ export function TipTapEditor({
         onToggleOutline={handleOutlineToggle}
       />
 
-      <SlashCommandPortal />
+      {richInteractionsEnabled && <SlashCommandPortal />}
 
       <MathEditorDialog
         open={mathDialogOpen}

@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import useTagStore from "@/stores/tag"
 import { useTranslations } from 'next-intl'
-import { useTextSize } from "@/contexts/text-size-context"
+import useSettingStore from "@/stores/setting"
 
 function ItemIcon({ isLocked=false, isPin=false }) {
   if (isLocked) {
@@ -50,12 +50,12 @@ function ItemContent({ value, isEditing, onChange }: { value: string, isEditing:
 
 export function TagItem(
   { tag, onChange, onSelect }:
-  { tag: Tag, onChange: () => void, onSelect: () => void }) 
+  { tag: Tag, onChange: () => void, onSelect: () => void })
 {
   const t = useTranslations();
-  const { getContextMenuTextSize } = useTextSize()
+  const { recordTextSize } = useSettingStore()
   const [isEditing, setIsEditing] = React.useState(false)
-  const textSize = getContextMenuTextSize('record')
+  const textSize = recordTextSize
 
   const { fetchTags, getCurrentTag, currentTagId } = useTagStore()
 

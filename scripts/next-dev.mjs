@@ -9,7 +9,7 @@ const __dirname = path.dirname(__filename)
 const workspace = path.resolve(__dirname, '..')
 const nextDir = path.join(workspace, '.next')
 const require = createRequire(import.meta.url)
-const devPort = process.env.NEXT_DEV_PORT || '3456'
+const devPort = process.env.NEXT_DEV_PORT || '3457'
 const devHost = process.env.NEXT_DEV_HOST || '0.0.0.0'
 
 function execFileText(command, args) {

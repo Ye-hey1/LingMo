@@ -2,13 +2,11 @@ import { useCallback, useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { toast } from '@/hooks/use-toast'
-import { getToolByName } from '@/lib/agent'
 import type { MessageCitationDetail } from '@/lib/ai/citations'
 import { cn } from '@/lib/utils'
 import emitter from '@/lib/emitter'
 import useArticleStore from '@/stores/article'
-import { ChevronRight, Download, ExternalLink, Link2, Loader2, LocateFixed } from 'lucide-react'
+import { ChevronRight, ExternalLink, Link2, LocateFixed } from 'lucide-react'
 
 interface MessageCitationsProps {
   sources?: string[]
@@ -64,7 +62,6 @@ function getCitationSearchText(detail: MessageCitationDetail) {
 }
 
 export function MessageCitations({ details, embedded = false }: MessageCitationsProps) {
-  const [savingKey, setSavingKey] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
 
   const summary = useMemo(() => {
@@ -75,54 +72,6 @@ export function MessageCitations({ details, embedded = false }: MessageCitations
     const first = getCitationLabel(details[0], 0)
     return details.length === 1 ? first : `${first} 等 ${details.length} 项`
   }, [details])
-
-  const handleSaveCitation = useCallback(async (detail: MessageCitationDetail, index: number) => {
-    const url = detail.url?.trim()
-    if (!url) {
-      return
-    }
-
-    const tool = getToolByName('clip_web_content')
-    if (!tool) {
-      toast({
-        title: '保存失败',
-        description: '未找到 clip_web_content 工具',
-        variant: 'destructive',
-      })
-      return
-    }
-
-    const key = `${url}-${index}`
-    setSavingKey(key)
-
-    try {
-      const result = await tool.execute({
-        url,
-        title: detail.title || detail.filename || getCitationLabel(detail, index),
-        content: detail.content || '',
-        folderPath: 'web-clips',
-        maxChars: 20000,
-      })
-
-      if (!result.success) {
-        toast({
-          title: '保存失败',
-          description: result.error || '网页内容保存失败',
-          variant: 'destructive',
-        })
-        return
-      }
-
-      toast({
-        title: '已保存到知识库',
-        description: result.data?.filePath
-          ? `文件路径：${result.data.filePath}`
-          : '网页内容已保存为笔记',
-      })
-    } finally {
-      setSavingKey(null)
-    }
-  }, [])
 
   const handleOpenCitation = useCallback((detail: MessageCitationDetail) => {
     const targetPath = getCitationPath(detail)
@@ -203,10 +152,7 @@ export function MessageCitations({ details, embedded = false }: MessageCitations
             const label = getCitationLabel(detail, index)
             const url = detail.url?.trim()
             const sourcePath = getCitationPath(detail)
-            const isWebSource = detail.sourceType === 'web' && !!url
             const canJump = !!sourcePath && detail.sourceType !== 'web' && !/^https?:\/\//i.test(sourcePath)
-            const citationKey = `${url || label}-${index}`
-            const isSaving = savingKey === citationKey
 
             return (
               <div key={`${label}-${index}`} className="rounded-md border border-border/50 bg-background/70 px-1.5 py-1">
@@ -245,24 +191,6 @@ export function MessageCitations({ details, embedded = false }: MessageCitations
                         title="定位到编辑器"
                       >
                         <LocateFixed className="size-2.5" />
-                      </Button>
-                    )}
-                    {isWebSource && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-4.5"
-                        onClick={() => void handleSaveCitation(detail, index)}
-                        disabled={isSaving}
-                        aria-label="保存到知识库"
-                        title="保存到知识库"
-                      >
-                        {isSaving ? (
-                          <Loader2 className="size-2.5 animate-spin" />
-                        ) : (
-                          <Download className="size-2.5" />
-                        )}
                       </Button>
                     )}
                     {url && (

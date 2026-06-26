@@ -60,7 +60,7 @@ function formatTrendTime(item: AiHotspotItem) {
   return formatHotspotTime(value)
 }
 
-function FeaturedTrendPanel({ items }: { items: AiHotspotItem[] }) {
+function FeaturedTrendPanel({ items, onSelectItem }: { items: AiHotspotItem[]; onSelectItem?: (id: string) => void }) {
   const trends = items
     .slice()
     .sort((left, right) => getItemTime(right) - getItemTime(left))
@@ -68,35 +68,42 @@ function FeaturedTrendPanel({ items }: { items: AiHotspotItem[] }) {
 
   if (trends.length === 0) return null
 
+  const handleOpen = (item: AiHotspotItem) => {
+    if (onSelectItem) {
+      onSelectItem(item.id)
+    } else if (item.url) {
+      window.open(item.url, '_blank', 'noopener,noreferrer')
+    }
+  }
+
   return (
-    <section className="rounded-lg border border-[#E5E7EB] bg-white px-4 py-3">
+    <section className="rounded-lg border border-border bg-card px-4 py-3">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-[#1D2129]">
+        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
           <span className="text-base" aria-hidden="true">🔥</span>
           当前热点
         </div>
-        <div className="text-xs text-[#86909C]">来自 AI HOT 精选，按发布时间排序</div>
+        <div className="text-xs text-muted-foreground">来自 AI HOT 精选，点击在应用内阅读</div>
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-0.5">
         {trends.map((item, index) => (
-          <a
+          <button
             key={item.id}
-            href={item.url}
-            target="_blank"
-            rel="noreferrer"
-            className="grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-1 py-1.5 text-sm transition-colors hover:bg-[#F7F8FA]"
+            type="button"
+            onClick={() => handleOpen(item)}
+            className="grid w-full grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-1 py-1.5 text-left text-sm transition-colors hover:bg-muted"
           >
             <span className={cn(
               'text-xs font-semibold tabular-nums',
-              index === 0 ? 'text-[#D9294A]' : index === 1 ? 'text-[#C75A00]' : index === 2 ? 'text-[#0F8EAE]' : 'text-[#86909C]',
+              index === 0 ? 'text-rose-500' : index === 1 ? 'text-amber-600' : index === 2 ? 'text-sky-600' : 'text-muted-foreground/60',
             )}>
               {index + 1}
             </span>
-            <span className="truncate font-medium text-[#1D2129]">{item.title}</span>
-            <span className="hidden text-xs text-[#5F6F89] sm:inline">
+            <span className="truncate font-medium text-foreground">{item.title}</span>
+            <span className="hidden text-xs text-muted-foreground/80 sm:inline">
               {item.sourceName} · {formatTrendTime(item)}
             </span>
-          </a>
+          </button>
         ))}
       </div>
     </section>
@@ -149,13 +156,13 @@ export function HotspotList({
     return (
       <div className="space-y-2">
         {Array.from({ length: 5 }).map((_, index) => (
-          <div key={index} className="rounded-lg border border-[#E5E7EB] bg-white p-4">
+          <div key={index} className="rounded-lg border border-border bg-card p-4">
             <div className="flex items-start gap-3">
-              <div className="size-10 rounded bg-[#F2F3F5]" />
+              <div className="size-10 rounded bg-muted" />
               <div className="min-w-0 flex-1 space-y-2">
-                <div className="h-3 w-32 rounded bg-[#F2F3F5]" />
-                <div className="h-4 w-full max-w-xl rounded bg-[#F2F3F5]" />
-                <div className="h-3 w-4/5 rounded bg-[#F2F3F5]" />
+                <div className="h-3 w-32 rounded bg-muted" />
+                <div className="h-4 w-full max-w-xl rounded bg-muted" />
+                <div className="h-3 w-4/5 rounded bg-muted" />
               </div>
             </div>
           </div>
@@ -177,16 +184,16 @@ export function HotspotList({
         : '点击刷新后会从默认来源和用户 RSS 中聚合最新动态。')
 
     return (
-      <div className="flex h-[360px] flex-col items-center justify-center rounded-lg border border-[#E5E7EB] bg-white px-4 text-center">
+      <div className="flex h-[360px] flex-col items-center justify-center rounded-lg border border-border bg-card px-4 text-center">
         {hasCachedItems && hasActiveFilters ? (
-          <SearchX className="mb-3 size-10 text-[#86909C]" />
+          <SearchX className="mb-3 size-10 text-muted-foreground/60" />
         ) : (
-          <Newspaper className="mb-3 size-10 text-[#86909C]" />
+          <Newspaper className="mb-3 size-10 text-muted-foreground/60" />
         )}
-        <div className="text-sm font-medium text-[#1D2129]">{resolvedTitle}</div>
-        <div className="mt-1 max-w-md text-sm leading-6 text-[#4E5968]">{resolvedDescription}</div>
+        <div className="text-sm font-medium text-foreground">{resolvedTitle}</div>
+        <div className="mt-1 max-w-md text-sm leading-6 text-muted-foreground">{resolvedDescription}</div>
         {!hasCachedItems && !isRefreshing ? (
-          <Button variant="outline" size="sm" className="mt-3 h-8 rounded text-xs shadow-none" onClick={onRefresh}>
+          <Button variant="outline" size="sm" className="mt-3 h-8 rounded-md text-xs shadow-none" onClick={onRefresh}>
             立即刷新
           </Button>
         ) : null}
@@ -199,13 +206,13 @@ export function HotspotList({
   return (
     <div className="relative space-y-3 pb-16">
       {showFeaturedTrends ? (
-        <FeaturedTrendPanel items={items} />
+        <FeaturedTrendPanel items={items} onSelectItem={onSelectItem} />
       ) : null}
 
-      <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 rounded-lg border border-[#E5E7EB] bg-white px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2 text-xs text-[#86909C]">
+      <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           {viewMode === 'grid' ? <LayoutGrid className="size-3.5" /> : <Rows3 className="size-3.5" />}
-          <span className="rounded bg-[#F2F3F5] px-2 py-1 text-[#4E5968]">
+          <span className="rounded bg-muted px-2 py-1 text-foreground/80">
             {viewMode === 'grid' ? '卡片视图' : '列表视图'}
           </span>
           <span className="whitespace-nowrap">
@@ -213,12 +220,12 @@ export function HotspotList({
             {typeof totalCount === 'number' && totalCount !== items.length ? ` / ${totalCount} 条` : ''}
           </span>
           {activeTopicLabel ? (
-            <span className="inline-flex min-w-0 items-center gap-1 rounded bg-[#E8F3FF] px-2 py-1 text-[#165DFF]">
+            <span className="inline-flex min-w-0 items-center gap-1 rounded bg-primary/10 px-2 py-1 text-primary">
               <Tag className="size-3.5 shrink-0" />
               <span className="truncate">{activeTopicLabel}</span>
               <button
                 type="button"
-                className="ml-0.5 rounded-sm text-[#165DFF] hover:bg-[#D8E9FF]"
+                className="ml-0.5 rounded-sm text-primary hover:bg-primary/20"
                 aria-label="清除分类"
                 onClick={onClearTopic}
               >
@@ -227,14 +234,14 @@ export function HotspotList({
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-2 text-[12px] text-[#86909C]">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <Newspaper className="size-3.5" />
           <span>按日期与热度排序</span>
         </div>
       </div>
 
       {isRefreshing ? (
-        <div className="flex items-center gap-2 rounded-lg border border-[#BEDAFF] bg-[#E8F3FF] px-3 py-2 text-sm text-[#165DFF]">
+        <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
           <Loader2 className="size-4 shrink-0 animate-spin" />
           <span>{refreshMessage || '正在后台刷新，当前缓存可继续阅读。'}</span>
         </div>
@@ -273,7 +280,7 @@ export function HotspotList({
           <Button
             variant="ghost"
             size="sm"
-            className="h-8 gap-1.5 px-3 text-xs text-muted-foreground shadow-none hover:bg-background hover:text-foreground"
+            className="h-8 gap-1.5 rounded-md px-3 text-xs text-muted-foreground shadow-none hover:bg-muted hover:text-foreground"
             onClick={onLoadMore}
           >
             <span>加载更多</span>
@@ -283,27 +290,27 @@ export function HotspotList({
       ) : null}
 
       {selectedCount > 0 ? (
-        <div className="sticky bottom-3 z-20 flex min-h-12 items-center gap-2 rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm">
-          <Archive className="size-4 text-[#165DFF]" />
-          <span className="text-[#1D2129]">已选择 {selectedCount} 条信号</span>
+        <div className="sticky bottom-3 z-20 flex min-h-12 items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-lg shadow-black/5">
+          <Archive className="size-4 text-primary" />
+          <span className="text-foreground">已选择 {selectedCount} 条信号</span>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            <Button variant="ghost" size="sm" className="h-8 gap-1.5 rounded px-2 text-xs shadow-none hover:bg-[#F2F3F5]" onClick={() => onBatchMarkRead?.(selectedItemIds)}>
+            <Button variant="ghost" size="sm" className="h-8 gap-1.5 rounded-md px-2 text-xs shadow-none hover:bg-muted" onClick={() => onBatchMarkRead?.(selectedItemIds)}>
               <CheckCheck className="size-3.5" />
               批量标记已读
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 gap-1.5 rounded px-2 text-xs shadow-none hover:bg-[#F2F3F5]" onClick={() => onBatchFavorite?.(selectedItemIds)}>
+            <Button variant="ghost" size="sm" className="h-8 gap-1.5 rounded-md px-2 text-xs shadow-none hover:bg-muted" onClick={() => onBatchFavorite?.(selectedItemIds)}>
               <Star className="size-3.5" />
               批量收藏
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 gap-1.5 rounded px-2 text-xs shadow-none hover:bg-[#F2F3F5]" onClick={() => onBatchSaveSnapshot?.(selectedItemIds)}>
+            <Button variant="ghost" size="sm" className="h-8 gap-1.5 rounded-md px-2 text-xs shadow-none hover:bg-muted" onClick={() => onBatchSaveSnapshot?.(selectedItemIds)}>
               <Bookmark className="size-3.5" />
               批量沉淀
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 gap-1.5 rounded px-2 text-xs text-[#F53F3F] shadow-none hover:bg-[#FEECEC]" onClick={() => onBatchDelete?.(selectedItemIds)}>
+            <Button variant="ghost" size="sm" className="h-8 gap-1.5 rounded-md px-2 text-xs text-destructive shadow-none hover:bg-destructive/10" onClick={() => onBatchDelete?.(selectedItemIds)}>
               <Trash2 className="size-3.5" />
               批量删除
             </Button>
-            <Button variant="ghost" size="icon" className="size-8 rounded text-[#86909C] shadow-none hover:bg-[#F2F3F5]" title="清除选择" onClick={onClearSelection}>
+            <Button variant="ghost" size="icon" className="size-8 rounded-md text-muted-foreground shadow-none hover:bg-muted" title="清除选择" onClick={onClearSelection}>
               <X className="size-4" />
             </Button>
           </div>

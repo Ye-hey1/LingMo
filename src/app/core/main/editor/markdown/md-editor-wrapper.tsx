@@ -1,13 +1,17 @@
 'use client'
 
-import useArticleStore from '@/stores/article'
-import { useEffect, useState, useCallback, useRef, RefObject } from 'react'
+import useArticleStore, {
+  clearCachedLargeMarkdownContent,
+  getCachedLargeMarkdownContent,
+} from '@/stores/article'
+import { useEffect, useState, useCallback, useMemo, useRef, RefObject } from 'react'
 import { TipTapEditor } from './tiptap-editor'
 import { Outline } from './outline'
 import { Loader2, Download, Menu } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import emitter from '@/lib/emitter'
 import useSettingStore from '@/stores/setting'
+import { isLargeMarkdownContentFast } from '@/lib/editor-document-profile'
 
 interface MdEditorProps {
   tabContentsRef: RefObject<Record<string, string>>
@@ -15,14 +19,12 @@ interface MdEditorProps {
 }
 
 export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
-  const {
-    saveCurrentArticle,
-    isPulling,
-    setCurrentArticle,
-    activeFilePath,
-    currentArticle,
-    justPulledFile
-  } = useArticleStore()
+  const saveCurrentArticle = useArticleStore((state) => state.saveCurrentArticle)
+  const isPulling = useArticleStore((state) => state.isPulling)
+  const setCurrentArticle = useArticleStore((state) => state.setCurrentArticle)
+  const activeFilePath = useArticleStore((state) => state.activeFilePath)
+  const currentArticle = useArticleStore((state) => state.currentArticle)
+  const justPulledFile = useArticleStore((state) => state.justPulledFile)
 
   const t = useTranslations('article.file.sync')
   const tEditor = useTranslations('editor')
@@ -60,6 +62,7 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
     const handleFileClose = (event: { path: string }) => {
       if (event.path === filePath) {
         loadedPathsRef.current.delete(filePath)
+        clearCachedLargeMarkdownContent(filePath)
       }
     }
     emitter.on('editor-file-close', handleFileClose as any)
@@ -85,6 +88,28 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
       emitter.off('article-opened', handleArticleOpened as any)
     }
   }, [filePath])
+
+  useEffect(() => {
+    const handleSyncContentUpdated = (event: { path: string; content: string }) => {
+      if (!event || event.path !== filePath) {
+        return
+      }
+
+      expectedContentRef.current = event.content
+      setInitialContent(event.content)
+      if (tabContentsRef.current) {
+        tabContentsRef.current[filePath] = event.content
+      }
+      setIsLoading(false)
+      isLoadingRef.current = false
+      contentInitializedRef.current = true
+    }
+
+    emitter.on('sync-content-updated', handleSyncContentUpdated as any)
+    return () => {
+      emitter.off('sync-content-updated', handleSyncContentUpdated as any)
+    }
+  }, [filePath, tabContentsRef])
 
   // Listen for AI streaming state
   useEffect(() => {
@@ -152,6 +177,19 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
         setInitialContent(tabContentsRef.current[filePath])
         setIsLoading(false)
         isLoadingRef.current = false
+        contentInitializedRef.current = true
+        return
+      }
+
+      const cachedLargeContent = getCachedLargeMarkdownContent(filePath)
+      if (cachedLargeContent !== null) {
+        setInitialContent(cachedLargeContent)
+        if (tabContentsRef.current) {
+          tabContentsRef.current[filePath] = cachedLargeContent
+        }
+        setIsLoading(false)
+        isLoadingRef.current = false
+        contentInitializedRef.current = true
         return
       }
 
@@ -161,6 +199,7 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
           setInitialContent(currentArticle)
           setIsLoading(false)
           isLoadingRef.current = false
+          contentInitializedRef.current = true
           return
         }
       }
@@ -239,7 +278,7 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
   // Handle content changes - only save if this is the active file
   const handleContentChange = useCallback((content: string) => {
     // Bug fix: Don't save if content is empty
-    if (content.length === 0) {
+    if (content.length === 0 && !contentInitializedRef.current) {
       return
     }
     // Bug fix: If expected content is set and incoming content doesn't match, skip save
@@ -329,8 +368,18 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
       useArticleStore.getState().setActiveFilePath(path)
       useArticleStore.getState().loadFileTree()
     } catch {
+      // Keep editing in memory if the untitled file cannot be created.
     }
   }
+
+  const cachedContent = filePath && tabContentsRef.current?.[filePath] !== undefined
+    ? tabContentsRef.current[filePath]
+    : null
+  const editorContent = cachedContent ?? initialContent ?? ''
+  const performanceMode = useMemo(
+    () => isLargeMarkdownContentFast(editorContent),
+    [editorContent],
+  )
 
   // Loading state - wait for content to be loaded
   // 如果正在从远程拉取，优先显示拉取遮罩
@@ -381,29 +430,33 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
         </div>
       )}
 
-      {/* Editor - initialContent only set once on mount */}
-      <TipTapEditor
-        initialContent={initialContent || ''}
-        onChange={handleContentChange}
-        placeholder={tEditor('placeholder')}
-        activeFilePath={filePath}
-        onQuoteToChat={handleQuoteToChat}
-        onEditorReady={handleEditorReady}
-        outlineOpen={outlineOpen}
-        outlinePosition={outlinePosition}
-        onToggleOutline={() => void setOutlineOpen(!outlineOpen)}
-        editable={!isPulling && !aiStreaming}
-        autoScroll={aiStreaming}
-        showOverlay={aiStreaming}
-        onTerminate={() => {
-          if (terminateRef.current) {
-            terminateRef.current()
-          } else {
-            // If terminateRef is not set, emit abort event
-            emitter.emit('abort-ai-streaming')
+      <div className="h-full">
+        <TipTapEditor
+          initialContent={editorContent}
+          onChange={handleContentChange}
+          placeholder={tEditor('placeholder')}
+          activeFilePath={filePath}
+          onQuoteToChat={handleQuoteToChat}
+          onEditorReady={handleEditorReady}
+          outlineOpen={outlineOpen}
+          outlinePosition={outlinePosition}
+          onToggleOutline={() => {
+            void setOutlineOpen(!outlineOpen)
           }}
-        }
-      />
+          editable={!isPulling && !aiStreaming}
+          autoScroll={aiStreaming}
+          showOverlay={aiStreaming}
+          performanceMode={performanceMode}
+          onTerminate={() => {
+            if (terminateRef.current) {
+              terminateRef.current()
+            } else {
+              // If terminateRef is not set, emit abort event
+              emitter.emit('abort-ai-streaming')
+            }}
+          }
+        />
+      </div>
 
       {!isPulling && editorReady && editorInstance && (
         <div

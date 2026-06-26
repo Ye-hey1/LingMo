@@ -1,8 +1,5 @@
 @import "tailwindcss";
 
-/* 导入动画库 */
-@import "tw-animate-css";
-
 @custom-variant dark (&:is(.dark *));
 
 /* 配置 dark mode 变体 - 必须在 @theme 外面 */
@@ -1058,4 +1055,10 @@ ol {
   .flashcard-progress-bar {
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Radix ScrollArea: 内部 Viewport 默认 display:table 会让宽内容撑破 flex 容器，
+   改为 block 让内容遵守父级 min-w-0 / overflow 约束，防止 Agent 中心等面板横向溢出。 */
+[data-radix-scroll-area-viewport] > div {
+  display: block !important;
 }

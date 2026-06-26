@@ -104,13 +104,10 @@ export function TimelineReviewPanel({
   const [reviewTitle, setReviewTitle] = useState('')
   const [lastReviewKind, setLastReviewKind] = useState<ActivityReviewKind | null>(null)
   const [savingNote, setSavingNote] = useState(false)
-  const {
-    activeFilePath,
-    currentArticle,
-    setCurrentArticle,
-    saveCurrentArticle,
-    loadFileTree,
-  } = useArticleStore()
+  const activeFilePath = useArticleStore((state) => state.activeFilePath)
+  const setCurrentArticle = useArticleStore((state) => state.setCurrentArticle)
+  const saveCurrentArticle = useArticleStore((state) => state.saveCurrentArticle)
+  const loadFileTree = useArticleStore((state) => state.loadFileTree)
 
   useEffect(() => {
     let cancelled = false
@@ -309,7 +306,7 @@ export function TimelineReviewPanel({
     setSavingNote(true)
     try {
       const nextContent = await appendActivityReviewToNote(activeFilePath, reviewMarkdown, {
-        currentContent: currentArticle || undefined,
+        currentContent: useArticleStore.getState().currentArticle || undefined,
         title: reviewTitle || '活动回顾',
         rangeLabel: scopeAnalysis.rangeLabel,
       })

@@ -111,7 +111,7 @@ class SyncPushQueue {
     this.removeListeners()
 
     // 监听文章保存事件
-    articleSavedListener = ((event: { path: string; content: string }) => {
+    articleSavedListener = ((event: { path: string; content?: string; largeMarkdown?: boolean }) => {
       this.addTask(event.path)
     }) as any
     emitter.on('article-saved', articleSavedListener)

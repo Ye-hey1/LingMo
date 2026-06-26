@@ -1,6 +1,5 @@
 import { toast } from '@/hooks/use-toast';
 import { Store } from '@tauri-apps/plugin-store';
-import { v4 as uuid } from 'uuid';
 import { GithubError, GithubRepoInfo, OctokitResponse } from './github.types';
 import { fetch } from '@tauri-apps/plugin-http'
 import { buildRepoContentPath, buildRepoContentsEndpoint } from './remote-file'
@@ -192,7 +191,7 @@ export async function uploadFile(
   const store = await Store.load('store.json');
   const accessToken = await store.get('accessToken')
   const githubUsername = await store.get('githubUsername')
-  const id = uuid()
+  const id = crypto.randomUUID()
   
   // 获取代理设置
   const proxy = await getProxyConfig()

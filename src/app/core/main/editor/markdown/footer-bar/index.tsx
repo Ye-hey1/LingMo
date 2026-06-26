@@ -8,6 +8,7 @@ import { FileCreatedAt } from './file-created-at'
 import { CopyButton } from './copy-button'
 import { ExportButton } from './export-button'
 import { HeadingCollapseMenu } from './heading-collapse-menu'
+import { OutlineToggle } from './outline-toggle'
 import { VectorCalc } from './vector-calc'
 import { SyncTools } from '../sync/sync-tools'
 import useArticleStore from '@/stores/article'
@@ -35,7 +36,7 @@ interface FooterBarProps {
   onToggleOutline?: () => void
 }
 
-export function FooterBar({ editor }: FooterBarProps) {
+export function FooterBar({ editor, outlineOpen, onToggleOutline }: FooterBarProps) {
   const activeFilePath = useArticleStore((s) => s.activeFilePath)
   const {
     aiCompletionEnabled,
@@ -78,6 +79,7 @@ export function FooterBar({ editor }: FooterBarProps) {
           <WordCount editor={editor} />
         </div>
         <div className="shrink-0 flex items-center gap-1">
+          <OutlineToggle editor={editor} outlineOpen={outlineOpen} onToggleOutline={onToggleOutline} />
           <Popover>
             <PopoverTrigger asChild>
               <button
@@ -130,6 +132,8 @@ export function FooterBar({ editor }: FooterBarProps) {
       <div className="flex min-w-0 items-center gap-0.5">
         <WordCount editor={editor} />
         <FileCreatedAt />
+        <Separator />
+        <OutlineToggle editor={editor} outlineOpen={outlineOpen} onToggleOutline={onToggleOutline} />
         <Separator />
         <HeadingCollapseMenu editor={editor} />
         <CopyButton editor={editor} />

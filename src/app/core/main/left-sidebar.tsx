@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, Brain, Files, Github, Highlighter, LayoutTemplate, Network, Newspaper, Settings, Star, WalletCards } from 'lucide-react'
+import { ArrowLeft, Bot, Brain, Files, Github, Highlighter, LayoutTemplate, Network, Newspaper, Settings, Star, WalletCards, Workflow } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -24,6 +24,7 @@ import { GITHUB_STARS_TAB_PATH } from './github-stars/github-stars-constants'
 import { KNOWLEDGE_GRAPH_TAB_PATH } from './knowledge/knowledge-graph-constants'
 import { MarkActions } from './mark/mark-actions'
 import { MEMORY_TAB_PATH } from './memory/memory-constants'
+import { AGENT_CENTER_TAB_PATH } from './agent/agent-constants'
 
 // 动态导入：侧边栏各面板按需加载，减少首屏 bundle 大小
 const FileSidebar = dynamic(() => import('./file/index').then(m => ({ default: m.FileSidebar })), { ssr: false })
@@ -80,7 +81,8 @@ function SidebarRailButton({
 
 export function LeftSidebarRail() {
   const { leftSidebarTab, leftSidebarVisible, centerPanelVisible, setLeftSidebarTab, toggleLeftSidebar, toggleCenterPanel } = useSidebarStore()
-  const { activeFilePath, currentArticle, setActiveFilePath } = useArticleStore()
+  const activeFilePath = useArticleStore((state) => state.activeFilePath)
+  const setActiveFilePath = useArticleStore((state) => state.setActiveFilePath)
   const { hasUpdate } = useUpdateStore()
   const isSettingsOpen = useSettingsDialogStore((state) => state.isOpen)
   const closeSettingsDialog = useSettingsDialogStore((state) => state.close)
@@ -109,6 +111,11 @@ export function LeftSidebarRail() {
     activeFilePath &&
     !activeFilePath.startsWith('lingmo://') &&
     (activeFilePath.split('/').pop() || '').includes('.')
+  )
+  const linkedFileContent = workshopInitialContent ?? (
+    outputWorkshopOpen && canLoadActiveFile
+      ? useArticleStore.getState().currentArticle
+      : null
   )
 
   const openFavorites = async () => {
@@ -154,6 +161,13 @@ export function LeftSidebarRail() {
     await setActiveFilePath(GITHUB_STARS_TAB_PATH)
   }
 
+  const openAgentCenter = async () => {
+    if (!centerPanelVisible) {
+      await toggleCenterPanel()
+    }
+    await setActiveFilePath(AGENT_CENTER_TAB_PATH)
+  }
+
   return (
     <TooltipProvider>
       <aside className="left-sidebar-rail">
@@ -196,6 +210,14 @@ export function LeftSidebarRail() {
             label="GitHub 管理"
             onClick={() => {
               void openGithubStars()
+            }}
+          />
+          <SidebarRailButton
+            active={activeFilePath === AGENT_CENTER_TAB_PATH}
+            icon={<Workflow className="size-4" />}
+            label="Agent 调度"
+            onClick={() => {
+              void openAgentCenter()
             }}
           />
           <SidebarRailButton
@@ -247,8 +269,8 @@ export function LeftSidebarRail() {
           setWorkshopInitialPath(null)
           setWorkshopInitialContent(null)
         }}
-        linkedFilePath={workshopInitialPath || (canLoadActiveFile ? activeFilePath : null)}
-        linkedFileContent={workshopInitialContent || (canLoadActiveFile ? currentArticle : null)}
+        linkedFilePath={workshopInitialPath ?? (canLoadActiveFile ? activeFilePath : null)}
+        linkedFileContent={linkedFileContent}
       />
       <AiHotspotsModal
         open={aiHotspotsOpen}

@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { mcpServerManager } from '@/lib/mcp/server-manager'
+import { formatMcpToolError, formatMcpToolErrorMessage } from '@/lib/mcp/error-message'
 import type { MCPServerConfig, MCPTool } from '@/lib/mcp/types'
 import { useMcpStore } from '@/stores/mcp'
 import useSettingStore from '@/stores/setting'
@@ -32,14 +33,14 @@ class SearchProviderRegistry {
     state.responseTime = responseTime
   }
 
-  recordFailure(name: string, responseTime: number) {
+  recordFailure(name: string, responseTime: number, tripAfterFailures = 3) {
     const state = this.getOrCreateState(name)
     state.failureCount++
     state.lastFailureTime = Date.now()
     state.responseTime = responseTime
-    if (state.failureCount >= 3) {
+    if (state.failureCount >= tripAfterFailures) {
       state.isBroken = true
-      console.warn(`[DeepResearch] Provider ${name} has been tripped due to 3 consecutive failures.`)
+      console.warn(`[DeepResearch] Provider ${name} has been tripped due to ${tripAfterFailures} consecutive failure(s).`)
     }
   }
 
@@ -243,6 +244,8 @@ export type ResearchStrategyConfig = {
 
 type ResearchSearchProvider = {
   name: string
+  tripAfterFailures?: number
+  isRetryableFailure?: (error: unknown) => boolean
   search: (query: string, options: {
     maxResults: number
     searchDepth: TavilySearchDepth
@@ -822,6 +825,20 @@ function getTextContent(result: unknown): string {
     .join('\n')
 }
 
+function stringifyUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message || error.name
+  }
+  if (typeof error === 'string') {
+    return error
+  }
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
 function parseSearchItems(resultText: string): FirecrawlSearchItem[] {
   const parsed = extractJsonObject(resultText)
   const rawItems = Array.isArray(parsed?.data)
@@ -1052,6 +1069,14 @@ function createExaProvider(apiKey: string): ResearchSearchProvider {
 function createFirecrawlProvider(binding: FirecrawlBinding): ResearchSearchProvider {
   return {
     name: `firecrawl:${binding.server.name || binding.server.id}`,
+    tripAfterFailures: 1,
+    isRetryableFailure(error) {
+      return formatMcpToolError({
+        toolName: `${binding.server.id}__${binding.searchTool.name}`,
+        error,
+        serverName: binding.server.name || 'Firecrawl',
+      }).retryable
+    },
     async search(query) {
       const searchTimeout = 20000
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -1059,33 +1084,50 @@ function createFirecrawlProvider(binding: FirecrawlBinding): ResearchSearchProvi
         timer = setTimeout(() => reject(new Error('Firecrawl search timeout (20s)')), searchTimeout)
       })
 
-      const result = await Promise.race([
-        mcpServerManager.callTool(
-          binding.server.id,
-          binding.searchTool.name,
-          buildSearchArgs(binding.searchTool, query)
-        ),
-        timeoutPromise,
-      ]).finally(() => {
-        clearTimeout(timer)
-      })
+      const toolName = `${binding.server.id}__${binding.searchTool.name}`
+      const serverName = binding.server.name || 'Firecrawl'
+      let result: Awaited<ReturnType<typeof mcpServerManager.callTool>> | undefined
+      try {
+        try {
+          result = await Promise.race([
+            mcpServerManager.callTool(
+              binding.server.id,
+              binding.searchTool.name,
+              buildSearchArgs(binding.searchTool, query)
+            ),
+            timeoutPromise,
+          ])
+        } finally {
+          clearTimeout(timer)
+        }
 
-      if (!result) {
-        throw new Error('Firecrawl MCP returned an empty response.')
-      }
-      if (result.isError) {
-        throw new Error(getTextContent(result) || `Firecrawl search failed for ${query}`)
-      }
+        if (!result) {
+          throw new Error('Firecrawl MCP returned an empty response.')
+        }
+        if (result.isError) {
+          const text = getTextContent(result)
+          throw new Error(text || 'Firecrawl MCP returned an error response with no text content.')
+        }
 
-      const items = parseSearchItems(getTextContent(result))
-      if (items.length === 0) {
-        throw new Error('Firecrawl MCP response did not contain parseable search results.')
-      }
+        const text = getTextContent(result)
+        const items = parseSearchItems(text)
+        if (items.length === 0) {
+          throw new Error(text.trim()
+            ? 'Firecrawl MCP response did not contain parseable search results.'
+            : 'Firecrawl MCP returned an empty response body.')
+        }
 
-      return items.map(item => ({
-        ...item,
-        provider: 'firecrawl',
-      }))
+        return items.map(item => ({
+          ...item,
+          provider: 'firecrawl',
+        }))
+      } catch (error) {
+        throw new Error(formatMcpToolErrorMessage({
+          toolName,
+          error: stringifyUnknownError(error),
+          serverName,
+        }))
+      }
     },
   }
 }
@@ -1093,6 +1135,14 @@ function createFirecrawlProvider(binding: FirecrawlBinding): ResearchSearchProvi
 function createAnySearchMcpProvider(binding: FirecrawlBinding): ResearchSearchProvider {
   return {
     name: `anysearch:${binding.server.name || binding.server.id}`,
+    tripAfterFailures: 1,
+    isRetryableFailure(error) {
+      return formatMcpToolError({
+        toolName: `${binding.server.id}__${binding.searchTool.name}`,
+        error,
+        serverName: binding.server.name || 'AnySearch',
+      }).retryable
+    },
     async search(query) {
       const searchTimeout = 25000
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -1100,35 +1150,51 @@ function createAnySearchMcpProvider(binding: FirecrawlBinding): ResearchSearchPr
         timer = setTimeout(() => reject(new Error('AnySearch MCP search timeout (25s)')), searchTimeout)
       })
 
-      const result = await Promise.race([
-        mcpServerManager.callTool(
-          binding.server.id,
-          binding.searchTool.name,
-          buildSearchArgs(binding.searchTool, query)
-        ),
-        timeoutPromise,
-      ]).finally(() => {
-        clearTimeout(timer)
-      })
+      const toolName = `${binding.server.id}__${binding.searchTool.name}`
+      const serverName = binding.server.name || 'AnySearch'
+      let result: Awaited<ReturnType<typeof mcpServerManager.callTool>> | undefined
+      try {
+        try {
+          result = await Promise.race([
+            mcpServerManager.callTool(
+              binding.server.id,
+              binding.searchTool.name,
+              buildSearchArgs(binding.searchTool, query)
+            ),
+            timeoutPromise,
+          ])
+        } finally {
+          clearTimeout(timer)
+        }
 
-      if (!result) {
-        throw new Error('AnySearch MCP returned an empty response.')
-      }
-      if (result.isError) {
-        throw new Error(getTextContent(result) || `AnySearch MCP search failed for ${query}`)
-      }
+        if (!result) {
+          throw new Error('AnySearch MCP returned an empty response.')
+        }
+        if (result.isError) {
+          const text = getTextContent(result)
+          throw new Error(text || 'AnySearch MCP returned an error response with no text content.')
+        }
 
-      const text = getTextContent(result)
-      const parsed = extractJsonObject(text)
-      const items = parseUnknownSearchItems(parsed || text)
-      if (items.length === 0) {
-        throw new Error('AnySearch MCP response did not contain parseable search results.')
-      }
+        const text = getTextContent(result)
+        const parsed = extractJsonObject(text)
+        const items = parseUnknownSearchItems(parsed || text)
+        if (items.length === 0) {
+          throw new Error(text.trim()
+            ? 'AnySearch MCP response did not contain parseable search results.'
+            : 'AnySearch MCP returned an empty response body.')
+        }
 
-      return items.map(item => ({
-        ...item,
-        provider: 'anysearch',
-      }))
+        return items.map(item => ({
+          ...item,
+          provider: 'anysearch',
+        }))
+      } catch (error) {
+        throw new Error(formatMcpToolErrorMessage({
+          toolName,
+          error: stringifyUnknownError(error),
+          serverName,
+        }))
+      }
     },
   }
 }
@@ -1553,34 +1619,58 @@ async function runSearch(params: {
   cacheStats: ResearchSearchCacheStats
   abortSignal?: AbortSignal
 }): Promise<FirecrawlSearchItem[]> {
-  const execute = (includeDomains?: string[]) => Promise.allSettled(
-    params.providers.map(provider =>
-      searchProviderWithCache({
-        provider,
-        query: params.query,
-        stats: params.cacheStats,
-        options: {
-          maxResults: params.strategy.maxResults,
-          searchDepth: params.strategy.searchDepth,
-          includeDomains,
-          abortSignal: params.abortSignal,
-        },
-      })
-    )
-  )
+  const execute = async (includeDomains?: string[]) => {
+    const activeProviders = params.providers.filter(provider => !searchProviderRegistry.isBroken(provider.name))
 
-  let settled = await execute(params.strategy.includeDomains)
+    return {
+      providers: activeProviders,
+      settled: await Promise.allSettled(
+        activeProviders.map(async provider => {
+          const startedAt = Date.now()
+          try {
+            const results = await searchProviderWithCache({
+              provider,
+              query: params.query,
+              stats: params.cacheStats,
+              options: {
+                maxResults: params.strategy.maxResults,
+                searchDepth: params.strategy.searchDepth,
+                includeDomains,
+                abortSignal: params.abortSignal,
+              },
+            })
+            searchProviderRegistry.recordSuccess(provider.name, Date.now() - startedAt)
+            return results
+          } catch (error) {
+            const retryable = provider.isRetryableFailure?.(error) ?? true
+            searchProviderRegistry.recordFailure(
+              provider.name,
+              Date.now() - startedAt,
+              retryable ? provider.tripAfterFailures : 1
+            )
+            throw error
+          }
+        })
+      ),
+    }
+  }
+
+  let execution = await execute(params.strategy.includeDomains)
+  let settled = execution.settled
+  let providers = execution.providers
   const hasResults = settled.some(result => result.status === 'fulfilled' && result.value.length > 0)
   if (!hasResults && params.strategy.includeDomains?.length) {
-    settled = await execute(undefined)
+    execution = await execute(undefined)
+    settled = execution.settled
+    providers = execution.providers
   }
 
   const merged: FirecrawlSearchItem[] = []
   const seen = new Set<string>()
   settled.forEach((result, index) => {
-    const providerName = params.providers[index]?.name || 'unknown'
+    const providerName = providers[index]?.name || 'unknown'
     if (result.status === 'rejected') {
-      console.warn('[DeepResearch] Search provider failed:', providerName, result.reason)
+      console.warn('[DeepResearch] Search provider failed and was skipped:', providerName, stringifyUnknownError(result.reason))
       return
     }
 

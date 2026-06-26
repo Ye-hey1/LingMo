@@ -4,7 +4,6 @@ import { BaseDirectory, copyFile, exists, mkdir, readFile } from '@tauri-apps/pl
 import useTagStore from "@/stores/tag";
 import useSettingStore from "@/stores/setting";
 import useMarkStore from "@/stores/mark";
-import { v4 as uuid } from 'uuid'
 import ocr from "@/lib/ocr";
 import { fetchAiDesc, fetchAiDescByImage } from "@/lib/ai/description";
 import { insertMark, Mark } from "@/db/marks";
@@ -63,7 +62,7 @@ export function ChatClipboard({chat}: { chat: Chat }) {
 
   async function handleInset() {
     setLoading(true)
-    const queueId = uuid()
+    const queueId = crypto.randomUUID()
     // 获取文件后缀
     addQueue({ queueId, tagId: currentTagId!, progress: '保存图片', type: 'image', startTime: Date.now() })
     const isImageFolderExists = await exists('image', { baseDir: BaseDirectory.AppData})

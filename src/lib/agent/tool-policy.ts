@@ -57,14 +57,22 @@ export const MEDIUM_RISK_TOOLS = new Set([
   'move_files_batch',
   'copy_files_batch',
   'create_diagram_file',
+  'create_drawio_diagram_from_cells',
   'create_diagram_from_outline',
+  'append_drawio_diagram_cells',
+  'edit_drawio_diagram',
   'update_diagram_file',
+  'export_drawio_diagram',
   'create_visual_report',
   'safe_write_file',
   'github_star_repo',
   'github_update_star_category',
   'github_update_star_notes_tags',
   'github_subscribe_star_releases',
+  // Phase 1 #A 文件管理工作流：批量改 frontmatter，影响多个文件但可逆
+  'tag_files',
+  'set_note_status',
+  'bulk_ensure_frontmatter',
 ])
 
 export const LOW_RISK_WRITE_TOOLS = new Set([
@@ -96,6 +104,8 @@ export const READ_ONLY_TOOLS = new Set([
   'read_markdown_file',
   'list_diagram_files',
   'read_diagram_file',
+  'validate_drawio_diagram',
+  'get_drawio_shape_library',
   'list_visual_report_files',
   'read_visual_report_file',
   'read_marks',
@@ -116,6 +126,15 @@ export const READ_ONLY_TOOLS = new Set([
   'suggest_links_for_note',
   'list_agent_run_summaries',
   'list_reminders',
+  'search_knowledge_objects',
+  'get_knowledge_object_overview',
+  'get_current_note_context',
+  // Phase 1 #A/#C 只读工具
+  'find_unindexed_notes',
+  'reindex_knowledge_objects',
+  'query_agent_runs',
+  'query_self_failures',
+  'get_agent_run_detail',
   'github_sync_starred',
   'github_list_starred',
   'github_summarize_recent_stars',
@@ -125,9 +144,15 @@ export const READ_ONLY_TOOLS = new Set([
   'github_mark_release_read',
 ])
 
+const directEditPatterns = [
+  /(帮我|请|麻烦|替我|直接|现在|把|将|给).{0,20}(优化|精简|简化|润色|调整|补充|增加|添加|补全|扩写|完善|丰富|重写|改写)/,
+  /(优化|精简|简化|润色|调整|补充|增加|添加|补全|扩写|完善|丰富|重写|改写).{0,30}(当前|这个|这段|这篇|这些|本项目|项目中|文件|笔记|代码|图表|内容|文本|文章|提示词|prompt)/i,
+  /\b(?:optimize|improve|refine|polish|simplify|rewrite|revise|adjust)\b.{0,40}\b(?:this|current|these|file|note|document|code|project|prompt|content|text|article|chart)\b/i,
+]
+
 const writePatterns = [
   /创建|新建|新增|写入|改写|修改|编辑|更新|重写|插入|替换|保存/,
-  /优化|精简|简化|润色|调整|补充|增加|添加|补全|扩写|完善|丰富/,
+  ...directEditPatterns,
   /重新规划|输出到笔记|保存到笔记|写入笔记|整理成笔记/,
   /重命名|改名|命名为|移动|移到|移动到|挪动|挪到|搬到|转移|迁移|复制|拷贝|草拟|起草/,
   /整理|归档|收纳|分类|分组|放到|放进|放入|存到|存入|并入|合并到|移入|移动进|移动至|归到/,
@@ -141,6 +166,16 @@ const writePatterns = [
   /改成|改为|整理成|转换成/,
   /\b(?:plan|design|draft|write|create|generate|produce).{0,40}(?:itinerary|travel plan|trip plan|route|note|document|file|guide|proposal|report)\b/i,
   /\b(create|write|draft|modify|edit|update|insert|replace|save|rename|move|copy|organize|archive|classify|sort|relocate)\b/i,
+]
+
+const conceptualWriteQuestionPatterns = [
+  /^(什么是|啥是|何为|为什么|怎么|怎样|如何|解释|介绍|讲讲|说说).{0,30}(优化|精简|简化|润色|调整|补充|增加|添加|补全|扩写|完善|丰富|重写|改写|创建|生成|写入|编辑|修改)/,
+  /\b(?:what is|why|how to|how can|explain|describe|tell me about|tips for|ways to)\b.{0,60}\b(?:optimize|improve|refine|polish|simplify|rewrite|revise|create|write|edit|modify)\b/i,
+]
+
+const concreteTargetPatterns = [
+  /(当前|这个|这段|这篇|这些|本项目|项目中|当前项目|文件|笔记|代码|图表|内容|文本|文章|src\/|docs\/)/,
+  /\b(?:this|current|these|file|note|document|code|project|workspace|repo|repository|content|text|article|chart)\b/i,
 ]
 
 const destructivePatterns = [
@@ -185,9 +220,13 @@ function matchesAny(patterns: RegExp[], input: string): boolean {
 export function deriveIntentPolicy(userInput: string): IntentPolicy {
   const input = userInput.toLowerCase()
   const skillExecutionIntent = matchesAny(skillExecutionPatterns, input)
+  const rawWriteIntent = matchesAny(writePatterns, input) || skillExecutionIntent
+  const isConceptualWriteQuestion =
+    matchesAny(conceptualWriteQuestionPatterns, input) &&
+    !matchesAny(concreteTargetPatterns, input)
 
   return {
-    allowWrite: matchesAny(writePatterns, input) || skillExecutionIntent,
+    allowWrite: rawWriteIntent && !isConceptualWriteQuestion,
     allowDestructive:
       matchesAny(destructivePatterns, input) &&
       !matchesAny(denyDestructivePatterns, input),
@@ -205,14 +244,17 @@ export function formatIntentPolicyForPrompt(intentPolicy: IntentPolicy): string 
   const executeMode = intentPolicy.allowExecute ? 'enabled' : 'disabled'
 
   return [
-    `- Write mode: ${writeMode}`,
-    `- Destructive mode: ${destructiveMode}`,
-    `- Execute mode: ${executeMode}`,
-    '- If write mode is disabled, it means this turn did not contain a clear write/move/edit intent. State that an explicit write or move target is needed before using write tools.',
-    '- If the user clearly asks to organize, archive, classify, move, copy, rename, create, save, or edit files, write mode should be enabled and medium-risk write tools may proceed through the normal confirmation flow.',
-    '- If destructive mode is disabled, do not delete or clear content; ask for explicit destructive confirmation instead.',
-    '- If execute mode is disabled, do not run commands or scripts; ask for explicit execution confirmation instead.',
-    '- High-risk tools always require confirmation before execution.',
+    `Modes: write=${writeMode}; destructive=${destructiveMode}; execute=${executeMode}.`,
+    'Read/search tools are allowed when relevant.',
+    writeMode === 'enabled'
+      ? 'Write/edit/move tools may proceed through the normal confirmation flow.'
+      : 'No clear write/move/edit target was detected; ask for the missing target before write tools.',
+    destructiveMode === 'enabled'
+      ? 'Delete/clear tools still require normal high-risk confirmation.'
+      : 'Do not delete or clear content; ask for explicit destructive confirmation first.',
+    executeMode === 'enabled'
+      ? 'Command/script tools still require normal high-risk confirmation.'
+      : 'Do not run commands or scripts; ask for explicit execution confirmation first.',
   ].join('\n')
 }
 

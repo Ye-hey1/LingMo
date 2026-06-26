@@ -5,7 +5,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import { readTextFile } from "@tauri-apps/plugin-fs"
 import { toast } from "@/hooks/use-toast"
 import { readWorkspaceTextFile } from "@/lib/file-binary"
-import { getAllMarkdownFiles, type MarkdownFile } from "@/lib/files"
+import { getAllMarkdownFiles, isUserKnowledgeFilePath, type MarkdownFile } from "@/lib/files"
 import type { SourceWorkspaceTab } from "@/components/output-workshop/types"
 import { getOutputFileName, getOutputTitleFromPath } from "@/lib/output-workshop/path-utils"
 
@@ -34,6 +34,7 @@ export function useOutputFiles({
   const [loadingFiles, setLoadingFiles] = React.useState(false)
 
   const canLoadLinkedFile = React.useMemo(() => {
+    if (linkedFilePath && !isUserKnowledgeFilePath(linkedFilePath)) return false
     if (linkedFileContent?.trim()) return true
     if (!linkedFilePath || linkedFilePath.startsWith("lingmo://")) return false
     return (linkedFilePath.split("/").pop() || "").includes(".")
@@ -94,6 +95,13 @@ export function useOutputFiles({
       })
 
       if (!selected || Array.isArray(selected)) return
+      if (!isUserKnowledgeFilePath(selected)) {
+        toast({
+          title: "已跳过 Skill 文件",
+          description: "Skill 模板与参考资料不作为智能排版素材。",
+        })
+        return
+      }
 
       const content = await readTextFile(selected)
       const fileName = getOutputFileName(selected)
