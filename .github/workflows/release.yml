@@ -9,6 +9,7 @@ jobs:
   build-android:
     outputs:
       appVersion: ${{ steps.get_version.outputs.version }}
+      androidReleaseAvailable: ${{ steps.android_signing.outputs.available }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -56,6 +57,21 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install
+
+      - name: Check Android signing availability
+        id: android_signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+            echo "Android signing secrets are configured."
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "Android signing secrets are not configured; Android release upload will be skipped."
+          fi
 
       - name: Build frontend
         run: pnpm build
@@ -116,6 +132,7 @@ jobs:
           pnpm tauri android build --apk --aab
 
       - name: Decode keystore
+        if: steps.android_signing.outputs.available == 'true'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
@@ -130,6 +147,7 @@ jobs:
           echo "Version: $VERSION"
 
       - name: Sign and Rename APK
+        if: steps.android_signing.outputs.available == 'true'
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -164,6 +182,7 @@ jobs:
           ls -lh "$SIGNED_APK"
 
       - name: Rename AAB
+        if: steps.android_signing.outputs.available == 'true'
         run: |
           cd src-tauri
           VERSION="${{ steps.get_version.outputs.version }}"
@@ -177,6 +196,7 @@ jobs:
           fi
 
       - name: Upload APK as artifact
+        if: steps.android_signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
@@ -184,6 +204,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload AAB as artifact
+        if: steps.android_signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: android-aab
@@ -191,6 +212,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload to Release
+        if: steps.android_signing.outputs.available == 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: lingmo-v${{ steps.get_version.outputs.version }}
@@ -207,6 +229,7 @@ jobs:
 
   upgradeLink-upload-android:
     needs: build-android
+    if: needs.build-android.outputs.androidReleaseAvailable == 'true'
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -290,8 +313,24 @@ jobs:
       - name: install frontend dependencies
         run: pnpm install
 
-      - name: Import Apple Certificate
+      - name: Check Apple signing availability
+        id: apple_signing
         if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+            echo "Apple signing secrets are configured."
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "Apple signing secrets are not configured; macOS release build will be skipped."
+          fi
+
+      - name: Import Apple Certificate
+        if: matrix.platform == 'macos-latest' && steps.apple_signing.outputs.available == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -317,6 +356,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
 
       - uses: tauri-apps/tauri-action@v0.5.23
+        if: matrix.platform != 'macos-latest' || steps.apple_signing.outputs.available == 'true'
         id: tauri-action
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -333,6 +373,7 @@ jobs:
 
       
       - name: Upload artifacts
+        if: matrix.platform != 'macos-latest' || steps.apple_signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
@@ -357,7 +398,7 @@ jobs:
           echo "appVersion=${{ steps.save_tag.outputs.appVersion }}" >> $GITHUB_OUTPUT
 
       - name: Cleanup keychain
-        if: matrix.platform == 'macos-latest' && always()
+        if: matrix.platform == 'macos-latest' && steps.apple_signing.outputs.available == 'true' && always()
         run: |
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
           security delete-keychain $KEYCHAIN_PATH || true
