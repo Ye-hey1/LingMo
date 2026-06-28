@@ -60,6 +60,19 @@ function isReadOnlyToolName(toolName: string): boolean {
     .some(prefix => baseName.startsWith(prefix) || toolName.startsWith(prefix))
 }
 
+function requiresFreshFileCreationApproval(toolName: string): boolean {
+  const baseName = getBaseToolName(toolName)
+  return [
+    'create_file',
+    'create_files_batch',
+    'safe_write_file',
+    'create_diagram_file',
+    'create_drawio_diagram_from_cells',
+    'create_diagram_from_outline',
+    'create_visual_report',
+  ].includes(baseName)
+}
+
 function extractPathCandidates(params: Record<string, any>): string[] {
   const candidates = [
     params.filePath,
@@ -125,6 +138,10 @@ export function getPersistentApprovalOptions(
 
   if (isReadOnlyToolName(toolName)) {
     options.push('always-readonly')
+  }
+
+  if (requiresFreshFileCreationApproval(toolName)) {
+    return options
   }
 
   if (tool && isRecoverableWriteTool(toolName, tool.category) && risk === 'medium') {

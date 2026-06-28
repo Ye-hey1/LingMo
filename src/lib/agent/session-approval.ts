@@ -10,13 +10,15 @@ function isRecoverableWriteToolLocally(toolName: string, tool: Tool | undefined)
     return false
   }
 
+  if (requiresFreshFileCreationApproval(toolName)) {
+    return false
+  }
+
   if (tool.category === 'editor') {
     return !toolName.startsWith('delete_') && toolName !== 'execute_skill_script'
   }
 
   return [
-    'create_file',
-    'create_files_batch',
     'create_mark',
     'create_marks_batch',
     'update_mark',
@@ -35,15 +37,22 @@ function isRecoverableWriteToolLocally(toolName: string, tool: Tool | undefined)
     'rename_files_batch',
     'move_files_batch',
     'copy_files_batch',
-    'create_diagram_file',
-    'create_drawio_diagram_from_cells',
-    'create_diagram_from_outline',
     'append_drawio_diagram_cells',
     'edit_drawio_diagram',
     'update_diagram_file',
     'export_drawio_diagram',
-    'create_visual_report',
+  ].includes(toolName)
+}
+
+function requiresFreshFileCreationApproval(toolName: string): boolean {
+  return [
+    'create_file',
+    'create_files_batch',
     'safe_write_file',
+    'create_diagram_file',
+    'create_drawio_diagram_from_cells',
+    'create_diagram_from_outline',
+    'create_visual_report',
   ].includes(toolName)
 }
 

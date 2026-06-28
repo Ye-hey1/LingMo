@@ -31,13 +31,17 @@ import { highlightTextReact } from '@/lib/highlight'
 import { parseResearchProgressView } from '@/lib/research/progress-status'
 import { parseResearchResumeData } from '@/lib/research/session-store'
 import { motion } from 'framer-motion'
+import { cn } from '@/lib/utils'
 
 const BOTTOM_THRESHOLD = 24
 const USER_SCROLL_GRACE_MS = 300
 const PENDING_AGENT_CHAT_ID = -1
 
+type ChatLayoutProps = {
+  expanded?: boolean
+}
 
-const ChatContent = React.memo(function ChatContent() {
+const ChatContent = React.memo(function ChatContent({ expanded = false }: ChatLayoutProps) {
   const { chats, init, agentState, loading, chatSearchQuery, chatSearchResults, chatSearchCurrentIndex } = useChatStore()
   const { currentTagId } = useTagStore()
   const [isOnBottom, setIsOnBottom] = useState(true)
@@ -327,16 +331,29 @@ const ChatContent = React.memo(function ChatContent() {
     }
   }, [chatSearchCurrentIndex, chatSearchResults])
 
-  return <div ref={wrapperRef} id="chats-wrapper" className="flex-1 relative overflow-y-auto overflow-x-hidden w-full flex flex-col items-end p-4 gap-6 [overflow-anchor:none]">
-    <div ref={contentRef} className="w-full flex flex-col items-end gap-6">
+  return <div
+    ref={wrapperRef}
+    id="chats-wrapper"
+    className={cn(
+      "flex-1 relative overflow-y-auto overflow-x-hidden w-full flex flex-col gap-6 [overflow-anchor:none]",
+      expanded ? "items-center px-4 py-7 lg:px-8" : "items-end p-4",
+    )}
+  >
+    <div
+      ref={contentRef}
+      className={cn(
+        "w-full flex flex-col gap-6",
+        expanded ? "max-w-[1280px] items-stretch" : "items-end",
+      )}
+    >
       {
         chats.length || pendingAgentChat ? (
           <>
             {chats.map((chat) => {
-              return <Message key={chat.id} chat={chat} searchQuery={chatSearchQuery} />
+              return <Message key={chat.id} chat={chat} searchQuery={chatSearchQuery} expanded={expanded} />
             })}
             {pendingAgentChat && (
-              <Message key={pendingAgentChat.id} chat={pendingAgentChat} searchQuery={chatSearchQuery} />
+              <Message key={pendingAgentChat.id} chat={pendingAgentChat} searchQuery={chatSearchQuery} expanded={expanded} />
             )}
           </>
         ) : <ChatEmpty />
@@ -346,7 +363,7 @@ const ChatContent = React.memo(function ChatContent() {
     </div>
 
     {
-      !isOnBottom && <Button variant="outline" className='sticky bottom-0 size-8 right-0' onClick={handleScrollToBottom} aria-label="Scroll to bottom">
+      !isOnBottom && <Button variant="outline" className='sticky bottom-0 right-0 size-8 self-end' onClick={handleScrollToBottom} aria-label="Scroll to bottom">
         <ArrowDownToLine className='size-4' />
       </Button>
     }
@@ -354,14 +371,21 @@ const ChatContent = React.memo(function ChatContent() {
 })
 ChatContent.displayName = 'ChatContent'
 
-const MessageWrapper = React.memo(function MessageWrapper({ chat, children }: { chat: Chat, children: React.ReactNode }) {
+const MessageWrapper = React.memo(function MessageWrapper({
+  chat,
+  children,
+  expanded = false,
+}: { chat: Chat, children: React.ReactNode } & ChatLayoutProps) {
   // 用户消息：右对齐，内容气泡和操作栏分离，避免工具栏被卡片包裹。
   if (chat.role === 'user') {
     return (
       <div className="flex w-full justify-end" data-chat-id={chat.id}>
-        <div className="flex max-w-[85%] flex-col items-end">
-          <div className="rounded-lg bg-muted/35 px-3 py-2 text-foreground/90 ring-1 ring-border/35 dark:bg-muted/20">
-            <div className='whitespace-pre-wrap break-words text-sm leading-6 max-w-[75ch]'>
+        <div className={cn("flex flex-col items-end", expanded ? "max-w-[min(78%,760px)]" : "max-w-[85%]")}>
+          <div className={cn(
+            "rounded-lg bg-muted/35 text-foreground/90 ring-1 ring-border/35 dark:bg-muted/20",
+            expanded ? "px-4 py-2.5" : "px-3 py-2",
+          )}>
+            <div className={cn("whitespace-pre-wrap break-words text-sm leading-6", expanded ? "max-w-[82ch]" : "max-w-[75ch]")}>
               {children}
             </div>
           </div>
@@ -386,7 +410,11 @@ const MessageWrapper = React.memo(function MessageWrapper({ chat, children }: { 
 })
 MessageWrapper.displayName = 'MessageWrapper'
 
-const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat; searchQuery?: string }) {
+const Message = React.memo(function Message({
+  chat,
+  searchQuery,
+  expanded = false,
+}: { chat: Chat; searchQuery?: string } & ChatLayoutProps) {
   const t = useTranslations()
   const { chats, deleteChat, loading, agentState, researchRun } = useChatStore()
   const content = chat.content
@@ -412,7 +440,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
 
     return false
   }, [chat.id, chat.role, chats])
-  const isBaseResponseStreaming = chat.role === 'system' && loading && (isActiveAgentMessage || isLatestSystemMessage)
+  const isBaseResponseStreaming = chat.role === 'system' && loading && !isActiveAgentMessage && isLatestSystemMessage
   const liveTextPartContent = useMemo(() => {
     if (!isActiveAgentMessage) return ''
     const textPart = [...(agentState.agentPartSnapshot?.parts || [])]
@@ -429,7 +457,10 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     agentState.isRunning || (agentState.isFinalAnswerMode && loading)
   )
   const isResponseStreaming = chat.role === 'system' && (isBaseResponseStreaming || isLiveAgentResponseStreaming)
-  const shouldShowLiveAgentStatus = isActiveAgentMessage && agentState.isRunning && !agentState.isFinalAnswerMode
+  const shouldShowLiveAgentStatus = isActiveAgentMessage
+    && agentState.isRunning
+    && !agentState.isFinalAnswerMode
+    && !liveFinalAnswerContent
   const shouldShowLiveFinalAnswer = isActiveAgentMessage && agentState.isFinalAnswerMode && Boolean(liveFinalAnswerContent)
   const isLiveFinalAnswerStreaming = shouldShowLiveFinalAnswer && (agentState.isRunning || loading)
   const visibleThinkingContent = useMemo(
@@ -446,6 +477,8 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
     ? researchRun.progressView
     : null
   const visibleResearchProgress = liveResearchProgress || researchProgress
+  const shouldShowStoredContent = !isLiveAgentActive
+    && (!visibleResearchProgress || (visibleResearchProgress && visibleResearchProgress.statusText === '研究完成，正在收尾' && displayContent?.trim()))
   const researchResume = useMemo(
     () => chat.role === 'system' ? parseResearchResumeData(content) : null,
     [chat.role, content],
@@ -549,12 +582,12 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
       </div>
 
     case 'clipboard':
-      return <MessageWrapper chat={chat}>
+      return <MessageWrapper chat={chat} expanded={expanded}>
         <ChatClipboard chat={chat} />
       </MessageWrapper>
 
     case 'note':
-      return <MessageWrapper chat={chat}>
+      return <MessageWrapper chat={chat} expanded={expanded}>
         {
           <div className='w-full overflow-x-hidden'>
             <div className='flex justify-between'>
@@ -563,7 +596,11 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
             <ChatThinking chat={chat} isStreaming={isResponseStreaming} />
             {
               <div className={`${content ? 'note-wrapper border w-full overflow-y-auto overflow-x-hidden my-2 p-4 rounded-lg' : ''}`}>
-                <ChatPreview text={content || ''} streaming={isResponseStreaming} />
+                <ChatPreview
+                  text={content || ''}
+                  streaming={isResponseStreaming}
+                  className={expanded ? "flex-1 max-w-full" : undefined}
+                />
               </div>
             }
             <MessageControl chat={chat}>
@@ -590,7 +627,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
         return null
       }
 
-      return <MessageWrapper chat={chat}>
+      return <MessageWrapper chat={chat} expanded={expanded}>
         {chat.role === 'system' ? (
           // AI 消息：优化后的布局结构
           <motion.div
@@ -607,6 +644,7 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
                   <ChatPreview
                     text={liveFinalAnswerContent}
                     streaming={isLiveFinalAnswerStreaming}
+                    className={expanded ? "flex-1 max-w-full" : undefined}
                   />
                 )}
               </div>
@@ -640,12 +678,13 @@ const Message = React.memo(function Message({ chat, searchQuery }: { chat: Chat;
             {visibleResearchProgress && (
               <TaskPlanProgress view={visibleResearchProgress} content={content || ''} compact={false} className="max-w-2xl" />
             )}
-            {(!visibleResearchProgress || (visibleResearchProgress && visibleResearchProgress.statusText === '研究完成，正在收尾' && displayContent?.trim())) && (
+            {shouldShowStoredContent && (
               <ChatPreview
                 text={displayContent || ''}
                 streaming={isResponseStreaming}
                 highlightQuery={searchQuery}
                 clawFormat={Boolean(storedAgentHistory)}
+                className={expanded ? "flex-1 max-w-full" : undefined}
               />
             )}
 

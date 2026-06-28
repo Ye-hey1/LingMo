@@ -10,6 +10,52 @@ type MessageLike = {
   content: string
 }
 
+type ChatTurn = {
+  user: ChatLike
+  assistants: ChatLike[]
+}
+
+function isPromptVisibleChat(chat: ChatLike) {
+  return (chat.type === 'chat' || chat.type === 'note') && Boolean((chat.content || chat.condensedContent || '').trim())
+}
+
+function getChatContentForPrompt(chat: ChatLike) {
+  return chat.role === 'user'
+    ? chat.content || ''
+    : chat.condensedContent || chat.content || ''
+}
+
+function buildChatTurns(chats: ChatLike[]): ChatTurn[] {
+  const turns: ChatTurn[] = []
+  let currentTurn: ChatTurn | null = null
+
+  for (const chat of chats) {
+    if (!isPromptVisibleChat(chat)) {
+      continue
+    }
+
+    if (chat.role === 'user') {
+      if (currentTurn) {
+        turns.push(currentTurn)
+      }
+      currentTurn = { user: chat, assistants: [] }
+      continue
+    }
+
+    // Drop assistant/system replies that do not have a user turn. Keeping an
+    // orphan answer without its question makes follow-up prompts ambiguous.
+    if (currentTurn) {
+      currentTurn.assistants.push(chat)
+    }
+  }
+
+  if (currentTurn) {
+    turns.push(currentTurn)
+  }
+
+  return turns
+}
+
 /**
  * 获取最后一次清除后的消息
  */
@@ -76,45 +122,32 @@ export function buildMessagesWithHistory(
     })
   }
 
-  let chatsAfterClear = getChatsAfterLastClear(chats)
+  let turns = buildChatTurns(getChatsAfterLastClear(chats))
 
-  if (!includeLatestUserMessage) {
-    const lastUserIndex = [...chatsAfterClear].map(chat => chat.role).lastIndexOf('user')
-    if (lastUserIndex !== -1) {
-      chatsAfterClear = chatsAfterClear.filter((_, index) => index !== lastUserIndex)
-    }
+  if (!includeLatestUserMessage && turns.length > 0) {
+    turns = turns.slice(0, -1)
   }
 
-  if (typeof maxUserMessages === 'number' && maxUserMessages >= 0) {
-    const userIndexes = chatsAfterClear
-      .map((chat, index) => chat.role === 'user' ? index : -1)
-      .filter(index => index !== -1)
-    const allowedUserIndexes = new Set(userIndexes.slice(-maxUserMessages))
-    chatsAfterClear = chatsAfterClear.filter((chat, index) => {
-      if (chat.role !== 'user') {
-        return true
+  if (typeof maxUserMessages === 'number' && Number.isFinite(maxUserMessages)) {
+    const limit = Math.max(0, Math.floor(maxUserMessages))
+    turns = limit === 0 ? [] : turns.slice(-limit)
+  }
+
+  for (const turn of turns) {
+    const userContent = getChatContentForPrompt(turn.user)
+    if (userContent) {
+      messages.push({ role: 'user', content: userContent })
+    }
+
+    if (!includeAssistantMessages) {
+      continue
+    }
+
+    for (const assistant of turn.assistants) {
+      const content = getChatContentForPrompt(assistant)
+      if (content) {
+        messages.push({ role: 'assistant', content })
       }
-
-      return allowedUserIndexes.has(index)
-    })
-  }
-
-  for (const chat of chatsAfterClear) {
-    if (chat.type !== 'chat' && chat.type !== 'note') {
-      continue
-    }
-
-    if (chat.role !== 'user' && !includeAssistantMessages) {
-      continue
-    }
-
-    const role: 'user' | 'assistant' = chat.role === 'user' ? 'user' : 'assistant'
-    const content = chat.role === 'user'
-      ? chat.content || ''
-      : chat.condensedContent || chat.content || ''
-
-    if (content) {
-      messages.push({ role, content })
     }
   }
 

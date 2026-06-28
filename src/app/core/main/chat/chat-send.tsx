@@ -93,6 +93,9 @@ export interface ChatSendOptions {
 
 const MIN_AUTO_EXTRACT_CHAR_COUNT = 500
 const AGENT_CONTEXT_TOTAL_LIMIT = 70000
+const AGENT_DEFAULT_HISTORY_TURNS = 6
+const AGENT_FOLLOW_UP_HISTORY_TURNS = 10
+const AGENT_LIVE_ANSWER_UPDATE_INTERVAL_MS = 120
 const AI_DOC_COMMAND_PREFIX = '你正在执行一个应用内命令：'
 const KNOWLEDGE_CAPTURE_INTENT_PATTERN = /总结|教程|方案|沉淀|笔记|整理|归纳|提炼|复盘|要点|大纲|知识库|保存|存成|存为|save|note|notes|summary|summarize|tutorial|guide|plan|organize|capture|extract|outline/i
 
@@ -547,6 +550,12 @@ export const ChatSend = forwardRef<{
       || /(继续|接着|然后|再来|再生成|再做|顺便|另外|刚才|基于刚才|在此基础上|那个|这个|它)/.test(normalized)
   }
 
+  const getAgentHistoryTurnLimit = (input: string) => (
+    shouldCarryUserHistoryForAgent(input)
+      ? AGENT_FOLLOW_UP_HISTORY_TURNS
+      : AGENT_DEFAULT_HISTORY_TURNS
+  )
+
   const buildPartialSuccessContent = (result: string, toolCalls: { result?: { success?: boolean; data?: any; error?: string } }[]) => {
     const generatedOutputFiles = toolCalls.flatMap((toolCall) => {
       const outputFiles = toolCall.result?.data?.output_files
@@ -697,6 +706,79 @@ export const ChatSend = forwardRef<{
       currentStepStartTime: undefined,
     })
     setLoading(false)
+  }
+
+  const createLiveAgentAnswerUpdater = (placeholderMessage: Chat) => {
+    let lastContent = ''
+    let pendingContent = ''
+    let lastAppliedAt = 0
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
+
+    const applyContent = (content: string) => {
+      if (cancelled) {
+        return
+      }
+      const visibleContent = sanitizeAgentFinalContent(content)
+      if (!visibleContent || visibleContent === lastContent) {
+        return
+      }
+
+      lastContent = visibleContent
+      lastAppliedAt = Date.now()
+      const currentMessage = useChatStore.getState().chats.find(c => c.id === placeholderMessage.id)
+      void saveChat({
+        id: placeholderMessage.id,
+        tagId: placeholderMessage.tagId,
+        conversationId: placeholderMessage.conversationId,
+        role: placeholderMessage.role,
+        type: placeholderMessage.type,
+        inserted: placeholderMessage.inserted,
+        createdAt: placeholderMessage.createdAt,
+        ragSources: currentMessage?.ragSources,
+        ragSourceDetails: currentMessage?.ragSourceDetails,
+        content: visibleContent,
+      }, false)
+    }
+
+    const flush = () => {
+      if (cancelled) {
+        return
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+      if (!pendingContent) {
+        return
+      }
+      const nextContent = pendingContent
+      pendingContent = ''
+      applyContent(nextContent)
+    }
+
+    const onAnswerDelta = (content: string) => {
+      pendingContent = content
+      const elapsed = Date.now() - lastAppliedAt
+      if (elapsed >= AGENT_LIVE_ANSWER_UPDATE_INTERVAL_MS) {
+        flush()
+        return
+      }
+      if (!timeoutId) {
+        timeoutId = setTimeout(flush, AGENT_LIVE_ANSWER_UPDATE_INTERVAL_MS - elapsed)
+      }
+    }
+
+    const cancel = () => {
+      cancelled = true
+      pendingContent = ''
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+    }
+
+    return { onAnswerDelta, flush, cancel }
   }
 
   const createPreparingAgentActivity = (startedAt: number) => ({
@@ -1731,6 +1813,7 @@ export const ChatSend = forwardRef<{
       placeholderMessage.id,
       useChatStore.getState().agentState.currentStepStartTime || Date.now(),
     )
+    const liveAnswerUpdater = createLiveAgentAnswerUpdater(placeholderMessage)
 
     try {
       const routeDecision = classifyAgentTask({
@@ -1744,6 +1827,20 @@ export const ChatSend = forwardRef<{
       })
 
       if (shouldBypassAgentRuntime(routeDecision)) {
+        const { chats } = useChatStore.getState()
+        const { buildMessagesWithHistory } = await import('@/lib/ai/condense')
+        const messages = buildMessagesWithHistory(
+          chats,
+          undefined,
+          undefined,
+          effectiveInstruction,
+          {
+            includeAssistantMessages: true,
+            includeLatestUserMessage: false,
+            maxUserMessages: getAgentHistoryTurnLimit(effectiveInstruction),
+          }
+        )
+
         const agentHandler = new AgentHandler({
           activeChatId: placeholderMessage.id,
           webSearchEnabled: effectiveWebSearchEnabled,
@@ -1759,17 +1856,27 @@ export const ChatSend = forwardRef<{
                 fullContent: quoteData.fullContent,
               }
             : undefined,
+          onAnswerDelta: liveAnswerUpdater.onAnswerDelta,
           onComplete: async (result, steps, stopped) => {
+            liveAnswerUpdater.flush()
             const { agentState } = useChatStore.getState()
             const completedSteps = steps && steps.length > 0
               ? steps
               : agentState.completedSteps || []
 
-            const finalContent = sanitizeAgentFinalContent(
+            let finalContent = sanitizeAgentFinalContent(
               stopped ? (result || t('record.chat.input.stopped')) : result
             )
             const currentState = useChatStore.getState()
             const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
+            if (!stopped && !finalContent.trim()) {
+              finalContent = sanitizeAgentFinalContent(
+                currentMessage?.content
+                  || agentState.finalAnswerContent
+                  || agentState.agentPartSnapshot?.finalAnswerContent
+                  || ''
+              )
+            }
             const agentHistory = {
               steps: completedSteps,
               toolCalls: agentState.toolCalls,
@@ -1796,10 +1903,12 @@ export const ChatSend = forwardRef<{
               agentHistory: JSON.stringify(agentHistory),
             }, true)
 
+            liveAnswerUpdater.cancel()
             finishVisibleAgentRun()
             agentHandlerRef.current = null
           },
           onError: async (error) => {
+            liveAnswerUpdater.cancel()
             await saveChat({
               ...placeholderMessage,
               content: formatUserVisibleError(error),
@@ -1810,7 +1919,7 @@ export const ChatSend = forwardRef<{
         })
 
         agentHandlerRef.current = agentHandler
-        await agentHandler.execute(effectiveInstruction, undefined, imageUrls)
+        await agentHandler.execute(effectiveInstruction, messages, imageUrls)
         return
       }
 
@@ -1844,7 +1953,9 @@ export const ChatSend = forwardRef<{
                   fullContent: quoteData.fullContent,
                 }
               : undefined,
+            onAnswerDelta: liveAnswerUpdater.onAnswerDelta,
             onComplete: async (result, steps, stopped) => {
+              liveAnswerUpdater.flush()
               // 获取 Agent 执行历史，保存完整的 ReAct 步骤
               const { agentState } = useChatStore.getState()
               const completedSteps = steps && steps.length > 0
@@ -1895,6 +2006,14 @@ export const ChatSend = forwardRef<{
               // 获取当前消息状态，保留 ragSources 和 ragSourceDetails
               const currentState = useChatStore.getState()
               const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
+              if (!stopped && !finalContent.trim()) {
+                finalContent = sanitizeAgentFinalContent(
+                  currentMessage?.content
+                    || agentState.finalAnswerContent
+                    || agentState.agentPartSnapshot?.finalAnswerContent
+                    || ''
+                )
+              }
 
               // 更新占位消息，保留 RAG 相关字段
               await saveChat({
@@ -1913,6 +2032,7 @@ export const ChatSend = forwardRef<{
                 agentHistory: JSON.stringify(agentHistory),
               }, true)
 
+              liveAnswerUpdater.cancel()
               finishVisibleAgentRun()
               agentHandlerRef.current = null
 
@@ -1935,6 +2055,7 @@ export const ChatSend = forwardRef<{
               const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
 
               // 更新占位消息为错误信息，保留 RAG 相关字段
+              liveAnswerUpdater.cancel()
               await saveChat({
                 id: placeholderMessage.id,
                 tagId: placeholderMessage.tagId,
@@ -2047,7 +2168,7 @@ export const ChatSend = forwardRef<{
             {
               includeAssistantMessages: true,
               includeLatestUserMessage: false,
-              maxUserMessages: shouldCarryUserHistoryForAgent(effectiveInstruction) ? 3 : 0,
+              maxUserMessages: getAgentHistoryTurnLimit(effectiveInstruction),
             }
           )
 
@@ -2056,6 +2177,20 @@ export const ChatSend = forwardRef<{
       })
     } catch (error) {
       console.error('Agent execution error:', error)
+      liveAnswerUpdater.cancel()
+      const currentState = useChatStore.getState()
+      const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
+      if (currentMessage?.content?.trim()) {
+        await saveChat(currentMessage, true)
+      } else {
+        await saveChat({
+          ...placeholderMessage,
+          ragSources: currentMessage?.ragSources,
+          ragSourceDetails: currentMessage?.ragSourceDetails,
+          content: formatUserVisibleError(error),
+        }, true)
+      }
+      finishVisibleAgentRun()
     } finally {
       agentHandlerRef.current = null
     }

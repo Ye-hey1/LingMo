@@ -72,6 +72,7 @@ docs/node_modules
 # Exclude all markdown files in root directory except README.md
 /*.md
 !README.md
+!README-zh.md
 
 # backup files
 *.backup
@@ -89,6 +90,7 @@ tmp-*
 .tmp/
 .pnpm-store/
 .omo/
+.serena/
 .cursor/
 .impeccable/
 

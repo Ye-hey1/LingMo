@@ -26,7 +26,6 @@ const BASE_ALWAYS_VISIBLE = [
   'safe_grep',
   'safe_read_file',
   'safe_list_files',
-  'create_file',
   'get_current_time',
   'create_reminder',
   'list_reminders',
@@ -264,6 +263,14 @@ function explainToolExposure(tool: Tool, input: AgentBeforeModelInput, state: Ag
     score += 80
     reasons.push('base tool')
   }
+  if (!input.intentPolicy?.allowWrite && tool.capabilities?.includes('write')) {
+    score -= 90
+    reasons.push('write hidden until explicit save/edit intent')
+  }
+  if (!input.intentPolicy?.allowFileCreation && (name === 'create_file' || baseName === 'create_file')) {
+    score -= 120
+    reasons.push('file creation hidden until explicit save intent')
+  }
   if (tool.category === 'mcp') {
     score += 20
     reasons.push('MCP tool')
@@ -344,6 +351,14 @@ function getIntentForcedToolNames(userInput: string): string[] {
   }
 
   return []
+}
+
+function getBaseVisibleToolNames(intentPolicy?: AgentBeforeModelInput['intentPolicy']): string[] {
+  return uniqueStrings([
+    ...BASE_ALWAYS_VISIBLE,
+    intentPolicy?.allowWrite ? 'replace_editor_content' : undefined,
+    intentPolicy?.allowFileCreation ? 'create_file' : undefined,
+  ])
 }
 
 function buildToolScopeSection(tools: Tool[], state: AgentRunMiddlewareState) {
@@ -628,9 +643,10 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
     beforeModel(input: AgentBeforeModelInput): AgentBeforeModelOutput {
       const currentState = input.state
       const maxTools = DEFAULT_MAX_VISIBLE_TOOLS
+      const baseVisibleToolNames = getBaseVisibleToolNames(input.intentPolicy)
       const forcedToolNames = new Set([
         ...SUPPORT_TOOL_NAMES,
-        ...BASE_ALWAYS_VISIBLE,
+        ...baseVisibleToolNames,
         ...getIntentForcedToolNames(input.userInput),
       ])
 
@@ -726,6 +742,7 @@ export function createSkillMcpMiddleware(): AgentHarnessMiddleware {
               tools: toolExposure,
               permissions: {
                 allowWrite: input.intentPolicy?.allowWrite,
+                allowFileCreation: input.intentPolicy?.allowFileCreation,
                 allowExecute: input.intentPolicy?.allowExecute,
                 allowDestructive: input.intentPolicy?.allowDestructive,
                 webSearchEnabled: input.webSearchEnabled,

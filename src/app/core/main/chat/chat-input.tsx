@@ -61,6 +61,7 @@ import { FileAutocompletePopover, type FileAutocompleteItem } from './file-autoc
 import type { DirTree } from '@/stores/article'
 import { useChatDictation } from './use-chat-dictation'
 import type { QuickPrompt } from '@/lib/ai/placeholder'
+import { cn } from '@/lib/utils'
 
 function flattenFileTree(tree: DirTree[]): FileAutocompleteItem[] {
   const list: FileAutocompleteItem[] = []
@@ -470,6 +471,10 @@ type ChatSendHandle = {
   stopChat: () => Promise<void>
 }
 
+type ChatInputProps = {
+  expanded?: boolean
+}
+
 interface ResourceContextMeta {
   origin: ResourceContextOrigin
   contentMode: ResourceContentMode
@@ -484,7 +489,7 @@ interface ResourcePreviewResult {
   note?: string
 }
 
-export const ChatInput = React.memo(function ChatInput() {
+export const ChatInput = React.memo(function ChatInput({ expanded = false }: ChatInputProps) {
   const [text, setText] = useState("")
   const {
     primaryModel,
@@ -553,6 +558,7 @@ export const ChatInput = React.memo(function ChatInput() {
   const isAgentMode = chatMode === 'agent'
   const isModelRunning = researchRunning || (isAgentMode ? agentState.isRunning : loading)
   const isResearchActive = researchRunning || (loading && chatMode === 'research')
+  const textareaMaxHeight = expanded ? 320 : 240
   const slashHighlightSegments = useMemo(
     () => buildSlashHighlightSegments(text, selectedSlashCommand),
     [selectedSlashCommand, text],
@@ -667,10 +673,10 @@ export const ChatInput = React.memo(function ChatInput() {
     updateSlashTriggerFromTextarea(textarea, val)
 
     textarea.style.height = 'auto'
-    const newHeight = Math.min(textarea.scrollHeight, 240)
+    const newHeight = Math.min(textarea.scrollHeight, textareaMaxHeight)
     textarea.style.height = `${newHeight}px`
     syncSlashHighlightScroll(textarea)
-  }, [selectedSlashCommand, syncSlashHighlightScroll, updateSlashTriggerFromTextarea, updateSuggestedModeFromText])
+  }, [selectedSlashCommand, syncSlashHighlightScroll, textareaMaxHeight, updateSlashTriggerFromTextarea, updateSuggestedModeFromText])
 
   // ---- 阶段 1：选中命令，仅填入输入框 ----
   const selectSlashCommand = useCallback(async (commandId: string) => {
@@ -962,9 +968,9 @@ ${exec.prompt}`
     }
 
     textarea.style.height = 'auto'
-    const newHeight = Math.min(textarea.scrollHeight, 240)
+    const newHeight = Math.min(textarea.scrollHeight, textareaMaxHeight)
     textarea.style.height = `${newHeight}px`
-  }, [])
+  }, [textareaMaxHeight])
 
   const clearPendingAutoSend = useCallback(() => {
     if (pendingAutoSendTimerRef.current === null) {
@@ -2121,10 +2127,19 @@ ${exec.prompt}`
   }, [aiModelList, primaryModel])
 
   return (
-    <footer id="onboarding-target-chat-input" className="relative z-20 flex w-full shrink-0 flex-col justify-between bg-background px-2 pb-2">
+    <footer
+      id="onboarding-target-chat-input"
+      className={cn(
+        "relative z-20 flex w-full shrink-0 flex-col items-center justify-between bg-background",
+        expanded ? "px-4 pb-4 lg:px-8" : "px-2 pb-2",
+      )}
+    >
       {/* 对话模式智能路由提示 Banner */}
       {suggestedMode && (
-        <div className="mb-2 flex w-full items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs text-foreground animate-in slide-in-from-top-1 duration-200">
+        <div className={cn(
+          "mb-2 flex w-full items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs text-foreground animate-in slide-in-from-top-1 duration-200",
+          expanded && "max-w-[1280px]",
+        )}>
           <div className="flex items-center gap-1.5">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
@@ -2160,29 +2175,37 @@ ${exec.prompt}`
         />
       )}
       {/* 上下文面板 */}
-      <ChatInputContext
-        hasContext={hasContext}
-        isExpanded={isContextExpanded}
-        onToggleExpand={() => {
-          setIsContextExpanded(!isContextExpanded)
-          setContextPanelExpandedPref(!isContextExpanded)
-        }}
-        pendingQuote={pendingQuote}
-        onClearQuote={clearPendingQuote}
-        linkedResources={linkedResources}
-        onRemoveResource={(key) => removeLinkedResourceByKey(key)}
-        onClearAllResources={clearLinkedFiles}
-        attachedImages={attachedImages}
-        onRemoveImage={(id) => setAttachedImages(prev => prev.filter(img => img.id !== id))}
-        onClearAllImages={() => setAttachedImages([])}
-        onClearAllContexts={clearAllContexts}
-      />
+      <div className={cn("w-full", expanded && "max-w-[1280px]")}>
+        <ChatInputContext
+          hasContext={hasContext}
+          isExpanded={isContextExpanded}
+          onToggleExpand={() => {
+            setIsContextExpanded(!isContextExpanded)
+            setContextPanelExpandedPref(!isContextExpanded)
+          }}
+          pendingQuote={pendingQuote}
+          onClearQuote={clearPendingQuote}
+          linkedResources={linkedResources}
+          onRemoveResource={(key) => removeLinkedResourceByKey(key)}
+          onClearAllResources={clearLinkedFiles}
+          attachedImages={attachedImages}
+          onRemoveImage={(id) => setAttachedImages(prev => prev.filter(img => img.id !== id))}
+          onClearAllImages={() => setAttachedImages([])}
+          onClearAllContexts={clearAllContexts}
+        />
+      </div>
 
       {/* 输入框容器 - 相对定位,用于放置 Token 气泡 */}
-      <div className="relative">
+      <div className={cn("relative w-full", expanded && "max-w-[1280px]")}>
         <div
           ref={inputDropZoneRef}
-          className={`group relative z-10 flex w-full flex-col gap-1.5 overflow-hidden rounded-xl border border-border/70 bg-background p-1.5 transition-colors duration-200 ${inputDropZoneStateClassName} ${inputModeBorderClassName} ${inputFlowBorderClassName}`}
+          className={cn(
+            "group relative z-10 flex w-full flex-col overflow-hidden rounded-xl border border-border/70 bg-background transition-colors duration-200",
+            expanded ? "gap-2 p-2" : "gap-1.5 p-1.5",
+            inputDropZoneStateClassName,
+            inputModeBorderClassName,
+            inputFlowBorderClassName,
+          )}
         >
         {isFilePointerDragging ? (
           <div
@@ -2226,7 +2249,10 @@ ${exec.prompt}`
             <div
               ref={slashHighlightRef}
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 min-h-[44px] max-h-[240px] overflow-hidden whitespace-pre-wrap break-words px-3 py-2.5 text-sm leading-6 text-foreground"
+              className={cn(
+                "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-sm leading-6 text-foreground",
+                expanded ? "min-h-[72px] max-h-[320px] px-4 py-3" : "min-h-[44px] max-h-[240px] px-3 py-2.5",
+              )}
             >
               {text ? slashHighlightSegments.map((segment, index) => (
                 segment.isCommand ? (
@@ -2245,7 +2271,10 @@ ${exec.prompt}`
             </div>
             <Textarea
               ref={textareaRef}
-              className="relative min-h-[44px] max-h-[240px] flex-1 resize-none overflow-y-auto border-none bg-transparent px-3 py-2.5 text-sm leading-6 text-transparent caret-foreground shadow-none outline-none placeholder:!text-muted-foreground/60 placeholder:text-sm focus-visible:ring-0 disabled:opacity-60"
+              className={cn(
+                "relative flex-1 resize-none overflow-y-auto border-none bg-transparent text-sm leading-6 text-transparent caret-foreground shadow-none outline-none placeholder:!text-muted-foreground/60 placeholder:text-sm focus-visible:ring-0 disabled:opacity-60",
+                expanded ? "min-h-[72px] max-h-[320px] px-4 py-3" : "min-h-[44px] max-h-[240px] px-3 py-2.5",
+              )}
               rows={1}
               disabled={!primaryModel || isResearchActive}
               value={text}
@@ -2305,7 +2334,7 @@ ${exec.prompt}`
                   textarea.focus()
                   textarea.setSelectionRange(next.cursor, next.cursor)
                   textarea.style.height = 'auto'
-                  textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`
+                  textarea.style.height = `${Math.min(textarea.scrollHeight, textareaMaxHeight)}px`
                   syncSlashHighlightScroll(textarea)
                 })
                 return

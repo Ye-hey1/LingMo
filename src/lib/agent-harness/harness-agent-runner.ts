@@ -219,7 +219,7 @@ function isConcreteCompletionTool(toolName?: string) {
 }
 
 function isInformationQueryRequest(userInput: string) {
-  if (/(?:规划|设计|制定|重新规划|输出|保存|写入|生成|创建|整理成).{0,32}(?:攻略|方案|行程|路线|计划|笔记|文档|文件)/.test(userInput)) {
+  if (/(?:输出|保存|写入|导出|存成|存为|新建|创建).{0,32}(?:笔记|文档|文件)|(?:笔记|文档|文件).{0,32}(?:输出|保存|写入|导出|存成|存为|新建|创建)/.test(userInput)) {
     return false
   }
 
@@ -257,9 +257,9 @@ function validateHarnessFinalAnswer(input: {
   }
 
   const normalizedInput = input.userInput.toLowerCase()
-  const claimsExecution = /已生成|已创建|已保存|已完成|已导出|已验证|成功使用|generated|created|saved|exported|verified|completed/.test(input.finalAnswer)
+  const claimsExecution = /已创建(?:文件|笔记|文档|图表|报告)?|已保存|已写入|已导出|已验证|成功使用|成功创建|成功保存|成功写入|成功导出|created (?:file|note|document|diagram|report)|saved|exported|verified|successfully used/i.test(input.finalAnswer)
   const requestedArtifact = !informationQuery &&
-    /生成|创建|制作|导出|保存|输出|写入|规划|设计|制定|攻略|方案|行程|路线|计划|笔记|文档|pptx|pdf|docx|xlsx|文件|演示文稿|generate|create|export|save|write|plan|itinerary|file|note|document|presentation/.test(normalizedInput)
+    /导出|保存|输出到|写入|存成|存为|笔记|文档|pptx|pdf|docx|xlsx|文件|演示文稿|export|save|write|file|note|document|presentation/.test(normalizedInput)
   const requestedEdit = /修改|编辑|改成|改为|改回|替换|删除|移动|重命名|复制|插入|rewrite|edit|modify|change|replace|delete|move|rename|copy|insert/.test(normalizedInput)
   const claimsEditApplied = /已修改|已更新|已改为|已改回|已删除|已移动|已重命名|已复制|现在为|已经是|updated|changed|modified|deleted|moved|renamed|copied/.test(input.finalAnswer)
   const hasMutationSuccess = input.steps.some(step => isMutationTool(step.action?.tool) && isSuccessfulStep(step))
@@ -681,6 +681,7 @@ function getToolSubset(
   forcedSkillIds: string[],
   selectedSkillIds: Set<string>,
   userInput?: string,
+  intentPolicy?: IntentPolicy,
 ) {
   const forceInclude = new Set<string>()
   for (const skillId of [...forcedSkillIds, ...selectedSkillIds]) {
@@ -690,34 +691,43 @@ function getToolSubset(
     }
   }
 
+  const alwaysInclude = [
+    'select_skill',
+    'load_skill_content',
+    'get_editor_content',
+    'read_markdown_file',
+    'read_markdown_files_batch',
+    'safe_grep',
+    'safe_read_file',
+    'safe_list_files',
+    'get_current_time',
+    'create_reminder',
+    'list_reminders',
+    'web_search',
+    'web_extract',
+    // Phase 1 #B：把 star/trending 主入口也放进 alwaysInclude，避免被 48 上限挤出
+    'github_list_starred',
+    'github_sync_starred',
+    'github_summarize_recent_stars',
+    'github_search_my_stars',
+    'github_trending',
+    'github_search',
+  ]
+
+  if (intentPolicy?.allowWrite) {
+    alwaysInclude.push(
+      'replace_editor_content',
+    )
+  }
+  if (intentPolicy?.allowFileCreation) {
+    alwaysInclude.push('create_file')
+  }
+
   return filterToolsWithCache(allTools, steps, {
     maxTools: 48,
     userInput,
     forceInclude: Array.from(forceInclude),
-    alwaysInclude: [
-      'select_skill',
-      'load_skill_content',
-      'get_editor_content',
-      'replace_editor_content',
-      'read_markdown_file',
-      'read_markdown_files_batch',
-      'safe_grep',
-      'safe_read_file',
-      'safe_list_files',
-      'create_file',
-      'get_current_time',
-      'create_reminder',
-      'list_reminders',
-      'web_search',
-      'web_extract',
-      // Phase 1 #B：把 star/trending 主入口也放进 alwaysInclude，避免被 48 上限挤出
-      'github_list_starred',
-      'github_sync_starred',
-      'github_summarize_recent_stars',
-      'github_search_my_stars',
-      'github_trending',
-      'github_search',
-    ],
+    alwaysInclude,
   })
 }
 
@@ -931,7 +941,7 @@ export class HarnessAgentRunner {
     intentPolicy: IntentPolicy
   }): Promise<{ tools: Tool[]; promptSections: string[] }> {
     const selectedSkillIds = Array.from(this.selectedSkillIds)
-    const dynamicSubset = getToolSubset(input.allTools, this.steps, this.config.forcedSkillIds || [], this.selectedSkillIds, input.userInput)
+    const dynamicSubset = getToolSubset(input.allTools, this.steps, this.config.forcedSkillIds || [], this.selectedSkillIds, input.userInput, input.intentPolicy)
     if (!this.config.runControl) {
       return { tools: dynamicSubset, promptSections: [] }
     }
@@ -1217,10 +1227,11 @@ export class HarnessAgentRunner {
       reason: input.routeDecision.reason,
     })
 
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: buildQuickAnswerSystemPrompt() },
-      { role: 'user', content: input.userInput },
-    ]
+    const messages = this.buildMessages(
+      buildQuickAnswerSystemPrompt(),
+      input.userInput,
+      input.contextOrMessages,
+    )
 
     const response = await this.streamModel({
       messages,

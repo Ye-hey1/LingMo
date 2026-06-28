@@ -263,7 +263,6 @@ const DEFAULT_OPTIONS: DynamicFilterOptions = {
     'get_knowledge_object_overview',
     'reindex_knowledge_objects',
     'safe_grep',
-    'create_file',
     'get_current_time',
     'create_reminder',
     'list_reminders',

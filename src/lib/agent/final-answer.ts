@@ -19,10 +19,10 @@ const CONTINUATION_FAILURE_PATTERNS = [
 ]
 
 const CONCRETE_ARTIFACT_REQUEST_PATTERN =
-  /生成|创建|制作|新建|导出|保存|写入|输出到|输出为|整理成|绘制|画一|画个|画出|可视化|规划|设计|制定|图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|攻略|方案|行程|路线|计划|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e|create|generate|export|save|file|note|document|presentation|itinerary|plan/i
+  /导出|保存|写入|输出到|输出为|存成|存为|绘制|画一|画个|画出|可视化|图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e|export|save|write|file|note|document|presentation/i
 
 const CONCRETE_ARTIFACT_DIRECTIVE_PATTERN =
-  /(?:生成|创建|制作|新建|导出|保存|写入|输出|整理成|绘制|画一|画个|画出|可视化).{0,30}(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|攻略|方案|行程|路线|计划|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw)|(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|攻略|方案|行程|路线|计划|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw).{0,30}(?:生成|创建|制作|新建|导出|保存|写入|输出|绘制)|(?:规划|设计|制定|重新规划).{0,30}(?:攻略|方案|行程|路线|计划)|(?:输出|保存|写入|整理).{0,16}(?:到|为|成)?\s*(?:笔记|文档|文件)|\b(?:create|generate|export|save|write|produce|visuali[sz]e).{0,40}(?:diagram|mind\s*map|mindmap|flowchart|file|note|document|itinerary|plan|presentation|pptx|pdf|docx|xlsx)\b/i
+  /(?:生成|创建|制作|新建|导出|保存|写入|输出|整理成|存成|存为|绘制|画一|画个|画出|可视化).{0,30}(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw)|(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw).{0,30}(?:生成|创建|制作|新建|导出|保存|写入|输出|绘制|存成|存为)|(?:规划|设计|制定|重新规划|生成|整理).{0,36}(?:攻略|方案|行程|路线|计划).{0,24}(?:输出|保存|写入|存成|存为|导出|笔记|文档|文件)|(?:输出|保存|写入|整理|存成|存为|导出).{0,16}(?:到|为|成|进)?\s*(?:笔记|文档|文件)|\b(?:create|generate|export|save|write|produce|visuali[sz]e).{0,40}(?:diagram|mind\s*map|mindmap|flowchart|file|note|document|presentation|pptx|pdf|docx|xlsx)\b|\b(?:itinerary|plan|guide|proposal|report).{0,40}(?:save|write|export|file|note|document)\b/i
 
 const INFORMATION_QUERY_PATTERN =
   /查看|查询|获取|检索|搜索|总结|汇总|梳理|分析|解读|列出|最新|热点|新闻|资讯|趋势|信息|内容|数据|find|search|fetch|get|retrieve|summari[sz]e|analy[sz]e|latest|news|trending|information/i
@@ -31,10 +31,10 @@ const DIAGRAM_ARTIFACT_REQUEST_PATTERN =
   /绘制|画一|画个|画出|可视化|图表|思维导图|导图|流程图|架构图|白板|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e/i
 
 const NOTE_OUTPUT_REQUEST_PATTERN =
-  /(?:输出|保存|写入|整理|生成|创建|新建).{0,18}(?:到|为|成|进)?\s*(?:笔记|文档|文件)|(?:笔记|文档|文件).{0,18}(?:输出|保存|写入|整理|生成|创建|新建)/i
+  /(?:输出|保存|写入|整理|生成|创建|新建|存成|存为|导出).{0,18}(?:到|为|成|进)?\s*(?:笔记|文档|文件)|(?:笔记|文档|文件).{0,18}(?:输出|保存|写入|整理|生成|创建|新建|存成|存为|导出)/i
 
 const PLAN_ARTIFACT_REQUEST_PATTERN =
-  /(?:规划|设计|制定|重新规划|生成|输出|整理).{0,36}(?:攻略|方案|行程|路线|计划)|(?:攻略|方案|行程|路线|计划).{0,36}(?:规划|设计|制定|重新规划|生成|输出|整理)/i
+  /(?:规划|设计|制定|重新规划|生成|整理).{0,36}(?:攻略|方案|行程|路线|计划).{0,24}(?:输出|保存|写入|存成|存为|导出|笔记|文档|文件)|(?:攻略|方案|行程|路线|计划).{0,36}(?:输出|保存|写入|存成|存为|导出|笔记|文档|文件)/i
 
 const PROGRESS_ONLY_FINAL_PATTERN =
   /^(?:好(?:的)?|收到|明白|可以|没问题|了解|充分理解|我明白|我知道了)[。！!，,\s]*(?:我(?:现在|会|将|来|马上|准备|先|接下来)|这就|下面|接下来|先|正在|开始|准备|马上)?|^(?:我(?:现在|会|将|来|马上|准备|先|接下来)|这就|下面|接下来|先|正在|开始|准备|马上)/i
@@ -324,8 +324,9 @@ export function validateFinalAnswer(
     return { ok: false, reason: 'Final Answer 不能只是重复用户的问题' }
   }
 
-  // 检查是否声称执行了操作但没有实际执行
-  const claimsExecution = /已生成|已创建|已保存|已完成|已导出|已验证|成功使用|generated|created|saved|exported|verified|completed/i.test(answer)
+  // 检查是否声称执行了落盘、导出、外部工具等操作但没有实际执行。
+  // 普通聊天里“已生成方案正文”不应被强行推回工具循环。
+  const claimsExecution = /已创建(?:文件|笔记|文档|图表|报告)?|已保存|已写入|已导出|已验证|成功使用|成功创建|成功保存|成功写入|成功导出|created (?:file|note|document|diagram|report)|saved|exported|verified|successfully used/i.test(answer)
   if (claimsExecution && !hasSuccessfulToolExecution) {
     return {
       ok: false,

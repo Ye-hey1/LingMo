@@ -202,6 +202,9 @@ try {
     shouldBypassAgentRuntime,
   } = await importTsModule('src/lib/agent/task-router.ts')
   const {
+    buildMessagesWithHistory,
+  } = await importTsModule('src/lib/ai/history-messages.ts')
+  const {
     createConfiguredModelSelectionId,
     matchesConfiguredModelSelection,
     parseConfiguredModelSelectionId,
@@ -298,21 +301,33 @@ try {
   assert.equal(deriveIntentPolicy('分类到已完成文件夹').allowWrite, true)
   assert.equal(deriveIntentPolicy('organize these notes into archive folder').allowWrite, true)
   assert.equal(deriveIntentPolicy('根据上面3天行程重新规划旅游攻略，并输出到笔记中').allowWrite, true)
+  assert.equal(deriveIntentPolicy('根据上面3天行程重新规划旅游攻略，并输出到笔记中').allowFileCreation, true)
   assert.equal(deriveIntentPolicy('帮我设计一份19日到21日出行方案并保存到笔记').allowWrite, true)
+  assert.equal(deriveIntentPolicy('帮我设计一份19日到21日出行方案并保存到笔记').allowFileCreation, true)
+  assert.equal(deriveIntentPolicy('帮我规划一份三天旅行方案').allowWrite, false)
+  assert.equal(deriveIntentPolicy('帮我规划一份三天旅行方案').allowFileCreation, false)
+  assert.equal(deriveIntentPolicy('生成一份学习计划').allowWrite, false)
+  assert.equal(deriveIntentPolicy('生成一份学习计划').allowFileCreation, false)
+  assert.equal(deriveIntentPolicy('生成一份学习计划并保存到笔记').allowWrite, true)
+  assert.equal(deriveIntentPolicy('生成一份学习计划并保存到笔记').allowFileCreation, true)
   assert.equal(deriveIntentPolicy('请优化当前项目中 agent 的提示词').allowWrite, true)
+  assert.equal(deriveIntentPolicy('请优化当前项目中 agent 的提示词').allowFileCreation, false)
   assert.equal(deriveIntentPolicy('如何优化提示词？').allowWrite, false)
   assert.equal(deriveIntentPolicy('删除这个文件').allowDestructive, true)
   assert.equal(deriveIntentPolicy('不要删除，只总结一下').allowDestructive, false)
   assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowWrite, true)
+  assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowFileCreation, true)
   assert.equal(deriveIntentPolicy('用技能导出为 pptx 文件').allowExecute, true)
   assert.equal(deriveIntentPolicy('不要执行脚本，只给命令建议').allowExecute, false)
   const disabledWritePrompt = formatIntentPolicyForPrompt({
     allowWrite: false,
+    allowFileCreation: false,
     allowDestructive: false,
     allowExecute: false,
   })
-  assert.match(disabledWritePrompt, /Modes: write=disabled; destructive=disabled; execute=disabled\./)
+  assert.match(disabledWritePrompt, /Modes: write=disabled; fileCreation=disabled; destructive=disabled; execute=disabled\./)
   assert.match(disabledWritePrompt, /No clear write\/move\/edit target was detected/)
+  assert.match(disabledWritePrompt, /Do not create new files or notes/)
   assert.match(disabledWritePrompt, /Do not delete or clear content; ask for explicit destructive confirmation first\./)
   assert.match(disabledWritePrompt, /Do not run commands or scripts; ask for explicit execution confirmation first\./)
   assert.doesNotMatch(disabledWritePrompt, /Agent cannot write files/)
@@ -515,6 +530,42 @@ try {
   assert.equal(travelNoteRoute.requiresRuntime, true)
   assert.notEqual(travelNoteRoute.route, 'quick_answer')
   assert.equal(shouldBypassAgentRuntime(travelNoteRoute), false)
+  const agentHistoryMessages = buildMessagesWithHistory([
+    { role: 'system', type: 'chat', content: '第零轮回答' },
+    { role: 'user', type: 'chat', content: '第一轮问题' },
+    { role: 'system', type: 'chat', content: '第一轮回答' },
+    { role: 'user', type: 'chat', content: '第二轮问题' },
+    { role: 'system', type: 'chat', content: '第二轮回答' },
+    { role: 'user', type: 'chat', content: '当前问题' },
+  ], undefined, '额外上下文', '当前问题', {
+    includeAssistantMessages: true,
+    includeLatestUserMessage: false,
+    maxUserMessages: 1,
+  })
+  assert.deepEqual(agentHistoryMessages, [
+    { role: 'user', content: '第二轮问题' },
+    { role: 'assistant', content: '第二轮回答' },
+    { role: 'system', content: '额外上下文' },
+    { role: 'user', content: '当前问题' },
+  ])
+  assert.equal(agentHistoryMessages.some(message => message.content === '第零轮回答'), false)
+  const agentHistoryWithoutLimit = buildMessagesWithHistory([
+    { role: 'user', type: 'chat', content: '用户 A' },
+    { role: 'system', type: 'chat', content: '助手 A' },
+    { role: 'user', type: 'chat', content: '用户 B' },
+    { role: 'system', type: 'chat', content: '助手 B' },
+    { role: 'user', type: 'chat', content: '用户 C' },
+  ], undefined, undefined, '用户 C', {
+    includeAssistantMessages: true,
+    includeLatestUserMessage: false,
+  })
+  assert.deepEqual(agentHistoryWithoutLimit, [
+    { role: 'user', content: '用户 A' },
+    { role: 'assistant', content: '助手 A' },
+    { role: 'user', content: '用户 B' },
+    { role: 'assistant', content: '助手 B' },
+    { role: 'user', content: '用户 C' },
+  ])
   assert.equal(createConfiguredModelSelectionId('provider-a', 'model-b'), 'provider-a:model-b')
   assert.deepEqual(parseConfiguredModelSelectionId('provider-a:model-b'), {
     configKey: 'provider-a',
@@ -640,7 +691,10 @@ try {
   )
   assert.equal(isConcreteArtifactRequest('使用 aihot 技能获取最新 AI 信息并直接输出文字', true), false)
   assert.equal(isConcreteArtifactRequest('根据上面3天行程重新规划旅游攻略，并输出到笔记中', true), true)
-  assert.equal(isConcreteArtifactRequest('规划设计一份19日-21日出行方案', true), true)
+  assert.equal(isConcreteArtifactRequest('规划设计一份19日-21日出行方案', true), false)
+  assert.equal(isConcreteArtifactRequest('帮我规划一份三天旅行方案', true), false)
+  assert.equal(isConcreteArtifactRequest('生成一份学习计划', true), false)
+  assert.equal(isConcreteArtifactRequest('生成一份学习计划并保存到笔记', true), true)
   assert.equal(isProgressOnlyFinalAnswer('收到。我现在先确认行程核心数据，然后输出到笔记中。'), true)
   assert.equal(isProgressOnlyFinalAnswer('充分理解。原图存在问题，我会重新规划一版完整方案。'), true)
   assert.equal(
@@ -1306,6 +1360,30 @@ try {
       intentPolicy: deriveIntentPolicy('帮我新建一篇笔记'),
     }),
     { allowed: true, requiresConfirmation: true },
+  )
+  assert.equal(
+    evaluateIntentAwareToolPolicy({
+      toolName: 'create_file',
+      category: 'note',
+      intentPolicy: deriveIntentPolicy('生成一份学习计划'),
+    }).allowed,
+    false,
+  )
+  assert.equal(
+    evaluateIntentAwareToolPolicy({
+      toolName: 'create_file',
+      category: 'note',
+      intentPolicy: deriveIntentPolicy('请优化当前项目中 agent 的提示词'),
+    }).allowed,
+    false,
+  )
+  assert.equal(
+    evaluateIntentAwareToolPolicy({
+      toolName: 'replace_editor_content',
+      category: 'editor',
+      intentPolicy: deriveIntentPolicy('请优化当前项目中 agent 的提示词'),
+    }).allowed,
+    true,
   )
   assert.equal(
     evaluateIntentAwareToolPolicy({
@@ -2166,6 +2244,12 @@ contextPolicy:
   assert.match(chatSendSource, /buildHarnessContextItems/)
   assert.match(chatSendSource, /agentExecutor:\s*async \(runControl\)/)
   assert.match(chatSendSource, /finishVisibleAgentRun/)
+  assert.match(chatSendSource, /AGENT_LIVE_ANSWER_UPDATE_INTERVAL_MS/)
+  assert.match(chatSendSource, /const createLiveAgentAnswerUpdater = \(placeholderMessage: Chat\) => \{/)
+  assert.match(chatSendSource, /onAnswerDelta: liveAnswerUpdater\.onAnswerDelta/)
+  assert.match(chatSendSource, /liveAnswerUpdater\.flush\(\)/)
+  assert.match(chatSendSource, /liveAnswerUpdater\.cancel\(\)/)
+  assert.match(chatSendSource, /saveChat\(\{[\s\S]{0,700}content:\s*visibleContent,[\s\S]{0,80}\}, false\)/)
   assert.match(chatSendSource, /const isRunning = researchRunning \|\| \(isAgentMode \? agentState\.isRunning : loading\)/)
   assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,240}setAgentState\(\{\s*agentRunId:\s*undefined/)
   assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,900}toolCalls:\s*\[\]/)
@@ -2214,6 +2298,9 @@ contextPolicy:
   assert.match(chatContentSource, /import \{ AgentRunSummary \}/)
   assert.match(chatContentSource, /shouldShowLiveAgentStatus/)
   assert.match(chatContentSource, /shouldShowLiveFinalAnswer/)
+  assert.match(chatContentSource, /const isBaseResponseStreaming = chat\.role === 'system' && loading && !isActiveAgentMessage && isLatestSystemMessage/)
+  assert.match(chatContentSource, /const shouldShowStoredContent = !isLiveAgentActive/)
+  assert.match(chatContentSource, /&& !liveFinalAnswerContent/)
   assert.match(chatContentSource, /scheduleScrollStateSync/)
   assert.match(chatContentSource, /liveAgentScrollSignal/)
   assert.match(chatContentSource, /PENDING_AGENT_CHAT_ID/)
@@ -2308,7 +2395,8 @@ contextPolicy:
   assert.match(agentRunSummarySource, /omittedChars/)
   assert.match(agentRunSummarySource, /liveThoughtText/)
   assert.match(agentRunSummarySource, /function hasLiveActivity/)
-  assert.match(agentRunSummarySource, /Boolean\(liveThoughtText\) \|\| hasLiveActivity/)
+  assert.match(agentRunSummarySource, /const shouldShowThinking = input\.live && Boolean\(liveThoughtText\)/)
+  assert.doesNotMatch(agentRunSummarySource, /Boolean\(liveThoughtText\) \|\| hasLiveActivity/)
   assert.match(agentRunSummarySource, /thought\.text && \(/)
   assert.doesNotMatch(agentRunSummarySource, /正在整理上下文和下一步动作。/)
   assert.match(agentRunSummarySource, /group\.thought \|\| group\.tools\.length > 0/)
@@ -2600,6 +2688,8 @@ contextPolicy:
   assert.match(toolPolicySource, /get_knowledge_object_overview/)
   assert.match(toolPolicySource, /get_current_note_context/)
   assert.match(toolPolicySource, /reindex_knowledge_objects/)
+  assert.match(toolPolicySource, /allowFileCreation/)
+  assert.match(toolPolicySource, /用户未明确要求保存、写入、导出或新建文件/)
 
   const dynamicToolFilterSource = await readFile(join(repoRoot, 'src/lib/agent/dynamic-tool-filter.ts'), 'utf8')
   assert.match(dynamicToolFilterSource, /get_current_note_context/)
@@ -2610,6 +2700,22 @@ contextPolicy:
   assert.match(dynamicToolFilterSource, /重建索引/)
   assert.match(dynamicToolFilterSource, /当前笔记/)
   assert.match(dynamicToolFilterSource, /alwaysInclude/)
+  assert.doesNotMatch(dynamicToolFilterSource, /alwaysInclude:\s*\[[\s\S]{0,600}['"]create_file['"]/)
+
+  const harnessRunnerFileCreationSource = await readFile(join(repoRoot, 'src/lib/agent-harness/harness-agent-runner.ts'), 'utf8')
+  assert.match(harnessRunnerFileCreationSource, /intentPolicy\?\.allowFileCreation/)
+  assert.doesNotMatch(harnessRunnerFileCreationSource, /alwaysInclude:\s*\[[\s\S]{0,700}['"]create_file['"]/)
+
+  const harnessMiddlewareSource = await readFile(join(repoRoot, 'src/lib/agent-harness/middleware.ts'), 'utf8')
+  assert.match(harnessMiddlewareSource, /intentPolicy\?\.allowFileCreation \? 'create_file'/)
+  assert.doesNotMatch(harnessMiddlewareSource, /const BASE_ALWAYS_VISIBLE = \[[\s\S]{0,500}['"]create_file['"]/)
+
+  const sessionApprovalSource = await readFile(join(repoRoot, 'src/lib/agent/session-approval.ts'), 'utf8')
+  assert.match(sessionApprovalSource, /requiresFreshFileCreationApproval/)
+  assert.match(sessionApprovalSource, /'create_file'/)
+
+  const persistentApprovalSource = await readFile(join(repoRoot, 'src/lib/agent/persistent-approval.ts'), 'utf8')
+  assert.match(persistentApprovalSource, /requiresFreshFileCreationApproval/)
 
   const toolIndexSource = await readFile(join(repoRoot, 'src/lib/agent/tools/index.ts'), 'utf8')
   assert.match(toolIndexSource, /import \{ knowledgeObjectTools \} from '\.\/knowledge-object-tools'/)

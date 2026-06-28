@@ -88,6 +88,7 @@ export interface ToolExposureSnapshot {
 
 export interface RuntimePermissionSnapshot {
   allowWrite?: boolean
+  allowFileCreation?: boolean
   allowExecute?: boolean
   allowDestructive?: boolean
   webSearchEnabled?: boolean

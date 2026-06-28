@@ -108,6 +108,8 @@ function ResizableWrapper() {
     syncPanel(rightPanelRef.current, isRightSidebarVisible)
   }, [layoutKey, isLeftSidebarVisible, centerPanelVisible, isRightSidebarVisible])
 
+  const chatExpanded = isRightSidebarVisible && !centerPanelVisible
+
   const onLayout = (sizes: number[]) => {
     const storageKey = `${PANEL_STORAGE_PREFIX}:${layoutKey}`
     localStorage.setItem(storageKey, JSON.stringify(sizes))
@@ -161,7 +163,7 @@ function ResizableWrapper() {
           collapsedSize={0}
           className={cn('main-layout-panel min-w-0 border-l', !isRightSidebarVisible && 'main-layout-panel-collapsed')}
         >
-          <Chat />
+          <Chat expanded={chatExpanded} />
         </ResizablePanel>
       </ResizablePanelGroup>
       <GlobalProgress />

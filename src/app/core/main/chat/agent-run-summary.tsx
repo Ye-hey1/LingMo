@@ -1105,10 +1105,7 @@ function buildThoughtTimeline(input: {
     activity: input.activity,
     partSnapshot: input.partSnapshot,
   })
-  const shouldShowThinking = input.live && (Boolean(liveThoughtText) || hasLiveActivity({
-    activity: input.activity,
-    partSnapshot: input.partSnapshot,
-  }))
+  const shouldShowThinking = input.live && Boolean(liveThoughtText)
   if (shouldShowThinking) {
     entries.push(createThoughtEntry({
       id: "thought-live",

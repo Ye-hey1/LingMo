@@ -2,6 +2,7 @@ export type ToolRiskLevel = 'low' | 'medium' | 'high'
 
 export interface IntentPolicy {
   allowWrite: boolean
+  allowFileCreation?: boolean
   allowDestructive: boolean
   allowExecute: boolean
 }
@@ -150,22 +151,75 @@ const directEditPatterns = [
   /\b(?:optimize|improve|refine|polish|simplify|rewrite|revise|adjust)\b.{0,40}\b(?:this|current|these|file|note|document|code|project|prompt|content|text|article|chart)\b/i,
 ]
 
+const fileCreationToolNames = new Set([
+  'create_file',
+  'create_files_batch',
+  'safe_write_file',
+  'create_diagram_file',
+  'create_drawio_diagram_from_cells',
+  'create_diagram_from_outline',
+  'create_visual_report',
+])
+
+const recoverableWriteToolNames = new Set([
+  ...MEDIUM_RISK_TOOLS,
+  ...LOW_RISK_WRITE_TOOLS,
+])
+
+const intentGatedWriteToolNames = new Set([
+  'create_file',
+  'create_files_batch',
+  'safe_write_file',
+  'create_mark',
+  'create_marks_batch',
+  'update_mark',
+  'update_marks_batch',
+  'create_tag',
+  'update_tag',
+  'create_chat',
+  'create_chats_batch',
+  'update_chat',
+  'update_chats_batch',
+  'insert_at_cursor',
+  'replace_editor_content',
+  'rename_file',
+  'move_file',
+  'copy_file',
+  'rename_files_batch',
+  'move_files_batch',
+  'copy_files_batch',
+  'tag_files',
+  'set_note_status',
+  'bulk_ensure_frontmatter',
+])
+
 const writePatterns = [
-  /创建|新建|新增|写入|改写|修改|编辑|更新|重写|插入|替换|保存/,
+  /写入|改写|修改|编辑|更新|重写|插入|替换|保存/,
+  /(?:创建|新建|新增).{0,24}(?:文件|笔记|文档|目录|文件夹|标签|记录|提醒|记忆|mark|chat|folder|directory|file|note|document|tag|reminder)/i,
   ...directEditPatterns,
   /重新规划|输出到笔记|保存到笔记|写入笔记|整理成笔记/,
-  /重命名|改名|命名为|移动|移到|移动到|挪动|挪到|搬到|转移|迁移|复制|拷贝|草拟|起草/,
-  /整理|归档|收纳|分类|分组|放到|放进|放入|存到|存入|并入|合并到|移入|移动进|移动至|归到/,
+  /重命名|改名|命名为|移动|移到|移动到|挪动|挪到|搬到|转移|迁移|复制|拷贝/,
   /(整理|归档|分类|收纳|移动|移到|移动到|挪到|放到|放进|放入).*(文件|目录|文件夹|folder|directory)/i,
   /(把|将).*(文件|笔记|目录|文件夹|内容).*(移动|移到|移动到|挪到|放到|放进|放入|归档|分类|整理|复制|拷贝)/,
-  /(输出|保存|写入|整理成|生成|创建|新建).{0,20}(笔记|文档|文件|攻略|方案|行程|计划)/,
-  /(规划|设计|制定|重新规划|生成|整理).{0,30}(攻略|方案|行程|路线|计划|旅游|旅行)/,
+  /(?:输出|保存|写入|整理成|存成|存为|导出|导出为|生成|创建|新建).{0,20}(?:笔记|文档|文件|markdown|md|pptx|pdf|docx|xlsx)/i,
+  /(?:笔记|文档|文件|markdown|md|pptx|pdf|docx|xlsx).{0,20}(?:输出|保存|写入|整理成|存成|存为|导出|生成|创建|新建)/i,
+  /(?:规划|设计|制定|重新规划|生成|整理).{0,30}(?:攻略|方案|行程|路线|计划|旅游|旅行).{0,24}(?:输出|保存|写入|存成|存为|导出|笔记|文档|文件)/,
   /提醒|通知|定时|闹钟|计时器|倒计时/,
-  /写(一篇|个|份)?(关于|有关|主题为)?/,
-  /生成(文章|内容|文件|笔记|文档|攻略|方案|行程|计划|图表|流程图|思维导图|白板|幻灯片|ppt|pdf|docx|xlsx)/,
-  /改成|改为|整理成|转换成/,
-  /\b(?:plan|design|draft|write|create|generate|produce).{0,40}(?:itinerary|travel plan|trip plan|route|note|document|file|guide|proposal|report)\b/i,
-  /\b(create|write|draft|modify|edit|update|insert|replace|save|rename|move|copy|organize|archive|classify|sort|relocate)\b/i,
+  /生成(文件|笔记|文档|图表|流程图|思维导图|白板|幻灯片|ppt|pdf|docx|xlsx)/,
+  /(改成|改为|整理成|转换成).{0,24}(当前|这个|这段|这篇|这些|文件|笔记|代码|图表|内容|文本|文章|提示词|prompt)/i,
+  /\b(?:save|write|export|create|generate|produce).{0,40}(?:note|document|file|presentation|pptx|pdf|docx|xlsx)\b/i,
+  /\b(?:plan|design|draft|write|create|generate|produce).{0,40}(?:itinerary|travel plan|trip plan|route|guide|proposal|report).{0,40}(?:save|write|export|file|note|document)\b/i,
+  /\b(?:modify|edit|update|insert|replace|save|rename|move|copy)\b/i,
+  /\b(?:organize|archive|classify|sort|relocate)\b.{0,60}\b(?:file|files|note|notes|folder|directory|archive)\b/i,
+]
+
+const fileCreationPatterns = [
+  /(?:输出|保存|写入|整理成|存成|存为|导出|导出为).{0,24}(?:笔记|文档|文件|markdown|md|pptx|pdf|docx|xlsx)/i,
+  /(?:笔记|文档|文件|markdown|md|pptx|pdf|docx|xlsx).{0,24}(?:输出|保存|写入|整理成|存成|存为|导出|生成|创建|新建)/i,
+  /(?:创建|新建|新增|生成).{0,24}(?:文件|笔记|文档|markdown|md)/i,
+  /(?:规划|设计|制定|重新规划|生成|整理).{0,30}(?:攻略|方案|行程|路线|计划|旅游|旅行).{0,24}(?:输出|保存|写入|存成|存为|导出|笔记|文档|文件)/,
+  /\b(?:save|write|export|create|generate|produce).{0,40}(?:note|document|file|presentation|pptx|pdf|docx|xlsx)\b/i,
+  /\b(?:itinerary|travel plan|trip plan|guide|proposal|report|plan).{0,40}(?:save|write|export|file|note|document)\b/i,
 ]
 
 const conceptualWriteQuestionPatterns = [
@@ -221,12 +275,14 @@ export function deriveIntentPolicy(userInput: string): IntentPolicy {
   const input = userInput.toLowerCase()
   const skillExecutionIntent = matchesAny(skillExecutionPatterns, input)
   const rawWriteIntent = matchesAny(writePatterns, input) || skillExecutionIntent
+  const rawFileCreationIntent = matchesAny(fileCreationPatterns, input) || skillExecutionIntent
   const isConceptualWriteQuestion =
     matchesAny(conceptualWriteQuestionPatterns, input) &&
     !matchesAny(concreteTargetPatterns, input)
 
   return {
     allowWrite: rawWriteIntent && !isConceptualWriteQuestion,
+    allowFileCreation: rawFileCreationIntent && !isConceptualWriteQuestion,
     allowDestructive:
       matchesAny(destructivePatterns, input) &&
       !matchesAny(denyDestructivePatterns, input),
@@ -240,15 +296,19 @@ export function deriveIntentPolicy(userInput: string): IntentPolicy {
 
 export function formatIntentPolicyForPrompt(intentPolicy: IntentPolicy): string {
   const writeMode = intentPolicy.allowWrite ? 'enabled' : 'disabled'
+  const fileCreationMode = intentPolicy.allowFileCreation ? 'enabled' : 'disabled'
   const destructiveMode = intentPolicy.allowDestructive ? 'enabled' : 'disabled'
   const executeMode = intentPolicy.allowExecute ? 'enabled' : 'disabled'
 
   return [
-    `Modes: write=${writeMode}; destructive=${destructiveMode}; execute=${executeMode}.`,
+    `Modes: write=${writeMode}; fileCreation=${fileCreationMode}; destructive=${destructiveMode}; execute=${executeMode}.`,
     'Read/search tools are allowed when relevant.',
     writeMode === 'enabled'
       ? 'Write/edit/move tools may proceed through the normal confirmation flow.'
       : 'No clear write/move/edit target was detected; ask for the missing target before write tools.',
+    fileCreationMode === 'enabled'
+      ? 'New file/note creation may proceed through the normal confirmation flow.'
+      : 'Do not create new files or notes; ask whether the user wants a saved file first.',
     destructiveMode === 'enabled'
       ? 'Delete/clear tools still require normal high-risk confirmation.'
       : 'Do not delete or clear content; ask for explicit destructive confirmation first.',
@@ -354,8 +414,11 @@ export function evaluateIntentAwareToolPolicy(
 ): ToolPolicyEvaluationResult {
   const { toolName, category, intentPolicy } = input
   const risk = getToolRiskLevel(toolName, category)
+  const baseName = getBaseToolName(toolName)
   const isDestructive = isDestructiveTool(toolName)
   const isExecute = isExecuteTool(toolName)
+  const isRecoverableWrite = recoverableWriteToolNames.has(toolName) || recoverableWriteToolNames.has(baseName)
+  const isIntentGatedWrite = intentGatedWriteToolNames.has(toolName) || intentGatedWriteToolNames.has(baseName)
 
   if (isExecute && !intentPolicy.allowExecute) {
     return {
@@ -370,6 +433,22 @@ export function evaluateIntentAwareToolPolicy(
       allowed: false,
       requiresConfirmation: false,
       reason: '用户未明确要求删除或清空操作',
+    }
+  }
+
+  if ((fileCreationToolNames.has(toolName) || fileCreationToolNames.has(baseName)) && !intentPolicy.allowFileCreation) {
+    return {
+      allowed: false,
+      requiresConfirmation: false,
+      reason: '用户未明确要求保存、写入、导出或新建文件；请先询问是否需要生成文件',
+    }
+  }
+
+  if (isRecoverableWrite && isIntentGatedWrite && risk !== 'low' && !intentPolicy.allowWrite) {
+    return {
+      allowed: false,
+      requiresConfirmation: false,
+      reason: '用户未明确要求写入、编辑、移动或保存内容',
     }
   }
 

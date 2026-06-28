@@ -61,10 +61,12 @@ const TOOL_OR_CONTEXT_PATTERNS = [
 ]
 
 const WRITE_OR_ACTION_PATTERNS = [
-  /创建|新建|新增|写入|输出|输出到|改写|修改|编辑|更新|修复|重构|优化|改进|精简|省token|省 token|删除|移动|复制|重命名|保存|导出|生成|制作|绘制|画出|整理成|运行|执行|安装|配置|迁移|部署|测试|提交/,
-  /(规划|设计|制定|重新规划).{0,30}(攻略|方案|行程|路线|计划|旅游|旅行|笔记|文档|文件)/,
+  /写入|输出到|改写|修改|编辑|更新|修复|重构|优化|改进|精简|省token|省 token|删除|移动|复制|重命名|保存|导出|制作|绘制|画出|整理成|运行|执行|安装|配置|迁移|部署|测试|提交/,
+  /(?:创建|新建|新增|生成).{0,24}(?:文件|笔记|文档|目录|文件夹|标签|记录|提醒|图表|流程图|思维导图|白板|幻灯片|ppt|pdf|docx|xlsx)/,
+  /(规划|设计|制定|重新规划|生成|整理).{0,30}(攻略|方案|行程|路线|计划|旅游|旅行).{0,24}(输出|保存|写入|导出|存成|存为|笔记|文档|文件)/,
   /(优化|改进|精简|完善|重写|调整).{0,30}(提示词|prompt|系统提示词|agent|运行逻辑|意图识别)/i,
-  /\b(?:plan|design|draft|write|create|generate|produce).{0,40}(?:itinerary|travel plan|trip plan|route|note|document|file|guide|proposal|report)\b/i,
+  /\b(?:save|write|create|generate|produce|export).{0,40}(?:note|document|file|presentation|pptx|pdf|docx|xlsx)\b/i,
+  /\b(?:plan|design|draft|write|create|generate|produce).{0,40}(?:itinerary|travel plan|trip plan|route|guide|proposal|report).{0,40}(?:save|write|export|file|note|document)\b/i,
   /\b(create|write|edit|modify|update|fix|repair|refactor|optimize|improve|polish|simplify|delete|move|copy|rename|save|export|generate|draw|run|execute|install|configure|migrate|deploy|test|commit)\b/i,
 ]
 
@@ -94,7 +96,7 @@ function estimateComplexityScore(userInput: string) {
   if (length > 180) score += 1
   if (length > 420) score += 2
   if (matchesAny(COMPLEXITY_PATTERNS, userInput)) score += 2
-  if (/(规划|设计|制定|重新规划).{0,30}(攻略|方案|行程|路线|计划)|(?:输出|保存|写入|整理).{0,16}(?:到|为|成)?\s*(?:笔记|文档|文件)/.test(userInput)) score += 2
+  if (/(?:规划|设计|制定|重新规划|生成|整理).{0,30}(?:攻略|方案|行程|路线|计划).{0,24}(?:输出|保存|写入|导出|存成|存为|笔记|文档|文件)|(?:输出|保存|写入|整理|导出|存成|存为).{0,16}(?:到|为|成)?\s*(?:笔记|文档|文件)/.test(userInput)) score += 2
   score += Math.min(3, Math.floor(countTaskSeparators(userInput) / 2))
   if ((userInput.match(/\d+[、.．)]/g)?.length || 0) >= 2) score += 2
   return score
