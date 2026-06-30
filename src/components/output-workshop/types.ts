@@ -1,8 +1,19 @@
 /**
- * 输出工坊模块共享类型定义
+ * 智能排版模块共享类型定义
  */
 
 export type GenerationStatus = "idle" | "generating" | "streaming" | "done" | "error"
+export type GenerationTelemetryPhase =
+  | "idle"
+  | "preparing"
+  | "local-build"
+  | "requesting-ai"
+  | "receiving"
+  | "quality-check"
+  | "repairing"
+  | "finalizing"
+  | "done"
+  | "error"
 export type ViewMode = "desktop" | "mobile" | "locked"
 export type PreviewWorkspaceTab = "preview" | "code" | "log" | "outline"
 export type SourceWorkspaceTab = "edit" | "history" | "outline"
@@ -30,9 +41,28 @@ export interface TemplateOverrides {
   mermaidRenderMode: MermaidRenderMode
 }
 
+export type BuildStageId = "parse" | "template" | "mermaid" | "preview"
+
 export interface BuildStage {
-  id: "parse" | "template" | "mermaid" | "preview"
+  id: BuildStageId
   label: string
+}
+
+export interface GenerationTelemetry {
+  phase: GenerationTelemetryPhase
+  phaseLabel: string
+  startedAt: number | null
+  requestStartedAt: number | null
+  firstByteAt: number | null
+  lastChunkAt: number | null
+  completedAt: number | null
+  outputChars: number
+  promptChars: number
+  qualityChecked: boolean
+  qualityFindingCount: number
+  severeFindingCount: number
+  repairTriggered: boolean
+  qualitySummary: string
 }
 
 export interface ExportRecord {

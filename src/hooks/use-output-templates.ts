@@ -6,15 +6,18 @@ import {
   INTERNAL_OUTPUT_TEMPLATES,
   OUTPUT_MODES,
   listAllTemplates,
+  type OutputMode,
   type OutputTemplate,
 } from "@/lib/output-workshop/templates"
 import { buildTemplatePreviewHtml } from "@/components/output-workshop/utils"
+
+type TemplateCategoryId = "all" | OutputMode
 
 export function useOutputTemplates() {
   const [selectedTemplateId, setSelectedTemplateId] = React.useState<string>("article-editorial")
   const [allTemplates, setAllTemplates] = React.useState<OutputTemplate[]>([])
   const [loadingTemplates, setLoadingTemplates] = React.useState(false)
-  const [selectedCategory, setSelectedCategory] = React.useState<string>("all")
+  const [selectedCategory, setSelectedCategory] = React.useState<TemplateCategoryId>("all")
   const [templateSearchQuery, setTemplateSearchQuery] = React.useState("")
   const [showTemplatePicker, setShowTemplatePicker] = React.useState(false)
   const [hoveredTemplateId, setHoveredTemplateId] = React.useState<string | null>(null)
@@ -48,8 +51,15 @@ export function useOutputTemplates() {
 
   const templateCategories = React.useMemo(() => {
     const presentModes = new Set(templateList.map((template) => template.mode))
-    return OUTPUT_MODES.filter((mode) => presentModes.has(mode.id))
+    return OUTPUT_MODES
+      .filter((mode) => presentModes.has(mode.id))
+      .map((mode) => ({
+        ...mode,
+        count: templateList.filter((template) => template.mode === mode.id).length,
+      }))
   }, [templateList])
+
+  const templateCategoryTotal = templateList.length
 
   const filteredTemplates = React.useMemo(() => {
     const query = templateSearchQuery.trim().toLowerCase()
@@ -63,6 +73,8 @@ export function useOutputTemplates() {
         template.nameEn,
         template.description,
         template.bestFor,
+        ...(template.features || []),
+        ...(template.outputTargets || []),
         template.mode,
         template.scenario,
       ].join(" ").toLowerCase()
@@ -70,6 +82,15 @@ export function useOutputTemplates() {
       return query.split(/\s+/).filter(Boolean).every((token) => haystack.includes(token))
     })
   }, [templateList, selectedCategory, templateSearchQuery])
+
+  const groupedFilteredTemplates = React.useMemo(() => {
+    return templateCategories
+      .map((category) => ({
+        ...category,
+        templates: filteredTemplates.filter((template) => template.mode === category.id),
+      }))
+      .filter((category) => category.templates.length > 0)
+  }, [filteredTemplates, templateCategories])
 
   const hoveredTemplate = React.useMemo(() => {
     if (!hoveredTemplateId) return null
@@ -139,10 +160,15 @@ export function useOutputTemplates() {
 
   // 监听点击外部关闭模板选择器
   const templatePickerRef = React.useRef<HTMLDivElement | null>(null)
+  const templatePickerPopupRef = React.useRef<HTMLDivElement | null>(null)
 
   React.useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (templatePickerRef.current && !templatePickerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node
+      const clickedTrigger = templatePickerRef.current?.contains(target)
+      const clickedPopup = templatePickerPopupRef.current?.contains(target)
+
+      if (!clickedTrigger && !clickedPopup) {
         if (hoverTimerRef.current) {
           clearTimeout(hoverTimerRef.current)
           hoverTimerRef.current = null
@@ -209,7 +235,9 @@ export function useOutputTemplates() {
     templatePreviewPosition,
     setTemplatePreviewPosition,
     templateCategories,
+    templateCategoryTotal,
     filteredTemplates,
+    groupedFilteredTemplates,
     hoveredTemplate,
     activeTemplatePreview,
     templatePreviewHtml,
@@ -218,5 +246,6 @@ export function useOutputTemplates() {
     handleSelectTemplate,
     handleTemplateHover,
     templatePickerRef,
+    templatePickerPopupRef,
   }
 }

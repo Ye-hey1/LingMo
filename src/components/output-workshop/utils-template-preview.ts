@@ -4,7 +4,7 @@ import { buildEditorialArticle, buildKamiParchment, buildBrutalistStyle, buildGu
 import { normalizeOutputWorkshopHtml } from "@/lib/output-workshop/html-normalizer"
 import { buildWechatArticle, buildWechatPreviewMarkdown } from "@/lib/output-workshop/wechat-builder"
 import { isWechatStyleId } from "@/lib/output-workshop/wechat-styles"
-import { buildMokaTemplatePreviewHtml, isMokaTemplateId } from "@/lib/output-workshop/moka"
+import { buildSocialSeriesTemplatePreview } from "./social-preview"
 
 const WORKSHOP_SAMPLE_SECTIONS: ExtractedSection[] = [
   {
@@ -42,14 +42,10 @@ export function buildTemplatePreviewHtml(template: OutputTemplate): string {
       title: template.name,
       subtitle: template.description,
       markdown: buildWechatPreviewMarkdown(template.name),
-      sourceLabel: "公众号模板示例",
+      sourceLabel: "一键排版模板示例",
       generatedAt: "Preview",
     })
     return makeStaticTemplatePreview(normalizeOutputWorkshopHtml(html))
-  }
-
-  if (isMokaTemplateId(template.id)) {
-    return makeStaticTemplatePreview(normalizeOutputWorkshopHtml(buildMokaTemplatePreviewHtml(template.id)))
   }
 
   let html: string
@@ -90,6 +86,23 @@ export function buildTemplatePreviewHtml(template: OutputTemplate): string {
       break
     case "social-waterfall":
       html = buildWaterfallStyle(options)
+      break
+    case "social-editorial":
+    case "social-geek-report":
+    case "social-consulting-report":
+    case "social-clean-review":
+    case "social-terminal":
+    case "social-story-field":
+    case "social-dot-matrix":
+    case "social-redbook-sketch":
+    case "social-redbook-playful":
+    case "social-redbook-brutal":
+    case "social-redbook-botanical":
+    case "social-redbook-professional":
+    case "social-redbook-retro":
+    case "social-redbook-terminal":
+    case "social-redbook-clean":
+      html = buildSocialSeriesTemplatePreview(template)
       break
     case "visual-bento":
       html = buildBentoStyle(options)
@@ -268,7 +281,7 @@ function getCreativePreviewConfig(templateId: string): CreativePreviewConfig {
           { title: "精确画布", body: "明确安全区、标题层级、图例、来源和脚注。" },
           { title: "真实数据", body: "有数据就用真实数据，无数据就做结构图、流程图或概念地图。" },
           { title: "矢量友好", bullets: ["高对比", "少装饰", "SVG 用于图表/连线", "可整页导出"] },
-          { title: "卡片导出", body: "声明关键选择器，方便输出工坊智能卡片导出。" },
+          { title: "卡片导出", body: "声明关键选择器，方便智能排版卡片导出。" },
         ],
         ruleTitle: "交付物",
         ruleBody: "印刷级信息图 HTML，可走 PDF、PNG 或 SVG 友好导出。",
@@ -594,7 +607,7 @@ function buildCreativeSeriesTemplatePreview(template: OutputTemplate): string {
 <body>
   <article class="creative-series-shell">
     <header class="topbar">
-      <span class="brand">Creative Output Lab</span>
+      <span class="brand">LingMo 智能排版</span>
       <span>content-driven HTML artifact</span>
     </header>
     <main class="stage">
@@ -694,7 +707,7 @@ function buildFallbackTemplatePreview(template: OutputTemplate): string {
         <div class="card"><b>工作流</b><p>选模板后直接编辑内容并生成，无需切换面板。</p></div>
       </section>
     </main>
-    <footer><span>LingMo Workshop Preview</span><span>${template.nameEn}</span></footer>
+    <footer><span>LingMo 智能排版预览</span><span>${template.nameEn}</span></footer>
   </div>
 </body>
 </html>`

@@ -1,10 +1,11 @@
 /**
- * LingMo 输出工坊物理导出与格式转换工具
+ * LingMo 智能排版物理导出与格式转换工具
  * 借鉴并优化自 html-anything 的导出系统，适配 Tauri 桌面端与 Web 浏览器双模式运行环境
  */
 
 import { domToBlob, waitUntilLoad } from "modern-screenshot"
 import juice from "juice"
+import { escapeHtml } from "./shared/escape"
 
 // ---------------------------------------------------------------------------
 // 1. 类型定义与结构体
@@ -725,12 +726,7 @@ export async function exportDeckPptx(
 /**
  * 物理打印并导出为矢量 PDF 文档（通过浏览器打印机制另存为 PDF）
  */
-export function exportDeckPrint(slides: DeckSlide[], title = "lingmo-deck"): void {
-  if (slides.length === 0) throw new Error("没有可供导出的幻灯片")
-
-  const w = window.open("", "_blank")
-  if (!w) throw new Error("新视窗弹窗被拦截，请允许允许 LingMo 打开新弹窗以打印/导出 PDF")
-
+function buildDeckPrintDocument(slides: DeckSlide[], title: string): string {
   const sectionsHtml = slides
     .map((s) => {
       const bodyMatch = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(s.html)
@@ -742,12 +738,11 @@ export function exportDeckPrint(slides: DeckSlide[], title = "lingmo-deck"): voi
   const headMatch = /<head[^>]*>([\s\S]*?)<\/head>/i.exec(slides[0].html)
   const head = headMatch ? headMatch[1] : ""
 
-  w.document.open()
-  w.document.write(`<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8" />
-<title>${title}</title>
+<title>${escapeHtml(title)}</title>
 ${head}
 <style>
   @page { size: 1920px 1080px; margin: 0; }
@@ -768,18 +763,68 @@ ${head}
 </head>
 <body>
 ${sectionsHtml}
-<script>
-  function ready(cb) {
-    if (document.readyState === 'complete') return cb();
-    window.addEventListener('load', cb, { once: true });
-  }
-  ready(function () {
-    setTimeout(function () { window.focus(); window.print(); }, 800);
-  });
-</script>
 </body>
-</html>`)
-  w.document.close()
+</html>`
+}
+
+export function exportDeckPrint(slides: DeckSlide[], title = "lingmo-deck"): void {
+  if (slides.length === 0) throw new Error("没有可供导出的幻灯片")
+
+  if (typeof document === "undefined") {
+    throw new Error("当前环境不支持浏览器打印导出")
+  }
+
+  const iframe = document.createElement("iframe")
+  iframe.title = "LingMo PDF print"
+  iframe.style.position = "fixed"
+  iframe.style.right = "0"
+  iframe.style.bottom = "0"
+  iframe.style.width = "1px"
+  iframe.style.height = "1px"
+  iframe.style.border = "0"
+  iframe.style.opacity = "0"
+  iframe.style.pointerEvents = "none"
+
+  let cleanupTimer: number | null = null
+  const cleanup = () => {
+    if (cleanupTimer) {
+      window.clearTimeout(cleanupTimer)
+      cleanupTimer = null
+    }
+    iframe.remove()
+  }
+
+  document.body.appendChild(iframe)
+
+  const printDocument = iframe.contentDocument
+  const printWindow = iframe.contentWindow
+  if (!printDocument || !printWindow) {
+    cleanup()
+    throw new Error("打印视图初始化失败")
+  }
+
+  printDocument.open()
+  printDocument.write(buildDeckPrintDocument(slides, title))
+  printDocument.close()
+
+  let printed = false
+  const triggerPrint = () => {
+    if (printed) return
+    printed = true
+    printWindow.addEventListener("afterprint", cleanup, { once: true })
+    cleanupTimer = window.setTimeout(cleanup, 60000)
+    window.setTimeout(() => {
+      printWindow.focus()
+      printWindow.print()
+    }, 250)
+  }
+
+  if (printDocument.readyState === "complete") {
+    triggerPrint()
+  } else {
+    iframe.addEventListener("load", triggerPrint, { once: true })
+    window.setTimeout(triggerPrint, 800)
+  }
 }
 
 export function downloadTextFile(

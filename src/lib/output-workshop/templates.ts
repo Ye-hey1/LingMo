@@ -1,12 +1,13 @@
 /**
- * 输出工坊模板系统
+ * 智能排版模板系统
  * 参考 html-anything 的 SKILL.md 模板架构，为 LingMo 笔记场景优化
  */
 
 import { listInstalledTemplates } from './market'
+import type { DesignProfileId } from './design-profiles'
 import type { ExportBlueprint } from './smart-card-export'
-import { WECHAT_STYLES } from './wechat-styles'
-import { MOKA_OUTPUT_TEMPLATES } from './moka/templates'
+import { WECHAT_STYLES, type WechatStyleId } from './wechat-styles'
+export { isLocalWechatOutputTemplate } from './template-routing'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -14,8 +15,7 @@ import { MOKA_OUTPUT_TEMPLATES } from './moka/templates'
 
 export type OutputMode =
   | 'social'       // 社交传播
-  | 'moka'         // Moka 卡片模式
-  | 'wechat'       // 公众号排版
+  | 'wechat'       // 一键排版
   | 'infographic'  // 可视化展示
   | 'deck'         // 演示汇报
   | 'article'      // 专业阅读
@@ -42,12 +42,20 @@ export interface OutputTemplate {
   outputHint: string
   /** 推荐用途 */
   bestFor: string
-  /** 模板能力标签：用于输出工坊模板库展示，兼容 open-design 的 artifact metadata 思路 */
+  /** 模板能力标签：用于智能排版模板库展示，兼容 open-design 的 artifact metadata 思路 */
   features?: string[]
   /** 支持/推荐的输出目标 */
   outputTargets?: string[]
   /** 预览视觉调性 */
   previewTone?: string
+  /** 模板库预览主题：色彩/字体/母题/标语，驱动 buildSocialSeriesTemplatePreview */
+  previewTheme?: TemplatePreviewTheme
+  /** 推荐的设计 profile，用于创意直绘提示词补充 */
+  designProfileId?: DesignProfileId
+  /** 推荐生成工作流，用于动态模板或 open-design 清单提示 */
+  pipelineHint?: string[]
+  /** 模板追加质量规则 */
+  qualityRules?: string[]
   /** 推荐尺寸预设 */
   sizePresets?: string[]
   /** 是否推荐 */
@@ -56,6 +64,44 @@ export interface OutputTemplate {
   skillPrompt?: string
   /** 智能卡片导出蓝图 */
   exportBlueprint?: ExportBlueprint
+}
+
+export interface TemplatePreviewTheme {
+  /** 卡片背景色 */
+  bg: string
+  /** 主文字色 */
+  ink: string
+  /** 副文字色 */
+  muted: string
+  /** 强调色 */
+  accent: string
+  /** 次强调色（可选，用于数据/图表） */
+  altAccent?: string
+  /** 标题字体 CSS font-family 值 */
+  fontTitle: string
+  /** 正文字体 CSS font-family 值 */
+  fontBody: string
+  /** 等宽字体（可选） */
+  fontMono?: string
+  /** 母题：控制预览卡装饰元素 */
+  motif:
+    | 'editorial'        // 双栏衬线 + 发丝线 + 刊号
+    | 'terminal-dark'    // 纯黑 + 荧光绿 + ASCII 边框
+    | 'consulting'       // 海军蓝 + 金 + 矩阵图
+    | 'review-score'     // 巨型评分 + 红绿结论
+    | 'terminal-warm'    // 暖纸 + 打字机 + $ 提示符
+    | 'storyboard'       // 石色 + 罗马数字 + 分镜格
+    | 'dot-matrix'       // 点阵网格 + 信号波形
+    | 'sketch-note'      // 纸张网格 + 手写批注
+    | 'playful-geometric'// Memphis 几何贴纸
+    | 'neo-brutal'       // 粗黑边框 + 硬阴影
+    | 'botanical'        // 叶脉线条 + 温和绿
+    | 'retro-print'      // 旧纸栏头 + 复古印刷
+    | 'clean-native'     // 原生简约卡片
+  /** 一句话视觉定位（显示在预览卡顶部） */
+  tagline: string
+  /** 角标编号，如 "ISSUE 042" / "SIG_01" / "VOL.I" */
+  cornerLabel?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -76,13 +122,49 @@ const SHARED_DESIGN_CONSTRAINTS = `
 `
 
 const WECHAT_DESIGN_CONSTRAINTS = `
-## 公众号排版约束
+## 一键排版约束
 
 1. **保持 Markdown 结构** — 不重新编造内容，不强行拆卡片，优先保留用户原有标题、段落、表格、列表、引用和代码块
 2. **微信编辑器友好** — 输出以内联样式为主，避免依赖外部脚本、复杂动画或平台不稳定 CSS
 3. **正文阅读优先** — 字号、行高、段落间距以手机阅读为准，避免网页化装饰遮蔽正文
 4. **图文复制优先** — 生成后推荐使用“导出 / 图文”复制到公众号后台
 `
+
+const WECHAT_TEMPLATE_ICONS: Record<WechatStyleId, string> = {
+  "wechat-default": "文",
+  "latepost-depth": "晚",
+  "wechat-anthropic": "C",
+  "wechat-tech": "码",
+  "wechat-elegant": "雅",
+  "wechat-deepread": "读",
+  "wechat-ft": "FT",
+  "wechat-nyt": "NY",
+  "wechat-jonyive": "J",
+  "wechat-medium": "M",
+  "wechat-apple": "⌘",
+  "guardian": "G",
+  "nikkei": "日",
+  "warm-docs": "暖",
+  "lemonde": "L",
+}
+
+const WECHAT_TEMPLATE_FEATURES: Record<WechatStyleId, string[]> = {
+  "wechat-default": ["通用图文", "一键排版", "图文复制"],
+  "latepost-depth": ["晚点深度", "一键排版", "商业观察"],
+  "wechat-anthropic": ["温暖文档", "一键排版", "AI 产品"],
+  "wechat-tech": ["技术代码", "一键排版", "代码友好"],
+  "wechat-elegant": ["优雅长文", "一键排版", "人文随笔"],
+  "wechat-deepread": ["深度阅读", "一键排版", "低干扰"],
+  "wechat-ft": ["财经评论", "一键排版", "商业分析"],
+  "wechat-nyt": ["新闻叙事", "一键排版", "专题报道"],
+  "wechat-jonyive": ["极简留白", "一键排版", "设计叙事"],
+  "wechat-medium": ["博客阅读", "一键排版", "观点文章"],
+  "wechat-apple": ["Apple 简洁", "一键排版", "产品发布"],
+  guardian: ["卫报评论", "一键排版", "公共议题"],
+  nikkei: ["日经商业", "一键排版", "产业观察"],
+  "warm-docs": ["暖色文档", "一键排版", "知识整理"],
+  lemonde: ["法式社论", "一键排版", "国际观察"],
+}
 
 const WECHAT_OUTPUT_TEMPLATES: OutputTemplate[] = WECHAT_STYLES.map((style) => ({
   id: style.id,
@@ -91,21 +173,336 @@ const WECHAT_OUTPUT_TEMPLATES: OutputTemplate[] = WECHAT_STYLES.map((style) => (
   mode: 'wechat',
   scenario: 'sharing',
   description: style.description,
-  icon: '🟩',
+  icon: WECHAT_TEMPLATE_ICONS[style.id],
   designConstraints: WECHAT_DESIGN_CONSTRAINTS,
   outputHint: '生成可直接复制到微信公众号编辑器的内联样式图文 HTML',
   bestFor: style.bestFor,
   recommended: style.recommended,
-  features: ['公众号', 'Markdown', '图文复制'],
+  features: WECHAT_TEMPLATE_FEATURES[style.id],
   outputTargets: ['图文'],
   previewTone: 'wechat-article',
   sizePresets: ['auto'],
 }))
 
+const REDBOOK_CARD_SELECTORS = ['.cover-container', '.card-container', '[data-redbook-card]', '[data-export-card]']
+
+const AUTO_REDBOOK_BASE_PROMPT = `
+## Auto-Redbook 社交组图规范
+
+能力来源：参考 comeonzhj/Auto-Redbook-Skills 的 8 套主题皮肤、4 种分页模式和统一卡片结构，并迁移为 LingMo 智能排版的社交传播模板。只生成可导出的 HTML 卡片，不生成账号登录、Cookie、托管运营或自动发布能力。
+
+### 统一卡片结构
+- 默认输出 1080×1440 的 3:4 小红书/社交传播组图，一组包含封面 + 多张正文卡。
+- 每张卡必须使用可被智能卡片导出识别的结构：\`.cover-container\` 或 \`.card-container\`，并补充 \`data-redbook-card\`。
+- 推荐结构：
+  \`<section class="card-container" data-redbook-card="1"><div class="card-inner"><div class="card-content"><div class="card-content-scale">...</div></div></div></section>\`
+- 封面可用 \`.cover-container\`，正文卡用 \`.card-container\`；所有卡片保持同一宽高比例、安全边距和主题语言。
+- \`.card-content\` 是固定视窗内容区，\`.card-content-scale\` 是自动适配层，便于导出时使用 auto-fit 整体缩放。
+
+### 分页与内容策略
+- 内容短且需要严格控制页数：可在 HTML 中保留 \`<hr data-card-break>\` 或独立 \`---\` 分隔，适配 separator。
+- 内容长短不稳定：按标题、段落和列表语义拆为多张卡，适配 auto-split。
+- 单张卡内容接近溢出时，优先压缩层级、删冗余装饰、拆下一页；不要把正文缩到不可读。
+- 每张卡只承载一个清晰观点：标题、解释、证据/步骤/清单、页码四层即可。
+- 需要标签时用真实主题词，不要批量生成平台运营话术。
+
+### 输出形态禁令
+- 不要生成普通长网页、桌面报告、全屏 dashboard 或单个 .container 平铺页面。
+- 不要只生成一个 hero 后面接四个信息块；必须是多张独立 3:4 画板。
+- 不要把所有章节放在一个 card 内；长内容必须拆为多个 .card-container。
+- 不要把卡片尺寸写成 max-width: 440px 的手机网页容器；导出源画板必须是 1080px × 1440px。
+`
+
+const AUTO_REDBOOK_EXPORT_BLUEPRINT: ExportBlueprint = {
+  cardSelectors: REDBOOK_CARD_SELECTORS,
+  defaultRatio: '3:4',
+  cardGap: 24,
+  pagingMode: 'auto-fit',
+  autoSplitMaxChars: 760,
+  dynamicMaxHeight: 2160,
+}
+
+const AUTO_REDBOOK_THEMES: Array<{
+  id: string
+  name: string
+  nameEn: string
+  description: string
+  icon: string
+  bestFor: string
+  themeName: string
+  themePrompt: string
+  recommended?: boolean
+  previewTheme: TemplatePreviewTheme
+  pagingMode?: ExportBlueprint['pagingMode']
+  autoSplitMaxChars?: number
+}> = [
+  {
+    id: 'social-redbook-sketch',
+    name: '手绘笔记组图',
+    nameEn: 'Redbook Sketch',
+    description: '纸张网格、铅笔线条、红蓝标记笔和便签感批注，适合把知识点整理成亲手画过的社交卡片。',
+    icon: '笔',
+    bestFor: '学习笔记、方法清单、课程总结、轻松教程',
+    themeName: 'sketch',
+    recommended: true,
+    themePrompt: `
+### 主题皮肤：Sketch 手绘素描
+- 背景使用米白纸张 #fffef9，可叠加浅灰网格线，形成手账/草稿纸质感。
+- 主文字为炭笔黑 #333，强调用红色标记笔 #e74c3c、蓝色圆珠笔 #3498db、黄色荧光笔 #f1c40f。
+- 标题可用波浪下划线、虚线分隔、手写批注式标签，但字体仍需清晰可读。
+- 引用块像便签纸，可有轻微旋转；正文保持整齐，不要把手绘感做成凌乱感。
+`,
+    previewTheme: {
+      bg: '#fffef9',
+      ink: '#333333',
+      muted: '#777777',
+      accent: '#e74c3c',
+      altAccent: '#3498db',
+      fontTitle: '"Comic Sans MS", "LXGW WenKai", "PingFang SC", sans-serif',
+      fontBody: '"PingFang SC", "Noto Sans SC", sans-serif',
+      fontMono: '"Courier New", monospace',
+      motif: 'sketch-note',
+      tagline: '纸张网格与手写批注',
+      cornerLabel: 'SKETCH 01',
+    },
+  },
+  {
+    id: 'social-redbook-playful',
+    name: '几何贴纸组图',
+    nameEn: 'Playful Geometric',
+    description: 'Memphis 几何、奶油底、紫粉黄绿高饱和贴纸块，适合更活泼的教程、清单和趋势解读。',
+    icon: '几',
+    bestFor: '轻教程、清单内容、趋势观察、生活方式分享',
+    themeName: 'playful-geometric',
+    themePrompt: `
+### 主题皮肤：Playful Geometric 活泼几何
+- 背景使用温暖奶油白 #fffdf5，可加入点阵或几何小元素。
+- 主色 #8b5cf6，辅助 #f472b6、#fbbf24、#34d399；用于标签、标题块、重点贴纸。
+- 标题可用粗边框、硬阴影、非对称圆角和贴纸效果，但页面网格必须稳定。
+- 适合短句、清单、步骤；避免整页堆满装饰导致导出时文字拥挤。
+`,
+    previewTheme: {
+      bg: '#fffdf5',
+      ink: '#1e293b',
+      muted: '#64748b',
+      accent: '#8b5cf6',
+      altAccent: '#f472b6',
+      fontTitle: '"Inter", "PingFang SC", sans-serif',
+      fontBody: '"PingFang SC", "Noto Sans SC", sans-serif',
+      fontMono: '"SFMono", "Menlo", monospace',
+      motif: 'playful-geometric',
+      tagline: 'Memphis 贴纸节奏',
+      cornerLabel: 'POP 02',
+    },
+  },
+  {
+    id: 'social-redbook-brutal',
+    name: '粗野醒目组图',
+    nameEn: 'Neo Brutalism',
+    description: '厚黑边框、硬阴影、荧光黄/红/青色块，适合强观点、避坑指南和结论先行内容。',
+    icon: '粗',
+    bestFor: '强观点、避坑指南、产品吐槽、结论型传播',
+    themeName: 'neo-brutalism',
+    themePrompt: `
+### 主题皮肤：Neo-Brutalism 新粗野主义
+- 奶油白底 #fffdf5，粗黑边框、硬阴影和高饱和色块构成视觉冲击。
+- 强调色可选 #ff4757、#feca57、#00d2d3、#a29bfe，但每张卡控制在 2-3 个主色。
+- 标题重字重、直角块面、黑色描边；数据/警示/结论可做成醒目标签。
+- 不用柔和渐变、玻璃拟态或大圆角；画面要直接、响亮、可截图传播。
+`,
+    previewTheme: {
+      bg: '#fffdf5',
+      ink: '#000000',
+      muted: '#3a3a3a',
+      accent: '#ff4757',
+      altAccent: '#feca57',
+      fontTitle: '"Arial Black", "PingFang SC", sans-serif',
+      fontBody: '"PingFang SC", "Noto Sans SC", sans-serif',
+      fontMono: '"SFMono", "Menlo", monospace',
+      motif: 'neo-brutal',
+      tagline: 'RAW · LOUD · DIRECT',
+      cornerLabel: 'LOUD 03',
+    },
+  },
+  {
+    id: 'social-redbook-botanical',
+    name: '植物园组图',
+    nameEn: 'Botanical',
+    description: '淡绿白底、森林绿、木质棕与舒缓行距，适合知识整理、疗愈内容和自然生活方式。',
+    icon: '叶',
+    bestFor: '自然生活、疗愈笔记、阅读摘记、温和知识分享',
+    themeName: 'botanical',
+    themePrompt: `
+### 主题皮肤：Botanical 植物园
+- 背景使用淡绿白 #f9faf6，文字为深绿灰 #2d3b36。
+- 主色森林绿 #4a7c59，辅助淡绿 #8fbc8f、木质棕 #8b7355、暖米白 #e8e4dc。
+- 标题用细线、叶脉感分隔、温和留白；正文行高更舒展，适合慢阅读。
+- 可使用极简叶形/枝条线条作为分区提示，但不要大量插画化。
+`,
+    previewTheme: {
+      bg: '#f9faf6',
+      ink: '#2d3b36',
+      muted: '#6f8177',
+      accent: '#4a7c59',
+      altAccent: '#8b7355',
+      fontTitle: '"Noto Serif SC", "Songti SC", serif',
+      fontBody: '"PingFang SC", "Noto Sans SC", sans-serif',
+      fontMono: '"SFMono", "Menlo", monospace',
+      motif: 'botanical',
+      tagline: '自然柔和的知识温度',
+      cornerLabel: 'BOTANY 04',
+    },
+  },
+  {
+    id: 'social-redbook-professional',
+    name: '专业简报组图',
+    nameEn: 'Professional',
+    description: '白底、专业蓝、三线表和报告式层级，适合商业分析、产品总结、研究摘要的社交化输出。',
+    icon: '报',
+    bestFor: '商业分析、研究摘要、产品复盘、专业干货',
+    themeName: 'professional',
+    themePrompt: `
+### 主题皮肤：Professional 专业商务
+- 纯白底 #ffffff，主文字 #1a202c，强调蓝 #2563eb，浅蓝底 #dbeafe。
+- 使用简洁页眉、章节编号、关键结论框、三线表或小型数据图，不做花哨装饰。
+- 标题底部可用蓝色细线；脚注、来源、页码必须清晰。
+- 适合高信任内容：不要编造数据来源，没有数据时用结构图或要点矩阵。
+`,
+    previewTheme: {
+      bg: '#ffffff',
+      ink: '#1a202c',
+      muted: '#64748b',
+      accent: '#2563eb',
+      altAccent: '#93c5fd',
+      fontTitle: '"Inter", "PingFang SC", sans-serif',
+      fontBody: '"PingFang SC", "Noto Sans SC", sans-serif',
+      fontMono: '"SFMono", "Menlo", monospace',
+      motif: 'consulting',
+      tagline: '专业简报的社交化表达',
+      cornerLabel: 'BRIEF 05',
+    },
+  },
+  {
+    id: 'social-redbook-retro',
+    name: '复古印刷组图',
+    nameEn: 'Retro',
+    description: '米黄纸、棕褐文字、复古橙与双线标题，适合怀旧故事、品牌旧事和读书札记。',
+    icon: '旧',
+    bestFor: '怀旧叙事、品牌故事、读书札记、文化随笔',
+    themeName: 'retro',
+    themePrompt: `
+### 主题皮肤：Retro 复古怀旧
+- 背景使用复古米黄 #fdf6e3，文字为棕褐 #5c4033。
+- 强调色 #d35400，辅助 #f39c12、#8b4513、#f5deb3；可用双线、虚线、邮戳式标签。
+- 标题适合双线下划、旧报纸栏头、复古编号；正文有温暖纸感。
+- 保持怀旧而不脏乱，避免咖啡色糊成一片，重点色只用于标题和标签。
+`,
+    previewTheme: {
+      bg: '#fdf6e3',
+      ink: '#5c4033',
+      muted: '#8b7355',
+      accent: '#d35400',
+      altAccent: '#f39c12',
+      fontTitle: '"Georgia", "Songti SC", serif',
+      fontBody: '"PingFang SC", "Noto Sans SC", sans-serif',
+      fontMono: '"Courier New", monospace',
+      motif: 'retro-print',
+      tagline: '温暖旧纸与复古栏头',
+      cornerLabel: 'RETRO 06',
+    },
+  },
+  {
+    id: 'social-redbook-terminal',
+    name: '黑屏终端组图',
+    nameEn: 'Terminal',
+    description: '深黑终端、等宽字、绿色命令提示符和代码块，适合技术教程、工具测评和开发者工作流。',
+    icon: '⌘',
+    bestFor: '技术教程、开源项目、命令行工作流、AI 工具测评',
+    themeName: 'terminal',
+    recommended: true,
+    themePrompt: `
+### 主题皮肤：Terminal 黑屏终端
+- 背景 #0d1117，主文字 #c9d1d9，终端绿 #39d353，链接蓝 #58a6ff，高亮紫 #a371f7。
+- 使用等宽字体、命令行提示符、状态栏、代码片段、日志输出和 ASCII 分隔线。
+- 标题可以带 \`#\` / \`##\` 前缀，清单可像命令输出；每张卡保留清楚的技术步骤。
+- 不使用暖纸终端风，也不使用彩虹霓虹；保持冷静、清晰、可复制教程感。
+`,
+    previewTheme: {
+      bg: '#0d1117',
+      ink: '#c9d1d9',
+      muted: '#8b949e',
+      accent: '#39d353',
+      altAccent: '#58a6ff',
+      fontTitle: '"JetBrains Mono", "SFMono", monospace',
+      fontBody: '"JetBrains Mono", "SFMono", monospace',
+      fontMono: '"JetBrains Mono", "SFMono", monospace',
+      motif: 'terminal-dark',
+      tagline: '命令行里的技术卡片',
+      cornerLabel: '$ xhs --render',
+    },
+  },
+  {
+    id: 'social-redbook-clean',
+    name: '简约原生组图',
+    nameEn: 'Clean Native',
+    description: '白底、靛蓝紫、圆角引用和干净层级，保留小红书原生友好的现代简约阅读感。',
+    icon: '简',
+    bestFor: '通用分享、知识摘要、观点提炼、轻量长文转卡片',
+    themeName: 'default',
+    themePrompt: `
+### 主题皮肤：Default 简约原生
+- 白底 #ffffff，文字 #475569 / #1e293b，强调靛蓝紫 #6366f1 和紫罗兰 #8b5cf6。
+- 标题、引用、代码和标签保持现代圆角，但圆角克制，投影轻微。
+- 适合多数内容的通用社交组图：清楚、干净、有一点平台友好气质。
+- 避免全屏大渐变和廉价装饰，优先保证信息层级和导出稳定。
+`,
+    previewTheme: {
+      bg: '#ffffff',
+      ink: '#1e293b',
+      muted: '#64748b',
+      accent: '#6366f1',
+      altAccent: '#8b5cf6',
+      fontTitle: '"Inter", "PingFang SC", sans-serif',
+      fontBody: '"PingFang SC", "Noto Sans SC", sans-serif',
+      fontMono: '"SFMono", "Menlo", monospace',
+      motif: 'clean-native',
+      tagline: '干净稳定的社交组图',
+      cornerLabel: 'CARD 08',
+    },
+    pagingMode: 'auto-split',
+    autoSplitMaxChars: 700,
+  },
+]
+
+const AUTO_REDBOOK_SOCIAL_TEMPLATES: OutputTemplate[] = AUTO_REDBOOK_THEMES.map((theme) => ({
+  id: theme.id,
+  name: theme.name,
+  nameEn: theme.nameEn,
+  mode: 'social',
+  scenario: 'sharing',
+  description: theme.description,
+  icon: theme.icon,
+  designConstraints: SHARED_DESIGN_CONSTRAINTS + AUTO_REDBOOK_BASE_PROMPT + theme.themePrompt,
+  skillPrompt: AUTO_REDBOOK_BASE_PROMPT + theme.themePrompt,
+  outputHint: `生成 ${theme.themeName} 主题的 3:4 社交传播组图 HTML，使用 Auto-Redbook 统一卡片结构并支持智能卡片导出`,
+  bestFor: theme.bestFor,
+  recommended: theme.recommended,
+  features: ['小红书组图', '3:4', theme.pagingMode === 'auto-split' ? '自动拆分' : '自动适配'],
+  outputTargets: ['PNG 组图', 'ZIP'],
+  previewTone: `auto-redbook-${theme.themeName}`,
+  previewTheme: theme.previewTheme,
+  sizePresets: ['3:4', '1:1'],
+  exportBlueprint: {
+    ...AUTO_REDBOOK_EXPORT_BLUEPRINT,
+    pagingMode: theme.pagingMode ?? AUTO_REDBOOK_EXPORT_BLUEPRINT.pagingMode,
+    autoSplitMaxChars: theme.autoSplitMaxChars ?? AUTO_REDBOOK_EXPORT_BLUEPRINT.autoSplitMaxChars,
+  },
+}))
+
 const CREATIVE_SERIES_BASE_PROMPT = `
 ## 创意设计集成规范
 
-能力来源：本模板提炼自本地创意设计工作流与 workflow、design-context、design-styles、content-guidelines、slide-decks、tweaks-system、animations、video-export、verification、critique-guide 等规范。输出工坊直接生成浏览器可预览的 HTML 源产物；PPTX、MP4、GIF、BGM 等脚本链路属于本地创意导出能力，必须在 HTML 注释中写清可执行导出配方，不能在页面可见区域假装已经导出。
+能力来源：本模板提炼自本地创意设计工作流与 workflow、design-context、design-styles、content-guidelines、slide-decks、tweaks-system、animations、video-export、verification、critique-guide 等规范。智能排版直接生成浏览器可预览的 HTML 源产物；PPTX、MP4、GIF、BGM 等脚本链路属于本地创意导出能力，必须在 HTML 注释中写清可执行导出配方，不能在页面可见区域假装已经导出。
 
 ### 核心理念
 - HTML 是工具，不是媒介。根据输入材料选择专家身份：视觉编辑、幻灯片设计师、信息图设计师、交互原型师或 motion designer。
@@ -218,7 +615,7 @@ const CREATIVE_SERIES_TEMPLATES: OutputTemplate[] = [
 - 输出单文件 HTML deck，16:9 舞台居中显示，键盘左右键翻页，页码、speaker notes、print/PDF 友好。
 - 每页一个记忆点，正文最小 24px，演讲者 10 米外可读；deck 不要像网页长滚动。
 - 如果输入或用户指令提到 PPTX/可编辑，HTML 必须从第一行按 html2pptx 友好约束写：body 固定 16:9，文字放 h/p，文字元素自身不加 background/border/shadow，不使用 web component、复杂 SVG、CSS gradient。
-- 在 HTML 顶部注释写清：当前输出工坊可直接预览 HTML，并可走现有 PPTX/PDF 导出；真文本框可编辑 PPTX 需本地 scripts/export_deck_pptx.mjs 链路。
+- 在 HTML 顶部注释写清：当前智能排版可直接预览 HTML，并可走现有 PPTX/PDF 导出；真文本框可编辑 PPTX 需本地 scripts/export_deck_pptx.mjs 链路。
 `,
     outputHint: '生成浏览器可演讲 HTML deck，并保留 PPTX/PDF 下游导出提示',
     bestFor: '演讲、课程、项目汇报、发布会 deck、可导 PPTX/PDF 的源文件',
@@ -232,7 +629,7 @@ const CREATIVE_SERIES_TEMPLATES: OutputTemplate[] = [
 - 输出单文件 HTML deck，16:9 舞台居中显示，键盘左右键翻页，页码、speaker notes、print/PDF 友好。
 - 每页一个记忆点，正文最小 24px，演讲者 10 米外可读；deck 不要像网页长滚动。
 - 如果输入或用户指令提到 PPTX/可编辑，HTML 必须从第一行按 html2pptx 友好约束写：body 固定 16:9，文字放 h/p，文字元素自身不加 background/border/shadow，不使用 web component、复杂 SVG、CSS gradient。
-- 在 HTML 顶部注释写清：当前输出工坊可直接预览 HTML，并可走现有 PPTX/PDF 导出；真文本框可编辑 PPTX 需本地 scripts/export_deck_pptx.mjs 链路。
+- 在 HTML 顶部注释写清：当前智能排版可直接预览 HTML，并可走现有 PPTX/PDF 导出；真文本框可编辑 PPTX 需本地 scripts/export_deck_pptx.mjs 链路。
 `,
   },
   {
@@ -248,7 +645,7 @@ const CREATIVE_SERIES_TEMPLATES: OutputTemplate[] = [
 - 输出单文件 HTML animation stage，包含 play/pause、scrubber、当前时间、总时长，并用 JS timeline 数据驱动场景。
 - 用 Stage/Sprite 思维组织：scene、sprite、start/end、interpolate、easing。不要做成几张 PPT 淡入淡出。
 - 默认画布 1920x1080，可自适应 letterbox。运动必须有节奏，重点信息逐步揭示，支持 prefers-reduced-motion。
-- 在 HTML 注释中附导出配方：25fps MP4、60fps 插帧、palette 优化 GIF、BGM/SFX cue list。当前输出工坊生成 HTML 源，视频/BGM 需本地 video-export 脚本链路。
+- 在 HTML 注释中附导出配方：25fps MP4、60fps 插帧、palette 优化 GIF、BGM/SFX cue list。当前智能排版生成 HTML 源，视频/BGM 需本地 video-export 脚本链路。
 `,
     outputHint: '生成时间轴动画 HTML 源，并附 MP4/GIF/BGM 下游导出说明',
     bestFor: '概念解释、发布动画、机制演示、社媒视频素材前置设计',
@@ -260,7 +657,7 @@ const CREATIVE_SERIES_TEMPLATES: OutputTemplate[] = [
 - 输出单文件 HTML animation stage，包含 play/pause、scrubber、当前时间、总时长，并用 JS timeline 数据驱动场景。
 - 用 Stage/Sprite 思维组织：scene、sprite、start/end、interpolate、easing。不要做成几张 PPT 淡入淡出。
 - 默认画布 1920x1080，可自适应 letterbox。运动必须有节奏，重点信息逐步揭示，支持 prefers-reduced-motion。
-- 在 HTML 注释中附导出配方：25fps MP4、60fps 插帧、palette 优化 GIF、BGM/SFX cue list。当前输出工坊生成 HTML 源，视频/BGM 需本地 video-export 脚本链路。
+- 在 HTML 注释中附导出配方：25fps MP4、60fps 插帧、palette 优化 GIF、BGM/SFX cue list。当前智能排版生成 HTML 源，视频/BGM 需本地 video-export 脚本链路。
 `,
   },
   {
@@ -304,7 +701,7 @@ const CREATIVE_SERIES_TEMPLATES: OutputTemplate[] = [
 - 输出印刷级信息图 HTML：明确画布、安全区、标题层级、图例、注释、来源、脚注。
 - 若材料包含数据，优先用真实数据做图；不能伪造数字。无数据时做结构图、流程图或概念地图。
 - SVG 只用于真实图表/连线/图例，不用于廉价装饰；可导 PDF/PNG/SVG 时要保持高对比、矢量友好。
-- 页面必须能整页导出，也要声明关键图表选择器，便于输出工坊智能卡片导出。
+- 页面必须能整页导出，也要声明关键图表选择器，便于智能排版卡片导出。
 `,
     outputHint: '生成印刷级信息图 HTML，可走 PDF/PNG/智能卡片导出',
     bestFor: '研究报告、数据故事、流程图、知识地图、品牌图解',
@@ -316,7 +713,7 @@ const CREATIVE_SERIES_TEMPLATES: OutputTemplate[] = [
 - 输出印刷级信息图 HTML：明确画布、安全区、标题层级、图例、注释、来源、脚注。
 - 若材料包含数据，优先用真实数据做图；不能伪造数字。无数据时做结构图、流程图或概念地图。
 - SVG 只用于真实图表/连线/图例，不用于廉价装饰；可导 PDF/PNG/SVG 时要保持高对比、矢量友好。
-- 页面必须能整页导出，也要声明关键图表选择器，便于输出工坊智能卡片导出。
+- 页面必须能整页导出，也要声明关键图表选择器，便于智能排版卡片导出。
 `,
   },
   {
@@ -382,10 +779,10 @@ const CREATIVE_SERIES_TEMPLATES: OutputTemplate[] = [
 
 export const OUTPUT_TEMPLATES: OutputTemplate[] = [
   ...WECHAT_OUTPUT_TEMPLATES,
-  ...MOKA_OUTPUT_TEMPLATES,
   ...CREATIVE_SERIES_TEMPLATES,
 
   // === 一、社交传播类 ===
+  ...AUTO_REDBOOK_SOCIAL_TEMPLATES,
   {
     id: 'social-xiaohongshu',
     name: '粉彩磨砂卡片',
@@ -441,6 +838,756 @@ export const OUTPUT_TEMPLATES: OutputTemplate[] = [
     recommended: true,
     sizePresets: ['3:4', '1:1'],
     exportBlueprint: { cardSelectors: ['.gz-social-card', '.cover-card', '.detail-card'], defaultRatio: '3:4', cardGap: 28 },
+  },
+
+  {
+    id: 'social-editorial',
+    name: '杂志风',
+    nameEn: 'Editorial',
+    mode: 'social',
+    scenario: 'sharing',
+    description: '纸刊仪式感：大号衬线刊头、首字下沉、双栏排版、栏目标签与刊号，像《单读》《T Magazine》的小红书封面',
+    icon: '📰',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+## 视觉灵魂：纸刊的仪式感
+这不是"加个衬线字体"的卡片，而是真正复刻一本设计杂志的版面节奏。读者第一眼应该觉得"这是一本可以翻的刊物"，而不是"一张社交卡片"。
+
+## 自主规划要求（不要套固定结构）
+由你根据内容自主决定每张卡的页面任务（封面/目录/正文对页/引文页/数据栏/结尾），但必须遵守下面的视觉契约。
+
+## 色彩令牌
+- 纸白底 #faf8f3，主墨 #111，副墨 #555，浅墨 #8d8a84
+- 发丝分隔线 #e4e0d7，强调用单一朱红 #c0392b（仅用于栏目标或重点词下划线，不大面积铺色）
+- 禁止渐变、禁止鲜彩、禁止深色块背景
+
+## 字体系统
+- 中文标题：宋体衬线大字（Songti SC / Noto Serif SC / STSong），可使用 60-90px 的刊头级字号
+- 中文正文：PingFang SC / Noto Sans SC
+- 数字/刊号/页码：等宽字（SFMono / Menlo），如 "ISSUE 042 · 2026"
+- 英文刊名：Cormorant / EB Garamond 衬线斜体
+
+## 构图语言
+- 双栏或三栏排版，栏间用 1px 发丝线分隔
+- 首字下沉（drop cap）：正文首字放大 3-4 倍衬线字
+- 栏目标签：左上角 "COLUMN / 栏目名"，右上角页码 "P.04"
+- 引文用大号衬线斜体独立成块，前后留白
+- 刊头：大字号衬线 + 一条粗水平线 + 一条细水平线（双线刊头）
+
+## 页面节奏建议
+- 封面：超大刊头 + 一句副标 + 期号
+- 内页：双栏正文 + 栏目标 + 引文块
+- 数据页：杂志式数据卡，数字用 Georgia 衬线大字
+
+## 避免项（防止风格趋同）
+- 不要用圆角卡片堆叠（那是小红书默认风）
+- 不要用 emoji 作装饰
+- 不要用渐变背景或毛玻璃
+- 不要把标题居中堆叠——杂志是网格的，不是居中的
+- 标题不使用无衬线
+`,
+    skillPrompt: `
+
+## 视觉灵魂：纸刊的仪式感
+这不是"加个衬线字体"的卡片，而是真正复刻一本设计杂志的版面节奏。读者第一眼应该觉得"这是一本可以翻的刊物"，而不是"一张社交卡片"。
+
+## 自主规划要求（不要套固定结构）
+由你根据内容自主决定每张卡的页面任务（封面/目录/正文对页/引文页/数据栏/结尾），但必须遵守下面的视觉契约。
+
+## 色彩令牌
+- 纸白底 #faf8f3，主墨 #111，副墨 #555，浅墨 #8d8a84
+- 发丝分隔线 #e4e0d7，强调用单一朱红 #c0392b（仅用于栏目标或重点词下划线，不大面积铺色）
+- 禁止渐变、禁止鲜彩、禁止深色块背景
+
+## 字体系统
+- 中文标题：宋体衬线大字（Songti SC / Noto Serif SC / STSong），可使用 60-90px 的刊头级字号
+- 中文正文：PingFang SC / Noto Sans SC
+- 数字/刊号/页码：等宽字（SFMono / Menlo），如 "ISSUE 042 · 2026"
+- 英文刊名：Cormorant / EB Garamond 衬线斜体
+
+## 构图语言
+- 双栏或三栏排版，栏间用 1px 发丝线分隔
+- 首字下沉（drop cap）：正文首字放大 3-4 倍衬线字
+- 栏目标签：左上角 "COLUMN / 栏目名"，右上角页码 "P.04"
+- 引文用大号衬线斜体独立成块，前后留白
+- 刊头：大字号衬线 + 一条粗水平线 + 一条细水平线（双线刊头）
+
+## 页面节奏建议
+- 封面：超大刊头 + 一句副标 + 期号
+- 内页：双栏正文 + 栏目标 + 引文块
+- 数据页：杂志式数据卡，数字用 Georgia 衬线大字
+
+## 避免项（防止风格趋同）
+- 不要用圆角卡片堆叠（那是小红书默认风）
+- 不要用 emoji 作装饰
+- 不要用渐变背景或毛玻璃
+- 不要把标题居中堆叠——杂志是网格的，不是居中的
+- 标题不使用无衬线
+`,
+    previewTheme: {
+    bg: '#faf8f3',
+    ink: '#111111',
+    muted: '#8d8a84',
+    accent: '#c0392b',
+    fontTitle: '"Songti SC", "Noto Serif SC", "STSong", serif',
+    fontBody: '"PingFang SC", "Noto Sans SC", sans-serif',
+    fontMono: '"SFMono", "Menlo", monospace',
+    motif: 'editorial',
+    tagline: '纸刊的仪式感',
+    cornerLabel: 'ISSUE 042 · 2026',
+  },
+    outputHint: '生成纸刊仪式感、双栏衬线主导的小红书杂志封面卡组',
+    bestFor: '观点文章封面、深度内容封面、品牌随笔、文化类小红书封面',
+    sizePresets: ['3:4', '1:1'],
+    exportBlueprint: { cardSelectors: ['.xhs-card', '.editorial-card', '[class*="card"]'], defaultRatio: '3:4', cardGap: 24 },
+  },
+  {
+    id: 'social-geek-report',
+    name: '极客风格',
+    nameEn: 'Geek Report',
+    mode: 'social',
+    scenario: 'sharing',
+    description: '终端屏幕的冷峻：纯黑底 + 荧光绿/青等宽字 + ASCII 边框 + 命令行交互，hacker 美学的小红书技术封面',
+    icon: '🛠️',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+## 视觉灵魂：终端屏幕的冷峻
+读者第一眼应该觉得"这是从某个终端 / IDE / 监控面板里截出来的画面"，而不是"一张加了等宽字体的卡片"。整个画面要像 CRT 屏幕或现代代码编辑器：高对比、信息密集、有命令行交互痕迹。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（终端启动屏/命令输出页/代码解析页/对比矩阵页/状态面板/结束页），但必须维持终端式视觉契约。
+
+## 色彩令牌
+- 纯黑或近黑底 #0a0a0a / #000
+- 主文字：荧光绿 #00ff9c 或薄荷青 #7fffd4（择一为主，不混用）
+- 副文字：雾灰 #8ba5ba、暗银 #a8b3bd
+- 警示：琥珀 #f4be64（warning）、朱红 #ff5555（error）、电光蓝 #5fb3f7（info）
+- 行号/注释：暗灰 #4a5560
+- 禁止彩虹色、禁止暖色调、禁止纸感底色
+
+## 字体系统
+- 全局等宽：JetBrains Mono / SF Mono / Consolas / Menlo
+- CJK：等宽中文（Hiragino Sans GB / Sarasa Mono），若无则 PingFang SC 但保持等宽气质
+- 标题用大号等宽 + 全大写英文 + 编号，如 "01_BUILD_LOG"
+
+## 构图语言
+- ASCII 边框：+- Raiders of the Lost Ark 式边框 ─┐ └┘
+- 命令行提示符：$ / > / # 作为段落引导
+- 代码块：语法高亮（关键字/字符串/注释不同色），行号
+- 状态行：底部 status bar 显示分支、时间、CPU 等 mock 数据
+- 标签：[TAG] / {KEY} / <ARG> 方括号语法
+
+## 页面节奏建议
+- 封面：终端启动画面 + 大号 ASCII 标题
+- 内容页：命令输出 + 注解
+- 对比页：左右双终端对比
+- 数据页：监控面板式 KPI 网格
+
+## 避免项
+- 不要用纸感暖底（那是另一个风格）
+- 不要用衬线字体
+- 不要用圆角卡片——终端是直角的
+- 不要堆 emoji
+- 不要让画面"温柔"——极客风是冷的、硬的、高对比的
+`,
+    skillPrompt: `
+
+## 视觉灵魂：终端屏幕的冷峻
+读者第一眼应该觉得"这是从某个终端 / IDE / 监控面板里截出来的画面"，而不是"一张加了等宽字体的卡片"。整个画面要像 CRT 屏幕或现代代码编辑器：高对比、信息密集、有命令行交互痕迹。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（终端启动屏/命令输出页/代码解析页/对比矩阵页/状态面板/结束页），但必须维持终端式视觉契约。
+
+## 色彩令牌
+- 纯黑或近黑底 #0a0a0a / #000
+- 主文字：荧光绿 #00ff9c 或薄荷青 #7fffd4（择一为主，不混用）
+- 副文字：雾灰 #8ba5ba、暗银 #a8b3bd
+- 警示：琥珀 #f4be64（warning）、朱红 #ff5555（error）、电光蓝 #5fb3f7（info）
+- 行号/注释：暗灰 #4a5560
+- 禁止彩虹色、禁止暖色调、禁止纸感底色
+
+## 字体系统
+- 全局等宽：JetBrains Mono / SF Mono / Consolas / Menlo
+- CJK：等宽中文（Hiragino Sans GB / Sarasa Mono），若无则 PingFang SC 但保持等宽气质
+- 标题用大号等宽 + 全大写英文 + 编号，如 "01_BUILD_LOG"
+
+## 构图语言
+- ASCII 边框：+- Raiders of the Lost Ark 式边框 ─┐ └┘
+- 命令行提示符：$ / > / # 作为段落引导
+- 代码块：语法高亮（关键字/字符串/注释不同色），行号
+- 状态行：底部 status bar 显示分支、时间、CPU 等 mock 数据
+- 标签：[TAG] / {KEY} / <ARG> 方括号语法
+
+## 页面节奏建议
+- 封面：终端启动画面 + 大号 ASCII 标题
+- 内容页：命令输出 + 注解
+- 对比页：左右双终端对比
+- 数据页：监控面板式 KPI 网格
+
+## 避免项
+- 不要用纸感暖底（那是另一个风格）
+- 不要用衬线字体
+- 不要用圆角卡片——终端是直角的
+- 不要堆 emoji
+- 不要让画面"温柔"——极客风是冷的、硬的、高对比的
+`,
+    previewTheme: {
+    bg: '#0a0a0a',
+    ink: '#e5e5e5',
+    muted: '#7a7a7a',
+    accent: '#00ff9c',
+    altAccent: '#4a9eff',
+    fontTitle: '"JetBrains Mono", "SFMono", monospace',
+    fontBody: '"JetBrains Mono", "SFMono", monospace',
+    fontMono: '"JetBrains Mono", "SFMono", monospace',
+    motif: 'terminal-dark',
+    tagline: '终端屏幕的冷峻',
+    cornerLabel: '~/xhs $',
+  },
+    outputHint: '生成纯黑底、荧光绿、终端交互感的极客技术封面卡组',
+    bestFor: '开发者工具实测、AI 工具技术封面、开源项目分享、命令行工作流',
+    sizePresets: ['3:4', '1:1'],
+    exportBlueprint: { cardSelectors: ['.xhs-card', '.geek-card', '[class*="card"]'], defaultRatio: '3:4', cardGap: 24 },
+  },
+  {
+    id: 'social-consulting-report',
+    name: '咨询报告',
+    nameEn: 'Consulting Report',
+    mode: 'social',
+    scenario: 'sharing',
+    description: '咨询机构的权威感：海军蓝 + 金线 + Georgia 衬线数字 + 战略框架图 + 来源标注，麦肯锡式的小红书行业研究封面',
+    icon: '📑',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+## 视觉灵魂：咨询机构的权威感
+读者第一眼应该觉得"这是从一份麦肯锡 / BCG / 贝恩的报告里撕下来的页面"，而不是"一张蓝色背景的卡片"。要传递出严谨、可信、有数据支撑的专业感。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（执行摘要/市场规模/竞争格局/战略框架/财务模型/结论建议），但必须维持咨询报告的视觉契约。
+
+## 色彩令牌
+- 深海军蓝主底 #1b2a4a / #151f35（仅用于封面/章节页）
+- 内容页用米白底 #faf8f3 + 海军蓝字
+- 强调色：青蓝 #00a9f4 / #4fc3f7（用于数据高亮）
+- 金属金 #c9a96e（用于细分隔线、章节编号）
+- 数据红绿：#c0392b / #27ae60（仅用于增减箭头）
+- 禁止鲜彩、禁止渐变、禁止荧光色
+
+## 字体系统
+- 标题：Noto Serif SC / Source Han Serif（衬线传递权威）
+- 正文：PingFang SC / Noto Sans SC
+- 数字：Georgia / Times New Roman 衬线数字（KPI 必须用衬线数字，不用等宽）
+- 来源/脚注：等宽小字，如 "Source: 工信部 2026Q1"
+
+## 构图语言
+- 顶部页眉：左 LOGO 占位 + 中章节名 + 右页码 "01 / 08"
+- 战略框架：2x2 矩阵、3 层金字塔、SWOT 四象限、价值链横向流程
+- 数据图：柱状/折线/瀑布图，数据标签清晰
+- 表格：三线表（顶线/表头线/底线），无竖线
+- 来源标注：每张图下脚注来源
+
+## 页面节奏建议
+- 封面：深蓝底 + 白色衬线大标题 + 报告编号
+- 执行摘要：米白底 + 3 条 Key Insight
+- 数据页：图表 + 解读 + 来源
+- 框架页：战略矩阵 + 象限标注
+
+## 避免项
+- 不要用荧光色或亮蓝（那是科技风不是咨询风）
+- 不要用等宽字作正文
+- 不要无来源地堆数字
+- 不要圆角卡片——咨询报告是方正的、严肃的
+- 不要 emoji
+`,
+    skillPrompt: `
+
+## 视觉灵魂：咨询机构的权威感
+读者第一眼应该觉得"这是从一份麦肯锡 / BCG / 贝恩的报告里撕下来的页面"，而不是"一张蓝色背景的卡片"。要传递出严谨、可信、有数据支撑的专业感。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（执行摘要/市场规模/竞争格局/战略框架/财务模型/结论建议），但必须维持咨询报告的视觉契约。
+
+## 色彩令牌
+- 深海军蓝主底 #1b2a4a / #151f35（仅用于封面/章节页）
+- 内容页用米白底 #faf8f3 + 海军蓝字
+- 强调色：青蓝 #00a9f4 / #4fc3f7（用于数据高亮）
+- 金属金 #c9a96e（用于细分隔线、章节编号）
+- 数据红绿：#c0392b / #27ae60（仅用于增减箭头）
+- 禁止鲜彩、禁止渐变、禁止荧光色
+
+## 字体系统
+- 标题：Noto Serif SC / Source Han Serif（衬线传递权威）
+- 正文：PingFang SC / Noto Sans SC
+- 数字：Georgia / Times New Roman 衬线数字（KPI 必须用衬线数字，不用等宽）
+- 来源/脚注：等宽小字，如 "Source: 工信部 2026Q1"
+
+## 构图语言
+- 顶部页眉：左 LOGO 占位 + 中章节名 + 右页码 "01 / 08"
+- 战略框架：2x2 矩阵、3 层金字塔、SWOT 四象限、价值链横向流程
+- 数据图：柱状/折线/瀑布图，数据标签清晰
+- 表格：三线表（顶线/表头线/底线），无竖线
+- 来源标注：每张图下脚注来源
+
+## 页面节奏建议
+- 封面：深蓝底 + 白色衬线大标题 + 报告编号
+- 执行摘要：米白底 + 3 条 Key Insight
+- 数据页：图表 + 解读 + 来源
+- 框架页：战略矩阵 + 象限标注
+
+## 避免项
+- 不要用荧光色或亮蓝（那是科技风不是咨询风）
+- 不要用等宽字作正文
+- 不要无来源地堆数字
+- 不要圆角卡片——咨询报告是方正的、严肃的
+- 不要 emoji
+`,
+    previewTheme: {
+    bg: '#1b2a4a',
+    ink: '#f5f1e8',
+    muted: '#a8b3c7',
+    accent: '#c9a96e',
+    fontTitle: '"Georgia", "Songti SC", serif',
+    fontBody: '"PingFang SC", "Noto Sans SC", "Helvetica Neue", sans-serif',
+    fontMono: '"Georgia", serif',
+    motif: 'consulting',
+    tagline: '咨询机构的权威感',
+    cornerLabel: 'EXHIBIT 03',
+  },
+    outputHint: '生成海军蓝、衬线数字、战略框架驱动的咨询报告封面卡组',
+    bestFor: '行业研究封面、执行摘要封面、咨询报告、高信任商业内容',
+    sizePresets: ['3:4', '1:1'],
+    exportBlueprint: { cardSelectors: ['.xhs-card', '.consulting-card', '[class*="card"]'], defaultRatio: '3:4', cardGap: 24 },
+  },
+  {
+    id: 'social-clean-review',
+    name: '简约测评',
+    nameEn: 'Clean Review',
+    mode: 'social',
+    scenario: 'sharing',
+    description: '结论先行的决断力：奶油底 + 超大评分数字 + 红绿 verdict + 对比矩阵，Wirecutter 式的极简测评封面',
+    icon: '⚖️',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+## 视觉灵魂：结论先行的决断力
+读者第一眼就要看到"推荐 / 不推荐 / 8.5 分"这样的明确结论。这不是温柔的内容卡片，而是一份冷静、克制、敢下判断的测评报告。视觉上要让结论数字和 verdict 标签成为绝对主角。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（总评/分项评分/优缺点/对比矩阵/场景推荐/购买建议），但必须维持"结论先行"的视觉契约。
+
+## 色彩令牌
+- 奶油主底 #f2f0ec / #f8f6f1
+- 主墨 #1a1a18 / #111110
+- 副灰 #77766e
+- 推荐绿 #2d8659 / #27ae60（仅用于推荐 verdict）
+- 警示红 #c0392b / #e8382a（仅用于不推荐/缺点）
+- 中性琥珀 #d4a017（用于"看情况"）
+- 禁止渐变、禁止多彩、禁止装饰性插图
+
+## 字体系统
+- 评分数字：超大无衬线（120-180px），PingFang SC / Inter / SF Pro，字重 Black 或 Bold
+- 标题：PingFang SC / Noto Sans SC，大号无衬线
+- 正文：同上，但字号克制
+- 标签：全大写无衬线 + 字距，如 "RECOMMENDED" / "BEST FOR"
+
+## 构图语言
+- Verdict 卡片：顶部超大评分数字 + 下方红绿标签条
+- 优缺点：左右双栏 ✓ 绿色 / ✗ 红色（仅此处用 emoji 替代符号也可）
+- 对比矩阵：表格形式，行=产品，列=维度，单元格用 ● ○ ✕ 评分
+- 维度条：水平进度条 + 分数标签
+
+## 页面节奏建议
+- 封面：超大评分 + 产品名 + 一句结论
+- 分项页：雷达图或维度条
+- 对比页：矩阵表
+- 场景页："适合谁 / 不适合谁"
+
+## 避免项
+- 不要温柔——测评要有判断力
+- 不要用衬线字体（那是杂志风）
+- 不要用深色背景（测评要冷静明亮）
+- 不要把优缺点藏起来——它们是主角
+- 评分数字必须够大，不能小里小气
+`,
+    skillPrompt: `
+
+## 视觉灵魂：结论先行的决断力
+读者第一眼就要看到"推荐 / 不推荐 / 8.5 分"这样的明确结论。这不是温柔的内容卡片，而是一份冷静、克制、敢下判断的测评报告。视觉上要让结论数字和 verdict 标签成为绝对主角。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（总评/分项评分/优缺点/对比矩阵/场景推荐/购买建议），但必须维持"结论先行"的视觉契约。
+
+## 色彩令牌
+- 奶油主底 #f2f0ec / #f8f6f1
+- 主墨 #1a1a18 / #111110
+- 副灰 #77766e
+- 推荐绿 #2d8659 / #27ae60（仅用于推荐 verdict）
+- 警示红 #c0392b / #e8382a（仅用于不推荐/缺点）
+- 中性琥珀 #d4a017（用于"看情况"）
+- 禁止渐变、禁止多彩、禁止装饰性插图
+
+## 字体系统
+- 评分数字：超大无衬线（120-180px），PingFang SC / Inter / SF Pro，字重 Black 或 Bold
+- 标题：PingFang SC / Noto Sans SC，大号无衬线
+- 正文：同上，但字号克制
+- 标签：全大写无衬线 + 字距，如 "RECOMMENDED" / "BEST FOR"
+
+## 构图语言
+- Verdict 卡片：顶部超大评分数字 + 下方红绿标签条
+- 优缺点：左右双栏 ✓ 绿色 / ✗ 红色（仅此处用 emoji 替代符号也可）
+- 对比矩阵：表格形式，行=产品，列=维度，单元格用 ● ○ ✕ 评分
+- 维度条：水平进度条 + 分数标签
+
+## 页面节奏建议
+- 封面：超大评分 + 产品名 + 一句结论
+- 分项页：雷达图或维度条
+- 对比页：矩阵表
+- 场景页："适合谁 / 不适合谁"
+
+## 避免项
+- 不要温柔——测评要有判断力
+- 不要用衬线字体（那是杂志风）
+- 不要用深色背景（测评要冷静明亮）
+- 不要把优缺点藏起来——它们是主角
+- 评分数字必须够大，不能小里小气
+`,
+    previewTheme: {
+    bg: '#f2f0ec',
+    ink: '#0e0e0e',
+    muted: '#8a8780',
+    accent: '#c0392b',
+    altAccent: '#2e7d32',
+    fontTitle: '"Helvetica Neue", "Inter", "PingFang SC", sans-serif',
+    fontBody: '"PingFang SC", "Noto Sans SC", "Helvetica Neue", sans-serif',
+    fontMono: '"SFMono", "Menlo", monospace',
+    motif: 'review-score',
+    tagline: '结论先行的决断力',
+    cornerLabel: 'VERDICT',
+  },
+    outputHint: '生成奶油底、超大评分、结论先行的极简测评封面卡组',
+    bestFor: '产品测评封面、AI 工具实测、对比横评、好物清单',
+    sizePresets: ['3:4', '1:1'],
+    exportBlueprint: { cardSelectors: ['.xhs-card', '.review-card', '[class*="card"]'], defaultRatio: '3:4', cardGap: 24 },
+  },
+  {
+    id: 'social-terminal',
+    name: '终端风',
+    nameEn: 'Terminal',
+    mode: 'social',
+    scenario: 'sharing',
+    description: '老式终端打印纸的暖意：暖灰纸底 + 深褐等宽字 + 打字机排版 + 命令行流程 + stdout 输出块',
+    icon: '🖥️',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+## 视觉灵魂：老式终端打印纸的暖意
+区别于"极客风格"的冷峻黑底荧光绿，这是 70-80 年代行式打印机 / 老式终端的暖纸质感——像热敏纸、像电传打字机输出。读者第一眼应该觉得"这是一卷刚从终端打印机里出来的纸"，带温度、带历史感、带工程师的手作气质。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（登录会话/命令序列/输出日志/任务清单/错误处理/退出总结），但必须维持"打印纸"的视觉契约。
+
+## 色彩令牌
+- 暖纸底 #e8e6e2 / #f3f2ef（带轻微颗粒/扫描线纹理）
+- 主字：深褐 #2f2f2f / #3a342c（不是纯黑，是墨水渗进纸的褐）
+- 副字：柔褐 rgba(47,47,47,0.58)
+- 强调：暗朱 #a04030 / 老式绿 #5a7a4a
+- 禁止荧光色、禁止纯黑底、禁止冷色调
+
+## 字体系统
+- 全局等宽：SFMono / Consolas / Courier New / Menlo（必须等宽，传递打字机感）
+- CJK：PingFang SC 但保持紧凑节奏
+- 标题可用 Arial Black 大号作"标题印刷感"，但主体仍是等宽
+- 所有文字带极轻微的 letter-spacing 模拟字距
+
+## 构图语言
+- 顶部 banner：模拟终端标题栏 "SESSION 2026-04-23 · TASK: xxx"
+- 命令提示符：$ / > / # 引导每一段
+- stdout 块：用边框框起来的输出区，等宽字
+- 任务清单：[ ] 未完成 / [x] 已完成（box-drawing 字符）
+- 进度条：ASCII 风格 [####------] 40%
+- 分隔线：===== 或 ----- 字符
+
+## 页面节奏建议
+- 封面：终端登录画面 + 任务标题
+- 内容页：命令 + 输出 + 注解
+- 清单页：任务列表 box
+- 结束页：logout + summary
+
+## 避免项
+- 不要和"极客风格"混淆——这个是暖纸，那个是黑屏
+- 不要用衬线字体
+- 不要用鲜彩
+- 不要现代化过度——保留一点 80 年代的笨拙感
+- 不要圆角卡片——纸是直角的
+`,
+    skillPrompt: `
+
+## 视觉灵魂：老式终端打印纸的暖意
+区别于"极客风格"的冷峻黑底荧光绿，这是 70-80 年代行式打印机 / 老式终端的暖纸质感——像热敏纸、像电传打字机输出。读者第一眼应该觉得"这是一卷刚从终端打印机里出来的纸"，带温度、带历史感、带工程师的手作气质。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（登录会话/命令序列/输出日志/任务清单/错误处理/退出总结），但必须维持"打印纸"的视觉契约。
+
+## 色彩令牌
+- 暖纸底 #e8e6e2 / #f3f2ef（带轻微颗粒/扫描线纹理）
+- 主字：深褐 #2f2f2f / #3a342c（不是纯黑，是墨水渗进纸的褐）
+- 副字：柔褐 rgba(47,47,47,0.58)
+- 强调：暗朱 #a04030 / 老式绿 #5a7a4a
+- 禁止荧光色、禁止纯黑底、禁止冷色调
+
+## 字体系统
+- 全局等宽：SFMono / Consolas / Courier New / Menlo（必须等宽，传递打字机感）
+- CJK：PingFang SC 但保持紧凑节奏
+- 标题可用 Arial Black 大号作"标题印刷感"，但主体仍是等宽
+- 所有文字带极轻微的 letter-spacing 模拟字距
+
+## 构图语言
+- 顶部 banner：模拟终端标题栏 "SESSION 2026-04-23 · TASK: xxx"
+- 命令提示符：$ / > / # 引导每一段
+- stdout 块：用边框框起来的输出区，等宽字
+- 任务清单：[ ] 未完成 / [x] 已完成（box-drawing 字符）
+- 进度条：ASCII 风格 [####------] 40%
+- 分隔线：===== 或 ----- 字符
+
+## 页面节奏建议
+- 封面：终端登录画面 + 任务标题
+- 内容页：命令 + 输出 + 注解
+- 清单页：任务列表 box
+- 结束页：logout + summary
+
+## 避免项
+- 不要和"极客风格"混淆——这个是暖纸，那个是黑屏
+- 不要用衬线字体
+- 不要用鲜彩
+- 不要现代化过度——保留一点 80 年代的笨拙感
+- 不要圆角卡片——纸是直角的
+`,
+    previewTheme: {
+    bg: '#e8e6e2',
+    ink: '#2f2f2f',
+    muted: '#6e6a64',
+    accent: '#8b4513',
+    fontTitle: '"Courier New", "Source Code Pro", monospace',
+    fontBody: '"Courier New", "Source Code Pro", monospace',
+    fontMono: '"Courier New", "Source Code Pro", monospace',
+    motif: 'terminal-warm',
+    tagline: '老式终端打印纸的暖意',
+    cornerLabel: 'TTY 01 · LOG',
+  },
+    outputHint: '生成暖纸底、深褐等宽、老式终端打印纸感的封面卡组',
+    bestFor: '终端风封面、命令行工作流、任务执行测评、复古极客内容',
+    sizePresets: ['3:4', '1:1'],
+    exportBlueprint: { cardSelectors: ['.xhs-card', '.terminal-card', '[class*="card"]'], defaultRatio: '3:4', cardGap: 24 },
+  },
+  {
+    id: 'social-story-field',
+    name: '故事集',
+    nameEn: 'Story Field',
+    mode: 'social',
+    scenario: 'sharing',
+    description: '胶片档案的安静奢华：石色底 + 暖驼沙 + 衬线斜体引文 + 分镜格 + 罗马数字章节 + 颗粒噪点',
+    icon: '🗺️',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+## 视觉灵魂：胶片档案的安静奢华
+读者第一眼应该觉得"这是一份从某个影像工作室 / 田野调查档案柜里抽出来的资料"，带电影感、带叙事性、带克制的奢华。不要热闹，不要鲜艳，要像《National Geographic》或 Wes Anderson 电影的安静时刻。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（封面/场景设定/人物或产品登场/过程展开/转折/收束/档案附录），但必须维持"影像档案"的视觉契约。
+
+## 色彩令牌
+- 浅米石底 #f4efe6 / #ede6d8（带轻微胶片颗粒）
+- 主字：深石 #2c2824 / #1f1c18
+- 副字：柔石 rgba(44,40,36,0.62)
+- 强调：暖沙驼 #a89474 / #b89968（用于章节编号、引文、细线）
+- 深色块可选：石黑 #1a1714（仅用于章节扉页）
+- 禁止鲜彩、禁止荧光、禁止渐变
+
+## 字体系统
+- 标题：Songti SC / Noto Serif CJK SC / Cormorant Garamond 衬线大字
+- 正文：PingFang SC / Noto Sans CJK SC
+- 引文：衬线斜体（Cormorant / EB Garamond Italic）
+- 章节编号：罗马数字 Ⅰ Ⅱ Ⅲ 用衬线大字
+
+## 构图语言
+- 分镜格：把页面分割成 2-4 个不等大的格子，像电影分镜（一大一小、上下错落）
+- 章节扉页：纯石色底 + 居中罗马数字 + 一句章节标题
+- 引文块：大号衬线斜体 + 上下留白 + 细沙驼线
+- 图位：留出大量图位（即使无图也保留 frame，标注 "FRAME 01"）
+- 颗粒：整页轻微胶片噪点（opacity 极低）
+
+## 页面节奏建议
+- 封面：石色底 + 衬线大标题 + 副标 + 期号
+- 场景页：宽幅图位 + 一段场景描写
+- 转折页：引文独立成页
+- 附录页：档案式列表 + 来源
+
+## 避免项
+- 不要热闹——这是安静叙事
+- 不要无衬线字体作标题
+- 不要鲜彩或荧光
+- 不要居中堆叠——故事集是分镜的、错落的
+- 不要现代感过强——保留一点档案柜的旧意
+`,
+    skillPrompt: `
+
+## 视觉灵魂：胶片档案的安静奢华
+读者第一眼应该觉得"这是一份从某个影像工作室 / 田野调查档案柜里抽出来的资料"，带电影感、带叙事性、带克制的奢华。不要热闹，不要鲜艳，要像《National Geographic》或 Wes Anderson 电影的安静时刻。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（封面/场景设定/人物或产品登场/过程展开/转折/收束/档案附录），但必须维持"影像档案"的视觉契约。
+
+## 色彩令牌
+- 浅米石底 #f4efe6 / #ede6d8（带轻微胶片颗粒）
+- 主字：深石 #2c2824 / #1f1c18
+- 副字：柔石 rgba(44,40,36,0.62)
+- 强调：暖沙驼 #a89474 / #b89968（用于章节编号、引文、细线）
+- 深色块可选：石黑 #1a1714（仅用于章节扉页）
+- 禁止鲜彩、禁止荧光、禁止渐变
+
+## 字体系统
+- 标题：Songti SC / Noto Serif CJK SC / Cormorant Garamond 衬线大字
+- 正文：PingFang SC / Noto Sans CJK SC
+- 引文：衬线斜体（Cormorant / EB Garamond Italic）
+- 章节编号：罗马数字 Ⅰ Ⅱ Ⅲ 用衬线大字
+
+## 构图语言
+- 分镜格：把页面分割成 2-4 个不等大的格子，像电影分镜（一大一小、上下错落）
+- 章节扉页：纯石色底 + 居中罗马数字 + 一句章节标题
+- 引文块：大号衬线斜体 + 上下留白 + 细沙驼线
+- 图位：留出大量图位（即使无图也保留 frame，标注 "FRAME 01"）
+- 颗粒：整页轻微胶片噪点（opacity 极低）
+
+## 页面节奏建议
+- 封面：石色底 + 衬线大标题 + 副标 + 期号
+- 场景页：宽幅图位 + 一段场景描写
+- 转折页：引文独立成页
+- 附录页：档案式列表 + 来源
+
+## 避免项
+- 不要热闹——这是安静叙事
+- 不要无衬线字体作标题
+- 不要鲜彩或荧光
+- 不要居中堆叠——故事集是分镜的、错落的
+- 不要现代感过强——保留一点档案柜的旧意
+`,
+    previewTheme: {
+    bg: '#f4efe6',
+    ink: '#3a3530',
+    muted: '#a89474',
+    accent: '#a89474',
+    fontTitle: '"Cormorant", "Songti SC", serif',
+    fontBody: '"PingFang SC", "Noto Sans SC", "Cormorant", serif',
+    fontMono: '"Cormorant", "EB Garamond", serif',
+    motif: 'storyboard',
+    tagline: '胶片档案的安静奢华',
+    cornerLabel: 'VOL. I',
+  },
+    outputHint: '生成石色底、暖驼沙、分镜叙事的胶片档案封面卡组',
+    bestFor: '故事化案例封面、项目复盘、田野调查、安静品牌叙事',
+    sizePresets: ['3:4', '1:1'],
+    exportBlueprint: { cardSelectors: ['.xhs-card', '.story-card', '[class*="card"]'], defaultRatio: '3:4', cardGap: 24 },
+  },
+  {
+    id: 'social-dot-matrix',
+    name: '点阵编辑风',
+    nameEn: 'Dot Matrix',
+    mode: 'social',
+    scenario: 'sharing',
+    description: '信号场的编辑感：浅纸底 + 点阵网格 + 信号波形 + 刻度尺 + 宋体大标题 + 数据节点标注',
+    icon: '📡',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+## 视觉灵魂：信号场的编辑感
+读者第一眼应该觉得"这是一个技术编辑 / 数据记者的工作面板"，背景是点阵网格（像工程图纸或示波器屏幕），上面飘着信号波形、刻度尺、数据节点。既有编辑的严谨，又有数据的活力，但不喧闹。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（信号总览/节点解析/波形对比/趋势曲线/异常标记/结论收束），但必须维持"点阵场域"的视觉契约。
+
+## 色彩令牌
+- 浅纸底 #deded9 / #e8e7e1（必须叠加点阵网格 pattern）
+- 主字：墨 #24221f
+- 副字：quiet 灰 rgba(36,34,31,0.62)
+- 网格线：极淡 rgba(36,34,31,0.055)（点阵或方阵）
+- 发丝线：rgba(36,34,31,0.16)
+- 强调：暗琥珀 #b8864a / 信号青 #4a7a8c（用于数据高亮和波形）
+- 禁止鲜彩、禁止渐变、禁止深色背景
+
+## 字体系统
+- 标题：Songti SC / Noto Serif CJK SC 衬线大字（编辑感的灵魂）
+- 正文：PingFang SC / Noto Sans CJK SC
+- 数据/标签/坐标：等宽（SFMono / Consolas），如 "SIG_01 · 0.84"
+
+## 构图语言
+- 全屏点阵网格背景（CSS background-image: radial-gradient 圆点矩阵，或 SVG pattern）
+- 信号波形：SVG path 绘制的折线/曲线，配坐标轴
+- 数据节点：圆点 + 引线标注 + 等宽标签
+- 刻度尺：顶部或左侧的工程刻度
+- 卡片：无边框，靠点阵背景分区，用细发丝线划界
+
+## 页面节奏建议
+- 封面：点阵底 + 衬线大标题 + 一条主信号波形
+- 节点页：单个数据点放大解析
+- 对比页：双波形叠加
+- 结论页：信号收敛/发散示意
+
+## 避免项
+- 不要无衬线标题（衬线是这个风格的编辑灵魂）
+- 不要纯白底——必须有点阵网格
+- 不要鲜彩——这是技术编辑，不是科技 demo
+- 不要圆角卡片堆叠
+- 波形/数据不能是装饰，必须与内容关联
+`,
+    skillPrompt: `
+
+## 视觉灵魂：信号场的编辑感
+读者第一眼应该觉得"这是一个技术编辑 / 数据记者的工作面板"，背景是点阵网格（像工程图纸或示波器屏幕），上面飘着信号波形、刻度尺、数据节点。既有编辑的严谨，又有数据的活力，但不喧闹。
+
+## 自主规划要求
+由你根据内容自主决定页面任务（信号总览/节点解析/波形对比/趋势曲线/异常标记/结论收束），但必须维持"点阵场域"的视觉契约。
+
+## 色彩令牌
+- 浅纸底 #deded9 / #e8e7e1（必须叠加点阵网格 pattern）
+- 主字：墨 #24221f
+- 副字：quiet 灰 rgba(36,34,31,0.62)
+- 网格线：极淡 rgba(36,34,31,0.055)（点阵或方阵）
+- 发丝线：rgba(36,34,31,0.16)
+- 强调：暗琥珀 #b8864a / 信号青 #4a7a8c（用于数据高亮和波形）
+- 禁止鲜彩、禁止渐变、禁止深色背景
+
+## 字体系统
+- 标题：Songti SC / Noto Serif CJK SC 衬线大字（编辑感的灵魂）
+- 正文：PingFang SC / Noto Sans CJK SC
+- 数据/标签/坐标：等宽（SFMono / Consolas），如 "SIG_01 · 0.84"
+
+## 构图语言
+- 全屏点阵网格背景（CSS background-image: radial-gradient 圆点矩阵，或 SVG pattern）
+- 信号波形：SVG path 绘制的折线/曲线，配坐标轴
+- 数据节点：圆点 + 引线标注 + 等宽标签
+- 刻度尺：顶部或左侧的工程刻度
+- 卡片：无边框，靠点阵背景分区，用细发丝线划界
+
+## 页面节奏建议
+- 封面：点阵底 + 衬线大标题 + 一条主信号波形
+- 节点页：单个数据点放大解析
+- 对比页：双波形叠加
+- 结论页：信号收敛/发散示意
+
+## 避免项
+- 不要无衬线标题（衬线是这个风格的编辑灵魂）
+- 不要纯白底——必须有点阵网格
+- 不要鲜彩——这是技术编辑，不是科技 demo
+- 不要圆角卡片堆叠
+- 波形/数据不能是装饰，必须与内容关联
+`,
+    previewTheme: {
+    bg: '#deded9',
+    ink: '#24221f',
+    muted: 'rgba(36,34,31,0.62)',
+    accent: '#b8864a',
+    altAccent: '#4a7a8c',
+    fontTitle: '"Songti SC", "Noto Serif CJK SC", serif',
+    fontBody: '"PingFang SC", "Noto Sans CJK SC", sans-serif',
+    fontMono: '"SFMono", "Consolas", monospace',
+    motif: 'dot-matrix',
+    tagline: '信号场的编辑感',
+    cornerLabel: 'SIG_01 · 0.84',
+  },
+    outputHint: '生成点阵网格、信号波形、技术编辑感的封面卡组',
+    bestFor: 'AI 系统观察、模型发布解读、技术编辑封面、数据叙事',
+    sizePresets: ['3:4', '1:1'],
+    exportBlueprint: { cardSelectors: ['.xhs-card', '.dot-card', '[class*="card"]'], defaultRatio: '3:4', cardGap: 24 },
   },
 
   // === 二、可视化展示类 ===
@@ -582,6 +1729,114 @@ export const OUTPUT_TEMPLATES: OutputTemplate[] = [
 `,
     outputHint: '生成高度严谨、专业工整的商务研究报告',
     bestFor: '工作总结、正式调研报告、学术笔记、公关文档',
+  },
+
+  {
+    id: 'deck-rain-notes',
+    name: '雨天手记',
+    nameEn: 'Rain Notes',
+    mode: 'deck',
+    scenario: 'presentation',
+    description: '参考 lieflat-html-deck/rain-notes：米白纸感底、墨色衬线、雨蓝薄雾点缀，极简安静的 AI 评测/产品札记演示',
+    icon: '🌧️',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+- 16:9 横向 slide，参考 lieflat "rain-notes" 风格：米白羊皮纸底（#ddd3ba / rgba(248,243,230,.84)），墨色正文（#2a2a28、副墨 #5a5854、灰墨 #8a8782），雨蓝点缀（rgba(82,118,142,0.52)）
+- 标题用宋体/Cormorant 衬线（Songti SC、Noto Serif SC），正文用 Noto Sans SC，章节序号用等宽字
+- 大量留白与极细分割线（rgba(60,58,54,0.15)），不使用粗边框、不用渐变、不用阴影
+- 装饰：可选的细雨斜线/雾化叠加（低透明度），呈现"雨日窗边安静写作"的氛围
+- 单页单观点，标题大字号轻字重，正文分 statement / body / evidence 三层
+- 动效极克制：仅入场淡入与细分隔线生长，必须提供 prefers-reduced-motion 降级
+`,
+    outputHint: '生成宁静、纸感、衬线主导的横向演示 HTML，适合 AI 模型评测、产品札记、安静叙事',
+    bestFor: 'AI 模型评测笔记、产品反思、安静型产品故事、雨日工坊式分享',
+    sizePresets: ['16:9'],
+    exportBlueprint: { cardSelectors: ['.slide', '.rain-slide', '[class*="slide"]'], defaultRatio: '16:9', cardGap: 0 },
+  },
+  {
+    id: 'deck-story-field',
+    name: '故事集',
+    nameEn: 'Story Field',
+    mode: 'deck',
+    scenario: 'presentation',
+    description: '参考 lieflat-html-deck/story-field：影像感深暗底、暖驼沙色、Cormorant 衬线大字，田野报告式的安静奢华叙事',
+    icon: '🎞️',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+- 16:9 横向 slide，参考 lieflat "story-field" 风格：深暗石底（#201d1a），暖驼沙色（rgba(168,148,116,.82)），白色透层卡片（rgba(255,255,255,.9)）
+- 标题字体用 Cormorant Garamond / EB Garamond / Songti SC 衬线大字，正文用 PingFang SC
+- 影像叙事感：大量图位（如有）、archive 档案式排印、横向分镜、可选颗粒噪点
+- 装饰：极细金线、引文用衬线斜体、章节编号采用罗马数字或田野手记体
+- 颜色克制：石色为主，沙驼为 accent，避免鲜彩与渐变
+- 动效：cubic-bezier(.76,0,.24,1) 缓动，分镜渐显与图片轻盈浮入
+`,
+    outputHint: '生成影像感、田野报告式、安静奢华的横向演示 HTML',
+    bestFor: '影像主导的故事型 deck、项目复盘、田野调查、品牌叙事',
+    sizePresets: ['16:9'],
+    exportBlueprint: { cardSelectors: ['.slide', '.story-slide', '[class*="slide"]'], defaultRatio: '16:9', cardGap: 0 },
+  },
+  {
+    id: 'deck-geek-report',
+    name: '极客报告',
+    nameEn: 'Geek Report',
+    mode: 'deck',
+    scenario: 'presentation',
+    description: '参考 lieflat-html-deck/geek-report：纸感暗底 + 终端正文字 + 酸性绿/蓝/橄榄点缀，单色技术型开发者报告',
+    icon: '🧰',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+- 16:9 横向 slide，参考 lieflat "geek-report" 风格：暗框底（#252525 frame），正文纸张色变量 paper，墨色字 #292929
+- accent 色板：酸性绿 #c9f044 (acid)、雾蓝 #8ba5ba (blue)、橄榄绿 #7d9c77 (green)、警示朱 #eb4e3d
+- 字体：中英等宽（SFMono / Consolas / Menlo）作章节编号与代码，CJK 用 Noto Sans SC；标题可用大号无衬线 + 编号
+- 装饰：终端式分隔条、纸感细线（rgba(41,41,41,.18)）、章节用 "01 / 04" 编号、引文用 > 引用块
+- 内容密度高：每页可承载 KPI、代码块、对比表、流程图，但不堆砌
+- 动效中等：入场缓动 cubic-bezier(0.19,1,0.22,1)，行/列错位浮入，禁用弹跳
+`,
+    outputHint: '生成极客、终端纸感、单色技术的横向演示 HTML',
+    bestFor: '开发者技术分析、AI 系统解读、开源项目汇报、极客评测',
+    sizePresets: ['16:9'],
+    exportBlueprint: { cardSelectors: ['.slide', '.geek-slide', '[class*="slide"]'], defaultRatio: '16:9', cardGap: 0 },
+  },
+  {
+    id: 'deck-pixel-report',
+    name: '黑底闪光',
+    nameEn: 'Pixel Report',
+    mode: 'deck',
+    scenario: 'presentation',
+    description: '参考 lieflat-html-deck/pixel-report：纯黑底 + 像素 HUD + 酸性绿/琥珀高对比，复古游戏式结构化分析演示',
+    icon: '👾',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+- 16:9 横向 slide，参考 lieflat "pixel-report" 风格：纯黑底 #000，前景文字偏白（#f6f7f3）
+- accent 色板：酸性绿黄 #c7f75a (acid)、琥珀 #f4be64 (amber)、青蓝渐变 (teal)
+- 视觉语言：像素 UI、复古游戏 HUD、扫描线、像素分块边角（step-corner）、单色像素图标
+- 字体：等宽像素风（Consolas / SF Mono / 像素字体回退），标题可使用大号无衬线 + 像素描边
+- 装饰：HUD 风格的数据标签、进度条、像素箭头、状态指示灯（在线/离线/分析中）
+- 信息分块清晰：每页用网格分区，像游戏面板一样组织 KPI/对比/流程
+- 动效：扫描线滑过、像素块入场（translate + opacity），中等节奏
+`,
+    outputHint: '生成像素 HUD、黑底闪光、复古游戏风的横向演示 HTML',
+    bestFor: '技术分步解析、产品升级解读、AI 工具实测、结构化对比分析',
+    sizePresets: ['16:9'],
+    exportBlueprint: { cardSelectors: ['.slide', '.pixel-slide', '[class*="slide"]'], defaultRatio: '16:9', cardGap: 0 },
+  },
+  {
+    id: 'deck-dot-matrix',
+    name: '点阵编辑风',
+    nameEn: 'Dot Matrix',
+    mode: 'deck',
+    scenario: 'presentation',
+    description: '参考 lieflat-html-deck/dot-matrix-dark：点阵画布背景 + 琥珀控件 + signal 数据叙事，深色技术型分析演示',
+    icon: '🛰️',
+    designConstraints: SHARED_DESIGN_CONSTRAINTS + `
+- 16:9 横向 slide，参考 lieflat "dot-matrix-dark" 风格：深暗底 #080706，琥珀色字 #f0dfbf，控件半透 rgba(246,244,239,.74)
+- 画布背景使用点阵网格（dot-matrix pattern），营造"信号场域 / data field"质感
+- accent 色板：琥珀 #f0dfbf、沙色、青灰 #3e4744 / 亮青 #e2cda5、control 半透层
+- 字体：PingFang SC 正文 + SF Mono 等宽数据，标题可用大号衬线/无衬线
+- 装饰：信号点、波形线、数据轨迹、低透明度网格刻度，控件用半透磨砂层
+- 信息以"信号 / 节点 / 字段"的方式组织，适合 KPI、benchmark、模型能力地图
+- 动效较高：信号扫描、点阵依次点亮、字段浮入，需提供 prefers-reduced-motion 降级
+`,
+    outputHint: '生成点阵画布、信号场域、深色技术风的横向演示 HTML',
+    bestFor: 'AI 系统解读、模型 benchmark、技术信号叙事、数据场域分析',
+    sizePresets: ['16:9'],
+    exportBlueprint: { cardSelectors: ['.slide', '.dot-slide', '[class*="slide"]'], defaultRatio: '16:9', cardGap: 0 },
   },
 
   // === 四、专业阅读类 ===
@@ -764,9 +2019,8 @@ export function isOutputTemplateId(value: unknown): value is string {
 // ---------------------------------------------------------------------------
 
 export const OUTPUT_MODES: Array<{ id: OutputMode; name: string; icon: string; description: string }> = [
+  { id: 'wechat', name: '一键排版', icon: '🪄', description: '内联样式、图文复制、微信编辑器友好' },
   { id: 'creative', name: 'AI 自由创意', icon: '🎨', description: '根据创意模板或自由提示直绘网页' },
-  { id: 'moka', name: 'Moka 卡片', icon: '✨', description: 'AI 卡片设计、参考图、分页导出' },
-  { id: 'wechat', name: '公众号排版', icon: '🟩', description: '内联样式、图文复制、微信编辑器友好' },
   { id: 'social', name: '社交传播', icon: '📢', description: '轻量化、易分享、高颜值' },
   { id: 'infographic', name: '可视化展示', icon: '📈', description: '图文并茂、视觉冲击' },
   { id: 'deck', name: '演示汇报', icon: '🎬', description: '正式、结构化、替代 PPT' },

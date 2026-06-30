@@ -38,10 +38,11 @@ import { cn } from "@/lib/utils"
 import { toast } from "@/hooks/use-toast"
 import { Popover, PopoverContent, PopoverAnchor } from "@/components/ui/popover"
 import { ModelSelect } from "@/app/core/setting/components/model-select"
+import { STYLE_DOCS, type StyleDocId } from "@/lib/style-doc/styles"
+import { generateStyleDoc } from "@/lib/style-doc/generate"
+import { isLocalWechatOutputTemplate } from "@/lib/output-workshop/template-routing"
 import type { ExtractedSection } from "./types"
-import { isMokaTemplateId } from "@/lib/output-workshop/moka"
 import { getMermaidRenderModeLabel } from "./workshop-controls"
-import { MokaDesignPanel } from "./moka-design-panel"
 import { useWorkshopContext } from "./workshop-context"
 
 const FONT_PRESETS = [
@@ -105,7 +106,7 @@ function getOutlineLevel(section: ExtractedSection): number {
 }
 
 function getOutlineTitleIndent(level: number): number {
-  return Math.min(3, Math.max(0, level - 1)) * 14
+  return Math.min(4, Math.max(0, level - 1)) * 12
 }
 
 // SourcePanel 现通过 useWorkshopContext() 获取所有依赖，不再接受 props
@@ -130,18 +131,6 @@ export function SourcePanel() {
     selectedTemplateId,
     templateOverrides,
     setTemplateOverrides,
-    mokaMode,
-    setMokaMode,
-    mokaPlatform,
-    setMokaPlatform,
-    mokaStyleId,
-    setMokaStyleId,
-    mokaPaletteId,
-    setMokaPaletteId,
-    mokaReferenceImageDataUrl,
-    mokaReferenceImageName,
-    onMokaReferenceImageChange,
-    onClearMokaReferenceImage,
     sourceOutlineSections,
     activeOutlineIndex,
     handleSelectOutlineSection: onSelectOutlineSection,
@@ -160,6 +149,7 @@ export function SourcePanel() {
     isDeploying,
     deployProgress,
   } = ctx.generation
+  const safeRefineQuery = typeof refineQuery === "string" ? refineQuery : ""
   const {
     showFilePicker,
     setShowFilePicker,
@@ -188,23 +178,55 @@ export function SourcePanel() {
   } = ctx.history
   const { handleSelectTemplate: onSelectTemplate } = ctx.templates
   const selectedTemplateName = ctx.selectedTemplate.name
+  const isOneClickLayoutTemplate = isLocalWechatOutputTemplate(ctx.selectedTemplate, selectedTemplateId)
   const generatedHtmlLength = ctx.generatedHtml.length
   const sourceTextareaRef = React.useRef<HTMLTextAreaElement | null>(null)
-  const isMokaMode = isMokaTemplateId(selectedTemplateId)
+  const [styleRewriting, setStyleRewriting] = React.useState<StyleDocId | null>(null)
+  const [selectedStyleId, setSelectedStyleId] = React.useState<StyleDocId | null>(null)
+  const pendingBuildAfterRewriteRef = React.useRef(false)
 
+  const handleStyleRewrite = React.useCallback(async () => {
+    if (!selectedStyleId) {
+      toast({ title: "请先选择目标风格", variant: "destructive" })
+      return
+    }
+    const trimmed = sourceContent.trim()
+    if (!trimmed) {
+      toast({ title: "素材正文为空", description: "请先粘贴或加载需要改写的内容。", variant: "destructive" })
+      return
+    }
+    const styleId = selectedStyleId
+    setStyleRewriting(styleId)
+    try {
+      const result = await generateStyleDoc(styleId, {
+        sourceContent: trimmed,
+        sourceTitle: sourceLabel || undefined,
+      }, { modelType: "outputWorkshopModel" })
+      setSourceContent(result.content)
+      setSourceLabel(`${result.styleName} · ${result.title}`)
+      pendingBuildAfterRewriteRef.current = true
+      toast({
+        title: `${result.styleName} 改写完成`,
+        description: "已自动开始构建右侧排版预览。",
+      })
+    } catch (error) {
+      toast({
+        title: "风格化改写失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      })
+    } finally {
+      setStyleRewriting(null)
+    }
+  }, [selectedStyleId, sourceContent, sourceLabel, setSourceContent, setSourceLabel])
+
+  // 改写成功并写入新的 sourceContent 后，自动触发右侧构建
   React.useEffect(() => {
-    if (activeOutlineIndex === null) return
-    const section = sourceOutlineSections[activeOutlineIndex]
-    const textarea = sourceTextareaRef.current
-    if (!section || !textarea || section.startOffset === undefined || section.endOffset === undefined) return
-
-    textarea.focus()
-    textarea.setSelectionRange(section.startOffset, section.endOffset)
-
-    const line = Math.max(0, (section.startLine ?? 1) - 1)
-    const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight || "20") || 20
-    textarea.scrollTop = Math.max(0, line * lineHeight - textarea.clientHeight * 0.25)
-  }, [activeOutlineIndex, sourceOutlineSections])
+    if (!pendingBuildAfterRewriteRef.current) return
+    if (!sourceContent.trim()) return
+    pendingBuildAfterRewriteRef.current = false
+    void onGenerate()
+  }, [sourceContent, onGenerate])
 
   return (
     <div className="flex h-full min-h-0 flex-col border-r bg-background">
@@ -221,11 +243,6 @@ export function SourcePanel() {
             </button>
             <div className="min-w-0">
               <div className="truncate text-xs font-semibold text-foreground">输入素材</div>
-              <div className="truncate text-[10px] text-muted-foreground">
-                {sourceContent.trim()
-                  ? `${sourceContent.trim().length.toLocaleString()} chars`
-                  : "等待材料"}
-              </div>
             </div>
           </div>
 
@@ -239,7 +256,7 @@ export function SourcePanel() {
             >
               <FolderOpen className="size-3.5" />
             </Button>
-            {isBuilding ? (
+            {isBuilding && !isOneClickLayoutTemplate ? (
               <Button size="sm" variant="destructive" className="h-8 gap-1.5 px-3 text-xs font-semibold shadow-none" onClick={onStop}>
                 <Loader2 className="size-3.5 animate-spin" />
                 停止
@@ -252,7 +269,7 @@ export function SourcePanel() {
                 disabled={!sourceContent.trim() || exportBusy}
               >
                 <Send className="size-3.5" />
-                {isMokaMode ? "开始设计" : "开始构建"}
+                {isOneClickLayoutTemplate ? "一键排版" : "开始构建"}
               </Button>
             )}
           </div>
@@ -283,60 +300,61 @@ export function SourcePanel() {
           <PopoverContent
             align="start"
             side="bottom"
-            sideOffset={4}
-            className="z-[10020] w-[280px] overflow-hidden rounded-lg border bg-popover p-0 shadow-none"
+            sideOffset={6}
+            style={{ width: "var(--radix-popover-trigger-width)", minWidth: 280 }}
+            className="z-[10020] overflow-hidden rounded-md border bg-popover p-0 shadow-md"
           >
-            <div className="border-b bg-muted/20 p-2">
+            <div className="border-b bg-muted/30 p-2">
               <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
                   type="text"
                   value={fileSearchQuery}
                   onChange={(e) => setFileSearchQuery(e.target.value)}
                   placeholder="搜索笔记"
-                  className="w-full rounded-md border bg-background py-1.5 pl-8 pr-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
+                  className="h-8 w-full rounded-md border bg-background pl-8 pr-2 text-xs placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   autoFocus
                 />
               </div>
             </div>
-            <ScrollArea className="h-48">
+            <div className="max-h-56 overflow-y-auto overscroll-contain [scrollbar-width:thin]">
               {loadingFiles ? (
-                <div className="flex items-center justify-center py-5">
+                <div className="flex items-center justify-center py-6">
                   <Loader2 className="size-4 animate-spin text-muted-foreground" />
                 </div>
               ) : filteredFiles.length === 0 ? (
-                <div className="py-5 text-center text-xs text-muted-foreground">无匹配笔记</div>
+                <div className="py-6 text-center text-xs text-muted-foreground">无匹配笔记</div>
               ) : (
-                <div className="p-1.5">
+                <div className="p-1">
                   {filteredFiles.map((file) => (
                     <button
                       key={file.relativePath}
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors hover:bg-muted"
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
                       onClick={() => {
                         void onSelectFile(file)
                         setShowFilePicker(false)
                       }}
                     >
-                      <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                      <FileText className="size-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-[11px] font-medium">{file.name}</div>
-                        <div className="truncate text-[9px] text-muted-foreground">{file.relativePath}</div>
+                        <div className="truncate text-xs font-medium text-foreground">{file.name}</div>
+                        <div className="truncate text-[10px] text-muted-foreground/80">{file.relativePath}</div>
                       </div>
                     </button>
                   ))}
                 </div>
               )}
-            </ScrollArea>
-            <div className="border-t bg-muted/10 p-1.5">
+            </div>
+            <div className="border-t bg-muted/20 p-1">
               <button
-                className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs font-medium text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => {
                   setShowFilePicker(false)
                   onLoadLinkedFile()
                 }}
                 disabled={!canLoadLinkedFile}
               >
-                <FolderOpen className="size-3.5" />
+                <FolderOpen className="size-4 text-muted-foreground" />
                 载入当前文件
               </button>
             </div>
@@ -376,7 +394,7 @@ export function SourcePanel() {
             <div className={cn("relative min-h-0 flex-1 flex-col gap-2", showAdvanced ? "hidden" : "flex")}>
               <div className="flex shrink-0 items-center justify-between gap-2">
                 <div className="min-w-0 text-[11px] font-medium text-foreground">素材正文</div>
-                <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                <div className="font-mono text-[10px] text-muted-foreground">
                   {sourceContent.trim().length.toLocaleString()} chars
                 </div>
               </div>
@@ -384,7 +402,7 @@ export function SourcePanel() {
                 ref={sourceTextareaRef}
                 value={sourceContent}
                 onChange={(e) => setSourceContent(e.target.value)}
-                placeholder={isMokaMode ? "粘贴要设计成卡片的内容，支持 Markdown、提纲或摘录。" : "粘贴正文、提纲、链接摘录或 Markdown 内容。"}
+                placeholder="粘贴正文、提纲、链接摘录或 Markdown 内容。"
                 className="min-h-0 flex-1 resize-none border-border/70 bg-background text-xs leading-relaxed shadow-none placeholder:text-muted-foreground/70"
               />
               {isCsvDetected && selectedTemplateId !== "data-dashboard" && (
@@ -419,7 +437,7 @@ export function SourcePanel() {
                   生成选项
                 </span>
                 <span className="shrink-0 text-[10px] font-normal">
-                  {isMokaMode ? selectedTemplateName : `${getFontPresetLabel(templateOverrides.fontFamily)} · ${templateOverrides.fontSize}px`}
+                  {getFontPresetLabel(templateOverrides.fontFamily)} · {templateOverrides.fontSize}px
                 </span>
               </button>
               {showAdvanced && (
@@ -430,34 +448,18 @@ export function SourcePanel() {
                 >
                   <div className="space-y-3">
                     <section className="space-y-2 rounded-md border bg-background p-2.5">
-                      <div className="text-[10px] font-semibold text-foreground">生成模型</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[10px] font-semibold text-foreground">生成模型</div>
+                        <div className="text-[9px] text-muted-foreground">用于构建与风格化改写</div>
+                      </div>
                       <ModelSelect
                         modelKey="outputWorkshop"
                         className="w-full"
-                        triggerClassName="h-8 w-full min-w-0 text-xs shadow-none"
-                        popoverClassName="z-[10030] w-[min(360px,calc(100vw-2rem))]"
+                        triggerClassName="h-8 w-full min-w-0 rounded-md bg-background text-xs font-medium shadow-none"
+                        popoverClassName="z-[10030] w-[252px] overflow-hidden rounded-md p-0 text-xs [&_[cmdk-input]]:h-7 [&_[cmdk-input]]:text-[11px] [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[9px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-item]]:gap-2 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-1 [&_[cmdk-item]]:text-[11px]"
+                        hideClear
                       />
                     </section>
-
-                    {isMokaMode && (
-                      <MokaDesignPanel
-                        mode={mokaMode}
-                        setMode={setMokaMode}
-                        platform={mokaPlatform}
-                        setPlatform={setMokaPlatform}
-                        styleId={mokaStyleId}
-                        setStyleId={setMokaStyleId}
-                        paletteId={mokaPaletteId}
-                        setPaletteId={setMokaPaletteId}
-                        referenceImageDataUrl={mokaReferenceImageDataUrl}
-                        referenceImageName={mokaReferenceImageName}
-                        onReferenceImageChange={onMokaReferenceImageChange}
-                        onClearReferenceImage={onClearMokaReferenceImage}
-                        onSelectTemplate={onSelectTemplate}
-                        onThemeColorChange={(color) => setTemplateOverrides({ ...templateOverrides, themeColor: color })}
-                        className="rounded-md border bg-background"
-                      />
-                    )}
 
                     <section className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
@@ -573,6 +575,69 @@ export function SourcePanel() {
                           </button>
                         ))}
                       </div>
+                    </section>
+
+                    <section className="space-y-1.5 border-t pt-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[10px] font-semibold text-foreground">输出风格</div>
+                        <div className="truncate text-[9px] text-muted-foreground">
+                          {selectedStyleId
+                            ? STYLE_DOCS.find(s => s.id === selectedStyleId)?.name
+                            : "未选择风格"}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 rounded-md border bg-background p-1">
+                        {STYLE_DOCS.map(item => {
+                          const active = selectedStyleId === item.id
+                          const busy = styleRewriting === item.id
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              title={item.description}
+                              disabled={styleRewriting !== null}
+                              onClick={() => setSelectedStyleId(active ? null : item.id)}
+                              className={cn(
+                                "flex h-7 items-center justify-center gap-1 rounded text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+                                active
+                                  ? "bg-primary text-primary-foreground"
+                                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                              )}
+                              aria-pressed={active}
+                            >
+                              {busy ? (
+                                <Loader2 className="size-3 animate-spin" />
+                              ) : (
+                                <span>{item.icon}</span>
+                              )}
+                              <span>{item.name}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!selectedStyleId || styleRewriting !== null || isBuilding}
+                        onClick={() => void handleStyleRewrite()}
+                        className={cn(
+                          "flex h-7 w-full items-center justify-center gap-1.5 rounded text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+                          styleRewriting
+                            ? "bg-muted text-muted-foreground"
+                            : "bg-primary text-primary-foreground hover:bg-primary/90"
+                        )}
+                      >
+                        {styleRewriting ? (
+                          <>
+                            <Loader2 className="size-3 animate-spin" />
+                            {STYLE_DOCS.find(s => s.id === styleRewriting)?.name}改写中
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="size-3" />
+                            开始转换
+                          </>
+                        )}
+                      </button>
                     </section>
                   </div>
                 </div>
@@ -723,59 +788,74 @@ export function SourcePanel() {
 
         {sourceWorkspaceTab === "outline" && (
           <ScrollArea className="h-full">
-            <div className="p-2.5">
+            <div className="p-2">
               {sourceOutlineSections.length === 0 ? (
                 <div className="flex h-44 flex-col items-center justify-center rounded-md border border-dashed bg-muted/10 px-4 text-center">
                   <ListTree className="mb-2 size-4 text-muted-foreground" />
                   <div className="text-xs font-medium text-foreground">暂无结构</div>
                   <div className="mt-1 max-w-[18rem] text-[11px] leading-relaxed text-muted-foreground">
-                    输入带标题的 Markdown 后，可以在这里跳转到对应段落和预览位置。
+                    输入带标题的 Markdown 后，可在此跳转到右侧预览的对应位置。
                   </div>
                 </div>
               ) : (
-                <div className="space-y-0.5">
-                  {sourceOutlineSections.map((section, index) => {
-                    const level = getOutlineLevel(section)
-                    const active = activeOutlineIndex === index
-                    return (
-                      <button
-                        key={`${section.title}-${index}`}
-                        type="button"
-                        onClick={() => onSelectOutlineSection(section, index)}
-                        className={cn(
-                          "group grid h-8 w-full grid-cols-[2rem_minmax(0,1fr)_3.75rem] items-center gap-2 rounded-md border border-transparent px-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                          active
-                            ? "bg-muted text-foreground"
-                            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                        )}
-                        title={section.title}
-                        aria-current={active ? "true" : undefined}
-                      >
-                        <span
+                <>
+                  <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                    <span className="text-[10px] font-medium text-muted-foreground">
+                      共 {sourceOutlineSections.length} 个标题
+                    </span>
+                    <span className="text-[9px] text-muted-foreground/70">点击跳转预览</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    {sourceOutlineSections.map((section, index) => {
+                      const level = getOutlineLevel(section)
+                      const active = activeOutlineIndex === index
+                      return (
+                        <button
+                          key={`${section.title}-${index}`}
+                          type="button"
+                          onClick={() => onSelectOutlineSection(section, index)}
                           className={cn(
-                            "justify-self-start font-mono text-[9px] tabular-nums",
-                            active ? "font-semibold text-foreground" : "text-muted-foreground/70 group-hover:text-muted-foreground"
+                            "group relative flex w-full min-w-0 items-center gap-2 rounded-md py-1.5 pr-2 text-left transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                            active
+                              ? "bg-primary/10"
+                              : "hover:bg-muted/60",
                           )}
+                          title={section.title}
+                          aria-current={active ? "true" : undefined}
+                          style={{ paddingLeft: `${getOutlineTitleIndent(level) + 10}px` }}
                         >
-                          {String(index + 1).padStart(2, "0")}
-                        </span>
-                        <span
-                          className={cn(
-                            "flex min-w-0 items-center text-[11px] leading-none",
-                            level <= 2 ? "font-semibold" : "font-medium",
-                            active ? "text-foreground" : "text-foreground/80"
-                          )}
-                          style={{ paddingLeft: `${getOutlineTitleIndent(level)}px` }}
-                        >
-                          <span className="min-w-0 truncate">{section.title}</span>
-                        </span>
-                        <span className="justify-self-end whitespace-nowrap text-right font-mono text-[9px] tabular-nums text-muted-foreground/70">
-                          H{level}{section.startLine ? ` · L${section.startLine}` : ""}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
+                          <span
+                            className={cn(
+                              "absolute left-0 top-1/2 h-3.5 w-[2px] -translate-y-1/2 rounded-full transition-colors",
+                              active ? "bg-primary" : "bg-transparent group-hover:bg-muted-foreground/40",
+                            )}
+                          />
+                          <span
+                            className={cn(
+                              "inline-flex h-4 shrink-0 items-center rounded px-1 font-mono text-[9px] leading-none tabular-nums transition-colors",
+                              active
+                                ? "bg-primary/15 text-primary"
+                                : "bg-muted text-muted-foreground/70 group-hover:text-muted-foreground",
+                            )}
+                          >
+                            H{level}
+                          </span>
+                          <span
+                            className={cn(
+                              "block min-w-0 flex-1 truncate text-[12px] leading-5 transition-colors",
+                              level === 1 && "font-semibold",
+                              level === 2 && "font-medium",
+                              level >= 3 && "font-normal",
+                              active ? "text-primary" : "text-foreground/85 group-hover:text-foreground",
+                            )}
+                          >
+                            {section.title}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
               )}
             </div>
           </ScrollArea>
@@ -789,7 +869,7 @@ export function SourcePanel() {
             </div>
             <div className="flex min-w-0 flex-1 items-center gap-1 rounded-md border bg-background p-1">
               <input
-                value={refineQuery}
+                value={safeRefineQuery}
                 onChange={(e) => setRefineQuery(e.target.value)}
                 placeholder="输入微调指令"
                 className="h-7 min-w-0 flex-1 bg-transparent px-1 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60"
@@ -811,7 +891,7 @@ export function SourcePanel() {
                   size="sm"
                   className="h-7 shrink-0 px-3 text-[10px] font-semibold shadow-none"
                   onClick={handleRefine}
-                  disabled={!refineQuery.trim() || status === "generating" || status === "streaming" || exportBusy}
+                  disabled={!safeRefineQuery.trim() || status === "generating" || status === "streaming" || exportBusy}
                 >
                   发送
                 </Button>
@@ -822,7 +902,7 @@ export function SourcePanel() {
       )}
       <div className="flex shrink-0 flex-col gap-0.5 border-t bg-muted/20 px-3 py-1.5 text-[10px] text-muted-foreground">
         <div className="flex min-w-0 items-center justify-between gap-2">
-          <span className="truncate font-medium">{isMokaMode ? "模式" : "模板"}：{selectedTemplateName}</span>
+          <span className="truncate font-medium">模板：{selectedTemplateName}</span>
           <span className="truncate">
             {hasGeneratedOutput ? `输出：${generatedHtmlLength.toLocaleString()} chars` : "输出：尚未生成"}
           </span>

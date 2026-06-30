@@ -1,5 +1,22 @@
 import { type ExtractedSection } from "./types"
 
+function cleanMarkdownTitle(value: string): string {
+  return value
+    .replace(/\s+#+\s*$/, "")
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/~~([^~]+)~~/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\\([\\`*_[\]{}()#+\-.!>])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 export function splitContentIntoSections(content: string): ExtractedSection[] {
   const normalized = content.trim()
   if (!normalized) return []
@@ -23,7 +40,7 @@ export function splitContentIntoSections(content: string): ExtractedSection[] {
         const lines = block.trim().split(/\r?\n/)
         const rawTitle = lines.shift() || ""
         const level = rawTitle.match(/^#{1,6}/)?.[0].length ?? 1
-        const title = rawTitle.replace(/^#{1,6}\s+/, "").trim()
+        const title = cleanMarkdownTitle(rawTitle.replace(/^#{1,6}\s+/, ""))
         const bodyLines = lines.filter(Boolean)
         const bullets = bodyLines
           .filter((line) => /^\s*[-*+]\s+/.test(line))

@@ -25,6 +25,7 @@ import {
 import { cn } from "@/lib/utils"
 import { openPath } from "@tauri-apps/plugin-opener"
 import { normalizeOutputWorkshopHtml } from "@/lib/output-workshop/html-normalizer"
+import { parseSmartCards, type SmartCard } from "@/lib/output-workshop/smart-card-export"
 import type { TemplateOverrides } from "./types"
 import { getStatusText } from "./utils"
 import {
@@ -91,6 +92,7 @@ function injectScrollbarStyles(html: string): string {
 }
 
 const PREVIEW_OVERRIDE_STYLE_ID = "lingmo-output-preview-overrides"
+const REDBOOK_PREVIEW_GRID_STYLE_ID = "lingmo-redbook-two-column-preview"
 
 function clampNumber(value: number, min: number, max: number, fallback: number): number {
   return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback
@@ -136,7 +138,7 @@ function buildTemplateOverrideCss(overrides: TemplateOverrides): string {
   const typographyCss = hasTypographyOverride
     ? `
       body,
-      :is(h1, h2, h3, h4, h5, h6, p, li, blockquote, figcaption, span, a, strong, em, small, button, td, th, label, summary, [data-moka-edit-path], [class*="title"], [class*="heading"], [class*="lead"], [class*="caption"], [class*="label"], [class*="body"], [class*="text"], [class*="copy"], [class*="description"]):not(pre):not(code):not(kbd):not(samp) {
+      :is(h1, h2, h3, h4, h5, h6, p, li, blockquote, figcaption, span, a, strong, em, small, button, td, th, label, summary, [class*="title"], [class*="heading"], [class*="lead"], [class*="caption"], [class*="label"], [class*="body"], [class*="text"], [class*="copy"], [class*="description"]):not(pre):not(code):not(kbd):not(samp) {
         font-family: var(--ow-preview-font-family) !important;
       }
 
@@ -145,27 +147,27 @@ function buildTemplateOverrideCss(overrides: TemplateOverrides): string {
         line-height: var(--ow-preview-line-height) !important;
       }
 
-      :is(p, li, blockquote, figcaption, td, th, .moka-lead, .moka-section p, .moka-slide-body p, .moka-ai-section p, .moka-cover-center p, .moka-end-center p, [class*="body"], [class*="text"], [class*="copy"], [class*="description"]) {
+      :is(p, li, blockquote, figcaption, td, th, [class*="body"], [class*="text"], [class*="copy"], [class*="description"]) {
         font-size: var(--ow-preview-body-size) !important;
         line-height: var(--ow-preview-line-height) !important;
       }
 
-      :is(h1, .moka-card h1, [class*="hero-title"], [class*="main-title"], [class*="cover-title"], [class*="card-title"]) {
+      :is(h1, [class*="hero-title"], [class*="main-title"], [class*="cover-title"], [class*="card-title"]) {
         font-size: var(--ow-preview-h1-size) !important;
         line-height: 1.18 !important;
       }
 
-      :is(h2, .moka-card h2, [class*="section-title"], [class*="slide-title"], [class*="heading"]) {
+      :is(h2, [class*="section-title"], [class*="slide-title"], [class*="heading"]) {
         font-size: var(--ow-preview-h2-size) !important;
         line-height: 1.22 !important;
       }
 
-      :is(h3, h4, .moka-card h3) {
+      :is(h3, h4) {
         font-size: var(--ow-preview-h3-size) !important;
         line-height: 1.3 !important;
       }
 
-      :is(small, figcaption, .moka-category, .moka-cover-mark, .moka-slide-top, .moka-tags span, [class*="caption"], [class*="label"], [class*="tag"], [class*="badge"]) {
+      :is(small, figcaption, [class*="caption"], [class*="label"], [class*="tag"], [class*="badge"]) {
         font-size: var(--ow-preview-caption-size) !important;
       }
 
@@ -182,22 +184,21 @@ function buildTemplateOverrideCss(overrides: TemplateOverrides): string {
         --primary: var(--ow-preview-theme-color) !important;
         --theme-color: var(--ow-preview-theme-color) !important;
         --brand: var(--ow-preview-theme-color) !important;
-        --moka-accent: var(--ow-preview-theme-color) !important;
       }
 
-      :is(a, mark, .moka-category, .moka-cover-mark, .moka-slide-top, .moka-tip b, .moka-tags span, [class*="accent"], [class*="highlight"], [class*="kicker"]) {
+      :is(a, mark, [class*="accent"], [class*="highlight"], [class*="kicker"]) {
         color: var(--ow-preview-theme-color) !important;
       }
 
-      :is(.moka-section-index, .moka-page-dots span.active, .moka-pop-block, [class*="accent-bg"], [class*="number-badge"]) {
+      :is([class*="accent-bg"], [class*="number-badge"]) {
         background-color: var(--ow-preview-theme-color) !important;
       }
 
-      :is(.moka-section, .moka-tip, .moka-slide-body blockquote, .moka-ai-section, blockquote, [class*="accent"], [class*="highlight"], [class*="badge"], [class*="tag"]) {
+      :is(blockquote, [class*="accent"], [class*="highlight"], [class*="badge"], [class*="tag"]) {
         border-color: var(--ow-preview-theme-color) !important;
       }
 
-      :is(.moka-tags span, [class*="tag"], [class*="badge"], [class*="chip"]) {
+      :is([class*="tag"], [class*="badge"], [class*="chip"]) {
         background-color: color-mix(in srgb, var(--ow-preview-theme-color) 12%, transparent) !important;
       }
     `
@@ -226,10 +227,89 @@ function injectTemplateOverrideStyles(html: string, overrides: TemplateOverrides
   return `${style}${html}`
 }
 
-function buildPreviewSrcDoc(html: string, overrides: TemplateOverrides): string {
+function isRedbookPreviewHtml(html: string, templateId?: string): boolean {
+  return Boolean(
+    templateId?.startsWith("social-redbook-") ||
+    /\bclass=["'][^"']*\bredbook-deck\b/i.test(html) ||
+    /\bdata-redbook-card\b/i.test(html)
+  )
+}
+
+function injectRedbookPreviewGridStyles(html: string, templateId?: string): string {
+  if (!html || !isRedbookPreviewHtml(html, templateId)) return html
+
+  const css = `
+    @media (min-width: 900px) {
+      :root {
+        --lingmo-redbook-preview-zoom: 0.42;
+      }
+
+      body.redbook-output {
+        overflow-x: hidden !important;
+      }
+
+      .redbook-deck {
+        width: 100% !important;
+        max-width: none !important;
+        display: grid !important;
+        grid-template-columns: repeat(2, max-content) !important;
+        justify-content: center !important;
+        justify-items: center !important;
+        align-items: start !important;
+        gap: 18px !important;
+        padding: 18px !important;
+        scroll-snap-type: none !important;
+      }
+
+      .redbook-deck > :is(.cover-container, .card-container, [data-redbook-card], [data-export-card]) {
+        width: 1080px !important;
+        height: 1440px !important;
+        max-width: none !important;
+        zoom: var(--lingmo-redbook-preview-zoom);
+        scroll-snap-align: none !important;
+      }
+    }
+
+    @media (min-width: 1180px) {
+      :root {
+        --lingmo-redbook-preview-zoom: 0.46;
+      }
+
+      .redbook-deck {
+        gap: 22px !important;
+        padding: 22px !important;
+      }
+    }
+
+    @media (min-width: 1500px) {
+      :root {
+        --lingmo-redbook-preview-zoom: 0.5;
+      }
+    }
+  `
+  const style = `<style id="${REDBOOK_PREVIEW_GRID_STYLE_ID}">${css}</style>`
+  const existingStyleRegex = new RegExp(
+    `<style\\b(?=[^>]*\\bid=["']${REDBOOK_PREVIEW_GRID_STYLE_ID}["'])[^>]*>[\\s\\S]*?<\\/style>`,
+    "i"
+  )
+  if (existingStyleRegex.test(html)) {
+    return html.replace(existingStyleRegex, style)
+  }
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, `${style}</head>`)
+  }
+  if (/<body\b/i.test(html)) {
+    return html.replace(/<body\b([^>]*)>/i, `<body$1>${style}`)
+  }
+  return `${style}${html}`
+}
+
+function buildPreviewSrcDoc(html: string, overrides: TemplateOverrides, templateId?: string): string {
   if (!html) return ""
   const normalized = normalizeOutputWorkshopHtml(html)
-  return injectTemplateOverrideStyles(injectScrollbarStyles(normalized), overrides)
+  const withScrollbar = injectScrollbarStyles(normalized)
+  const withOverrides = injectTemplateOverrideStyles(withScrollbar, overrides)
+  return injectRedbookPreviewGridStyles(withOverrides, templateId)
 }
 
 function LogRow({
@@ -260,6 +340,76 @@ function LogRow({
   )
 }
 
+function formatTelemetryDuration(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return "等待中"
+  if (value < 1000) return `${Math.round(value)}ms`
+  return `${(value / 1000).toFixed(1)}s`
+}
+
+function getFirstResponseText(telemetry: ReturnType<typeof useWorkshopContext>["generation"]["generationTelemetry"]): string {
+  if (!telemetry.requestStartedAt) {
+    return telemetry.phase === "local-build" ? "本地模板，无需 AI 响应" : "尚未请求"
+  }
+  if (!telemetry.firstByteAt) {
+    return `等待首个响应 · ${formatTelemetryDuration(Date.now() - telemetry.requestStartedAt)}`
+  }
+  return `${formatTelemetryDuration(telemetry.firstByteAt - telemetry.requestStartedAt)} · ${telemetry.outputChars.toLocaleString()} chars`
+}
+
+function getGenerationWaitText(telemetry: ReturnType<typeof useWorkshopContext>["generation"]["generationTelemetry"] | undefined): string {
+  if (!telemetry) return "正在准备"
+  if (telemetry.phase === "local-build" || telemetry.phase === "finalizing") {
+    return telemetry.phaseLabel
+  }
+  if (!telemetry.requestStartedAt) {
+    return telemetry.phaseLabel || "正在准备"
+  }
+  if (!telemetry.firstByteAt) {
+    return `请求已发出，正在等待首个响应 · ${formatTelemetryDuration(Date.now() - telemetry.requestStartedAt)}`
+  }
+  return `已收到响应 · ${telemetry.outputChars.toLocaleString()} chars`
+}
+
+function RedbookCardWall({
+  cards,
+  templateOverrides,
+  selectedTemplateId,
+}: {
+  cards: SmartCard[]
+  templateOverrides: TemplateOverrides
+  selectedTemplateId: string
+}) {
+  return (
+    <div className="flex min-h-full w-full justify-center overflow-y-auto bg-muted/20 px-4 py-5 [scrollbar-width:thin]">
+      <div className="grid w-full max-w-[640px] grid-cols-1 justify-center gap-3 sm:grid-cols-[repeat(2,minmax(0,300px))]">
+        {cards.map((card) => (
+          <article
+            key={card.index}
+            className="group overflow-hidden rounded-md border bg-background shadow-sm transition-colors hover:border-primary/40"
+          >
+            <div className="relative aspect-[3/4] w-full overflow-hidden bg-muted/20">
+              <iframe
+                title={`卡片预览 ${card.index + 1}: ${card.title}`}
+                srcDoc={buildPreviewSrcDoc(card.html, templateOverrides, selectedTemplateId)}
+                className="h-full w-full border-0 bg-background"
+                sandbox="allow-same-origin"
+                tabIndex={-1}
+              />
+              <div className="pointer-events-none absolute left-2 top-2 rounded bg-background/90 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground shadow-sm">
+                #{card.index + 1}
+              </div>
+            </div>
+            <div className="flex h-8 items-center justify-between gap-2 border-t px-2">
+              <p className="truncate text-[11px] font-medium text-foreground">{card.title}</p>
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">3:4</span>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // PreviewPanel 现通过 useWorkshopContext() 获取所有依赖，不再接受 props
 
 export function PreviewPanel() {
@@ -282,6 +432,8 @@ export function PreviewPanel() {
     sourcePanelCollapsed,
     toggleSourcePanel,
     iframeRef,
+    selectedTemplateId,
+    selectedTemplate,
   } = ctx
   const {
     status,
@@ -289,6 +441,7 @@ export function PreviewPanel() {
     progressText,
     elapsed,
     buildStageId,
+    generationTelemetry,
     lastExportRecord,
     streamingHtml,
     exportBusy,
@@ -297,16 +450,23 @@ export function PreviewPanel() {
     deployProgress,
     deployedUrl,
     refining,
-    mokaRenderMemory,
-    handleMokaTextEdit: onMokaTextEdit,
-    handleMokaStyleEdit: onMokaStyleEdit,
-    handleMokaReorder: onMokaReorder,
     handleGenerate,
   } = ctx.generation
   const selectedTemplatePreviewHtml = ctx.templates.selectedTemplatePreviewHtml
   const parsedDeckData = ctx.parsedDeckData
-  const mokaEditingEnabled = Boolean(mokaRenderMemory) && !refining && status === "done"
   const activeSizePreset = getPresetById(templateOverrides.sizePresetId)
+  const isRedbookPreview = React.useMemo(() => {
+    return isRedbookPreviewHtml(streamingHtml || generatedHtml || selectedTemplatePreviewHtml, selectedTemplateId)
+  }, [generatedHtml, selectedTemplateId, selectedTemplatePreviewHtml, streamingHtml])
+  const redbookPreviewCards = React.useMemo(() => {
+    const html = streamingHtml || generatedHtml
+    if (!html || !isRedbookPreviewHtml(html, selectedTemplateId)) return []
+    try {
+      return parseSmartCards(html, selectedTemplate.exportBlueprint).cards
+    } catch {
+      return []
+    }
+  }, [generatedHtml, selectedTemplate.exportBlueprint, selectedTemplateId, streamingHtml])
   const [mermaidStatus, setMermaidStatus] = React.useState<{ ok: boolean; text: string }>({
     ok: true,
     text: "未检测到 Mermaid 图表",
@@ -314,41 +474,12 @@ export function PreviewPanel() {
 
   const previewHtml = React.useMemo(() => {
     const html = streamingHtml || generatedHtml
-    return buildPreviewSrcDoc(html, templateOverrides)
-  }, [generatedHtml, streamingHtml, templateOverrides])
+    return buildPreviewSrcDoc(html, templateOverrides, selectedTemplateId)
+  }, [generatedHtml, selectedTemplateId, streamingHtml, templateOverrides])
 
   const templateExamplePreviewHtml = React.useMemo(() => {
-    return buildPreviewSrcDoc(selectedTemplatePreviewHtml, templateOverrides)
-  }, [selectedTemplatePreviewHtml, templateOverrides])
-
-  React.useEffect(() => {
-    if (!mokaEditingEnabled) return
-
-    const handleMessage = (event: MessageEvent) => {
-      if (event.source !== iframeRef.current?.contentWindow) return
-      const data = event.data
-      if (!data || typeof data !== "object" || data.source !== "lingmo-moka-editor") return
-
-      if (data.type === "text" && typeof data.path === "string" && typeof data.value === "string") {
-        onMokaTextEdit?.(data.path, data.value)
-        return
-      }
-      if (data.type === "style" && typeof data.path === "string" && data.style && typeof data.style === "object") {
-        const style = Object.fromEntries(
-          Object.entries(data.style as Record<string, unknown>)
-            .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-        )
-        onMokaStyleEdit?.(data.path, style)
-        return
-      }
-      if (data.type === "reorder" && Number.isInteger(data.from) && Number.isInteger(data.to)) {
-        onMokaReorder?.(data.from, data.to)
-      }
-    }
-
-    window.addEventListener("message", handleMessage)
-    return () => window.removeEventListener("message", handleMessage)
-  }, [iframeRef, mokaEditingEnabled, onMokaReorder, onMokaStyleEdit, onMokaTextEdit])
+    return buildPreviewSrcDoc(selectedTemplatePreviewHtml, templateOverrides, selectedTemplateId)
+  }, [selectedTemplateId, selectedTemplatePreviewHtml, templateOverrides])
 
   // 2. 对 Mermaid 图表校验执行防抖优化，流式高频期间延缓 500ms 校验以释压主线程
   React.useEffect(() => {
@@ -454,7 +585,7 @@ export function PreviewPanel() {
         <div className="flex items-center gap-1">
           {previewTab === "preview" && (
             <>
-              <DropdownMenu>
+              <DropdownMenu modal={false}>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-[11px] shadow-none">
                     {activeSizePreset.label}
@@ -530,12 +661,17 @@ export function PreviewPanel() {
             <div className="flex h-full min-h-0 flex-col items-center overflow-y-auto overflow-x-hidden bg-muted/20 p-4 select-text [scrollbar-width:thin]">
               {/* 阶段一：等待 AI 首字节时的 spinner */}
               {showSpinner && (
-                <div className="z-20 flex w-[320px] max-w-[calc(100vw-48px)] flex-col items-center justify-center rounded-lg border bg-background p-6 text-center animate-in fade-in duration-150">
-                  <Loader2 className="mb-3 size-6 animate-spin text-primary" />
-                  <p className="text-sm font-semibold text-foreground">{progressText || "AI 正在分析..."}</p>
-                  <p className="mt-1.5 font-mono text-[10px] text-muted-foreground">
-                    {(elapsed / 1000).toFixed(1)}s
-                  </p>
+                <div className="absolute inset-0 z-20 grid place-items-center p-4">
+                  <div className="flex w-[320px] max-w-[calc(100vw-48px)] flex-col items-center justify-center rounded-lg border bg-background p-6 text-center animate-in fade-in duration-150">
+                    <Loader2 className="mb-3 size-6 animate-spin text-primary" />
+                    <p className="text-sm font-semibold text-foreground">{progressText || "AI 正在分析..."}</p>
+                    <p className="mt-1 max-w-[260px] text-[11px] leading-relaxed text-muted-foreground">
+                      {getGenerationWaitText(generationTelemetry)}
+                    </p>
+                    <p className="mt-1.5 font-mono text-[10px] text-muted-foreground">
+                      {(elapsed / 1000).toFixed(1)}s
+                    </p>
+                  </div>
                 </div>
               )}
 
@@ -587,11 +723,13 @@ export function PreviewPanel() {
                     // 基础视口样式
                   viewMode === "mobile"
                       ? "h-[600px] w-[340px] overflow-hidden rounded-lg border bg-background"
+                      : isRedbookPreview
+                      ? "min-h-full w-full max-w-[1180px] overflow-hidden rounded-md border bg-background"
                       : viewMode === "locked" && activeSizePreset.id !== "auto"
                       ? "overflow-hidden rounded-md border bg-background"
                       : "min-h-full w-full max-w-none overflow-hidden bg-background"
                   )}
-                  style={viewMode === "locked" && activeSizePreset.id !== "auto" ? {
+                  style={viewMode === "locked" && activeSizePreset.id !== "auto" && !isRedbookPreview ? {
                     width: `min(${activeSizePreset.width / 2}px, calc(100vw - 96px))`,
                     maxHeight: "calc(100vh - 160px)",
                     aspectRatio: `${activeSizePreset.width} / ${activeSizePreset.height}`,
@@ -610,7 +748,7 @@ export function PreviewPanel() {
                   {isStreamingActive && (
                     <div className="absolute bottom-3 right-3 z-50 flex items-center gap-1.5 rounded-md border border-primary/20 bg-background px-2.5 py-1 animate-in fade-in duration-150">
                       <Loader2 className="size-3 animate-spin text-primary" />
-                      <span className="text-[10px] font-medium text-primary">{progressText}</span>
+                      <span className="max-w-[220px] truncate text-[10px] font-medium text-primary">{generationTelemetry.phaseLabel || progressText}</span>
                       <span className="text-[9px] text-muted-foreground">{(elapsed / 1000).toFixed(0)}s</span>
                     </div>
                   )}
@@ -619,24 +757,47 @@ export function PreviewPanel() {
                     <div className="absolute left-1/2 top-2 z-20 h-1 w-16 -translate-x-1/2 rounded-full bg-muted-foreground/35 select-none" />
                   )}
 
-                  <iframe
-                    ref={iframeRef}
-                    key={
-                      status === "generating" || status === "streaming"
-                        ? `streaming-iframe-${streamingHtml.length}`
-                        : freezePreviewInteraction
-                          ? "static-iframe"
-                          : "interactive-iframe"
-                    }
-                    srcDoc={previewHtml}
-                    className="w-full flex-1 border-0 bg-background"
-                    title="智能排版预览视口"
-                    sandbox={
-                      status === "generating" || status === "streaming" || freezePreviewInteraction
-                        ? "allow-same-origin"
-                        : "allow-scripts allow-same-origin allow-downloads allow-forms"
-                    }
-                  />
+                  {isRedbookPreview && viewMode !== "mobile" && redbookPreviewCards.length > 1 ? (
+                    <>
+                      <RedbookCardWall
+                        cards={redbookPreviewCards}
+                        templateOverrides={templateOverrides}
+                        selectedTemplateId={selectedTemplateId}
+                      />
+                      <iframe
+                        ref={iframeRef}
+                        key={`export-source-${streamingHtml.length || generatedHtml.length}`}
+                        srcDoc={previewHtml}
+                        className="pointer-events-none absolute -left-[10000px] top-0 h-[720px] w-[540px] border-0 opacity-0"
+                        title="智能排版导出源视口"
+                        sandbox={
+                          status === "generating" || status === "streaming" || freezePreviewInteraction
+                            ? "allow-same-origin"
+                            : "allow-scripts allow-same-origin allow-downloads allow-forms"
+                        }
+                        tabIndex={-1}
+                      />
+                    </>
+                  ) : (
+                    <iframe
+                      ref={iframeRef}
+                      key={
+                        status === "generating" || status === "streaming"
+                          ? `streaming-iframe-${streamingHtml.length}`
+                          : freezePreviewInteraction
+                            ? "static-iframe"
+                            : "interactive-iframe"
+                      }
+                      srcDoc={previewHtml}
+                      className="w-full flex-1 border-0 bg-background"
+                      title="智能排版预览视口"
+                      sandbox={
+                        status === "generating" || status === "streaming" || freezePreviewInteraction
+                          ? "allow-same-origin"
+                          : "allow-scripts allow-same-origin allow-downloads allow-forms"
+                      }
+                    />
+                  )}
 
                   {viewMode === "mobile" && (
                     <div className="absolute bottom-1.5 left-1/2 z-20 h-1 w-20 -translate-x-1/2 rounded-full bg-muted-foreground/20 select-none" />
@@ -689,6 +850,11 @@ export function PreviewPanel() {
                 <LogRow label="耗时" value={`${(elapsed / 1000).toFixed(1)}s`} tone={status === "generating" || status === "streaming" ? "primary" : "default"} compact />
                 <LogRow label="输出" value={`${generatedHtml.length.toLocaleString()} chars`} compact />
               </div>
+              <div className="grid gap-2 lg:grid-cols-3">
+                <LogRow label="当前阶段" value={generationTelemetry.phaseLabel || "等待生成"} tone={status === "generating" || status === "streaming" ? "primary" : "default"} compact />
+                <LogRow label="首响应" value={getFirstResponseText(generationTelemetry)} tone={generationTelemetry.firstByteAt ? "success" : status === "streaming" ? "primary" : "default"} compact />
+                <LogRow label="本轮输出" value={`${generationTelemetry.outputChars.toLocaleString()} chars`} compact />
+              </div>
               <div className="rounded-md border bg-muted/15 p-2">
                 <div className="mb-2 text-[10px] font-semibold text-muted-foreground">渲染步骤</div>
                 <div className="grid gap-1 sm:grid-cols-4">
@@ -722,6 +888,18 @@ export function PreviewPanel() {
                 </div>
               )}
               <LogRow label="阶段" value={buildStageId ? BUILD_STAGES.find((stage) => stage.id === buildStageId)?.label || buildStageId : "等待构建"} tone={status === "generating" || status === "streaming" ? "primary" : "default"} compact />
+              <LogRow
+                label="质量检查"
+                value={generationTelemetry.qualityChecked ? generationTelemetry.qualitySummary : "等待最终 HTML"}
+                tone={generationTelemetry.severeFindingCount > 0 ? "destructive" : generationTelemetry.qualityChecked ? "success" : "default"}
+                compact
+              />
+              <LogRow
+                label="修复状态"
+                value={generationTelemetry.repairTriggered ? "已触发一次 AI 修复" : "未触发修复"}
+                tone={generationTelemetry.repairTriggered ? "primary" : "default"}
+                compact
+              />
               <LogRow label="画幅" value={`${activeSizePreset.label} ${activeSizePreset.id === "auto" ? "自适应" : `${activeSizePreset.width}x${activeSizePreset.height}`} · 安全区 ${templateOverrides.safeAreaEnabled ? "开启" : "关闭"}`} compact />
               <LogRow label="模板参数" value={`字体 ${templateOverrides.fontFamily} · ${templateOverrides.fontSize}px / ${templateOverrides.lineHeight} · 间距 ${templateOverrides.cardGap}px · 贴纸 ${templateOverrides.stickersEnabled ? "开" : "关"}`} compact />
               <div className={cn(

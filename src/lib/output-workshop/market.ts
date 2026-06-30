@@ -1,11 +1,13 @@
 /**
- * LingMo 输出工坊动态模板市场与本地自定义模板管理器
+ * LingMo 智能排版动态模板市场与本地自定义模板管理器
  * 支持从 GitHub 免 Git 动态下载安装设计技能包，并支持本地自建 SKILL.md 自定义排版规范
  */
 
 import { exists, mkdir, writeTextFile, readTextFile, readDir } from "@tauri-apps/plugin-fs"
 import { appDataDir, join } from "@tauri-apps/api/path"
-import { type OutputTemplate } from "./templates"
+import { type OutputMode, type OutputScenario, type OutputTemplate } from "./templates"
+import type { DesignProfileId } from "./design-profiles"
+import type { ExportBlueprint, SmartCardPagingMode } from "./smart-card-export"
 
 // ---------------------------------------------------------------------------
 // 1. 类型定义
@@ -21,6 +23,40 @@ export type MarketInstallResult = {
   packageName: string
   skillsCount: number
   installedTemplateIds: string[]
+}
+
+interface OpenDesignManifestLite {
+  name?: string
+  title?: string
+  title_i18n?: Record<string, string>
+  description?: string
+  description_i18n?: Record<string, string>
+  icon?: string
+  tags?: string[]
+  od?: {
+    mode?: string
+    scenario?: string
+    platform?: string
+    preview?: {
+      type?: string
+      motion?: string
+    }
+    inputs?: Array<{
+      name?: string
+      label?: string
+      type?: string
+      required?: boolean
+    }>
+    pipeline?: {
+      stages?: Array<{
+        id?: string
+        atoms?: string[]
+      }>
+    }
+    useCase?: {
+      query?: string | Record<string, string>
+    }
+  }
 }
 
 // 技能包安装与自定义根目录：AppData/article/skills/
@@ -239,6 +275,13 @@ export async function installSkillsFromGitHub(
             const mdFileText = await mdFileRes.text()
             await writeTextFile(await join(skillTargetDir, "example.md"), mdFileText)
           }
+
+          const openDesignManifest = dirFiles.find((f) => f.name.toLowerCase() === "open-design.json")
+          if (openDesignManifest && openDesignManifest.download_url) {
+            const manifestRes = await fetch(openDesignManifest.download_url)
+            const manifestText = await manifestRes.text()
+            await writeTextFile(await join(skillTargetDir, "open-design.json"), manifestText)
+          }
         }
       }
     } catch (e) {
@@ -282,10 +325,139 @@ function readFirstMarkdownHeading(text: string): string | null {
   return heading && heading.length <= 80 ? heading : null
 }
 
-function parseSkillTemplate(id: string, skillMdText: string): OutputTemplate | null {
+function resolveLocalized(value?: string | Record<string, string>): string | undefined {
+  if (!value) return undefined
+  if (typeof value === "string") return value
+  return value["zh-CN"] || value.zh || value.en || Object.values(value).find((text) => typeof text === "string" && text.trim())
+}
+
+function normalizeFeatureList(items: Array<string | undefined>, fallback: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of [...items, ...fallback]) {
+    const value = item?.trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    out.push(value)
+  }
+  return out.slice(0, 6)
+}
+
+function mapOpenDesignMode(mode?: string): OutputMode {
+  switch ((mode || "").toLowerCase()) {
+    case "deck":
+    case "slides":
+      return "deck"
+    case "image":
+    case "video":
+    case "hyperframes":
+      return "social"
+    case "live-artifact":
+    case "dashboard":
+    case "report":
+      return "infographic"
+    case "prototype":
+    case "design-system":
+    case "scenario":
+    default:
+      return "creative"
+  }
+}
+
+function mapOpenDesignScenario(scenario?: string): OutputScenario {
+  switch ((scenario || "").toLowerCase()) {
+    case "research":
+    case "report":
+    case "analysis":
+      return "research"
+    case "presentation":
+    case "deck":
+    case "pitch":
+      return "presentation"
+    case "share":
+    case "social":
+    case "marketing":
+      return "sharing"
+    case "learning":
+    case "education":
+      return "learning"
+    case "product":
+    case "prototype":
+    case "note":
+    default:
+      return "note"
+  }
+}
+
+function inferDesignProfileFromManifest(manifest?: OpenDesignManifestLite): DesignProfileId | undefined {
+  const mode = manifest?.od?.mode?.toLowerCase()
+  const tags = (manifest?.tags ?? []).map((tag) => tag.toLowerCase())
+  if (mode === "deck" || tags.includes("deck") || tags.includes("slides")) return "swiss-deck"
+  if (mode === "live-artifact" || tags.includes("dashboard") || tags.includes("data")) return "data-utility"
+  if (mode === "image" || mode === "video" || tags.includes("social")) return "social-impact"
+  if (tags.includes("code") || tags.includes("developer")) return "tech-utility"
+  if (tags.includes("experimental") || tags.includes("brutalist")) return "experimental-brutalist"
+  return undefined
+}
+
+function parseOpenDesignManifest(text?: string): OpenDesignManifestLite | undefined {
+  if (!text?.trim()) return undefined
+  try {
+    const parsed = JSON.parse(text) as OpenDesignManifestLite
+    return parsed && typeof parsed === "object" ? parsed : undefined
+  } catch (e) {
+    console.warn("解析 open-design.json 失败，忽略此模板清单:", e)
+    return undefined
+  }
+}
+
+async function readOptionalTextFile(path: string): Promise<string | undefined> {
+  try {
+    if (!(await exists(path))) return undefined
+    return await readTextFile(path)
+  } catch (e) {
+    console.warn(`读取可选模板文件失败: ${path}`, e)
+    return undefined
+  }
+}
+
+function renderOpenDesignPromptAppendix(manifest?: OpenDesignManifestLite): string {
+  if (!manifest?.od) return ""
+
+  const blocks: string[] = []
+  const query = resolveLocalized(manifest.od.useCase?.query)
+  if (query) {
+    blocks.push(`参考使用场景：${query}`)
+  }
+
+  if (manifest.od.inputs?.length) {
+    blocks.push([
+      "预期输入项：",
+      ...manifest.od.inputs.map((input) => {
+        const label = input.label || input.name || "input"
+        return `- ${label}${input.type ? ` (${input.type})` : ""}${input.required ? "，必填" : ""}`
+      }),
+    ].join("\n"))
+  }
+
+  if (manifest.od.pipeline?.stages?.length) {
+    blocks.push([
+      "推荐工作流：",
+      ...manifest.od.pipeline.stages.map((stage) => {
+        const atoms = stage.atoms?.length ? `：${stage.atoms.join(", ")}` : ""
+        return `- ${stage.id || "stage"}${atoms}`
+      }),
+    ].join("\n"))
+  }
+
+  return blocks.length ? `\n\n【Open Design Manifest 补充】\n${blocks.join("\n\n")}` : ""
+}
+
+function parseSkillTemplate(id: string, skillMdText: string, openDesignManifestText?: string): OutputTemplate | null {
   const trimmed = skillMdText.trim()
   if (!trimmed) return null
 
+  const openDesignManifest = parseOpenDesignManifest(openDesignManifestText)
   const yamlMatch = /^---\s*\r?\n([\s\S]*?)\r?\n---/.exec(trimmed)
   const yamlRaw = yamlMatch?.[1] || ""
   const skillPrompt = yamlMatch ? trimmed.slice(yamlMatch[0].length).trim() : trimmed
@@ -309,13 +481,25 @@ function parseSkillTemplate(id: string, skillMdText: string): OutputTemplate | n
   })
 
   // 如果连名字都没有，则使用 ID 代替
-  const name = metadata.name || metadata.zh_name || readFirstMarkdownHeading(skillPrompt) || toTemplateDisplayName(id)
-  const nameEn = metadata.nameEn || metadata.en_name || id
-  const icon = metadata.icon || metadata.emoji || "✨"
-  const description = metadata.description || "AI 自由创意设计 Skill"
+  const manifestTitle = resolveLocalized(openDesignManifest?.title_i18n) || openDesignManifest?.title
+  const manifestDescription = resolveLocalized(openDesignManifest?.description_i18n) || openDesignManifest?.description
+  const name = metadata.name || metadata.zh_name || manifestTitle || readFirstMarkdownHeading(skillPrompt) || toTemplateDisplayName(id)
+  const nameEn = metadata.nameEn || metadata.en_name || openDesignManifest?.name || id
+  const icon = metadata.icon || metadata.emoji || openDesignManifest?.icon || "✨"
+  const description = metadata.description || manifestDescription || "AI 自由创意设计 Skill"
+  const manifestMode = mapOpenDesignMode(openDesignManifest?.od?.mode)
+  const manifestScenario = mapOpenDesignScenario(openDesignManifest?.od?.scenario)
+  const manifestAppendix = renderOpenDesignPromptAppendix(openDesignManifest)
+  const mergedSkillPrompt = `${skillPrompt}${manifestAppendix}`
+  const manifestPipeline = openDesignManifest?.od?.pipeline?.stages
+    ?.map((stage) => stage.id)
+    .filter((stageId): stageId is string => Boolean(stageId?.trim()))
+  const manifestInputs = openDesignManifest?.od?.inputs
+    ?.map((input) => input.label || input.name)
+    .filter((label): label is string => Boolean(label?.trim()))
 
   // 解析导出蓝图
-  const exportBlueprint: Record<string, any> = {}
+  const exportBlueprint: ExportBlueprint = {}
   if (metadata.cardSelectors) {
     exportBlueprint.cardSelectors = metadata.cardSelectors.split(",").map((s: string) => s.trim())
   }
@@ -325,22 +509,47 @@ function parseSkillTemplate(id: string, skillMdText: string): OutputTemplate | n
   if (metadata.cardGap) {
     exportBlueprint.cardGap = parseInt(metadata.cardGap, 10)
   }
+  if (metadata.pagingMode) {
+    const pagingMode = metadata.pagingMode.trim()
+    if (["semantic", "separator", "auto-fit", "auto-split", "dynamic"].includes(pagingMode)) {
+      exportBlueprint.pagingMode = pagingMode as SmartCardPagingMode
+    }
+  }
+  if (metadata.autoSplitMaxChars) {
+    const autoSplitMaxChars = parseInt(metadata.autoSplitMaxChars, 10)
+    if (Number.isFinite(autoSplitMaxChars)) {
+      exportBlueprint.autoSplitMaxChars = autoSplitMaxChars
+    }
+  }
+  if (metadata.dynamicMaxHeight) {
+    const dynamicMaxHeight = parseInt(metadata.dynamicMaxHeight, 10)
+    if (Number.isFinite(dynamicMaxHeight)) {
+      exportBlueprint.dynamicMaxHeight = dynamicMaxHeight
+    }
+  }
 
   return {
     id,
     name,
     nameEn,
-    mode: "creative",
-    scenario: (metadata.scenario || "note") as any,
+    mode: (metadata.mode as OutputMode) || manifestMode,
+    scenario: (metadata.scenario as OutputScenario) || manifestScenario,
     description,
     icon,
-    designConstraints: `【${name} 设计规范与约束】:\n${skillPrompt}`,
+    designConstraints: `【${name} 设计规范与约束】:\n${mergedSkillPrompt}`,
     outputHint: metadata.outputHint || "由 AI 根据 Skill 设计规范直绘生成网页",
     bestFor: metadata.bestFor || "AI 自由设计、个性排版、非结构化视觉输出",
-    skillPrompt: skillPrompt, // 用于传递给 AI 扮演设计师的核心约束
+    skillPrompt: mergedSkillPrompt, // 用于传递给 AI 扮演设计师的核心约束
     recommended: metadata.recommended === "true" || metadata.featured !== undefined,
-    features: ["AI直绘", "Skill规范"],
-    exportBlueprint: Object.keys(exportBlueprint).length > 0 ? exportBlueprint as any : undefined,
+    features: normalizeFeatureList([
+      ...(openDesignManifest?.tags ?? []),
+      ...(manifestInputs ?? []).map((label) => `输入:${label}`),
+      openDesignManifest?.od?.mode ? `OD:${openDesignManifest.od.mode}` : undefined,
+    ], ["AI直绘", "Skill规范"]),
+    previewTone: openDesignManifest?.od?.preview?.type || openDesignManifest?.od?.preview?.motion,
+    designProfileId: (metadata.designProfileId as DesignProfileId) || inferDesignProfileFromManifest(openDesignManifest),
+    pipelineHint: manifestPipeline?.length ? manifestPipeline : undefined,
+    exportBlueprint: Object.keys(exportBlueprint).length > 0 ? exportBlueprint : undefined,
   }
 }
 
@@ -369,7 +578,8 @@ export async function listInstalledTemplates(): Promise<OutputTemplate[]> {
               if (await exists(skillMdPath)) {
                 try {
                   const text = await readTextFile(skillMdPath)
-                  const parsed = parseSkillTemplate(`market-${pkgId}--${skillId}`, text)
+                  const manifestText = await readOptionalTextFile(await join(skillsSubDir, skillId, "open-design.json"))
+                  const parsed = parseSkillTemplate(`market-${pkgId}--${skillId}`, text, manifestText)
                   if (parsed) templates.push(parsed)
                 } catch (e) {
                   console.warn(`读取模板 ${skillId} 失败:`, e)
@@ -395,7 +605,8 @@ export async function listInstalledTemplates(): Promise<OutputTemplate[]> {
         if (await exists(skillMdPath)) {
           try {
             const text = await readTextFile(skillMdPath)
-            const parsed = parseSkillTemplate(`custom-${skillId}`, text)
+            const manifestText = await readOptionalTextFile(await join(customDir, skillId, "open-design.json"))
+            const parsed = parseSkillTemplate(`custom-${skillId}`, text, manifestText)
             if (parsed) templates.push(parsed)
           } catch (e) {
             console.warn(`读取自定义模板 ${skillId} 失败:`, e)

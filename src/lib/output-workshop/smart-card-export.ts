@@ -11,6 +11,8 @@ import { domToBlob, waitUntilLoad } from "modern-screenshot"
 // ---------------------------------------------------------------------------
 
 /** 模板导出蓝图 — 模板可声明自己的卡片结构和导出偏好 */
+export type SmartCardPagingMode = "semantic" | "separator" | "auto-fit" | "auto-split" | "dynamic"
+
 export interface ExportBlueprint {
   /** 卡片级元素的 CSS 选择器列表（优先级从高到低） */
   cardSelectors?: string[]
@@ -20,6 +22,12 @@ export interface ExportBlueprint {
   cardGap?: number
   /** 是否包含封面卡 */
   includeCover?: boolean
+  /** 卡片分割/适配策略，吸收 Auto-Redbook 的 separator/auto-fit/auto-split/dynamic 思路 */
+  pagingMode?: SmartCardPagingMode
+  /** auto-split 语义切分的目标字符权重 */
+  autoSplitMaxChars?: number
+  /** dynamic 模式最大导出高度 */
+  dynamicMaxHeight?: number
 }
 
 /** 从 HTML 中提取的一张独立卡片 */
@@ -34,6 +42,10 @@ export type SmartCard = {
   bg?: string
   /** 检测来源 */
   matchedBy: string
+  /** 当前卡片推荐导出策略 */
+  exportMode?: SmartCardPagingMode
+  /** dynamic 模式最大导出高度 */
+  dynamicMaxHeight?: number
 }
 
 /** 卡片检测结果 */
@@ -48,8 +60,10 @@ export type SmartCardParsed = {
   bodyClass: string
   /** 原始 body style */
   bodyStyle: string
-  /** 检测方法: 'blueprint' | 'selector' | 'heading' | 'fallback' */
+  /** 检测方法: 'blueprint' | 'selector' | 'separator' | 'auto-split' | 'heading' | 'fallback' */
   detectionMethod: string
+  /** 当前使用的分割/适配策略 */
+  pagingMode: SmartCardPagingMode
 }
 
 export interface ExportResult {
@@ -67,6 +81,11 @@ export interface SmartCardExportSkip {
   reason: string
 }
 
+export interface SmartCardRenderOptions {
+  pagingMode?: SmartCardPagingMode
+  dynamicMaxHeight?: number
+}
+
 // ---------------------------------------------------------------------------
 // 2. HTML 解析辅助
 // ---------------------------------------------------------------------------
@@ -79,6 +98,11 @@ function pick(re: RegExp, src: string): string {
 function extractAttr(tag: string, name: string): string {
   const re = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i")
   return pick(re, tag)
+}
+
+function normalizePagingMode(mode: string | undefined): SmartCardPagingMode {
+  if (mode === "separator" || mode === "auto-fit" || mode === "auto-split" || mode === "dynamic") return mode
+  return "semantic"
 }
 
 function getNormalizedText(el: Element): string {
@@ -106,6 +130,10 @@ function dropNestedDuplicateMatches(elements: HTMLElement[]): HTMLElement[] {
 
 /** 默认的卡片选择器级联（与原 getCardSliceLines 保持一致） */
 const DEFAULT_CARD_SELECTORS = [
+  ".cover-container",
+  ".card-container",
+  "[data-redbook-card]",
+  "[data-export-card]",
   ".slide",
   ".deck-slide",
   ".card",
@@ -132,8 +160,9 @@ export function parseSmartCards(
   fullHtml: string,
   blueprint?: ExportBlueprint
 ): SmartCardParsed {
+  const pagingMode = normalizePagingMode(blueprint?.pagingMode)
   if (!fullHtml) {
-    return { hasCards: false, cards: [], head: "", bodyClass: "", bodyStyle: "", detectionMethod: "fallback" }
+    return { hasCards: false, cards: [], head: "", bodyClass: "", bodyStyle: "", detectionMethod: "fallback", pagingMode }
   }
 
   const head = pick(/<head\b[^>]*>([\s\S]*?)<\/head>/i, fullHtml)
@@ -144,29 +173,45 @@ export function parseSmartCards(
   const parser = new DOMParser()
   const doc = parser.parseFromString(fullHtml, "text/html")
 
+  // Tier 0: Auto-Redbook 手动分隔模式，识别 Markdown/HTML 中保留的 --- 分隔段
+  if (pagingMode === "separator") {
+    const cards = splitBySeparatorBoundaries(doc, head, bodyClass, bodyStyle, blueprint)
+    if (cards.length > 1) {
+      return { hasCards: true, cards, head, bodyClass, bodyStyle, detectionMethod: "separator", pagingMode }
+    }
+  }
+
   // Tier 1: 模板蓝图选择器
   if (blueprint?.cardSelectors?.length) {
-    const cards = trySelectors(doc, blueprint.cardSelectors, head, bodyClass, bodyStyle)
+    const cards = trySelectors(doc, blueprint.cardSelectors, head, bodyClass, bodyStyle, blueprint)
     if (cards.length > 1) {
-      return { hasCards: true, cards, head, bodyClass, bodyStyle, detectionMethod: "blueprint" }
+      return { hasCards: true, cards, head, bodyClass, bodyStyle, detectionMethod: "blueprint", pagingMode }
     }
   }
 
   // Tier 2: 默认 CSS 选择器级联
-  const selectorCards = trySelectors(doc, DEFAULT_CARD_SELECTORS, head, bodyClass, bodyStyle)
+  const selectorCards = trySelectors(doc, DEFAULT_CARD_SELECTORS, head, bodyClass, bodyStyle, blueprint)
   if (selectorCards.length > 1) {
-    return { hasCards: true, cards: selectorCards, head, bodyClass, bodyStyle, detectionMethod: "selector" }
+    return { hasCards: true, cards: selectorCards, head, bodyClass, bodyStyle, detectionMethod: "selector", pagingMode }
   }
 
-  // Tier 3: 标题边界分割
-  const headingCards = splitByHeadingBoundaries(doc, head, bodyClass, bodyStyle)
+  // Tier 3: Auto-Redbook auto-split 语义拆分，根据标题和内容体量组合为多张固定比例卡
+  if (pagingMode === "auto-split") {
+    const autoSplitCards = splitByContentWeight(doc, head, bodyClass, bodyStyle, blueprint)
+    if (autoSplitCards.length > 1) {
+      return { hasCards: true, cards: autoSplitCards, head, bodyClass, bodyStyle, detectionMethod: "auto-split", pagingMode }
+    }
+  }
+
+  // Tier 4: 标题边界分割
+  const headingCards = splitByHeadingBoundaries(doc, head, bodyClass, bodyStyle, blueprint)
   if (headingCards.length > 1) {
-    return { hasCards: true, cards: headingCards, head, bodyClass, bodyStyle, detectionMethod: "heading" }
+    return { hasCards: true, cards: headingCards, head, bodyClass, bodyStyle, detectionMethod: "heading", pagingMode }
   }
 
-  // Tier 4: 整页兜底
-  const fallbackCard = wrapAsSingleCard(fullHtml)
-  return { hasCards: false, cards: [fallbackCard], head, bodyClass, bodyStyle, detectionMethod: "fallback" }
+  // Tier 5: 整页兜底
+  const fallbackCard = wrapAsSingleCard(fullHtml, blueprint)
+  return { hasCards: false, cards: [fallbackCard], head, bodyClass, bodyStyle, detectionMethod: "fallback", pagingMode }
 }
 
 /** 尝试一组选择器，返回第一个匹配到 >1 个有效元素的结果 */
@@ -175,7 +220,8 @@ function trySelectors(
   selectors: string[],
   head: string,
   bodyClass: string,
-  bodyStyle: string
+  bodyStyle: string,
+  blueprint?: ExportBlueprint
 ): SmartCard[] {
   for (const selector of selectors) {
     try {
@@ -184,7 +230,7 @@ function trySelectors(
       )
       const valid = dropNestedDuplicateMatches(found).filter(isSemanticCardCandidate)
       if (valid.length > 1) {
-        return valid.map((el, i) => buildStandaloneCardHtml(el, head, bodyClass, bodyStyle, i, selector))
+        return valid.map((el, i) => buildStandaloneCardHtml(el, head, bodyClass, bodyStyle, i, selector, blueprint))
       }
     } catch {
       // 选择器无效，跳过
@@ -200,7 +246,8 @@ function buildStandaloneCardHtml(
   bodyClass: string,
   bodyStyle: string,
   index: number,
-  matchedBy: string
+  matchedBy: string,
+  blueprint?: ExportBlueprint
 ): SmartCard {
   // 提取标题
   let title = `卡片 ${index + 1}`
@@ -242,17 +289,18 @@ function buildStandaloneCardHtml(
         max-width: 100%;
         max-height: 100%;
       }
-      .lingmo-smart-card-export-root > .moka-card {
+      .lingmo-smart-card-export-root > .card-container,
+      .lingmo-smart-card-export-root > .cover-container,
+      .lingmo-smart-card-export-root > [data-redbook-card] {
         width: 100% !important;
         height: 100% !important;
-        aspect-ratio: 3 / 4 !important;
-        max-width: none !important;
-        max-height: none !important;
+        min-height: 100% !important;
+        overflow: hidden !important;
       }
-      .lingmo-smart-card-export-root .lingmo-moka-editor,
-      .lingmo-smart-card-export-root .moka-reorder-handle,
-      .lingmo-smart-card-export-root [data-moka-editor-ui] {
-        display: none !important;
+      .lingmo-smart-card-export-root .card-inner,
+      .lingmo-smart-card-export-root .cover-inner {
+        max-width: 100% !important;
+        max-height: 100% !important;
       }
       .lingmo-smart-card-export-root .slide,
       .lingmo-smart-card-export-root .deck-slide,
@@ -271,7 +319,15 @@ function buildStandaloneCardHtml(
     </style></head>` +
     `<body class="${bodyClass}"><div class="lingmo-smart-card-export-root">${cardHtml}</div></body></html>`
 
-  return { html: standalone, title, index, bg, matchedBy }
+  return {
+    html: standalone,
+    title,
+    index,
+    bg,
+    matchedBy,
+    exportMode: normalizePagingMode(blueprint?.pagingMode),
+    dynamicMaxHeight: blueprint?.dynamicMaxHeight,
+  }
 }
 
 /** 解析元素自身的背景色 */
@@ -285,12 +341,163 @@ function resolveElementBackground(el: HTMLElement): string | undefined {
   return undefined
 }
 
+function isSeparatorElement(el: HTMLElement): boolean {
+  if (el.matches("hr, [data-page-break], [data-card-break]")) return true
+  const text = getNormalizedText(el)
+  return /^[-*_]{3,}$/.test(text)
+}
+
+function createAutoRedbookWrapper(doc: Document, nodes: Node[], index: number): HTMLElement {
+  const container = doc.createElement("section")
+  container.className = "card-container"
+  container.setAttribute("data-redbook-card", String(index + 1))
+
+  const inner = doc.createElement("div")
+  inner.className = "card-inner"
+
+  const content = doc.createElement("div")
+  content.className = "card-content"
+
+  const scale = doc.createElement("div")
+  scale.className = "card-content-scale"
+
+  for (const node of nodes) {
+    scale.appendChild(node.cloneNode(true))
+  }
+
+  content.appendChild(scale)
+  inner.appendChild(content)
+  container.appendChild(inner)
+  return container
+}
+
+function buildCardsFromNodeChunks(
+  doc: Document,
+  chunks: Node[][],
+  head: string,
+  bodyClass: string,
+  bodyStyle: string,
+  matchedBy: string,
+  blueprint?: ExportBlueprint,
+  titleHints: string[] = []
+): SmartCard[] {
+  return chunks
+    .filter((chunk) => chunk.some((node) => node.textContent?.trim() || node.nodeType === Node.ELEMENT_NODE))
+    .map((chunk, index) => {
+      const wrapper = createAutoRedbookWrapper(doc, chunk, index)
+      const card = buildStandaloneCardHtml(wrapper, head, bodyClass, bodyStyle, index, matchedBy, blueprint)
+      if (titleHints[index]) card.title = titleHints[index]
+      return card
+    })
+}
+
+function splitBySeparatorBoundaries(
+  doc: Document,
+  head: string,
+  bodyClass: string,
+  bodyStyle: string,
+  blueprint?: ExportBlueprint
+): SmartCard[] {
+  const body = doc.body
+  if (!body) return []
+
+  const chunks: Node[][] = []
+  let currentNodes: Node[] = []
+  const children = Array.from(body.childNodes)
+
+  for (const child of children) {
+    if (child.nodeType === Node.ELEMENT_NODE && isSeparatorElement(child as HTMLElement)) {
+      if (currentNodes.length) {
+        chunks.push(currentNodes)
+        currentNodes = []
+      }
+      continue
+    }
+    if (child.nodeType === Node.TEXT_NODE && /^\s*---+\s*$/.test(child.textContent || "")) {
+      if (currentNodes.length) {
+        chunks.push(currentNodes)
+        currentNodes = []
+      }
+      continue
+    }
+    if (child.textContent?.trim() || child.nodeType === Node.ELEMENT_NODE) {
+      currentNodes.push(child)
+    }
+  }
+  if (currentNodes.length) chunks.push(currentNodes)
+
+  if (chunks.length < 2) return []
+  return buildCardsFromNodeChunks(doc, chunks, head, bodyClass, bodyStyle, "separator", blueprint)
+}
+
+function nodeWeight(node: Node): number {
+  if (node.nodeType === Node.TEXT_NODE) return (node.textContent || "").trim().length
+  if (node.nodeType !== Node.ELEMENT_NODE) return 0
+
+  const el = node as HTMLElement
+  const tag = el.tagName.toLowerCase()
+  const textLength = getNormalizedText(el).length
+  const mediaWeight = el.querySelector("img, svg, canvas, video, table") ? 240 : 0
+  const headingWeight = /^h[1-6]$/.test(tag) ? 160 : 0
+  return textLength + mediaWeight + headingWeight
+}
+
+function splitByContentWeight(
+  doc: Document,
+  head: string,
+  bodyClass: string,
+  bodyStyle: string,
+  blueprint?: ExportBlueprint
+): SmartCard[] {
+  const body = doc.body
+  if (!body) return []
+
+  const maxWeight = Math.max(520, blueprint?.autoSplitMaxChars ?? 760)
+  const chunks: Node[][] = []
+  const titleHints: string[] = []
+  let currentNodes: Node[] = []
+  let currentWeight = 0
+  let currentTitle = ""
+
+  const flush = () => {
+    if (!currentNodes.length) return
+    chunks.push(currentNodes)
+    titleHints.push(currentTitle)
+    currentNodes = []
+    currentWeight = 0
+    currentTitle = ""
+  }
+
+  for (const child of Array.from(body.childNodes)) {
+    if (!(child.textContent?.trim() || child.nodeType === Node.ELEMENT_NODE)) continue
+    const isHeading = child.nodeType === Node.ELEMENT_NODE && (child as HTMLElement).matches("h1, h2, h3")
+    const weight = Math.max(1, nodeWeight(child))
+
+    if (isHeading && currentNodes.length && currentWeight >= maxWeight * 0.35) {
+      flush()
+    } else if (currentNodes.length && currentWeight + weight > maxWeight) {
+      flush()
+    }
+
+    if (!currentTitle && isHeading) {
+      currentTitle = (child.textContent || "").trim().slice(0, 20)
+    }
+    currentNodes.push(child)
+    currentWeight += weight
+  }
+  flush()
+
+  if (chunks.length < 2) return []
+  return buildCardsFromNodeChunks(doc, chunks, head, bodyClass, bodyStyle, "auto-split", blueprint, titleHints)
+}
+
 /** 按标题边界分割文档为虚拟卡片 */
 function splitByHeadingBoundaries(
   doc: Document,
   head: string,
   bodyClass: string,
-  bodyStyle: string
+  bodyStyle: string,
+  blueprint?: ExportBlueprint
 ): SmartCard[] {
   const body = doc.body
   if (!body) return []
@@ -313,7 +520,7 @@ function splitByHeadingBoundaries(
     for (const node of currentNodes) {
       wrapper.appendChild(node.cloneNode(true))
     }
-    const card = buildStandaloneCardHtml(wrapper as HTMLElement, head, bodyClass, bodyStyle, cards.length, "heading")
+    const card = buildStandaloneCardHtml(wrapper as HTMLElement, head, bodyClass, bodyStyle, cards.length, "heading", blueprint)
     if (currentTitle) card.title = currentTitle
     cards.push(card)
     currentNodes = []
@@ -341,12 +548,14 @@ function splitByHeadingBoundaries(
 }
 
 /** 整页作为单张卡片 */
-function wrapAsSingleCard(fullHtml: string): SmartCard {
+function wrapAsSingleCard(fullHtml: string, blueprint?: ExportBlueprint): SmartCard {
   return {
     html: fullHtml,
     title: "整页导出",
     index: 0,
     matchedBy: "fallback",
+    exportMode: normalizePagingMode(blueprint?.pagingMode),
+    dynamicMaxHeight: blueprint?.dynamicMaxHeight,
   }
 }
 
@@ -381,28 +590,22 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
   })
 }
 
-function isMokaCard(card: SmartCard): boolean {
-  return /\b(?:moka-card|moka-slide)\b|data-moka-card|data-moka-ai-design/.test(card.html)
-}
-
 function getRenderViewport(card: SmartCard, targetWidth: number, targetHeight: number): { width: number; height: number } {
-  if (isMokaCard(card)) {
-    return {
-      width: CARD_BASE_WIDTH,
-      height: CARD_BASE_HEIGHT,
-    }
-  }
-
+  const maxDynamicHeight = Math.min(Math.max(card.dynamicMaxHeight ?? targetHeight, targetHeight), 4096)
+  const dynamicHeight = card.exportMode === "dynamic"
+    ? maxDynamicHeight
+    : targetHeight
   return {
     width: Math.max(targetWidth, CARD_BASE_WIDTH),
-    height: Math.max(targetHeight, CARD_BASE_HEIGHT),
+    height: Math.max(dynamicHeight, CARD_BASE_HEIGHT),
   }
 }
 
 function findScreenshotTarget(doc: Document): HTMLElement {
   const selectors = [
-    ".lingmo-smart-card-export-root > [data-moka-card]",
-    ".lingmo-smart-card-export-root > .moka-card",
+    ".lingmo-smart-card-export-root > .card-container",
+    ".lingmo-smart-card-export-root > .cover-container",
+    ".lingmo-smart-card-export-root > [data-redbook-card]",
     ".lingmo-smart-card-export-root > .gz-social-card",
     ".lingmo-smart-card-export-root > .xhs-card",
     ".lingmo-smart-card-export-root > .learning-card",
@@ -498,6 +701,29 @@ function resolveTargetBackground(target: HTMLElement, fallback: string): string 
   return fallback
 }
 
+function applyAutoFitScale(doc: Document): void {
+  const viewportContent = doc.querySelector(".card-content")
+  const scaleEl = doc.querySelector(".card-content-scale")
+  if (!(viewportContent instanceof HTMLElement) || !(scaleEl instanceof HTMLElement)) return
+
+  scaleEl.style.transform = "none"
+  scaleEl.style.width = ""
+  scaleEl.style.height = ""
+
+  const availableWidth = viewportContent.clientWidth
+  const availableHeight = viewportContent.clientHeight
+  const rect = scaleEl.getBoundingClientRect()
+  const contentWidth = Math.max(scaleEl.scrollWidth, rect.width)
+  const contentHeight = Math.max(scaleEl.scrollHeight, rect.height)
+
+  if (!availableWidth || !availableHeight || !contentWidth || !contentHeight) return
+
+  const fitScale = Math.min(1, availableWidth / contentWidth, availableHeight / contentHeight)
+  scaleEl.style.width = `${availableWidth / fitScale}px`
+  scaleEl.style.transformOrigin = "top left"
+  scaleEl.style.transform = `scale(${fitScale})`
+}
+
 /** 等待 iframe 文档就绪 */
 async function waitForIframeReady(iframe: HTMLIFrameElement): Promise<void> {
   await withTimeout(waitForIframeReadyInner(iframe), CARD_RESOURCE_TIMEOUT_MS, "卡片资源加载")
@@ -561,9 +787,16 @@ export async function renderCardToBlob(
   card: SmartCard,
   targetWidth: number,
   targetHeight: number,
-  scale = 2
+  scale = 2,
+  options?: SmartCardRenderOptions
 ): Promise<Blob> {
-  const viewport = getRenderViewport(card, targetWidth, targetHeight)
+  const renderMode = options?.pagingMode ?? card.exportMode ?? "semantic"
+  const renderCard: SmartCard = {
+    ...card,
+    exportMode: renderMode,
+    dynamicMaxHeight: options?.dynamicMaxHeight ?? card.dynamicMaxHeight,
+  }
+  const viewport = getRenderViewport(renderCard, targetWidth, targetHeight)
   const wrap = document.createElement("div")
   wrap.style.cssText = `
     position: fixed;
@@ -607,6 +840,10 @@ export async function renderCardToBlob(
     doc.body.style.height = `${viewport.height}px`
     doc.body.style.overflow = "hidden"
 
+    if (renderMode === "auto-fit") {
+      applyAutoFitScale(doc)
+    }
+
     await nextFrame()
     await sleep(50)
     await nextFrame()
@@ -619,19 +856,25 @@ export async function renderCardToBlob(
         throw new Error("卡片内容尚未渲染，无法截图")
       }
       const backgroundColor = resolveTargetBackground(target, card.bg ?? "#ffffff")
-      const presetScale = Math.min(targetWidth / rect.width, targetHeight / rect.height)
+      const presetScale = renderMode === "dynamic"
+        ? targetWidth / rect.width
+        : Math.min(targetWidth / rect.width, targetHeight / rect.height)
       const captureScale = Math.max(0.25, Math.min(5, presetScale * Math.max(scale, 1)))
+      const captureHeight = renderMode === "dynamic"
+        ? Math.min(Math.ceil(Math.max(target.scrollHeight, rect.height, targetHeight)), renderCard.dynamicMaxHeight ?? viewport.height)
+        : Math.ceil(rect.height)
       const blob = await withTimeout(
         domToBlob(target, {
           scale: captureScale,
           width: Math.ceil(rect.width),
-          height: Math.ceil(rect.height),
+          height: captureHeight,
           backgroundColor,
         }),
         timeoutMs,
         `卡片 #${card.index + 1} 截图`
       )
       if (!blob) throw new Error("卡片截图转换失败")
+      if (renderMode === "dynamic") return blob
       return fitBlobToTargetSize(blob, targetWidth, targetHeight, backgroundColor)
     } finally {
       if (prevHtmlStyle === null) doc.documentElement.removeAttribute("style")
@@ -657,7 +900,8 @@ export async function exportSmartCardsZip(
   targetHeight: number,
   basename = "lingmo-cards",
   selectedIndices: number[],
-  onProgress?: (i: number, total: number) => void
+  onProgress?: (i: number, total: number) => void,
+  options?: SmartCardRenderOptions
 ): Promise<ExportResult> {
   const filtered = selectedIndices.length > 0
     ? cards.filter((c) => selectedIndices.includes(c.index))
@@ -677,7 +921,7 @@ export async function exportSmartCardsZip(
     onProgress?.(i + 1, total)
     const card = filtered[i]
     try {
-      const blob = await renderCardToBlob(card, targetWidth, targetHeight)
+      const blob = await renderCardToBlob(card, targetWidth, targetHeight, 2, options)
       zip.file(`${basename}-${pad(card.index + 1)}.png`, blob)
       exportedCount += 1
     } catch (error) {
@@ -712,9 +956,10 @@ export async function downloadSingleCard(
   card: SmartCard,
   targetWidth: number,
   targetHeight: number,
-  filename: string
+  filename: string,
+  options?: SmartCardRenderOptions
 ): Promise<ExportResult> {
-  const blob = await renderCardToBlob(card, targetWidth, targetHeight)
+  const blob = await renderCardToBlob(card, targetWidth, targetHeight, 2, options)
   return saveBlobAs(blob, filename)
 }
 
@@ -759,9 +1004,10 @@ async function saveBlobAs(blob: Blob, defaultName: string): Promise<ExportResult
 export async function renderCardThumbnail(
   card: SmartCard,
   thumbWidth = 270,
-  thumbHeight = 360
+  thumbHeight = 360,
+  options?: SmartCardRenderOptions
 ): Promise<string> {
-  const blob = await renderCardToBlob(card, thumbWidth, thumbHeight, 1)
+  const blob = await renderCardToBlob(card, thumbWidth, thumbHeight, 1, options)
   return withTimeout(new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(reader.result as string)

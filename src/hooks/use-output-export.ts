@@ -21,6 +21,7 @@ import {
 import {
   exportSmartCardsZip,
   type SmartCard,
+  type SmartCardRenderOptions,
 } from "@/lib/output-workshop/smart-card-export"
 import { deployToVercel } from "@/lib/output-workshop/deploy"
 import type { ExportRecord, PreviewSizePreset } from "@/components/output-workshop/types"
@@ -45,7 +46,7 @@ interface UseOutputExportParams {
 }
 
 /**
- * 输出工坊导出/部署逻辑：封装 export/deploy state、文件名生成、任务包装器、
+ * 智能排版导出/部署逻辑：封装 export/deploy state、文件名生成、任务包装器、
  * 以及全部 15 个导出 handler。从 use-output-generation 提取，使其专注生成。
  */
 export function useOutputExport({ getLatest, iframeRef, parsedDeckData }: UseOutputExportParams) {
@@ -158,7 +159,7 @@ export function useOutputExport({ getLatest, iframeRef, parsedDeckData }: UseOut
   }, [runExportTask, iframeRef, buildExportBaseName, rememberExport])
 
   // 智能卡片导出
-  const handleExportSmartCards = React.useCallback((cards: SmartCard[], preset: PreviewSizePreset, selectedIndices: number[]) => {
+  const handleExportSmartCards = React.useCallback((cards: SmartCard[], preset: PreviewSizePreset, selectedIndices: number[], options?: SmartCardRenderOptions) => {
     void runExportTask("智能卡片导出", async () => {
       const result = await exportSmartCardsZip(
         cards,
@@ -168,7 +169,8 @@ export function useOutputExport({ getLatest, iframeRef, parsedDeckData }: UseOut
         selectedIndices,
         (cur, total) => {
           setExportProgressText(`渲染卡片中 (${cur}/${total})`)
-        }
+        },
+        options
       )
       if (result.canceled) return false
       rememberExport({ target: "smart-card", label: "智能卡片导出", fileName: result.fileName, filePath: result.filePath })
