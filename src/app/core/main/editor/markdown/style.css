@@ -196,7 +196,7 @@
 .tiptap-editor .ProseMirror {
   outline: none;
   min-height: 100%;
-  padding: 32px 24px 64px;
+  padding: 20px 24px 64px;
   font-size: 16px;
   line-height: 1.7;
   max-width: 75ch;
@@ -231,6 +231,10 @@
 
 .tiptap-editor .tiptap.ProseMirror > p:not(.is-empty) + p:not(.is-empty) {
   margin-top: 0.85em;
+}
+
+.tiptap-editor .ProseMirror > :first-child {
+  margin-top: 0;
 }
 
 /* 基础样式覆盖 */
@@ -269,12 +273,14 @@
 /* 粗体和斜体 */
 .tiptap-editor .ProseMirror .heading-collapse-heading {
   position: relative;
+  --heading-collapse-toggle-left: -1.08em;
+  --heading-collapse-toggle-top: 0.65em;
 }
 
 .tiptap-editor .ProseMirror .heading-collapse-toggle {
   position: absolute;
-  left: -0.72em;
-  top: 50%;
+  left: var(--heading-collapse-toggle-left);
+  top: var(--heading-collapse-toggle-top);
   display: inline-flex;
   height: 1em;
   width: 1em;
@@ -287,6 +293,22 @@
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s ease;
+}
+
+.tiptap-editor .ProseMirror h1.heading-collapse-heading {
+  --heading-collapse-toggle-top: 0.625em;
+}
+
+.tiptap-editor .ProseMirror h2.heading-collapse-heading {
+  --heading-collapse-toggle-top: 0.65em;
+}
+
+.tiptap-editor .ProseMirror h3.heading-collapse-heading {
+  --heading-collapse-toggle-top: 0.675em;
+}
+
+.tiptap-editor .ProseMirror h4.heading-collapse-heading {
+  --heading-collapse-toggle-top: 0.7em;
 }
 
 .tiptap-editor .ProseMirror .heading-collapse-caret {

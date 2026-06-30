@@ -32,6 +32,29 @@ export interface SkillContextPolicy {
   references?: 'on-demand' | 'eager'
 }
 
+export type SkillPermissionCapability = 'read' | 'write' | 'delete' | 'execute' | 'network'
+
+export interface SkillPermissionManifest {
+  tools?: string[]
+  capabilities?: SkillPermissionCapability[]
+  filesystem?: Array<{
+    path: string
+    access: 'read' | 'write' | 'readwrite'
+  }>
+  network?: Array<{
+    host: string
+    purpose?: string
+  }>
+  requiresConfirmation?: boolean
+}
+
+export interface SkillArtifactSchema {
+  type: 'file' | 'folder' | 'url' | 'markdown' | 'json' | 'other'
+  path?: string
+  mimeType?: string
+  description?: string
+}
+
 /**
  * Skill 脚本文件
  */
@@ -85,9 +108,12 @@ export interface SkillMetadata {
   // 执行配置 (扩展字段)
   model?: string                // 指定使用的模型
   allowedTools?: string[]       // 允许使用的工具 (无需权限确认)
+  permissionManifest?: SkillPermissionManifest  // 权限声明，用于运行前展示和治理
+  artifactSchema?: SkillArtifactSchema[]        // 预期产物声明，用于运行记录和 Rich Console
   runtimeProfile?: SkillRuntimeProfile  // 运行时画像，用于选择 writer/advisor/agent/workflow 执行路径
   capabilities?: string[]       // Skill 能力声明，用于运行时路由和 UI 展示
   contextPolicy?: SkillContextPolicy  // 上下文加载策略
+  lazyLoad?: boolean            // 是否仅在选中后加载完整指令/引用
 
   // 可见性控制 (扩展字段)
   userInvocable?: boolean       // 是否在斜杠菜单显示
@@ -140,6 +166,9 @@ export interface SkillYamlMetadata {
   runtimeProfile?: SkillRuntimeProfile
   capabilities?: string[]
   contextPolicy?: SkillContextPolicy
+  permissionManifest?: SkillPermissionManifest
+  artifactSchema?: SkillArtifactSchema[]
+  lazyLoad?: boolean
 
   // 依赖声明
   dependencies?: SkillDependency[]
@@ -311,6 +340,16 @@ export interface SkillMatchSummary {
   confidence: SkillMatchConfidence
   reasons: string[]
   matchedSignals: SkillMatchSignal[]
+  runtimeProfile?: SkillRuntimeProfile
+  lazyLoad?: boolean
+  allowedTools?: string[]
+  permissionManifest?: SkillPermissionManifest
+  artifactSchema?: SkillArtifactSchema[]
+  counts?: {
+    scripts: number
+    references: number
+    assets: number
+  }
 }
 
 // ============================================================================

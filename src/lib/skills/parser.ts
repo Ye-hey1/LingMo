@@ -10,6 +10,8 @@ import {
   SkillYamlMetadata,
   ScriptType,
   SkillContextPolicy,
+  SkillArtifactSchema,
+  SkillPermissionManifest,
   SkillRuntimeProfile,
   SCRIPT_EXTENSIONS,
   SCRIPT_SHEBANG,
@@ -70,6 +72,7 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
   const lines = yamlContent.split('\n')
   let inMetadataSection = false
   let inContextPolicySection = false
+  let inPermissionManifestSection = false
 
   for (const line of lines) {
     const trimmed = line.trim()
@@ -77,6 +80,21 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
     // 跳过空行和注释
     if (!trimmed || trimmed.startsWith('#')) {
       continue
+    }
+
+    if (inPermissionManifestSection) {
+      const manifestIndent = line.match(/^(\s+)/)?.[1]?.length || 0
+      if (manifestIndent > 0) {
+        const colonIndex = trimmed.indexOf(':')
+        if (colonIndex > 0) {
+          const key = trimmed.slice(0, colonIndex).trim()
+          const value = trimmed.slice(colonIndex + 1).trim()
+          metadata.permissionManifest = parsePermissionManifestField(metadata.permissionManifest, key, value)
+          continue
+        }
+      } else {
+        inPermissionManifestSection = false
+      }
     }
 
     // 如果在 contextPolicy 部分中，处理缩进的键值对
@@ -136,6 +154,8 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
     // 检测数组字段的 YAML 列表格式: key: 后跟 - item 行
     if ((trimmed.startsWith('allowedTools:') ||
          trimmed.startsWith('allowed-tools:') ||
+         trimmed.startsWith('artifactSchema:') ||
+         trimmed.startsWith('artifact-schema:') ||
          trimmed.startsWith('capabilities:')) &&
         !trimmed.includes(': ') && !trimmed.includes(':[')) {
       // 这是列表格式的开始，收集后续的 - item 行
@@ -165,6 +185,8 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
       if (values.length > 0) {
         if (trimmed.startsWith('capabilities:')) {
           metadata.capabilities = values
+        } else if (trimmed.startsWith('artifactSchema:') || trimmed.startsWith('artifact-schema:')) {
+          metadata.artifactSchema = values.map(item => parseArtifactSchemaItem(item))
         } else {
           metadata.allowedTools = values
         }
@@ -242,6 +264,25 @@ function parseYamlMetadata(yamlContent: string): SkillYamlMetadata {
           metadata.contextPolicy = {}
           inContextPolicySection = true
         }
+        break
+      case 'permissionManifest':
+      case 'permission-manifest':
+      case 'permissions':
+        if (value) {
+          metadata.permissionManifest = parsePermissionManifest(value)
+        } else {
+          metadata.permissionManifest = {}
+          inPermissionManifestSection = true
+        }
+        break
+      case 'artifactSchema':
+      case 'artifact-schema':
+      case 'artifacts':
+        metadata.artifactSchema = parseArtifactSchema(value)
+        break
+      case 'lazyLoad':
+      case 'lazy-load':
+        metadata.lazyLoad = parseBoolean(value)
         break
     }
   }
@@ -333,6 +374,10 @@ function parseMarkdownTableMetadata(content: string): SkillYamlMetadata {
       case 'user-invocable':
         metadata.userInvocable = parseBoolean(value)
         break
+      case 'lazyload':
+      case 'lazy-load':
+        metadata.lazyLoad = parseBoolean(value)
+        break
     }
   }
 
@@ -404,6 +449,101 @@ function parseContextPolicy(value: string): SkillContextPolicy {
   }
 
   return policy as SkillContextPolicy
+}
+
+function parseObjectFields(value: string): Record<string, string> {
+  const trimmed = value.trim()
+  if (!trimmed) return {}
+  const objectContent = trimmed.startsWith('{') && trimmed.endsWith('}')
+    ? trimmed.slice(1, -1)
+    : trimmed
+  const fields: Record<string, string> = {}
+  for (const part of objectContent.split(',')) {
+    const colonIndex = part.indexOf(':')
+    if (colonIndex === -1) continue
+    const key = part.slice(0, colonIndex).trim()
+    const itemValue = part.slice(colonIndex + 1).trim()
+    if (key && itemValue) fields[key] = parseValue(itemValue)
+  }
+  return fields
+}
+
+function parsePermissionManifest(value: string): SkillPermissionManifest {
+  const fields = parseObjectFields(value)
+  let manifest: SkillPermissionManifest = {}
+  for (const [key, itemValue] of Object.entries(fields)) {
+    manifest = parsePermissionManifestField(manifest, key, itemValue)
+  }
+  return manifest
+}
+
+function parsePermissionManifestField(
+  manifest: SkillPermissionManifest | undefined,
+  key: string,
+  value: string,
+): SkillPermissionManifest {
+  const next: SkillPermissionManifest = { ...(manifest || {}) }
+  switch (key) {
+    case 'tools':
+      next.tools = parseStringArray(value)
+      break
+    case 'capabilities':
+      next.capabilities = parseStringArray(value) as SkillPermissionManifest['capabilities']
+      break
+    case 'requiresConfirmation':
+    case 'requires-confirmation':
+      next.requiresConfirmation = parseBoolean(value)
+      break
+    case 'network':
+      next.network = parseStringArray(value).map(host => ({ host }))
+      break
+    case 'filesystem':
+      next.filesystem = parseStringArray(value).map(path => ({ path, access: 'readwrite' as const }))
+      break
+  }
+  return next
+}
+
+function parseArtifactSchema(value: string): SkillArtifactSchema[] {
+  const trimmed = value.trim()
+  if (!trimmed) return []
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    return trimmed
+      .slice(1, -1)
+      .split(',')
+      .map(item => parseArtifactSchemaItem(item.trim()))
+      .filter((item): item is SkillArtifactSchema => Boolean(item.type))
+  }
+  return parseStringArray(trimmed).map(item => parseArtifactSchemaItem(item))
+}
+
+function parseArtifactSchemaItem(value: string): SkillArtifactSchema {
+  const fields = parseObjectFields(value)
+  if (Object.keys(fields).length > 0) {
+    return {
+      type: normalizeArtifactType(fields.type),
+      path: fields.path,
+      mimeType: fields.mimeType || fields['mime-type'],
+      description: fields.description,
+    }
+  }
+  return {
+    type: normalizeArtifactType(value),
+  }
+}
+
+function normalizeArtifactType(value: string | undefined): SkillArtifactSchema['type'] {
+  const normalized = (value || '').trim().toLowerCase()
+  switch (normalized) {
+    case 'file':
+    case 'folder':
+    case 'url':
+    case 'markdown':
+    case 'json':
+      return normalized as SkillArtifactSchema['type']
+    default:
+      return 'other'
+  }
 }
 
 /**
@@ -531,6 +671,27 @@ export function serializeSkillFile(
     if (metadata.contextPolicy.references) {
       yamlLines.push(`  references: ${metadata.contextPolicy.references}`)
     }
+  }
+
+  if (metadata.lazyLoad !== undefined) {
+    yamlLines.push(`lazyLoad: ${metadata.lazyLoad}`)
+  }
+
+  if (metadata.permissionManifest && Object.keys(metadata.permissionManifest).length > 0) {
+    yamlLines.push(`permissionManifest:`)
+    if (metadata.permissionManifest.tools?.length) {
+      yamlLines.push(`  tools: ${metadata.permissionManifest.tools.join(' ')}`)
+    }
+    if (metadata.permissionManifest.capabilities?.length) {
+      yamlLines.push(`  capabilities: ${metadata.permissionManifest.capabilities.join(' ')}`)
+    }
+    if (metadata.permissionManifest.requiresConfirmation !== undefined) {
+      yamlLines.push(`  requiresConfirmation: ${metadata.permissionManifest.requiresConfirmation}`)
+    }
+  }
+
+  if (metadata.artifactSchema && metadata.artifactSchema.length > 0) {
+    yamlLines.push(`artifactSchema: ${metadata.artifactSchema.map(item => item.type).join(' ')}`)
   }
 
   if (metadata.userInvocable !== undefined) {

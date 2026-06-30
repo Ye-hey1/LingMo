@@ -88,7 +88,6 @@ import {
   normalizeMarkdownCodeFenceLanguages,
   type CodeBlockLanguageRegistry,
 } from '@/lib/markdown-code-language'
-import './style.css'
 
 type EditorLowlight = ReturnType<typeof createLowlight>
 

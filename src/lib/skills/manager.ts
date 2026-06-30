@@ -301,6 +301,9 @@ class SkillManager {
         runtimeProfile: parsed.metadata.runtimeProfile,
         capabilities: parsed.metadata.capabilities,
         contextPolicy: parsed.metadata.contextPolicy,
+        lazyLoad: parsed.metadata.lazyLoad,
+        permissionManifest: parsed.metadata.permissionManifest,
+        artifactSchema: parsed.metadata.artifactSchema,
         userInvocable: parsed.metadata.userInvocable ?? DEFAULT_USER_INVOCABLE,
         enabled: DEFAULT_SKILL_ENABLED,
         createdAt: now,
@@ -753,6 +756,16 @@ class SkillManager {
       confidence: score.confidence,
       reasons: score.reasons,
       matchedSignals: score.matchedSignals,
+      runtimeProfile: score.skill.metadata.runtimeProfile,
+      lazyLoad: score.skill.metadata.lazyLoad ?? score.skill.metadata.contextPolicy?.load === 'summary-first',
+      allowedTools: score.skill.metadata.allowedTools,
+      permissionManifest: score.skill.metadata.permissionManifest,
+      artifactSchema: score.skill.metadata.artifactSchema,
+      counts: {
+        scripts: score.skill.scripts?.length || 0,
+        references: score.skill.references?.length || 0,
+        assets: score.skill.assets?.length || 0,
+      },
     }
   }
 

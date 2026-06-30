@@ -208,6 +208,10 @@ function formatEmptyAiResponseMessage(meta?: AiStreamFinishMetadata | null, thin
   ].filter(Boolean).join('\n')
 }
 
+function formatAgentNoVisibleAnswerMessage() {
+  return '这次没有生成可展示的正式回答。内部工具结果和错误已保留在运行记录中，请重试或换一个可用的数据源。'
+}
+
 /** 判断内容是否包含值得沉淀的知识性结构（而非简单问答/闲聊） */
 function hasKnowledgeRichContent(content: string): boolean {
   // 多个列表项（知识点罗列）
@@ -778,16 +782,75 @@ export const ChatSend = forwardRef<{
       }
     }
 
-    return { onAnswerDelta, flush, cancel }
+    const clear = () => {
+      pendingContent = ''
+      lastContent = ''
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+      const currentMessage = useChatStore.getState().chats.find(c => c.id === placeholderMessage.id)
+      void saveChat({
+        id: placeholderMessage.id,
+        tagId: placeholderMessage.tagId,
+        conversationId: placeholderMessage.conversationId,
+        role: placeholderMessage.role,
+        type: placeholderMessage.type,
+        inserted: placeholderMessage.inserted,
+        createdAt: placeholderMessage.createdAt,
+        ragSources: currentMessage?.ragSources,
+        ragSourceDetails: currentMessage?.ragSourceDetails,
+        content: '',
+      }, false)
+    }
+
+    return { onAnswerDelta, flush, cancel, clear }
   }
 
-  const createPreparingAgentActivity = (startedAt: number) => ({
-    label: '正在准备 Agent',
-    phase: 'preparing' as const,
-    startedAt,
-  })
+  const isLikelyVisualCreationRequest = (text: string) => (
+    /绘画|画一|画个|画张|生成图|生成一张|图片生成|出图|插画|海报|封面|视觉设计|draw|image|poster|illustration/i.test(text)
+  )
 
-  const primeAgentRunStatus = (activeChatId?: number, startedAt = Date.now()) => {
+  const createPreparingAgentActivity = (
+    startedAt: number,
+    context?: { userInput?: string; imageCount?: number },
+  ) => {
+    const imageCount = context?.imageCount || 0
+    const userInput = context?.userInput || ''
+
+    if (imageCount > 0) {
+      return {
+        label: '正在读取图片',
+        detail: imageCount === 1
+          ? '已接收图片，正在整理视觉上下文。'
+          : `已接收 ${imageCount} 张图片，正在整理视觉上下文。`,
+        phase: 'preparing' as const,
+        startedAt,
+      }
+    }
+
+    if (isLikelyVisualCreationRequest(userInput)) {
+      return {
+        label: '正在理解创作需求',
+        detail: '正在把描述整理成可执行的绘画任务。',
+        phase: 'preparing' as const,
+        startedAt,
+      }
+    }
+
+    return {
+      label: '正在准备任务',
+      detail: '正在整理上下文、历史消息和可用工具。',
+      phase: 'preparing' as const,
+      startedAt,
+    }
+  }
+
+  const primeAgentRunStatus = (
+    activeChatId?: number,
+    startedAt = Date.now(),
+    context?: { userInput?: string; imageCount?: number },
+  ) => {
     setAgentState({
       agentRunId: undefined,
       agentEventCursor: undefined,
@@ -813,7 +876,7 @@ export const ChatSend = forwardRef<{
       agentParts: [],
       isFinalAnswerMode: false,
       finalAnswerContent: undefined,
-      activity: createPreparingAgentActivity(startedAt),
+      activity: createPreparingAgentActivity(startedAt, context),
       telemetry: undefined,
       taskPlan: undefined,
     })
@@ -1812,6 +1875,7 @@ export const ChatSend = forwardRef<{
     primeAgentRunStatus(
       placeholderMessage.id,
       useChatStore.getState().agentState.currentStepStartTime || Date.now(),
+      { userInput: effectiveInstruction, imageCount: imageUrls.length },
     )
     const liveAnswerUpdater = createLiveAgentAnswerUpdater(placeholderMessage)
 
@@ -1857,6 +1921,7 @@ export const ChatSend = forwardRef<{
               }
             : undefined,
           onAnswerDelta: liveAnswerUpdater.onAnswerDelta,
+          onAnswerRejected: liveAnswerUpdater.clear,
           onComplete: async (result, steps, stopped) => {
             liveAnswerUpdater.flush()
             const { agentState } = useChatStore.getState()
@@ -1871,11 +1936,13 @@ export const ChatSend = forwardRef<{
             const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
             if (!stopped && !finalContent.trim()) {
               finalContent = sanitizeAgentFinalContent(
-                currentMessage?.content
-                  || agentState.finalAnswerContent
+                agentState.finalAnswerContent
                   || agentState.agentPartSnapshot?.finalAnswerContent
                   || ''
               )
+            }
+            if (!stopped && !finalContent.trim()) {
+              finalContent = formatAgentNoVisibleAnswerMessage()
             }
             const agentHistory = {
               steps: completedSteps,
@@ -1928,6 +1995,7 @@ export const ChatSend = forwardRef<{
         userInput: effectiveInstruction,
         route: options?.routeOverride === 'workflow' ? 'workflow' : 'agent',
         conversationId: placeholderMessage.conversationId ?? null,
+        assistantChatId: placeholderMessage.id,
         forcedSkillIds: options?.forcedSkillIds,
         webSearchEnabled: effectiveWebSearchEnabled,
         agentExecutor: async (runControl) => {
@@ -1954,6 +2022,7 @@ export const ChatSend = forwardRef<{
                 }
               : undefined,
             onAnswerDelta: liveAnswerUpdater.onAnswerDelta,
+            onAnswerRejected: liveAnswerUpdater.clear,
             onComplete: async (result, steps, stopped) => {
               liveAnswerUpdater.flush()
               // 获取 Agent 执行历史，保存完整的 ReAct 步骤
@@ -2008,11 +2077,13 @@ export const ChatSend = forwardRef<{
               const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
               if (!stopped && !finalContent.trim()) {
                 finalContent = sanitizeAgentFinalContent(
-                  currentMessage?.content
-                    || agentState.finalAnswerContent
+                  agentState.finalAnswerContent
                     || agentState.agentPartSnapshot?.finalAnswerContent
                     || ''
                 )
+              }
+              if (!stopped && !finalContent.trim()) {
+                finalContent = formatAgentNoVisibleAnswerMessage()
               }
 
               // 更新占位消息，保留 RAG 相关字段
@@ -2180,8 +2251,12 @@ export const ChatSend = forwardRef<{
       liveAnswerUpdater.cancel()
       const currentState = useChatStore.getState()
       const currentMessage = currentState.chats.find(c => c.id === placeholderMessage.id)
-      if (currentMessage?.content?.trim()) {
-        await saveChat(currentMessage, true)
+      const visibleCurrentContent = sanitizeAgentFinalContent(currentMessage?.content || '')
+      if (visibleCurrentContent) {
+        await saveChat({
+          ...currentMessage!,
+          content: visibleCurrentContent,
+        }, true)
       } else {
         await saveChat({
           ...placeholderMessage,
@@ -2216,7 +2291,10 @@ export const ChatSend = forwardRef<{
     const effectiveRoute = options?.routeOverride || effectiveMode
     const shouldPrimeAgentRunStatus = effectiveRoute === 'agent' || effectiveRoute === 'workflow'
     if (shouldPrimeAgentRunStatus) {
-      primeAgentRunStatus(undefined, Date.now())
+      primeAgentRunStatus(undefined, Date.now(), {
+        userInput: requestText,
+        imageCount: imageUrls.length,
+      })
     }
 
     const userMessage = await insert({
