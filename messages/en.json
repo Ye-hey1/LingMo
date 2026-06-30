@@ -319,7 +319,7 @@
       "jsonEmpty": "JSON configuration cannot be empty",
       "jsonInvalidJson": "Invalid JSON format",
       "jsonInvalidFormat": "Invalid configuration format, must contain name and type fields",
-      "jsonInvalidType": "Server type must be stdio or http",
+      "jsonInvalidType": "Server type must be stdio, http, or streamable-http",
       "jsonMissingCommand": "stdio type server must specify command",
       "jsonMissingUrl": "http type server must specify url",
       "jsonImportSuccess": "Successfully imported {count} server(s)",

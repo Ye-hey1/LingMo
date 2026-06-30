@@ -14,12 +14,13 @@ import { resolveMcpEnv, resolveMcpHeaders } from './config-values'
 
 /**
  * MCP 客户端
- * 支持 stdio 和 HTTP 两种传输协议
+ * 支持 stdio、HTTP 和 Streamable HTTP 传输协议
  */
 export class MCPClient {
   private config: MCPServerConfig
   private requestId = 0
   private isInitialized = false
+  private sessionId: string | null = null
   
   constructor(config: MCPServerConfig) {
     this.config = config
@@ -59,8 +60,9 @@ export class MCPClient {
     // HTTP 连接不需要特殊的启动过程
     // 只需要验证 URL 是否可访问
     if (!this.config.url) {
-      throw new Error('HTTP server URL is required')
+      throw new Error(`${this.getHttpTransportLabel()} server URL is required`)
     }
+    this.sessionId = null
   }
   
   /**
@@ -68,7 +70,7 @@ export class MCPClient {
    */
   async initialize(): Promise<InitializeResult> {
     const response = await this.sendRequest('initialize', {
-      protocolVersion: '2024-11-05',
+      protocolVersion: this.getProtocolVersion(),
       capabilities: {},
       clientInfo: {
         name: 'lingmo',
@@ -160,6 +162,7 @@ export class MCPClient {
       }
     }
     this.isInitialized = false
+    this.sessionId = null
   }
   
   /**
@@ -225,7 +228,7 @@ export class MCPClient {
    */
   private async sendHttpRequest(request: JSONRPCRequest): Promise<any> {
     if (!this.config.url) {
-      throw new Error('HTTP server URL is required')
+      throw new Error(`${this.getHttpTransportLabel()} server URL is required`)
     }
     
     try {
@@ -234,12 +237,12 @@ export class MCPClient {
       const response = await tauriFetch(this.config.url, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json, text/event-stream',
-          ...customHeaders,
+          ...this.buildHttpHeaders(customHeaders, this.getProtocolVersion()),
         },
         body: JSON.stringify(request),
       })
+
+      this.captureSessionId(response)
       
       if (!response.ok) {
         const errorText = await response.text().catch(() => response.statusText)
@@ -304,7 +307,7 @@ export class MCPClient {
 
   private async sendHttpNotification(request: Omit<JSONRPCRequest, 'id'>): Promise<void> {
     if (!this.config.url) {
-      throw new Error('HTTP server URL is required')
+      throw new Error(`${this.getHttpTransportLabel()} server URL is required`)
     }
 
     const customHeaders = this.getHttpHeaders()
@@ -312,12 +315,12 @@ export class MCPClient {
     const response = await tauriFetch(this.config.url, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-        ...customHeaders,
+        ...this.buildHttpHeaders(customHeaders, this.getProtocolVersion()),
       },
       body: JSON.stringify(request),
     })
+
+    this.captureSessionId(response)
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => response.statusText)
@@ -332,6 +335,36 @@ export class MCPClient {
       console.warn('Failed to parse custom headers:', error)
       return {}
     }
+  }
+
+  private buildHttpHeaders(customHeaders: Record<string, string>, protocolVersion: string): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      'MCP-Protocol-Version': protocolVersion,
+      ...customHeaders,
+    }
+
+    if (this.sessionId) {
+      headers['Mcp-Session-Id'] = this.sessionId
+    }
+
+    return headers
+  }
+
+  private captureSessionId(response: { headers?: { get(name: string): string | null } }) {
+    const sessionId = response.headers?.get('mcp-session-id') || response.headers?.get('Mcp-Session-Id')
+    if (sessionId && sessionId.trim()) {
+      this.sessionId = sessionId.trim()
+    }
+  }
+
+  private getHttpTransportLabel(): string {
+    return this.config.type === 'streamable-http' ? 'Streamable HTTP' : 'HTTP'
+  }
+
+  private getProtocolVersion(): string {
+    return this.config.type === 'streamable-http' ? '2025-03-26' : '2024-11-05'
   }
 }
 

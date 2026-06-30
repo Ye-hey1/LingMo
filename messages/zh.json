@@ -319,7 +319,7 @@
       "jsonEmpty": "JSON 配置不能为空",
       "jsonInvalidJson": "JSON 格式错误",
       "jsonInvalidFormat": "配置格式无效，必须包含 name 和 type 字段",
-      "jsonInvalidType": "服务器类型必须是 stdio 或 http",
+      "jsonInvalidType": "服务器类型必须是 stdio、http 或 streamable-http",
       "jsonMissingCommand": "stdio 类型服务器必须指定 command",
       "jsonMissingUrl": "http 类型服务器必须指定 url",
       "jsonImportSuccess": "成功导入 {count} 个服务器",

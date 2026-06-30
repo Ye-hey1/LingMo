@@ -2,6 +2,76 @@ import { create } from 'zustand'
 import { Store } from '@tauri-apps/plugin-store'
 import type { MCPServerConfig, MCPServerState } from '@/lib/mcp/types'
 
+const ANYSEARCH_MCP_URL = 'https://api.anysearch.com/mcp'
+
+function isAnySearchServer(server: MCPServerConfig) {
+  const args = (server.args || []).join(' ')
+  const haystack = `${server.name} ${server.command || ''} ${args} ${server.url || ''}`.toLowerCase()
+  return haystack.includes('anysearch') || haystack.includes('api.anysearch.com/mcp')
+}
+
+function extractAnySearchUrl(server: MCPServerConfig) {
+  if (server.url?.includes('api.anysearch.com/mcp')) {
+    return server.url
+  }
+  return (server.args || []).find(arg => typeof arg === 'string' && arg.includes('api.anysearch.com/mcp')) || ANYSEARCH_MCP_URL
+}
+
+function normalizeMcpServerConfig(server: MCPServerConfig): MCPServerConfig {
+  if (server.type === 'streamable-http') {
+    return server
+  }
+
+  if (isAnySearchServer(server)) {
+    return {
+      ...server,
+      type: 'streamable-http',
+      command: undefined,
+      args: undefined,
+      env: undefined,
+      url: extractAnySearchUrl(server),
+    }
+  }
+
+  return server
+}
+
+function normalizeMcpServerConfigs(servers: MCPServerConfig[]) {
+  return servers.map(normalizeMcpServerConfig)
+}
+
+function hasNormalizedMcpServerChanges(
+  originalServers: MCPServerConfig[],
+  normalizedServers: MCPServerConfig[],
+) {
+  return normalizedServers.some((server, index) => server !== originalServers[index])
+}
+
+async function persistMcpConfigMigration(
+  store: Store,
+  originalServers: MCPServerConfig[],
+  normalizedServers: MCPServerConfig[],
+  originalSelectedServerIds: string[] | undefined,
+  normalizedSelectedServerIds: string[],
+) {
+  const shouldPersistServers = hasNormalizedMcpServerChanges(originalServers, normalizedServers)
+  const shouldPersistSelection = originalSelectedServerIds === undefined ||
+    originalSelectedServerIds.length !== normalizedSelectedServerIds.length ||
+    originalSelectedServerIds.some((id, index) => id !== normalizedSelectedServerIds[index])
+
+  if (!shouldPersistServers && !shouldPersistSelection) {
+    return
+  }
+
+  if (shouldPersistServers) {
+    await store.set('mcp.servers', normalizedServers)
+  }
+  if (shouldPersistSelection) {
+    await store.set('mcp.selectedServerIds', normalizedSelectedServerIds)
+  }
+  await store.save()
+}
+
 async function refreshAgentMcpTools() {
   try {
     const { refreshMcpToolsForAgent } = await import('@/lib/mcp/agent-ready')
@@ -52,9 +122,10 @@ export const useMcpStore = create<MCPState>((set, get) => ({
   
   addServer: async (server: MCPServerConfig) => {
     const store = await Store.load('store.json')
-    const servers = [...get().servers, server]
-    const selectedServerIds = server.enabled
-      ? Array.from(new Set([...get().selectedServerIds, server.id]))
+    const normalizedServer = normalizeMcpServerConfig(server)
+    const servers = [...get().servers, normalizedServer]
+    const selectedServerIds = normalizedServer.enabled
+      ? Array.from(new Set([...get().selectedServerIds, normalizedServer.id]))
       : get().selectedServerIds
     await store.set('mcp.servers', servers)
     await store.set('mcp.selectedServerIds', selectedServerIds)
@@ -66,7 +137,7 @@ export const useMcpStore = create<MCPState>((set, get) => ({
   updateServer: async (id: string, updates: Partial<MCPServerConfig>) => {
     const store = await Store.load('store.json')
     const servers = get().servers.map(s =>
-      s.id === id ? { ...s, ...updates } : s
+      s.id === id ? normalizeMcpServerConfig({ ...s, ...updates }) : s
     )
     await store.set('mcp.servers', servers)
     await store.save()
@@ -93,7 +164,7 @@ export const useMcpStore = create<MCPState>((set, get) => ({
   toggleServerEnabled: async (id: string) => {
     const store = await Store.load('store.json')
     const servers = get().servers.map(s =>
-      s.id === id ? { ...s, enabled: !s.enabled } : s
+      s.id === id ? normalizeMcpServerConfig({ ...s, enabled: !s.enabled }) : s
     )
     const target = servers.find(server => server.id === id)
     const selectedServerIds = target?.enabled
@@ -149,16 +220,14 @@ export const useMcpStore = create<MCPState>((set, get) => ({
     try {
       const store = await Store.load('store.json')
       const servers = await store.get<MCPServerConfig[]>('mcp.servers')
+      const rawServers = servers ?? []
       const selectedServerIds = await store.get<string[]>('mcp.selectedServerIds')
-      const loadedServers = servers ?? []
+      const loadedServers = normalizeMcpServerConfigs(rawServers)
       const loadedSelection = selectedServerIds === undefined
         ? loadedServers.filter(server => server.enabled).map(server => server.id)
         : selectedServerIds.filter(id => loadedServers.some(server => server.id === id && server.enabled))
 
-      if (selectedServerIds === undefined) {
-        await store.set('mcp.selectedServerIds', loadedSelection)
-        await store.save()
-      }
+      await persistMcpConfigMigration(store, rawServers, loadedServers, selectedServerIds, loadedSelection)
 
       set({
         servers: loadedServers,
@@ -179,16 +248,14 @@ export const useMcpStore = create<MCPState>((set, get) => ({
     try {
       const store = await Store.load('store.json')
       const servers = await store.get<MCPServerConfig[]>('mcp.servers')
+      const rawServers = servers ?? []
       const selectedServerIds = await store.get<string[]>('mcp.selectedServerIds')
-      const loadedServers = servers ?? []
+      const loadedServers = normalizeMcpServerConfigs(rawServers)
       const loadedSelection = selectedServerIds === undefined
         ? loadedServers.filter(server => server.enabled).map(server => server.id)
         : selectedServerIds.filter(id => loadedServers.some(server => server.id === id && server.enabled))
 
-      if (selectedServerIds === undefined) {
-        await store.set('mcp.selectedServerIds', loadedSelection)
-        await store.save()
-      }
+      await persistMcpConfigMigration(store, rawServers, loadedServers, selectedServerIds, loadedSelection)
 
       set({
         servers: loadedServers,

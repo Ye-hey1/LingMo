@@ -184,7 +184,7 @@ export function ServerConfigDialog({
       return
     }
     
-    if (type === 'http' && !url.trim()) {
+    if ((type === 'http' || type === 'streamable-http') && !url.trim()) {
       toast({ description: t('urlRequired'), variant: 'destructive' })
       return
     }
@@ -289,6 +289,7 @@ export function ServerConfigDialog({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="http">{t('http')}</SelectItem>
+                      <SelectItem value="streamable-http">Streamable HTTP</SelectItem>
                       {!isActualMobile && <SelectItem value="stdio">{t('stdio')}</SelectItem>}
                     </SelectContent>
                   </Select>
@@ -336,7 +337,7 @@ export function ServerConfigDialog({
               )}
 
               {/* HTTP 配置 */}
-              {type === 'http' && (
+              {(type === 'http' || type === 'streamable-http') && (
                 <>
                   <div className="space-y-2">
                     <Label htmlFor="url">{t('url')}</Label>
@@ -344,7 +345,7 @@ export function ServerConfigDialog({
                       id="url"
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
-                      placeholder="http://localhost:3000/mcp"
+                      placeholder="https://api.anysearch.com/mcp"
                     />
                   </div>
 
@@ -421,6 +422,7 @@ export function ServerConfigDialog({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="http">{t('http')}</SelectItem>
+                      <SelectItem value="streamable-http">Streamable HTTP</SelectItem>
                       {!isActualMobile && <SelectItem value="stdio">{t('stdio')}</SelectItem>}
                     </SelectContent>
                   </Select>
@@ -468,7 +470,7 @@ export function ServerConfigDialog({
               )}
 
               {/* HTTP 配置 */}
-              {type === 'http' && (
+              {(type === 'http' || type === 'streamable-http') && (
                 <>
                   <div className="space-y-2">
                     <Label htmlFor="url">{t('url')}</Label>
@@ -476,7 +478,7 @@ export function ServerConfigDialog({
                       id="url"
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
-                      placeholder="http://localhost:3000/mcp"
+                      placeholder="https://api.anysearch.com/mcp"
                     />
                   </div>
 

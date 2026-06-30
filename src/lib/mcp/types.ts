@@ -3,7 +3,7 @@
  */
 
 // MCP 服务器配置类型
-export type MCPServerType = 'stdio' | 'http'
+export type MCPServerType = 'stdio' | 'http' | 'streamable-http'
 
 // MCP 服务器配置
 export interface MCPServerConfig {

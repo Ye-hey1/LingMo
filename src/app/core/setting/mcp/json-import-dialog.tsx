@@ -34,6 +34,46 @@ interface JsonImportDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
+function normalizeImportedMcpType(config: any): MCPServerConfig['type'] {
+  if (config?.type === 'streamable-http' || config?.type === 'remote') {
+    return 'streamable-http'
+  }
+  if (config?.type === 'http' || config?.type === 'sse') {
+    return 'http'
+  }
+  return config?.url ? 'http' : 'stdio'
+}
+
+function createImportedMcpConfig(name: string, config: any): MCPServerConfig | null {
+  const type = normalizeImportedMcpType(config)
+  const base = {
+    id: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    name,
+    type,
+    enabled: true,
+    createdAt: Date.now(),
+  }
+
+  if (type === 'stdio' && config.command) {
+    return {
+      ...base,
+      command: config.command,
+      args: config.args,
+      env: config.env,
+    }
+  }
+
+  if ((type === 'http' || type === 'streamable-http') && config.url) {
+    return {
+      ...base,
+      url: config.url,
+      headers: config.headers,
+    }
+  }
+
+  return null
+}
+
 export function JsonImportDialog({ open, onOpenChange }: JsonImportDialogProps) {
   const isMobile = useIsMobile() || checkIsMobileDevice()
   const t = useTranslations('settings.mcp')
@@ -51,32 +91,8 @@ export function JsonImportDialog({ open, onOpenChange }: JsonImportDialogProps) 
     if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
       for (const [name, serverConfig] of Object.entries(parsed.mcpServers)) {
         const config = serverConfig as any
-
-        // 检查是否是 stdio 类型 (有 command 字段)
-        if (config.command) {
-          configs.push({
-            id: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-            name,
-            type: 'stdio',
-            enabled: true,
-            createdAt: Date.now(),
-            command: config.command,
-            args: config.args,
-            env: config.env,
-          })
-        }
-        // 检查是否是 http 类型 (有 url 字段)
-        else if (config.url) {
-          configs.push({
-            id: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-            name,
-            type: 'http',
-            enabled: true,
-            createdAt: Date.now(),
-            url: config.url,
-            headers: config.headers,
-          })
-        }
+        const importedConfig = createImportedMcpConfig(name, config)
+        if (importedConfig) configs.push(importedConfig)
       }
       return configs
     }
@@ -96,28 +112,8 @@ export function JsonImportDialog({ open, onOpenChange }: JsonImportDialogProps) 
       if (hasMcpFormat) {
         for (const [name, serverConfig] of Object.entries(parsed)) {
           const config = serverConfig as any
-          if (config.command) {
-            configs.push({
-              id: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-              name,
-              type: 'stdio',
-              enabled: true,
-              createdAt: Date.now(),
-              command: config.command,
-              args: config.args,
-              env: config.env,
-            })
-          } else if (config.url) {
-            configs.push({
-              id: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-              name,
-              type: 'http',
-              enabled: true,
-              createdAt: Date.now(),
-              url: config.url,
-              headers: config.headers,
-            })
-          }
+          const importedConfig = createImportedMcpConfig(name, config)
+          if (importedConfig) configs.push(importedConfig)
         }
         return configs
       }
@@ -129,7 +125,7 @@ export function JsonImportDialog({ open, onOpenChange }: JsonImportDialogProps) 
       configs.push({
         id: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         name: config.name,
-        type: config.type || 'stdio',
+        type: normalizeImportedMcpType(config),
         enabled: config.enabled ?? true,
         createdAt: Date.now(),
         command: config.command,
@@ -173,7 +169,7 @@ export function JsonImportDialog({ open, onOpenChange }: JsonImportDialogProps) 
           return
         }
 
-        if (config.type !== 'stdio' && config.type !== 'http') {
+        if (config.type !== 'stdio' && config.type !== 'http' && config.type !== 'streamable-http') {
           setError(t('jsonInvalidType'))
           return
         }
@@ -183,7 +179,7 @@ export function JsonImportDialog({ open, onOpenChange }: JsonImportDialogProps) 
           return
         }
 
-        if (config.type === 'http' && !config.url) {
+        if ((config.type === 'http' || config.type === 'streamable-http') && !config.url) {
           setError(t('jsonMissingUrl'))
           return
         }

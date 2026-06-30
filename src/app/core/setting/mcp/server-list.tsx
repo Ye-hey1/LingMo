@@ -201,7 +201,11 @@ export function ServerList() {
                         )}
                         <h4 className="font-medium">{server.name}</h4>
                         <Badge variant="outline" className="text-xs">
-                          {server.type === 'stdio' ? t('stdio') : t('http')}
+                          {server.type === 'stdio'
+                            ? t('stdio')
+                            : server.type === 'streamable-http'
+                              ? 'Streamable HTTP'
+                              : t('http')}
                         </Badge>
                       </div>
                       
@@ -237,7 +241,7 @@ export function ServerList() {
                         </p>
                       )}
                       
-                      {server.type === 'http' && server.url && (
+                      {(server.type === 'http' || server.type === 'streamable-http') && server.url && (
                         <p className="text-xs text-muted-foreground">
                           {server.url}
                         </p>

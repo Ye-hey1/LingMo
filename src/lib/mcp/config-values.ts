@@ -17,14 +17,21 @@ function unwrapLiteralSecret(value: string): string {
   return inner
 }
 
-function expandEnvToken(value: string): string {
-  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, key) => {
+function expandEnvToken(value: string): { value: string; missingEnv: boolean } {
+  let missingEnv = false
+  const expanded = value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, key) => {
     const envValue = typeof process !== 'undefined' ? process.env?.[key] : undefined
     if (envValue != null && envValue !== '') {
       return envValue
     }
-    return LITERAL_SECRET_RE.test(key) ? key : match
+    if (LITERAL_SECRET_RE.test(key)) {
+      return key
+    }
+    missingEnv = true
+    return ''
   })
+
+  return { value: expanded, missingEnv }
 }
 
 export function resolveMcpConfigValue(value: unknown): string {
@@ -33,10 +40,12 @@ export function resolveMcpConfigValue(value: unknown): string {
   if (!raw) return ''
 
   if (BRACED_ENV_RE.test(raw)) {
-    return expandEnvToken(raw)
+    const expanded = expandEnvToken(raw)
+    return expanded.missingEnv ? '' : expanded.value.trim()
   }
 
-  return expandEnvToken(unwrapLiteralSecret(raw))
+  const expanded = expandEnvToken(unwrapLiteralSecret(raw))
+  return expanded.missingEnv ? '' : expanded.value.trim()
 }
 
 export function resolveMcpHeaders(headers?: MCPServerConfig['headers'] | string): Record<string, string> {
