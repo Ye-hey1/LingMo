@@ -58,11 +58,6 @@ import { DeployPanel } from "./deploy-panel"
 import { MarketModal } from "./market-modal"
 import { SmartCardDialog } from "./smart-card-dialog"
 import { WorkshopProvider, type WorkshopContextValue } from "./workshop-context"
-import type { MokaPanelMode, MokaPanelPlatform } from "./moka-design-panel"
-import {
-  getMokaStyleId,
-  getMokaTemplateKind,
-} from "@/lib/output-workshop/moka"
 
 // Types & utils
 import type {
@@ -102,12 +97,6 @@ export function OutputWorkshopModal({
   const [activeOutlineIndex, setActiveOutlineIndex] = React.useState<number | null>(null)
   const [templateOverrides, setTemplateOverrides] = React.useState(DEFAULT_TEMPLATE_OVERRIDES)
   const [showSmartCardDialog, setShowSmartCardDialog] = React.useState(false)
-  const [mokaMode, setMokaMode] = React.useState<MokaPanelMode>("split")
-  const [mokaPlatform, setMokaPlatform] = React.useState<MokaPanelPlatform>("xhs")
-  const [mokaStyleId, setMokaStyleId] = React.useState("ai")
-  const [mokaPaletteId, setMokaPaletteId] = React.useState("coral")
-  const [mokaReferenceImageDataUrl, setMokaReferenceImageDataUrl] = React.useState("")
-  const [mokaReferenceImageName, setMokaReferenceImageName] = React.useState("")
 
   // Market state (kept here because it involves install/create logic)
   const [showMarketModal, setShowMarketModal] = React.useState(false)
@@ -128,18 +117,6 @@ export function OutputWorkshopModal({
       ...current,
       sizePresetId: getTemplateDefaultSizePreset(selectedTemplateId),
     }))
-  }, [selectedTemplateId])
-
-  React.useEffect(() => {
-    const mokaKind = getMokaTemplateKind(selectedTemplateId)
-    if (!mokaKind) return
-
-    setMokaMode(mokaKind === "single" || mokaKind === "ai-single" ? "single" : "split")
-    if (mokaKind === "single" || mokaKind === "split") {
-      setMokaStyleId(getMokaStyleId(selectedTemplateId))
-    }
-    setShowAdvanced(true)
-    setSourceWorkspaceTab("edit")
   }, [selectedTemplateId])
 
   // Computed: parsed deck data
@@ -205,12 +182,6 @@ export function OutputWorkshopModal({
     parsedDeckData,
     iframeRef,
     templateOverrides,
-    mokaMode,
-    mokaPlatform,
-    mokaStyleId,
-    mokaPaletteId,
-    mokaReferenceImageDataUrl,
-    mokaReferenceImageName,
     setGeneratedHtml,
     saveSnapshot: history.saveSnapshot,
   })
@@ -360,7 +331,7 @@ export function OutputWorkshopModal({
     }
   }
 
-  const scrollToPreviewSection = (idx: number) => {
+  const scrollToPreviewSection = (section: ExtractedSection, idx: number) => {
     const iframe = iframeRef.current
     if (!iframe?.contentDocument) return
 
@@ -370,19 +341,37 @@ export function OutputWorkshopModal({
     }
 
     const doc = iframe.contentDocument
-    const candidates = doc.querySelectorAll(
-      ".slide, section, article, main > div, .card, [class*='card'], h1, h2, h3"
+    const title = (section.title || "").trim()
+    const headings = Array.from(
+      doc.querySelectorAll("h1, h2, h3, h4, h5, h6"),
     )
-    const target = candidates[Math.min(idx, Math.max(0, candidates.length - 1))]
+    let target: Element | null = null
+
+    if (title) {
+      target =
+        headings.find(h => (h.textContent || "").trim() === title) ||
+        headings.find(h => (h.textContent || "").includes(title)) ||
+        headings.find(h => title.includes((h.textContent || "").trim())) ||
+        null
+    }
+    if (!target && headings.length > 0) {
+      target = headings[Math.min(idx, headings.length - 1)]
+    }
+    if (!target) {
+      const fallback = doc.querySelectorAll(
+        "section, article, .card, [class*='card']",
+      )
+      target = fallback[Math.min(idx, fallback.length - 1)] || null
+    }
     if (target) {
-      target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" })
+      target.scrollIntoView({ behavior: "smooth", block: "start" })
     }
   }
 
   const handleSelectOutlineSection = (section: ExtractedSection, index: number) => {
     setActiveOutlineIndex(index)
     window.setTimeout(() => {
-      scrollToPreviewSection(index)
+      scrollToPreviewSection(section, index)
     }, 80)
   }
 
@@ -391,16 +380,6 @@ export function OutputWorkshopModal({
 
   // 阶段4 组件解耦：将核心 state / hooks / handler 聚合到 Context，
   // 供 SourcePanel / PreviewPanel / TemplatePicker 通过 useWorkshopContext() 取用
-  const onMokaReferenceImageChange = React.useCallback((dataUrl: string, name: string) => {
-    setMokaReferenceImageDataUrl(dataUrl)
-    setMokaReferenceImageName(name)
-  }, [])
-
-  const onClearMokaReferenceImage = React.useCallback(() => {
-    setMokaReferenceImageDataUrl("")
-    setMokaReferenceImageName("")
-  }, [])
-
   const onOpenMarket = React.useCallback(() => {
     setShowMarketModal(true)
   }, [])
@@ -427,18 +406,6 @@ export function OutputWorkshopModal({
     activeOutlineIndex,
     templateOverrides,
     setTemplateOverrides,
-    mokaMode,
-    setMokaMode,
-    mokaPlatform,
-    setMokaPlatform,
-    mokaStyleId,
-    setMokaStyleId,
-    mokaPaletteId,
-    setMokaPaletteId,
-    mokaReferenceImageDataUrl,
-    mokaReferenceImageName,
-    onMokaReferenceImageChange,
-    onClearMokaReferenceImage,
     generatedHtml,
     setGeneratedHtml,
     selectedTemplate,
@@ -481,7 +448,7 @@ export function OutputWorkshopModal({
           </div>
 
           <div className="flex items-center gap-1.5">
-            <DropdownMenu>
+            <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <Button
                   size="sm"
@@ -593,7 +560,7 @@ export function OutputWorkshopModal({
             ref={sourcePanelRef}
             id="output-workshop-source"
             order={1}
-            defaultSize={isMobile ? 46 : 28}
+            defaultSize={isMobile ? 46 : 22}
             minSize={isMobile ? 32 : 22}
             maxSize={isMobile ? 68 : 42}
             collapsible

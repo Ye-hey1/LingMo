@@ -10,7 +10,6 @@ import type {
 } from "./types"
 import type { DeckParsed } from "@/lib/output-workshop/export"
 import type { OutputTemplate } from "@/lib/output-workshop/templates"
-import type { MokaPanelMode, MokaPanelPlatform } from "./moka-design-panel"
 import type { useOutputGeneration } from "@/hooks/use-output-generation"
 import type { useOutputHistory } from "@/hooks/use-output-history"
 import type { useOutputFiles } from "@/hooks/use-output-files"
@@ -53,20 +52,6 @@ export interface WorkshopContextValue {
   // ---- 模板覆写态 ----
   templateOverrides: TemplateOverrides
   setTemplateOverrides: (next: TemplateOverrides) => void
-
-  // ---- Moka 态 ----
-  mokaMode: MokaPanelMode
-  setMokaMode: (mode: MokaPanelMode) => void
-  mokaPlatform: MokaPanelPlatform
-  setMokaPlatform: (platform: MokaPanelPlatform) => void
-  mokaStyleId: string
-  setMokaStyleId: (styleId: string) => void
-  mokaPaletteId: string
-  setMokaPaletteId: (paletteId: string) => void
-  mokaReferenceImageDataUrl: string
-  mokaReferenceImageName: string
-  onMokaReferenceImageChange: (dataUrl: string, name: string) => void
-  onClearMokaReferenceImage: () => void
 
   // ---- 生成产物 ----
   generatedHtml: string
