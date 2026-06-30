@@ -78,6 +78,13 @@ export { formatConfirmationPreview } from './tool-confirmation-display'
 // ---- 事件总线 ----
 export { createAgentEventBus, replayAgentEvents } from './event-bus'
 export type { AgentEventBus, AgentReplayState } from './event-bus'
+export { buildAgentEventEnvelope, getAgentEventEnvelope } from './event-envelope'
+export {
+  buildAgentTraceTimeline,
+  normalizeAgentTraceEvents,
+  renderAgentTraceTimelineMarkdown,
+} from './trace-timeline'
+export type { AgentTraceTimelineItem } from './trace-timeline'
 
 // ---- 工作记忆 ----
 export { loadWorkingMemory, formatWorkingMemoryForPrompt } from './working-memory'
@@ -113,6 +120,23 @@ export type {
   DistillRecommendation,
   DreamCandidate,
 } from './dream'
+
+// ---- LoopSpec Lite ----
+export {
+  formatAgentLoopSpecForPrompt,
+  getAgentLoopExecutionOrder,
+  parseAgentLoopSpec,
+  validateAgentLoopSpec,
+} from './loop-spec'
+export type {
+  AgentLoopExecutionLimits,
+  AgentLoopGateSpec,
+  AgentLoopGateType,
+  AgentLoopPhaseSpec,
+  AgentLoopPhaseType,
+  AgentLoopSpec,
+  AgentLoopSpecValidation,
+} from './loop-spec'
 
 // ---- 稳定流式状态 ----
 export {

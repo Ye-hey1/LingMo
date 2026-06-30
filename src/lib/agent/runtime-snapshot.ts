@@ -1,5 +1,5 @@
 import type { Tool } from './types'
-import type { SkillContent, SkillFileInfo } from '../skills/types'
+import type { SkillArtifactSchema, SkillContent, SkillFileInfo, SkillPermissionManifest } from '../skills/types'
 
 export type RuntimeWarningLevel = 'info' | 'warn' | 'error'
 
@@ -24,6 +24,9 @@ export interface SkillRuntimeEntry {
   userInvocable: boolean
   selected: boolean
   allowedTools: string[]
+  lazyLoad: boolean
+  permissionManifest?: SkillPermissionManifest
+  artifactSchema?: SkillArtifactSchema[]
   scriptCount: number
   referenceCount: number
   assetCount: number
@@ -177,6 +180,9 @@ export function buildSkillRuntimeSnapshot(input: {
       userInvocable: skill.metadata.userInvocable !== false,
       selected: selected.has(skill.metadata.id),
       allowedTools: skill.metadata.allowedTools || [],
+      lazyLoad: skill.metadata.lazyLoad ?? skill.metadata.contextPolicy?.load === 'summary-first',
+      permissionManifest: skill.metadata.permissionManifest,
+      artifactSchema: skill.metadata.artifactSchema,
       scriptCount: skill.scripts?.length || 0,
       referenceCount: skill.references?.length || 0,
       assetCount: skill.assets?.length || 0,

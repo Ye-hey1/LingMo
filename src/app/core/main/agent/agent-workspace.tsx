@@ -35,9 +35,23 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { cn } from '@/lib/utils'
 import useChatStore from '@/stores/chat'
 import { useAgentRunsStore } from '@/stores/agent-runs'
+import { buildAgentEventEnvelope } from '@/lib/agent/event-envelope'
+import type {
+  AgentEvent,
+  AgentEventEnvelope,
+} from '@/lib/agent/types'
+import type {
+  AgentRunSnapshot,
+  VfsRef,
+} from '@/lib/agent-harness/types'
+import type {
+  AgentRuntimeSnapshot,
+  SkillRuntimeEntry,
+} from '@/lib/agent/runtime-snapshot'
 import type {
   AgentApprovalRecord,
   AgentArtifactRecord,
+  AgentEventRecord,
   AgentFailedToolCallRow,
   AgentRunDetail,
   AgentRunRecord,
@@ -65,10 +79,10 @@ type AgentRunMetricsView = {
   finalAnswerRetries?: number
 }
 
-type AgentPanelId = 'overview' | 'live' | 'failures' | 'knowledge' | 'review' | 'run' | 'context' | 'tree'
+type AgentPanelId = 'overview' | 'live' | 'failures' | 'knowledge' | 'review' | 'run' | 'context' | 'tree' | 'runtime'
 
 type GlobalPanelId = 'overview' | 'live' | 'failures' | 'knowledge'
-type DetailPanelId = 'review' | 'run' | 'context' | 'tree'
+type DetailPanelId = 'review' | 'run' | 'context' | 'tree' | 'runtime'
 
 const GLOBAL_PANELS: GlobalPanelId[] = ['overview', 'live', 'failures', 'knowledge']
 
@@ -93,6 +107,7 @@ const AGENT_PANELS: Array<{
   { id: 'run', label: '运行', icon: Activity },
   { id: 'context', label: '上下文', icon: Layers },
   { id: 'tree', label: '执行树', icon: GitBranch },
+  { id: 'runtime', label: '运行时', icon: ShieldCheck },
 ]
 
 function parseJson<T>(value?: string | null): T | null {
@@ -114,6 +129,188 @@ function prettyJson(value?: string | null) {
   const parsed = parseJson<unknown>(value)
   if (parsed === null) return value || ''
   return JSON.stringify(parsed, null, 2)
+}
+
+function safeStringify(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function parseAgentRunSnapshot(detail: AgentRunDetail): AgentRunSnapshot | null {
+  const parsed = parseJson<AgentRunSnapshot>(detail.run.runtimeSnapshotJson)
+  return parsed && typeof parsed.status === 'string' ? parsed : null
+}
+
+function parseAgentRuntimeSnapshot(detail: AgentRunDetail): AgentRuntimeSnapshot | null {
+  const parsed = parseJson<AgentRuntimeSnapshot>(detail.run.runtimeSnapshotJson)
+  return parsed && typeof parsed === 'object' && 'skills' in parsed && 'mcp' in parsed && 'tools' in parsed
+    ? parsed
+    : null
+}
+
+function parseEventPayload(event: AgentEventRecord): Record<string, any> {
+  return parseJson<Record<string, any>>(event.payloadJson) || {}
+}
+
+function agentEventFromRecord(event: AgentEventRecord): AgentEvent {
+  const parsedEnvelope = parseJson<AgentEventEnvelope>(event.envelopeJson)
+  return {
+    id: event.id,
+    runId: event.runId,
+    sequence: typeof event.seq === 'number' ? event.seq : undefined,
+    schemaVersion: event.schemaVersion || undefined,
+    spanId: event.spanId || undefined,
+    parentId: event.parentId || undefined,
+    type: event.type as AgentEvent['type'],
+    level: event.level as AgentEvent['level'],
+    iteration: typeof event.iteration === 'number' ? event.iteration : undefined,
+    payload: parseEventPayload(event),
+    timestamp: event.createdAt,
+    envelope: parsedEnvelope || undefined,
+  }
+}
+
+function getEventEnvelope(event: AgentEventRecord): AgentEventEnvelope {
+  const parsed = parseJson<AgentEventEnvelope>(event.envelopeJson)
+  if (parsed) return parsed
+  return buildAgentEventEnvelope(agentEventFromRecord(event))
+}
+
+function getRuntimeSnapshot(detail: AgentRunDetail): AgentRuntimeSnapshot | undefined {
+  const snapshot = parseAgentRunSnapshot(detail)
+  return snapshot?.partSnapshot?.runtimeSnapshot || parseAgentRuntimeSnapshot(detail) || undefined
+}
+
+function latestEventByType(detail: AgentRunDetail, type: string): AgentEventRecord | undefined {
+  return [...detail.events].reverse().find(event => event.type === type)
+}
+
+function getModelThinkingSnapshot(detail: AgentRunDetail) {
+  const modelEvent = latestEventByType(detail, 'model.request.started')
+  const payload = modelEvent ? parseEventPayload(modelEvent) : {}
+  const envelope = modelEvent ? getEventEnvelope(modelEvent) : undefined
+  const snapshot = parseAgentRunSnapshot(detail)
+  const model = envelope?.model?.model
+    || (typeof payload.model === 'string' ? payload.model : undefined)
+    || detail.run.model
+    || undefined
+  const thinkingLevel = envelope?.model?.thinkingLevel
+    || (typeof payload.thinkingLevel === 'string' ? payload.thinkingLevel : undefined)
+  const thinkingRequestMode = typeof payload.thinkingRequestMode === 'string' ? payload.thinkingRequestMode : undefined
+  const thinkingSupported = typeof envelope?.model?.thinkingSupported === 'boolean'
+    ? envelope.model.thinkingSupported
+    : typeof payload.thinkingSupported === 'boolean'
+      ? payload.thinkingSupported
+      : undefined
+
+  return {
+    model,
+    mode: envelope?.model?.mode || (typeof payload.mode === 'string' ? payload.mode : undefined),
+    thinkingLevel,
+    thinkingRequestMode,
+    thinkingSupported,
+    messageCount: typeof payload.messageCount === 'number' ? payload.messageCount : undefined,
+    toolCount: typeof payload.toolCount === 'number' ? payload.toolCount : undefined,
+    inputTokens: typeof payload.inputTokens === 'number'
+      ? payload.inputTokens
+      : snapshot?.partSnapshot?.telemetry?.inputTokens,
+    outputTokens: snapshot?.partSnapshot?.telemetry?.outputTokens,
+  }
+}
+
+function getEnvelopeAuditRows(detail: AgentRunDetail) {
+  const rows = new Map<string, {
+    key: string
+    label: string
+    count: number
+    lastStatus?: string
+    lastSource?: string
+    lastChannel?: string
+    lastPhase?: string
+    lastAt?: number
+  }>()
+
+  for (const event of detail.events) {
+    const envelope = getEventEnvelope(event)
+    const key = `${envelope.source}:${envelope.channel}:${envelope.type}`
+    const current = rows.get(key) || {
+      key,
+      label: String(envelope.type),
+      count: 0,
+    }
+    rows.set(key, {
+      ...current,
+      count: current.count + 1,
+      lastStatus: envelope.status,
+      lastSource: envelope.source,
+      lastChannel: envelope.channel,
+      lastPhase: envelope.phase,
+      lastAt: envelope.timestamp,
+    })
+  }
+
+  return [...rows.values()]
+    .sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0))
+    .slice(0, 14)
+}
+
+function formatRef(ref?: VfsRef | null) {
+  if (!ref) return ''
+  return ref.summary ? `${ref.path} · ${ref.summary}` : ref.path
+}
+
+function compactArray(values?: string[], max = 4) {
+  const cleaned = (values || []).filter(Boolean)
+  if (cleaned.length === 0) return ''
+  const preview = cleaned.slice(0, max).join(', ')
+  return cleaned.length > max ? `${preview} +${cleaned.length - max}` : preview
+}
+
+function formatSkillPermission(skill: SkillRuntimeEntry) {
+  const manifest = skill.permissionManifest
+  const parts = [
+    compactArray(manifest?.capabilities),
+    compactArray(manifest?.tools),
+    manifest?.filesystem?.length ? `${manifest.filesystem.length} fs` : '',
+    manifest?.network?.length ? `${manifest.network.length} net` : '',
+    manifest?.requiresConfirmation ? 'confirm' : '',
+  ].filter(Boolean)
+  return parts.join(' · ') || '-'
+}
+
+function formatSkillArtifacts(skill: SkillRuntimeEntry) {
+  return skill.artifactSchema?.map(item => item.path ? `${item.type}:${item.path}` : item.type).join(', ') || '-'
+}
+
+function getRuntimeSkills(detail: AgentRunDetail): SkillRuntimeEntry[] {
+  const runtime = getRuntimeSnapshot(detail)
+  if (runtime?.skills.skills.length) {
+    return runtime.skills.skills
+  }
+
+  const selected = latestEventByType(detail, 'skills.selected')
+  if (!selected) return []
+  const skillIds = parseEventPayload(selected).skillIds
+  if (!Array.isArray(skillIds)) return []
+  return skillIds
+    .filter((id): id is string => typeof id === 'string')
+    .map(id => ({
+      id,
+      name: id,
+      source: 'unknown',
+      enabled: true,
+      userInvocable: true,
+      selected: true,
+      allowedTools: [],
+      lazyLoad: false,
+      scriptCount: 0,
+      referenceCount: 0,
+      assetCount: 0,
+      warnings: [],
+    } satisfies SkillRuntimeEntry))
 }
 
 function estimateTokensFromChars(chars: number) {
@@ -190,6 +387,7 @@ function scopeTitle(id: AgentPanelId) {
     case 'run': return '运行状态'
     case 'context': return '上下文拼接'
     case 'tree': return '执行树'
+    case 'runtime': return '运行时审计'
     default: return id
   }
 }
@@ -231,6 +429,15 @@ function JsonBlock({
         {prettyJson(value)}
       </pre>
     </details>
+  )
+}
+
+function MetaCell({ label, value }: { label: string; value?: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-md bg-muted/30 px-2.5 py-2">
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate font-mono text-xs text-foreground/85">{value || '-'}</div>
+    </div>
   )
 }
 
@@ -772,6 +979,8 @@ function ContextPanel({ detail }: { detail: AgentRunDetail }) {
 
 function TreePanel({ detail }: { detail: AgentRunDetail }) {
   const nodes = useMemo(() => buildExecutionTree(detail), [detail])
+  const snapshot = useMemo(() => parseAgentRunSnapshot(detail), [detail])
+  const sessionTree = snapshot?.sessionTree
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col text-sm">
@@ -786,6 +995,14 @@ function TreePanel({ detail }: { detail: AgentRunDetail }) {
         <p className="mt-2 text-xs leading-5 text-muted-foreground">
           以运行记录为根节点，向下展开步骤、工具调用与关键事件，模拟 pi-app 的 Tree 面板。
         </p>
+        {sessionTree ? (
+          <div className="mt-3 grid gap-2 md:grid-cols-4">
+            <MetaCell label="Root" value={sessionTree.rootRunId} />
+            <MetaCell label="Branch" value={sessionTree.branchId} />
+            <MetaCell label="Entries" value={sessionTree.entryCount} />
+            <MetaCell label="Compactions" value={sessionTree.compactionRefs.length} />
+          </div>
+        ) : null}
       </div>
       <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-x-hidden">
         <div className="p-3">
@@ -814,6 +1031,166 @@ function TreePanel({ detail }: { detail: AgentRunDetail }) {
         </div>
       </ScrollArea>
     </section>
+  )
+}
+
+function RuntimePanel({ detail }: { detail: AgentRunDetail }) {
+  const snapshot = useMemo(() => parseAgentRunSnapshot(detail), [detail])
+  const runtimeSnapshot = useMemo(() => getRuntimeSnapshot(detail), [detail])
+  const thinking = useMemo(() => getModelThinkingSnapshot(detail), [detail])
+  const envelopeRows = useMemo(() => getEnvelopeAuditRows(detail), [detail])
+  const skills = useMemo(() => getRuntimeSkills(detail), [detail])
+  const selectedSkills = skills.filter(skill => skill.selected)
+  const visibleTools = runtimeSnapshot?.visibleToolNames || []
+  const blockedTools = runtimeSnapshot?.tools.blocked || []
+  const compactionRefs = snapshot?.sessionTree?.compactionRefs || []
+
+  return (
+    <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-x-hidden">
+      <div className="space-y-3 p-4" data-agent-runtime-console="rich">
+        <section className="rounded-md border bg-background">
+          <div className="flex items-center justify-between border-b px-3 py-2">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Zap className="size-4 text-muted-foreground" />
+              Think Mode
+            </div>
+            <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+              {thinking.thinkingSupported === false ? 'provider-default' : thinking.thinkingLevel || 'unknown'}
+            </Badge>
+          </div>
+          <div className="grid gap-2 p-3 md:grid-cols-4">
+            <MetaCell label="Model" value={thinking.model || '-'} />
+            <MetaCell label="Level" value={thinking.thinkingLevel || '-'} />
+            <MetaCell label="Request" value={thinking.thinkingRequestMode || thinking.mode || '-'} />
+            <MetaCell label="Input" value={thinking.inputTokens ? `${formatTokenCount(thinking.inputTokens)} tok` : '-'} />
+          </div>
+        </section>
+
+        <section className="rounded-md border bg-background">
+          <div className="flex items-center justify-between border-b px-3 py-2">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <GitBranch className="size-4 text-muted-foreground" />
+              Session Binding
+            </div>
+            <span className="text-xs text-muted-foreground">{snapshot?.sessionTree?.entryCount ?? 0} entries</span>
+          </div>
+          <div className="grid gap-2 p-3 md:grid-cols-3">
+            <MetaCell label="Root run" value={snapshot?.rootRunId || snapshot?.runId || detail.run.id} />
+            <MetaCell label="Parent run" value={snapshot?.parentRunId || '-'} />
+            <MetaCell label="Branch" value={snapshot?.branchId || '-'} />
+            <MetaCell label="Conversation" value={snapshot?.chat?.conversationId ?? detail.run.conversationId ?? '-'} />
+            <MetaCell label="Assistant chat" value={snapshot?.chat?.assistantChatId ?? '-'} />
+            <MetaCell label="Last event" value={snapshot?.sessionTree?.lastEventSequence ?? '-'} />
+          </div>
+          {compactionRefs.length > 0 ? (
+            <div className="border-t px-3 py-2">
+              <div className="mb-2 text-xs font-medium text-muted-foreground">Compaction refs</div>
+              <div className="space-y-1">
+                {compactionRefs.slice(-5).map(ref => (
+                  <div key={ref.uri} className="truncate rounded bg-muted/30 px-2 py-1 font-mono text-[11px] text-muted-foreground" title={ref.uri}>
+                    {formatRef(ref)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="rounded-md border bg-background">
+          <div className="flex items-center justify-between border-b px-3 py-2">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Radio className="size-4 text-muted-foreground" />
+              SSE / Event Envelope
+            </div>
+            <span className="text-xs text-muted-foreground">{detail.events.length} events</span>
+          </div>
+          {envelopeRows.length === 0 ? (
+            <EmptyState icon={<Radio className="size-5" />} label="暂无事件信封" />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-xs">
+                <thead className="border-b bg-muted/20 text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Type</th>
+                    <th className="px-3 py-2 text-left font-medium">Source</th>
+                    <th className="px-3 py-2 text-left font-medium">Channel</th>
+                    <th className="px-3 py-2 text-left font-medium">Phase</th>
+                    <th className="px-3 py-2 text-left font-medium">Status</th>
+                    <th className="px-3 py-2 text-right font-medium">Count</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {envelopeRows.map(row => (
+                    <tr key={row.key}>
+                      <td className="max-w-[220px] truncate px-3 py-2 font-mono">{row.label}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{row.lastSource || '-'}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{row.lastChannel || '-'}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{row.lastPhase || '-'}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{row.lastStatus || '-'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{row.count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-md border bg-background">
+          <div className="flex items-center justify-between border-b px-3 py-2">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <ShieldCheck className="size-4 text-muted-foreground" />
+              Skills Governance
+            </div>
+            <span className="text-xs text-muted-foreground">{selectedSkills.length} selected · {visibleTools.length} tools</span>
+          </div>
+          <div className="grid gap-2 p-3 md:grid-cols-4">
+            <StatCell label="选中 Skills" value={selectedSkills.length} icon={<Layers className="size-3.5" />} />
+            <StatCell label="Lazy Load" value={skills.filter(skill => skill.lazyLoad).length} icon={<Clock3 className="size-3.5" />} />
+            <StatCell label="可见工具" value={visibleTools.length} icon={<Wrench className="size-3.5" />} />
+            <StatCell label="阻塞工具" value={blockedTools.length} icon={<AlertTriangle className="size-3.5" />} />
+          </div>
+          {skills.length === 0 ? (
+            <div className="border-t px-3 py-4 text-sm text-muted-foreground">暂无 Skill 运行时信息</div>
+          ) : (
+            <div className="overflow-x-auto border-t">
+              <table className="w-full min-w-[860px] text-xs">
+                <thead className="border-b bg-muted/20 text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Skill</th>
+                    <th className="px-3 py-2 text-left font-medium">Source</th>
+                    <th className="px-3 py-2 text-left font-medium">Load</th>
+                    <th className="px-3 py-2 text-left font-medium">Permissions</th>
+                    <th className="px-3 py-2 text-left font-medium">Artifacts</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {skills.slice(0, 24).map(skill => (
+                    <tr key={skill.id} className={skill.selected ? 'bg-primary/[0.025]' : undefined}>
+                      <td className="max-w-[220px] px-3 py-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate font-medium">{skill.name}</span>
+                          {skill.selected ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">selected</Badge> : null}
+                        </div>
+                        <div className="truncate font-mono text-[11px] text-muted-foreground">{skill.id}</div>
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground">{skill.source}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{skill.lazyLoad ? 'lazy' : 'eager'}</td>
+                      <td className="max-w-[260px] truncate px-3 py-2 text-muted-foreground" title={safeStringify(skill.permissionManifest)}>
+                        {formatSkillPermission(skill)}
+                      </td>
+                      <td className="max-w-[260px] truncate px-3 py-2 text-muted-foreground" title={safeStringify(skill.artifactSchema)}>
+                        {formatSkillArtifacts(skill)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+    </ScrollArea>
   )
 }
 
@@ -944,10 +1321,35 @@ function buildContextSegments(detail: AgentRunDetail): ContextSegment[] {
   return segments
 }
 
+type ExecutionTreeNode = {
+  id: string
+  depth: number
+  title: string
+  meta?: string
+  badge?: string
+  current?: boolean
+}
+
+function createExecutionTreeNodePusher(nodes: ExecutionTreeNode[]) {
+  const seenIds = new Map<string, number>()
+
+  return (node: ExecutionTreeNode) => {
+    const baseId = node.id
+    const seenCount = seenIds.get(baseId) || 0
+    seenIds.set(baseId, seenCount + 1)
+    nodes.push({
+      ...node,
+      id: seenCount === 0 ? baseId : `${baseId}#${seenCount + 1}`,
+    })
+  }
+}
+
 function buildExecutionTree(detail: AgentRunDetail) {
-  const nodes: Array<{ id: string; depth: number; title: string; meta?: string; badge?: string; current?: boolean }> = []
-  nodes.push({
-    id: detail.run.id,
+  const nodes: ExecutionTreeNode[] = []
+  const pushNode = createExecutionTreeNodePusher(nodes)
+
+  pushNode({
+    id: `run:${detail.run.id}`,
     depth: 0,
     title: compactText(detail.run.userGoal, 100) || 'Agent run',
     meta: `${statusLabel(detail.run.status)} · ${formatDateTime(detail.run.startedAt)}`,
@@ -955,16 +1357,16 @@ function buildExecutionTree(detail: AgentRunDetail) {
     current: true,
   })
   for (const step of detail.steps) {
-    nodes.push({
-      id: step.id,
+    pushNode({
+      id: `step:${step.id}`,
       depth: 1,
       title: step.title || `Step ${step.stepIndex}`,
       meta: [formatDateTime(step.startedAt), formatDuration(step.endedAt && step.startedAt ? step.endedAt - step.startedAt : undefined)].filter(Boolean).join(' · '),
       badge: step.status,
     })
     for (const call of detail.toolCalls.filter(item => item.iteration === step.stepIndex)) {
-      nodes.push({
-        id: call.id,
+      pushNode({
+        id: `step-tool:${step.stepIndex}:${call.id}`,
         depth: 2,
         title: call.toolName,
         meta: compactText(call.error || call.message || call.dataRef || '', 120),
@@ -974,23 +1376,23 @@ function buildExecutionTree(detail: AgentRunDetail) {
   }
   const stepIterations = new Set(detail.steps.map(step => step.stepIndex))
   for (const call of detail.toolCalls.filter(item => !item.iteration || !stepIterations.has(item.iteration))) {
-    nodes.push({
-      id: call.id,
+    pushNode({
+      id: `tool:${call.id}`,
       depth: 1,
       title: call.toolName,
       meta: compactText(call.error || call.message || call.dataRef || '', 120),
       badge: call.status,
     })
   }
-  for (const event of detail.events.slice(-40)) {
-    nodes.push({
-      id: event.id,
+  detail.events.slice(-40).forEach((event, index) => {
+    pushNode({
+      id: `event:${event.id || event.seq || event.createdAt || index}`,
       depth: 1,
       title: event.type,
       meta: [event.seq !== null && event.seq !== undefined ? `seq ${event.seq}` : '', event.iteration ? `iter ${event.iteration}` : '', formatDateTime(event.createdAt)].filter(Boolean).join(' · '),
       badge: event.level || 'event',
     })
-  }
+  })
   return nodes.slice(0, 180)
 }
 
@@ -1881,6 +2283,7 @@ function AgentPanelHost({
       {activePanel === 'run' ? <RunPanel detail={detail} /> : null}
       {activePanel === 'context' ? <ContextPanel detail={detail} /> : null}
       {activePanel === 'tree' ? <TreePanel detail={detail} /> : null}
+      {activePanel === 'runtime' ? <RuntimePanel detail={detail} /> : null}
     </section>
   )
 }

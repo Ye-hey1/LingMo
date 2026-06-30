@@ -47,6 +47,102 @@ export type ToolCallStatus =
   | 'cached'
   | 'cancelled'
 
+export const AGENT_EVENT_SCHEMA_VERSION = 'agent.event.v1' as const
+export const AGENT_EVENT_ENVELOPE_VERSION = 'agent.event.envelope.v1' as const
+
+export type AgentEventSchemaVersion = typeof AGENT_EVENT_SCHEMA_VERSION
+export type AgentEventEnvelopeVersion = typeof AGENT_EVENT_ENVELOPE_VERSION
+
+export type AgentEventSource =
+  | 'model'
+  | 'tool'
+  | 'runtime'
+  | 'skill'
+  | 'mcp'
+  | 'approval'
+  | 'research'
+  | 'unknown'
+
+export type AgentEventChannel =
+  | 'lifecycle'
+  | 'status'
+  | 'reasoning'
+  | 'answer'
+  | 'tool'
+  | 'approval'
+  | 'planning'
+  | 'context'
+  | 'skill'
+  | 'mcp'
+  | 'research'
+  | 'error'
+
+export type AgentEventVisibility = 'visible' | 'hidden'
+
+export type AgentEventEnvelopeStatus =
+  | 'pending'
+  | 'started'
+  | 'running'
+  | 'delta'
+  | 'finished'
+  | 'success'
+  | 'error'
+  | 'blocked'
+  | 'skipped'
+  | 'adjusted'
+  | 'cached'
+  | 'cancelled'
+  | 'completed'
+  | 'stopped'
+  | 'unknown'
+
+export interface AgentEventEnvelope {
+  version: AgentEventEnvelopeVersion
+  eventId?: string
+  runId?: string
+  sequence?: number
+  type: AgentEventType | string
+  timestamp: number
+  iteration?: number
+  spanId?: string
+  parentId?: string
+  source: AgentEventSource
+  channel: AgentEventChannel
+  phase?: AgentActivityPhase
+  visibility: AgentEventVisibility
+  status: AgentEventEnvelopeStatus
+  content?: string
+  stream?: {
+    segmentId?: string
+    kind?: string
+    contentLength?: number
+    deltaLength?: number
+    finishReason?: string | null
+  }
+  model?: {
+    provider?: string
+    model?: string
+    mode?: string
+    thinkingLevel?: string
+    thinkingSupported?: boolean
+  }
+  usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+  }
+  tool?: {
+    callId?: string
+    name?: string
+    status?: ToolCallStatus
+  }
+  error?: {
+    message: string
+    recoverable?: boolean
+  }
+  metadata?: Record<string, any>
+}
+
 export type AgentApprovalScope =
   | 'once'
   | 'conversation'
@@ -108,6 +204,10 @@ export interface AgentEvent {
   id?: string
   runId?: string
   sequence?: number
+  schemaVersion?: AgentEventSchemaVersion | string
+  envelope?: AgentEventEnvelope
+  spanId?: string
+  parentId?: string
   type: AgentEventType
   timestamp: number
   iteration?: number

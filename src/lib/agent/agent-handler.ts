@@ -39,6 +39,7 @@ export interface AgentHandlerConfig {
   onComplete?: (result: string, steps?: any[], stopped?: boolean) => void
   onError?: (error: string) => void | Promise<void>
   onAnswerDelta?: (markdownContent: string) => void
+  onAnswerRejected?: () => void
   onFinalAnswerRender?: (markdownContent: string) => void  // 当检测到 Final Answer 时立即渲染 Markdown
   requestConfirmation?: (toolName: string, params: Record<string, any>) => Promise<boolean>
   forcedSkillIds?: string[]
@@ -488,6 +489,8 @@ export class AgentHandler {
     this.localPartSnapshot = partSnapshot
 
     if (event.type === 'final.answer.rejected') {
+      this.lastAnswerDeltaContent = ''
+      this.config.onAnswerRejected?.()
       this.stateBatcher.enqueue({
         isFinalAnswerMode: false,
         finalAnswerContent: undefined,

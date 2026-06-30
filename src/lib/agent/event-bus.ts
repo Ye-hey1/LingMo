@@ -1,10 +1,19 @@
 import type { AgentActivityPhase, AgentEvent, AgentEventType, AgentTurnTelemetry, ToolCall } from './types'
+import { AGENT_EVENT_SCHEMA_VERSION } from './types'
 import { isSupportOnlyObservationText, isSupportOnlyToolName } from './support-tools'
+import { buildAgentEventEnvelope, getAgentEventEnvelope } from './event-envelope'
 
 export interface AgentEventBusOptions {
   runId?: string
   maxEvents?: number
   onEvent?: (event: AgentEvent) => void
+}
+
+export interface AgentEventEmitOptions {
+  iteration?: number
+  level?: AgentEvent['level']
+  spanId?: string
+  parentId?: string | null
 }
 
 export interface AgentReplayState {
@@ -24,6 +33,11 @@ export interface AgentReplayState {
 
 function createRunId(): string {
   return `agent-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function createEventSpanId(type: AgentEventType, sequence: number): string {
+  const safeType = type.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'event'
+  return `span:${safeType}:${sequence}`
 }
 
 function isToolCall(value: unknown): value is ToolCall {
@@ -65,19 +79,24 @@ export class AgentEventBus {
   emit(
     type: AgentEventType,
     payload?: Record<string, any>,
-    options: { iteration?: number; level?: AgentEvent['level'] } = {}
+    options: AgentEventEmitOptions = {}
   ): AgentEvent {
     this.sequence += 1
+    const previousEvent = this.events[this.events.length - 1]
     const event: AgentEvent = {
       id: `${this.runId}:${this.sequence}`,
       runId: this.runId,
       sequence: this.sequence,
+      schemaVersion: AGENT_EVENT_SCHEMA_VERSION,
+      spanId: options.spanId || createEventSpanId(type, this.sequence),
+      parentId: options.parentId === null ? undefined : options.parentId || previousEvent?.id,
       type,
       timestamp: Date.now(),
       iteration: options.iteration,
       level: options.level,
       payload,
     }
+    event.envelope = buildAgentEventEnvelope(event)
 
     this.events = appendAgentEvent(this.events, event, this.maxEvents)
     this.onEvent?.(event)
@@ -136,10 +155,15 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
 
   for (const event of events) {
     const payload = event.payload || {}
-    const hiddenEvent = payload.internal === true || payload.visibility === 'hidden'
+    const envelope = getAgentEventEnvelope(event)
+    const hiddenEvent = envelope.visibility === 'hidden'
     updatedAt = event.timestamp
 
-    if (typeof payload.toolName === 'string') {
+    if (typeof envelope.tool?.name === 'string') {
+      if (!isSupportOnlyToolName(envelope.tool.name)) {
+        latestToolName = envelope.tool.name
+      }
+    } else if (typeof payload.toolName === 'string') {
       if (!isSupportOnlyToolName(payload.toolName)) {
         latestToolName = payload.toolName
       }
@@ -165,9 +189,9 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
       case 'agent.completed':
         replay.status = 'completed'
         currentPhase = 'completed'
-        if (typeof payload.result === 'string') {
-          replay.finalAnswer = payload.result
-          outputChars = Math.max(outputChars, payload.result.length)
+        if (typeof envelope.content === 'string') {
+          replay.finalAnswer = envelope.content
+          outputChars = Math.max(outputChars, envelope.content.length)
         }
         break
       case 'agent.planning':
@@ -178,17 +202,17 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
         break
       case 'agent.stream.delta':
         currentPhase = 'answering'
-        if (typeof payload.contentLength === 'number') {
-          outputChars = Math.max(outputChars, payload.contentLength)
+        if (typeof envelope.stream?.contentLength === 'number') {
+          outputChars = Math.max(outputChars, envelope.stream.contentLength)
         }
         break
       case 'agent.stream.started':
         currentPhase = 'thinking'
         break
       case 'agent.stream.finished':
-        if (typeof payload.contentLength === 'number' && payload.contentLength > 0) {
+        if (typeof envelope.stream?.contentLength === 'number' && envelope.stream.contentLength > 0) {
           currentPhase = 'answering'
-          outputChars = Math.max(outputChars, payload.contentLength)
+          outputChars = Math.max(outputChars, envelope.stream.contentLength)
         }
         break
       case 'iteration.started':
@@ -199,9 +223,9 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
         if (hiddenEvent) {
           break
         }
-        if (typeof payload.content === 'string') {
-          replay.currentThought = payload.content
-          outputChars = Math.max(outputChars, payload.content.length)
+        if (typeof envelope.content === 'string') {
+          replay.currentThought = envelope.content
+          outputChars = Math.max(outputChars, envelope.content.length)
         }
         currentPhase = 'thinking'
         break
@@ -275,14 +299,14 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
           timestamp: event.timestamp,
           payload,
         })
-        if (typeof payload.contentLength === 'number') {
-          outputChars = Math.max(outputChars, payload.contentLength)
+        if (typeof envelope.stream?.contentLength === 'number') {
+          outputChars = Math.max(outputChars, envelope.stream.contentLength)
         }
-        if (typeof payload.inputTokens === 'number') {
-          inputTokens = payload.inputTokens
+        if (typeof envelope.usage?.inputTokens === 'number') {
+          inputTokens = envelope.usage.inputTokens
         }
-        if (typeof payload.outputTokens === 'number') {
-          outputTokens = payload.outputTokens
+        if (typeof envelope.usage?.outputTokens === 'number') {
+          outputTokens = envelope.usage.outputTokens
         }
         currentPhase = 'thinking'
         break
@@ -348,9 +372,9 @@ export function replayAgentEvents(events: AgentEvent[]): AgentReplayState {
         break
       case 'final':
       case 'final.answer.rendered':
-        if (typeof payload.content === 'string') {
-          replay.finalAnswer = payload.content
-          outputChars = Math.max(outputChars, payload.content.length)
+        if (typeof envelope.content === 'string') {
+          replay.finalAnswer = envelope.content
+          outputChars = Math.max(outputChars, envelope.content.length)
         }
         currentPhase = 'answering'
         break

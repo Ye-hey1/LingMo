@@ -577,6 +577,38 @@ const INTERNAL_AGENT_INSTRUCTION_PATTERNS = [
   /两个搜索引擎都不可用/i,
 ]
 
+const INTERNAL_TOOL_REPORT_PATTERNS = [
+  /我先基于目前已经确认的信息整理如下[:：]?/i,
+  /仍未确认的部分我会标明为待核实/i,
+  /数据详情[:：]\s*\{/i,
+  /原始错误[:：]\s*/i,
+  /ChunkLoadError/i,
+  /\((?:select_skill|load_skill_content)\)/i,
+  /\b(?:select_skill|load_skill_content)\b.{0,80}(?:已选择|没有找到额外的支持文件|Skill)/i,
+  /\bmcp-[\w-]+__[a-z0-9_-]+/i,
+  /MCP\s*工具执行失败/i,
+]
+
+export function isInternalToolReport(value: unknown): boolean {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  const normalized = value.replace(/\r\n/g, '\n').trim()
+  if (!normalized) {
+    return false
+  }
+
+  const matchedSignals = INTERNAL_TOOL_REPORT_PATTERNS.filter(pattern => pattern.test(normalized)).length
+  if (matchedSignals >= 2) {
+    return true
+  }
+
+  const numberedToolRows = normalized.match(/(?:^|\n)\s*\d+[.、．]\s*\([^)\n]+?\)\s+/g) || []
+  const supportToolRows = numberedToolRows.filter(row => /\((?:select_skill|load_skill_content|mcp-[^)]+)\)/i.test(row)).length
+  return supportToolRows >= 2 && /(?:数据详情|原始错误|调用失败|没有找到额外的支持文件)/i.test(normalized)
+}
+
 export function isInternalAgentInstruction(value: unknown): boolean {
   if (typeof value !== 'string') {
     return false
@@ -587,7 +619,8 @@ export function isInternalAgentInstruction(value: unknown): boolean {
     return false
   }
 
-  return INTERNAL_AGENT_INSTRUCTION_PATTERNS.some(pattern => pattern.test(normalized))
+  return INTERNAL_AGENT_INSTRUCTION_PATTERNS.some(pattern => pattern.test(normalized)) ||
+    isInternalToolReport(normalized)
 }
 
 export function sanitizeVisibleAssistantContent(content: string): string {

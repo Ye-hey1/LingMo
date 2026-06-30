@@ -1,7 +1,7 @@
 import type OpenAI from 'openai'
 import { createOpenAIClient, getAISettings } from '@/lib/ai/utils'
 import { isVisionContentUnsupportedError, prepareMessagesWithImages } from '@/lib/ai/vision-bridge'
-import { getModelCapabilityProfile } from '@/lib/ai/model-capabilities'
+import { resolveThinkingSettings } from '@/lib/ai/model-capabilities'
 import { estimateTokens } from '@/lib/ai/token-counter'
 import { getAllToolsSync, reloadMcpTools } from '@/lib/agent/tools'
 import type { AgentEvent, ReActStep, Tool, ToolCall, ToolResult } from '@/lib/agent/types'
@@ -23,6 +23,7 @@ import { withTransientRetry } from '@/lib/agent/transient-retry'
 import { isSupportOnlyToolName } from '@/lib/agent/support-tools'
 import { createAiStreamContentProcessor } from '@/lib/ai/sanitize'
 import { validateFinalAnswer } from '@/lib/agent/final-answer'
+import { isInternalAgentInstruction, sanitizeVisibleAssistantContent } from '@/lib/agent/parse-action-input'
 import type { LinkedResource } from '@/lib/files'
 import { AgentLifecycleController } from './turn-lifecycle'
 import { getAiRateLimitUserMessage, isAiRateLimitError } from '@/lib/ai/rate-limit'
@@ -219,11 +220,17 @@ function isConcreteCompletionTool(toolName?: string) {
 }
 
 function isInformationQueryRequest(userInput: string) {
-  if (/(?:输出|保存|写入|导出|存成|存为|新建|创建).{0,32}(?:笔记|文档|文件)|(?:笔记|文档|文件).{0,32}(?:输出|保存|写入|导出|存成|存为|新建|创建)/.test(userInput)) {
+  if (/(?:输出到|输出为|保存|写入|导出|存成|存为|新建|创建).{0,32}(?:笔记|文档|文件)|(?:笔记|文档|文件).{0,32}(?:输出到|输出为|保存|写入|导出|存成|存为|新建|创建)/.test(userInput)) {
     return false
   }
 
   return /查看|查询|获取|检索|搜索|总结|汇总|梳理|分析|解读|列出|最新|热点|新闻|资讯|趋势|信息|内容|数据|资料|事实|来源|指南|find|search|fetch|get|retrieve|summari[sz]e|analy[sz]e|latest|news|trending|information|research|source|guide/i.test(userInput)
+}
+
+function isSocialContentPlanRequest(userInput: string) {
+  const artifactProbe = userInput.replace(/\brednote\b/ig, '')
+  return /(?:小红书|rednote|xhs|图文|发布文案|页面结构|图像提示词|图片提示词|风格判断|选题判断|逐页|6\s*页|六\s*页)/i.test(userInput) &&
+    !/导出|保存|写入|输出到|输出为|存成|存为|文件|笔记|文档|pptx|pdf|docx|xlsx|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|export|save|write|file|note|document|presentation/i.test(artifactProbe)
 }
 
 function validateHarnessFinalAnswer(input: {
@@ -257,9 +264,10 @@ function validateHarnessFinalAnswer(input: {
   }
 
   const normalizedInput = input.userInput.toLowerCase()
-  const claimsExecution = /已创建(?:文件|笔记|文档|图表|报告)?|已保存|已写入|已导出|已验证|成功使用|成功创建|成功保存|成功写入|成功导出|created (?:file|note|document|diagram|report)|saved|exported|verified|successfully used/i.test(input.finalAnswer)
+  const claimsExecution = /已创建(?:文件|笔记|文档|图表|报告)?|已保存|已写入|已导出|成功创建|成功保存|成功写入|成功导出|created (?:file|note|document|diagram|report)|saved|exported/i.test(input.finalAnswer)
   const requestedArtifact = !informationQuery &&
-    /导出|保存|输出到|写入|存成|存为|笔记|文档|pptx|pdf|docx|xlsx|文件|演示文稿|export|save|write|file|note|document|presentation/.test(normalizedInput)
+    !isSocialContentPlanRequest(input.userInput) &&
+    /导出|保存|输出到|输出为|写入|存成|存为|笔记|文档|pptx|pdf|docx|xlsx|文件|演示文稿|export|save|write|file|note|document|presentation/.test(normalizedInput)
   const requestedEdit = /修改|编辑|改成|改为|改回|替换|删除|移动|重命名|复制|插入|rewrite|edit|modify|change|replace|delete|move|rename|copy|insert/.test(normalizedInput)
   const claimsEditApplied = /已修改|已更新|已改为|已改回|已删除|已移动|已重命名|已复制|现在为|已经是|updated|changed|modified|deleted|moved|renamed|copied/.test(input.finalAnswer)
   const hasMutationSuccess = input.steps.some(step => isMutationTool(step.action?.tool) && isSuccessfulStep(step))
@@ -273,7 +281,10 @@ function validateHarnessFinalAnswer(input: {
     }
   }
 
-  if (input.selectedSkillIds.size > 0 && claimsExecution && !hasSuccessfulTool) {
+  const onlyClaimsUsingSkill = /(?:已|已经).{0,12}(?:使用|基于|按照|应用).{0,24}(?:skill|技能|指令)/i.test(input.finalAnswer) &&
+    !/已创建|已保存|已写入|已导出|成功创建|成功保存|成功写入|成功导出|created (?:file|note|document|diagram|report)|saved|exported/i.test(input.finalAnswer)
+
+  if (input.selectedSkillIds.size > 0 && claimsExecution && !hasSuccessfulTool && !onlyClaimsUsingSkill) {
     return {
       ok: false,
       reason: '已选择 Skill，但还没有真正完成执行步骤。请先完成 create_file、execute_skill_script 或其他实际工具调用，再给最终答案。',
@@ -315,7 +326,11 @@ function buildOutputLengthContinuationPrompt() {
 }
 
 function compactObservationText(value: string, maxChars = 900) {
-  const cleaned = value.replace(/\s+/g, ' ').trim()
+  const publicText = sanitizeVisibleAssistantContent(value)
+  const withoutDetails = (publicText || value)
+    .split(/\n\s*数据详情[:：]\s*/)[0]
+    .split(/\n\s*原始错误[:：]\s*/)[0]
+  const cleaned = withoutDetails.replace(/\s+/g, ' ').trim()
   if (cleaned.length <= maxChars) return cleaned
   return `${cleaned.slice(0, maxChars).trim()}...`
 }
@@ -323,14 +338,16 @@ function compactObservationText(value: string, maxChars = 900) {
 function buildObservationDigest(steps: ReActStep[], maxSteps = 8) {
   const usefulSteps = steps
     .filter(step => step.observation?.trim())
+    .filter(step => !isSupportOnlyToolName(step.action?.tool))
+    .filter(step => !isInternalAgentInstruction(step.observation || ''))
     .slice(-maxSteps)
 
   if (usefulSteps.length === 0) return ''
 
   return usefulSteps.map((step, index) => {
-    const toolLabel = step.action?.tool ? ` (${step.action.tool})` : ''
-    return `${index + 1}. ${toolLabel} ${compactObservationText(step.observation || '')}`.trim()
-  }).join('\n')
+    const text = compactObservationText(step.observation || '', 700)
+    return text ? `${index + 1}. ${text}` : ''
+  }).filter(Boolean).join('\n')
 }
 
 function buildMaxIterationFallback(steps: ReActStep[]) {
@@ -338,15 +355,15 @@ function buildMaxIterationFallback(steps: ReActStep[]) {
 
   if (digest) {
     return [
-      '我先基于目前已经确认的信息整理如下：',
+      '我暂时没有拿到完整的正式回答，只能整理目前可公开的信息：',
       '',
       digest,
       '',
-      '仍未确认的部分我会标明为待核实，并给出下一步建议。',
+      '仍待核实的部分建议重新运行，或换一个可用的数据源后继续。',
     ].join('\n')
   }
 
-  return '这轮暂时没有拿到足够的可展示信息。可以把任务拆成更小的一步继续，我会从当前上下文接着处理。'
+  return '这轮没有拿到足够的可展示正文。内部工具结果和错误已保留在运行记录中，请重试或换一个可用的数据源。'
 }
 
 function buildRateLimitFallback(input: { userInput: string; steps: ReActStep[]; partialContent?: string; error: unknown }) {
@@ -980,7 +997,8 @@ export class HarnessAgentRunner {
   }): Promise<{ content: string; toolCalls: ModelToolCall[]; finishReason?: string | null }> {
     const aiConfig = await getAISettings()
     const openai = await createOpenAIClient(aiConfig)
-    const capabilities = getModelCapabilityProfile(aiConfig)
+    const thinkingSettings = resolveThinkingSettings(aiConfig)
+    const capabilities = thinkingSettings.profile
     const textMessages = input.messages
     let messages = await prepareMessagesWithImages(textMessages, aiConfig, input.imageUrls, this.abortController?.signal)
     const requestParams: any = {
@@ -990,6 +1008,7 @@ export class HarnessAgentRunner {
       top_p: aiConfig?.topP ?? 1,
       stream: true,
       tools: input.tools.map(toolToOpenAiTool),
+      ...thinkingSettings.requestPatch,
     }
     if (capabilities.supportsToolChoice) requestParams.tool_choice = 'auto'
     if (input.maxTokens && input.maxTokens > 0) requestParams.max_tokens = input.maxTokens
@@ -1001,6 +1020,10 @@ export class HarnessAgentRunner {
     const modelStartedAt = Date.now()
     this.emitEvent('model.request.started', {
       mode: 'harness-tools',
+      model: aiConfig?.model || '',
+      thinkingLevel: thinkingSettings.level,
+      thinkingSupported: capabilities.supportsThinkingLevel,
+      thinkingRequestMode: capabilities.thinkingRequestMode,
       messageCount: messages.length,
       toolCount: input.tools.length,
       inputTokens: estimateTokens(JSON.stringify(messages)),

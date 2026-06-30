@@ -1,4 +1,5 @@
 import type { AgentEvent, ReActStep, Tool, ToolExecutionContext, ToolResult } from '@/lib/agent/types'
+import type { AgentPartSnapshot } from '@/lib/agent/part-reducer'
 import type { AgentRuntimeSnapshot, McpRuntimeSnapshot, SkillRuntimeSnapshot, ToolExposureSnapshot } from '@/lib/agent/runtime-snapshot'
 import type { IntentPolicy } from '@/lib/agent/tool-policy'
 import type { AgentWorkflowTemplatePromptItem } from '@/lib/agent/workflow-templates'
@@ -109,12 +110,33 @@ export interface AgentRunMetrics {
   finalAnswerRetries: number
 }
 
+export interface AgentSessionTreeBinding {
+  rootRunId: string
+  parentRunId?: string
+  branchId: string
+  leafEntryId?: string | null
+  entryCount: number
+  lastEventSequence?: number | null
+  compactionRefs: VfsRef[]
+}
+
+export interface AgentChatBinding {
+  conversationId?: number | null
+  userChatId?: number | null
+  assistantChatId?: number | null
+}
+
 export interface AgentRunSnapshot {
   runId: string
+  rootRunId?: string
+  parentRunId?: string
+  branchId?: string
+  chat?: AgentChatBinding
   status: 'running' | 'paused' | 'completed' | 'failed'
   userGoal: string
   route: AgentRoute
   phase?: import('./turn-lifecycle').AgentHarnessPhase
+  sessionTree?: AgentSessionTreeBinding
   sessionLogRef?: VfsRef
   turnRefs?: VfsRef[]
   planRef?: VfsRef
@@ -126,6 +148,7 @@ export interface AgentRunSnapshot {
   pendingApproval?: ApprovalRequest
   toolExposureHistory?: ToolExposureRecord[]
   metrics?: AgentRunMetrics
+  partSnapshot?: AgentPartSnapshot
   finalAnswer?: string
   updatedAt: number
 }

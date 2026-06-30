@@ -1,3 +1,5 @@
+import { isInternalToolReport } from './parse-action-input'
+
 export interface AutoFinalAnswerDescriptor {
   key: string
   values: Record<string, string>
@@ -22,7 +24,7 @@ const CONCRETE_ARTIFACT_REQUEST_PATTERN =
   /导出|保存|写入|输出到|输出为|存成|存为|绘制|画一|画个|画出|可视化|图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e|export|save|write|file|note|document|presentation/i
 
 const CONCRETE_ARTIFACT_DIRECTIVE_PATTERN =
-  /(?:生成|创建|制作|新建|导出|保存|写入|输出|整理成|存成|存为|绘制|画一|画个|画出|可视化).{0,30}(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw)|(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw).{0,30}(?:生成|创建|制作|新建|导出|保存|写入|输出|绘制|存成|存为)|(?:规划|设计|制定|重新规划|生成|整理).{0,36}(?:攻略|方案|行程|路线|计划).{0,24}(?:输出|保存|写入|存成|存为|导出|笔记|文档|文件)|(?:输出|保存|写入|整理|存成|存为|导出).{0,16}(?:到|为|成|进)?\s*(?:笔记|文档|文件)|\b(?:create|generate|export|save|write|produce|visuali[sz]e).{0,40}(?:diagram|mind\s*map|mindmap|flowchart|file|note|document|presentation|pptx|pdf|docx|xlsx)\b|\b(?:itinerary|plan|guide|proposal|report).{0,40}(?:save|write|export|file|note|document)\b/i
+  /(?:生成|创建|制作|新建|导出|保存|写入|整理成|存成|存为|绘制|画一|画个|画出|可视化|输出到|输出为).{0,30}(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw)|(?:图表|思维导图|导图|流程图|架构图|白板|文件|笔记|文档|演示文稿|pptx|pdf|docx|xlsx|drawio|excalidraw).{0,30}(?:生成|创建|制作|新建|导出|保存|写入|绘制|存成|存为|输出到|输出为)|(?:规划|设计|制定|重新规划|生成|整理).{0,36}(?:攻略|方案|行程|路线|计划).{0,24}(?:保存|写入|存成|存为|导出|笔记|文档|文件|输出到|输出为)|(?:输出到|输出为|保存|写入|整理|存成|存为|导出).{0,16}(?:到|为|成|进)?\s*(?:笔记|文档|文件)|\b(?:create|generate|export|save|write|produce|visuali[sz]e).{0,40}(?:diagram|mind\s*map|mindmap|flowchart|file|note|document|presentation|pptx|pdf|docx|xlsx)\b|\b(?:itinerary|plan|guide|proposal|report).{0,40}(?:save|write|export|file|note|document)\b/i
 
 const INFORMATION_QUERY_PATTERN =
   /查看|查询|获取|检索|搜索|总结|汇总|梳理|分析|解读|列出|最新|热点|新闻|资讯|趋势|信息|内容|数据|find|search|fetch|get|retrieve|summari[sz]e|analy[sz]e|latest|news|trending|information/i
@@ -31,10 +33,16 @@ const DIAGRAM_ARTIFACT_REQUEST_PATTERN =
   /绘制|画一|画个|画出|可视化|图表|思维导图|导图|流程图|架构图|白板|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|visuali[sz]e/i
 
 const NOTE_OUTPUT_REQUEST_PATTERN =
-  /(?:输出|保存|写入|整理|生成|创建|新建|存成|存为|导出).{0,18}(?:到|为|成|进)?\s*(?:笔记|文档|文件)|(?:笔记|文档|文件).{0,18}(?:输出|保存|写入|整理|生成|创建|新建|存成|存为|导出)/i
+  /(?:输出到|输出为|保存|写入|整理|生成|创建|新建|存成|存为|导出).{0,18}(?:到|为|成|进)?\s*(?:笔记|文档|文件)|(?:笔记|文档|文件).{0,18}(?:输出到|输出为|保存|写入|整理|生成|创建|新建|存成|存为|导出)/i
 
 const PLAN_ARTIFACT_REQUEST_PATTERN =
-  /(?:规划|设计|制定|重新规划|生成|整理).{0,36}(?:攻略|方案|行程|路线|计划).{0,24}(?:输出|保存|写入|存成|存为|导出|笔记|文档|文件)|(?:攻略|方案|行程|路线|计划).{0,36}(?:输出|保存|写入|存成|存为|导出|笔记|文档|文件)/i
+  /(?:规划|设计|制定|重新规划|生成|整理).{0,36}(?:攻略|方案|行程|路线|计划).{0,24}(?:保存|写入|存成|存为|导出|笔记|文档|文件|输出到|输出为)|(?:攻略|方案|行程|路线|计划).{0,36}(?:保存|写入|存成|存为|导出|笔记|文档|文件|输出到|输出为)/i
+
+const SOCIAL_CONTENT_PLAN_PATTERN =
+  /(?:小红书|rednote|xhs|图文|发布文案|页面结构|图像提示词|图片提示词|风格判断|选题判断|逐页|6\s*页|六\s*页)/i
+
+const EXPLICIT_ARTIFACT_OUTPUT_PATTERN =
+  /导出|保存|写入|输出到|输出为|存成|存为|文件|笔记|文档|pptx|pdf|docx|xlsx|drawio|excalidraw|diagram|mind\s*map|mindmap|flowchart|export|save|write|file|note|document|presentation/i
 
 const PROGRESS_ONLY_FINAL_PATTERN =
   /^(?:好(?:的)?|收到|明白|可以|没问题|了解|充分理解|我明白|我知道了)[。！!，,\s]*(?:我(?:现在|会|将|来|马上|准备|先|接下来)|这就|下面|接下来|先|正在|开始|准备|马上)?|^(?:我(?:现在|会|将|来|马上|准备|先|接下来)|这就|下面|接下来|先|正在|开始|准备|马上)/i
@@ -63,6 +71,10 @@ export function isProgressOnlyFinalAnswer(answer: string): boolean {
   const length = estimateChineseAwareLength(normalized)
   const contentSignals = countContentSignals(answer)
   if (length <= 36 && PROGRESS_ONLY_FINAL_PATTERN.test(normalized)) {
+    return true
+  }
+
+  if (length <= 220 && PROGRESS_ONLY_FINAL_PATTERN.test(normalized) && /(?:我(?:现在|会|将|来|马上|准备|先|接下来)|这就|下面|接下来|先|正在|开始|准备|马上).{0,80}(?:然后|再|最终|给你|输出|写入|整理出|生成|完成)/.test(normalized) && contentSignals === 0) {
     return true
   }
 
@@ -95,6 +107,11 @@ export function shouldRecoverWithAutoFinalAnswer(thought: string): boolean {
 }
 
 export function isConcreteArtifactRequest(userInput: string, actionLikeRequest: boolean): boolean {
+  const artifactProbe = userInput.replace(/\brednote\b/ig, '')
+  if (SOCIAL_CONTENT_PLAN_PATTERN.test(userInput) && !EXPLICIT_ARTIFACT_OUTPUT_PATTERN.test(artifactProbe)) {
+    return false
+  }
+
   if (NOTE_OUTPUT_REQUEST_PATTERN.test(userInput) || PLAN_ARTIFACT_REQUEST_PATTERN.test(userInput)) {
     return true
   }
@@ -312,6 +329,10 @@ export function validateFinalAnswer(
     return { ok: false, reason: 'Final Answer 内容不能为空' }
   }
 
+  if (isInternalToolReport(answer)) {
+    return { ok: false, reason: 'Final Answer 包含内部工具日志或诊断信息，请改写为面向用户的正式回答' }
+  }
+
   const normalizedAnswer = answer.toLowerCase().trim()
   const normalizedInput = userInput.toLowerCase().trim()
 
@@ -326,7 +347,7 @@ export function validateFinalAnswer(
 
   // 检查是否声称执行了落盘、导出、外部工具等操作但没有实际执行。
   // 普通聊天里“已生成方案正文”不应被强行推回工具循环。
-  const claimsExecution = /已创建(?:文件|笔记|文档|图表|报告)?|已保存|已写入|已导出|已验证|成功使用|成功创建|成功保存|成功写入|成功导出|created (?:file|note|document|diagram|report)|saved|exported|verified|successfully used/i.test(answer)
+  const claimsExecution = /已创建(?:文件|笔记|文档|图表|报告)?|已保存|已写入|已导出|成功创建|成功保存|成功写入|成功导出|created (?:file|note|document|diagram|report)|saved|exported/i.test(answer)
   if (claimsExecution && !hasSuccessfulToolExecution) {
     return {
       ok: false,

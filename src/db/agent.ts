@@ -30,10 +30,14 @@ export interface AgentEventRecord {
   id: string
   runId: string
   seq?: number | null
+  schemaVersion?: string | null
+  spanId?: string | null
+  parentId?: string | null
   type: string
   level?: string | null
   iteration?: number | null
   payloadJson?: string | null
+  envelopeJson?: string | null
   createdAt: number
 }
 
@@ -279,6 +283,17 @@ function refId(ref: VfsRef) {
   return `${ref.runId}:${ref.uri}`
 }
 
+async function ensureColumn(
+  db: Awaited<ReturnType<typeof getDb>>,
+  table: string,
+  column: string,
+  definition: string,
+) {
+  const columns = await db.select<Array<{ name: string }>>(`pragma table_info(${table})`)
+  if (columns.some(item => item.name === column)) return
+  await db.execute(`alter table ${table} add column ${column} ${definition}`)
+}
+
 export async function initAgentDb() {
   const db = await getDb()
 
@@ -325,14 +340,23 @@ export async function initAgentDb() {
       id text primary key,
       run_id text not null,
       seq integer default null,
+      schema_version text default null,
+      span_id text default null,
+      parent_id text default null,
       type text not null,
       level text default null,
       iteration integer default null,
       payload_json text default null,
+      envelope_json text default null,
       created_at integer not null,
       foreign key(run_id) references agent_runs(id) on delete cascade
     )
   `)
+
+  await ensureColumn(db, 'agent_events', 'schema_version', 'text default null')
+  await ensureColumn(db, 'agent_events', 'span_id', 'text default null')
+  await ensureColumn(db, 'agent_events', 'parent_id', 'text default null')
+  await ensureColumn(db, 'agent_events', 'envelope_json', 'text default null')
 
   await db.execute(`
     create table if not exists agent_tool_calls (
@@ -514,16 +538,20 @@ export async function insertAgentEvent(runId: string, event: AgentEvent) {
     const db = await getDb()
     await db.execute(
       `insert or ignore into agent_events (
-        id, run_id, seq, type, level, iteration, payload_json, created_at
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        id, run_id, seq, schema_version, span_id, parent_id, type, level, iteration, payload_json, envelope_json, created_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         eventPrimaryId(runId, event),
         runId,
         eventSeq(event),
+        event.schemaVersion ?? null,
+        event.spanId ?? null,
+        event.parentId ?? null,
         event.type,
         event.level ?? null,
         event.iteration ?? null,
         safeJson(event.payload),
+        event.envelope ? safeJson(event.envelope) : null,
         event.timestamp || now(),
       ],
     )
@@ -595,10 +623,14 @@ export async function listAgentEventsFromDb(runId: string, limit = 500): Promise
       id,
       run_id as runId,
       seq,
+      schema_version as schemaVersion,
+      span_id as spanId,
+      parent_id as parentId,
       type,
       level,
       iteration,
       payload_json as payloadJson,
+      envelope_json as envelopeJson,
       created_at as createdAt
     from agent_events
     where run_id = $1

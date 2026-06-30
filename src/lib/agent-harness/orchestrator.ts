@@ -6,15 +6,21 @@ import { saveRunSnapshot } from './run-snapshot-store'
 import { executeHarnessTool } from './tool-runtime'
 import { writeAgentVfsText } from './vfs'
 import { reduceAgentSessionLogFromEvents, type AgentSessionLog } from './session-log'
+import { createInitialAgentPartSnapshot, reduceAgentPartSnapshot } from '@/lib/agent/part-reducer'
 import type { AgentEvent } from '@/lib/agent/types'
-import type { AgentHarnessMiddleware, AgentRoute, AgentRunControl, AgentRunMetrics, AgentRunSnapshot, ContextPack, ToolExposureRecord, VfsRef } from './types'
+import type { AgentHarnessMiddleware, AgentRoute, AgentRunControl, AgentRunMetrics, AgentRunSnapshot, AgentSessionTreeBinding, ContextPack, ToolExposureRecord, VfsRef } from './types'
 import { persistAgentRuntimeEvent } from '@/db/agent'
 
 export interface AgentOrchestratorInput {
   userInput: string
   route: AgentRoute
   runId?: string
+  parentRunId?: string
+  rootRunId?: string
+  branchId?: string
   conversationId?: number | null
+  userChatId?: number | null
+  assistantChatId?: number | null
   forcedSkillIds?: string[]
   webSearchEnabled?: boolean
   middlewares?: AgentHarnessMiddleware[]
@@ -25,8 +31,18 @@ export interface AgentOrchestratorInput {
 export class AgentOrchestrator {
   async run(input: AgentOrchestratorInput): Promise<{ runId: string; result: string; snapshot: AgentRunSnapshot }> {
     const runId = input.runId || createAgentRunId()
+    const rootRunId = input.rootRunId || input.parentRunId || runId
+    const branchId = input.branchId || `${rootRunId}:branch:${input.parentRunId ? runId : 'root'}`
     let snapshot: AgentRunSnapshot = {
       runId,
+      rootRunId,
+      parentRunId: input.parentRunId,
+      branchId,
+      chat: {
+        conversationId: input.conversationId ?? null,
+        userChatId: input.userChatId ?? null,
+        assistantChatId: input.assistantChatId ?? null,
+      },
       status: 'running',
       userGoal: input.userInput,
       route: input.route,
@@ -34,6 +50,16 @@ export class AgentOrchestrator {
       observationRefs: [],
       approvalHistory: [],
       metrics: createInitialRunMetrics(Date.now()),
+      partSnapshot: createInitialAgentPartSnapshot(runId),
+      sessionTree: {
+        rootRunId,
+        parentRunId: input.parentRunId,
+        branchId,
+        leafEntryId: null,
+        entryCount: 0,
+        lastEventSequence: null,
+        compactionRefs: [],
+      },
       updatedAt: Date.now(),
     }
 
@@ -49,6 +75,8 @@ export class AgentOrchestrator {
       snapshot = {
         ...snapshot,
         ...patch,
+        chat: patch.chat ? { ...(snapshot.chat || {}), ...patch.chat } : snapshot.chat,
+        sessionTree: patch.sessionTree ? { ...getSnapshotSessionTree(snapshot), ...patch.sessionTree } : snapshot.sessionTree,
         updatedAt: Date.now(),
       }
       await saveRunSnapshot(snapshot, { conversationId: input.conversationId })
@@ -129,6 +157,15 @@ export class AgentOrchestrator {
       },
       setSessionLog: (log) => {
         latestSessionLog = log
+        void updateSnapshot({
+          sessionTree: buildSessionTreeBinding({
+            snapshot,
+            sessionLog: log,
+            lastEventSequence: recordedEvents[recordedEvents.length - 1]?.sequence ?? null,
+          }),
+        }).catch(error => {
+          console.warn('[AgentHarness] Failed to update session tree snapshot:', error)
+        })
       },
       getSnapshot: () => snapshot,
       getMiddlewareState: () => middlewareRuntime.getState(),
@@ -162,6 +199,15 @@ export class AgentOrchestrator {
               ...(snapshot.toolExposureHistory || []),
               record,
             ].slice(-30),
+          })
+        }
+        const runtimeSnapshot = middlewareRuntime.getState().runtime?.snapshot
+        if (runtimeSnapshot) {
+          await updateSnapshot({
+            partSnapshot: {
+              ...(snapshot.partSnapshot || createInitialAgentPartSnapshot(runId)),
+              runtimeSnapshot,
+            },
           })
         }
         return prepared
@@ -214,6 +260,16 @@ export class AgentOrchestrator {
         status: 'completed',
         finalAnswer: result,
         sessionLogRef,
+        sessionTree: buildSessionTreeBinding({
+          snapshot,
+          sessionLog: latestSessionLog || reduceAgentSessionLogFromEvents({
+            runId,
+            route: input.route,
+            userGoal: input.userInput,
+            events: recordedEvents,
+          }),
+          lastEventSequence: recordedEvents[recordedEvents.length - 1]?.sequence ?? null,
+        }),
       })
       await this.runAfterRunMiddleware(middlewareRuntime, {
         runId,
@@ -240,7 +296,20 @@ export class AgentOrchestrator {
           events: recordedEvents,
           sessionLog: latestSessionLog,
         })
-        await updateSnapshot({ status: 'paused', sessionLogRef })
+        await updateSnapshot({
+          status: 'paused',
+          sessionLogRef,
+          sessionTree: buildSessionTreeBinding({
+            snapshot,
+            sessionLog: latestSessionLog || reduceAgentSessionLogFromEvents({
+              runId,
+              route: input.route,
+              userGoal: input.userInput,
+              events: recordedEvents,
+            }),
+            lastEventSequence: recordedEvents[recordedEvents.length - 1]?.sequence ?? null,
+          }),
+        })
       } else {
         const sessionLogRef = await this.persistSessionLog({
           runId,
@@ -253,6 +322,16 @@ export class AgentOrchestrator {
           status: 'failed',
           finalAnswer: message,
           sessionLogRef,
+          sessionTree: buildSessionTreeBinding({
+            snapshot,
+            sessionLog: latestSessionLog || reduceAgentSessionLogFromEvents({
+              runId,
+              route: input.route,
+              userGoal: input.userInput,
+              events: recordedEvents,
+            }),
+            lastEventSequence: recordedEvents[recordedEvents.length - 1]?.sequence ?? null,
+          }),
         })
       }
       await this.runAfterRunMiddleware(middlewareRuntime, {
@@ -301,7 +380,18 @@ export class AgentOrchestrator {
     current: () => AgentRunSnapshot,
     save: (patch: Partial<AgentRunSnapshot>) => Promise<void>,
   ) {
-    await save({ metrics: reduceRunMetrics(current().metrics, event) })
+    const currentSnapshot = current()
+    await save({
+      metrics: reduceRunMetrics(currentSnapshot.metrics, event),
+      partSnapshot: reduceAgentPartSnapshot(
+        currentSnapshot.partSnapshot || createInitialAgentPartSnapshot(runId),
+        event,
+      ),
+      sessionTree: {
+        ...getSnapshotSessionTree(currentSnapshot),
+        lastEventSequence: event.sequence ?? currentSnapshot.sessionTree?.lastEventSequence ?? null,
+      },
+    })
     try {
       await persistAgentRuntimeEvent(runId, event)
     } catch (error) {
@@ -323,6 +413,30 @@ export class AgentOrchestrator {
         content.replace(/\s+/g, ' ').slice(0, 240),
       )
       await save({ observationRefs: [...current().observationRefs, ref] })
+      return
+    }
+
+    if (event.type === 'agent.context.compacted') {
+      const latest = current()
+      const tree = getSnapshotSessionTree(latest)
+      const compacted = await writeAgentVfsText(
+        runId,
+        'context',
+        `compaction-${String(event.sequence || Date.now()).padStart(4, '0')}.json`,
+        JSON.stringify(event.payload?.snapshot || event.payload || {}, null, 2),
+        'Agent context compaction snapshot',
+      )
+      await save({
+        observationRefs: [...latest.observationRefs, compacted],
+        sessionTree: {
+          ...tree,
+          compactionRefs: [
+            ...tree.compactionRefs,
+            compacted,
+          ].slice(-20),
+          lastEventSequence: event.sequence ?? tree.lastEventSequence ?? null,
+        },
+      })
       return
     }
 
@@ -451,6 +565,34 @@ function reduceRunMetrics(metrics: AgentRunMetrics | undefined, event: AgentEven
 
   next.durationMs = Math.max(0, next.updatedAt - next.startedAt)
   return next
+}
+
+function getSnapshotSessionTree(snapshot: AgentRunSnapshot): AgentSessionTreeBinding {
+  const rootRunId = snapshot.rootRunId || snapshot.parentRunId || snapshot.runId
+  return {
+    rootRunId,
+    parentRunId: snapshot.parentRunId,
+    branchId: snapshot.branchId || `${rootRunId}:branch:${snapshot.parentRunId ? snapshot.runId : 'root'}`,
+    leafEntryId: snapshot.sessionTree?.leafEntryId ?? null,
+    entryCount: snapshot.sessionTree?.entryCount || 0,
+    lastEventSequence: snapshot.sessionTree?.lastEventSequence ?? null,
+    compactionRefs: snapshot.sessionTree?.compactionRefs || [],
+  }
+}
+
+function buildSessionTreeBinding(input: {
+  snapshot: AgentRunSnapshot
+  sessionLog: AgentSessionLog
+  lastEventSequence?: number | null
+}): AgentSessionTreeBinding {
+  const base = getSnapshotSessionTree(input.snapshot)
+  return {
+    ...base,
+    leafEntryId: input.sessionLog.leafId,
+    entryCount: input.sessionLog.entries.length,
+    lastEventSequence: input.lastEventSequence ?? base.lastEventSequence ?? null,
+    compactionRefs: base.compactionRefs,
+  }
 }
 
 function vfsRefFromUri(

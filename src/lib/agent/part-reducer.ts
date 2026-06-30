@@ -1,6 +1,7 @@
 import type { AgentActivityPhase, AgentEvent, AgentTurnTelemetry, ToolCall } from './types'
 import type { AgentRuntimeSnapshot } from './runtime-snapshot'
 import { extractVisibleFinalAnswer, isInternalAgentInstruction, sanitizeVisibleAssistantContent } from './parse-action-input'
+import { getAgentEventEnvelope } from './event-envelope'
 
 export type AgentPartStatus =
   | 'pending'
@@ -133,6 +134,14 @@ function eventPayload(event: AgentEvent): Record<string, any> {
   return event.payload || {}
 }
 
+function eventContent(event: AgentEvent): string | undefined {
+  return getAgentEventEnvelope(event).content
+}
+
+function eventVisibility(event: AgentEvent): AgentPartVisibility {
+  return getAgentEventEnvelope(event).visibility
+}
+
 function createPartId(event: AgentEvent, suffix: string) {
   return `${event.runId || 'agent'}:${event.sequence || event.timestamp}:${suffix}`
 }
@@ -186,6 +195,10 @@ function getPayloadToolName(payload: Record<string, any>) {
       : typeof payload.toolCall?.toolName === 'string'
         ? payload.toolCall.toolName
         : undefined
+}
+
+function getEventToolName(event: AgentEvent, payload: Record<string, any>) {
+  return getAgentEventEnvelope(event).tool?.name || getPayloadToolName(payload)
 }
 
 function getToolPartId(event: AgentEvent, toolCallId?: string) {
@@ -282,16 +295,18 @@ function getPayloadToolCall(event: AgentEvent, payload: Record<string, any>): To
   const direct = payload.toolCall as ToolCall | undefined
   if (direct?.toolName) return direct
 
-  const toolName = getPayloadToolName(payload)
+  const envelope = getAgentEventEnvelope(event)
+  const toolName = envelope.tool?.name || getPayloadToolName(payload)
   if (!toolName) return undefined
 
-  const status = typeof payload.status === 'string'
+  const status = envelope.tool?.status
+    ?? (typeof payload.status === 'string'
     ? payload.status as ToolCall['status']
     : event.type === 'tool.execution.started'
       ? 'running'
       : event.type === 'tool.execution.finished'
         ? payload.success === false ? 'error' : 'success'
-        : 'pending'
+        : 'pending')
 
   const message = typeof payload.message === 'string'
     ? payload.message
@@ -301,7 +316,7 @@ function getPayloadToolCall(event: AgentEvent, payload: Record<string, any>): To
   const error = typeof payload.error === 'string' ? payload.error : undefined
 
   return {
-    id: typeof payload.toolCallId === 'string' ? payload.toolCallId : getToolPartId(event),
+    id: envelope.tool?.callId || (typeof payload.toolCallId === 'string' ? payload.toolCallId : getToolPartId(event)),
     toolName,
     params: typeof payload.params === 'object' && payload.params ? payload.params : {},
     status,
@@ -380,8 +395,9 @@ function reduceAgentPartSnapshotCore(
 
     case 'thought':
     case 'thought.updated': {
-      if (payload.internal === true || payload.visibility === 'hidden') return snapshot
-      if (typeof payload.content !== 'string' || !payload.content.trim()) return snapshot
+      const content = eventContent(event)
+      if (eventVisibility(event) === 'hidden') return snapshot
+      if (typeof content !== 'string' || !content.trim()) return snapshot
       const now = event.timestamp
       const part: AgentReasoningPart = {
         id: getReasoningPartId(event),
@@ -391,7 +407,7 @@ function reduceAgentPartSnapshotCore(
         visibility: 'visible',
         createdAt: snapshot.parts.find(existing => existing.id === getReasoningPartId(event))?.createdAt || now,
         updatedAt: now,
-        text: payload.content,
+        text: content,
       }
       return {
         ...snapshot,
@@ -404,7 +420,7 @@ function reduceAgentPartSnapshotCore(
 
     case 'action':
     case 'action.parsed': {
-      const toolName = getPayloadToolName(payload)
+      const toolName = getEventToolName(event, payload)
       if (!toolName) return snapshot
       return {
         ...snapshot,
@@ -494,7 +510,7 @@ function reduceAgentPartSnapshotCore(
 
     case 'final':
     case 'final.answer.rendered': {
-      const content = sanitizeFinalAnswerPartContent(payload.content, snapshot.finalAnswerContent)
+      const content = sanitizeFinalAnswerPartContent(eventContent(event), snapshot.finalAnswerContent)
       if (!content) {
         return {
           ...snapshot,
@@ -525,7 +541,7 @@ function reduceAgentPartSnapshotCore(
     }
 
     case 'agent.completed': {
-      const content = sanitizeFinalAnswerPartContent(payload.result, snapshot.finalAnswerContent)
+      const content = sanitizeFinalAnswerPartContent(eventContent(event) || payload.result, snapshot.finalAnswerContent)
       const now = event.timestamp
       const existing = snapshot.parts.find(part => part.id === getFinalAnswerPartId(event))
       const parts = content
@@ -602,6 +618,9 @@ function computeToolTelemetry(parts: AgentPart[]) {
 }
 
 function phaseFromEvent(event: AgentEvent): AgentActivityPhase | undefined {
+  const envelopePhase = getAgentEventEnvelope(event).phase
+  if (envelopePhase) return envelopePhase
+
   switch (event.type) {
     case 'agent.started':
       return 'preparing'
@@ -668,18 +687,19 @@ export function deriveTelemetry(
   // outputChars / tokens：随 event 增量取 max（与 replayAgentEvents 行为一致）
   const payload = event.payload || {}
   let outputChars = prev?.outputChars || 0
-  if (typeof payload.contentLength === 'number') {
-    outputChars = Math.max(outputChars, payload.contentLength)
+  const envelope = getAgentEventEnvelope(event)
+  if (typeof envelope.stream?.contentLength === 'number') {
+    outputChars = Math.max(outputChars, envelope.stream.contentLength)
   }
-  if (typeof payload.content === 'string') {
-    outputChars = Math.max(outputChars, payload.content.length)
+  if (typeof envelope.content === 'string') {
+    outputChars = Math.max(outputChars, envelope.content.length)
   }
   if (event.type === 'agent.completed' && typeof payload.result === 'string') {
     const content = sanitizeFinalAnswerPartContent(payload.result, snapshot.finalAnswerContent)
     outputChars = Math.max(outputChars, (content || payload.result).length)
   }
-  const inputTokens = typeof payload.inputTokens === 'number' ? payload.inputTokens : prev?.inputTokens
-  const outputTokens = typeof payload.outputTokens === 'number' ? payload.outputTokens : prev?.outputTokens
+  const inputTokens = typeof envelope.usage?.inputTokens === 'number' ? envelope.usage.inputTokens : prev?.inputTokens
+  const outputTokens = typeof envelope.usage?.outputTokens === 'number' ? envelope.usage.outputTokens : prev?.outputTokens
 
   // completedStepCount：每个 step.completed event 计一步（与 replay 一致）
   const completedStepCount = (prev?.completedStepCount || 0) + (event.type === 'step.completed' ? 1 : 0)

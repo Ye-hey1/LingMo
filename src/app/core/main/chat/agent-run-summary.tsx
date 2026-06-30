@@ -52,6 +52,17 @@ type RunStep = {
 type TimelineEntry =
   | {
       id: string
+      timestamp?: number
+      type: "status"
+      label: string
+      detail?: string
+      tone: "running" | "done" | "error" | "muted"
+      phase?: AgentActivity["phase"]
+      durationLabel?: string
+    }
+  | {
+      id: string
+      timestamp?: number
       type: "thought"
       text: string
       omittedChars?: number
@@ -60,6 +71,7 @@ type TimelineEntry =
     }
   | {
       id: string
+      timestamp?: number
       type: "tool"
       step: RunStep
       toolCall?: StepToolCall
@@ -67,6 +79,7 @@ type TimelineEntry =
 
 type TimelineGroup = {
   id: string
+  statuses: Array<Extract<TimelineEntry, { type: "status" }>>
   thought?: Extract<TimelineEntry, { type: "thought" }>
   tools: Array<Extract<TimelineEntry, { type: "tool" }>>
 }
@@ -96,6 +109,11 @@ function formatElapsed(ms?: number) {
   const seconds = totalSeconds % 60
   if (minutes > 0) return `${minutes}m ${seconds}s`
   return `${seconds}s`
+}
+
+function formatLiveElapsed(ms?: number) {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return ""
+  return `${(ms / 1000).toFixed(1)}s`
 }
 
 function formatTokenCount(count?: number) {
@@ -998,10 +1016,12 @@ function createThoughtEntry(input: {
   id: string
   text: string
   tone: ThoughtTimelineEntry["tone"]
+  timestamp?: number
   durationLabel?: string
 }): ThoughtTimelineEntry {
   return {
     id: input.id,
+    timestamp: input.timestamp,
     type: "thought",
     text: input.text,
     tone: input.tone,
@@ -1009,12 +1029,258 @@ function createThoughtEntry(input: {
   }
 }
 
-function getLiveThoughtText(input: {
-  currentThought?: string
+function createStatusEntry(input: {
+  id: string
+  label: string
+  detail?: string
+  tone: StatusTimelineEntry["tone"]
+  phase?: AgentActivity["phase"]
+  timestamp?: number
+  durationLabel?: string
+}): StatusTimelineEntry {
+  return {
+    id: input.id,
+    timestamp: input.timestamp,
+    type: "status",
+    label: input.label,
+    detail: input.detail,
+    tone: input.tone,
+    phase: input.phase,
+    durationLabel: input.durationLabel,
+  }
+}
+
+function getLatestEventTimestamp(events: AgentEvent[], types: AgentEvent["type"][]) {
+  let timestamp: number | undefined
+  for (const event of events) {
+    if (!types.includes(event.type)) continue
+    if (typeof event.timestamp !== "number") continue
+    timestamp = typeof timestamp === "number" ? Math.max(timestamp, event.timestamp) : event.timestamp
+  }
+  return timestamp
+}
+
+function getLatestEventPayload(events: AgentEvent[], types: AgentEvent["type"][]) {
+  for (const event of [...events].reverse()) {
+    if (types.includes(event.type)) return event.payload || {}
+  }
+  return {}
+}
+
+function hasEvent(events: AgentEvent[], types: AgentEvent["type"][]) {
+  return events.some(event => types.includes(event.type))
+}
+
+function getCurrentPhase(input: {
   activity?: AgentActivity
   partSnapshot?: AgentPartSnapshot
 }) {
-  // 优先使用 partSnapshot 中最新的 reasoning part 文本（实时思考流）
+  return input.partSnapshot?.activity?.phase || input.partSnapshot?.telemetry?.currentPhase || input.activity?.phase
+}
+
+function getCompletedPreparingLabel(activity?: AgentActivity) {
+  const label = activity?.label || ""
+  if (label.includes("读取图片")) return "已读取图片"
+  if (label.includes("理解创作需求")) return "已理解创作需求"
+  if (label.startsWith("正在")) return label.replace(/^正在/, "已")
+  return "已准备任务"
+}
+
+function hasVisibleReasoningPart(partSnapshot?: AgentPartSnapshot) {
+  return Boolean(partSnapshot?.parts?.some(part => (
+    part.type === "reasoning" &&
+    part.visibility !== "hidden" &&
+    Boolean(part.text?.trim())
+  )))
+}
+
+function hasVisibleFinalOutput(input: {
+  visibleOutput?: string
+  partSnapshot?: AgentPartSnapshot
+}) {
+  return Boolean(input.visibleOutput?.trim() || input.partSnapshot?.finalAnswerContent?.trim())
+}
+
+function getStatusTone(input: {
+  live: boolean
+  phase?: AgentActivity["phase"]
+  activePhase?: AgentActivity["phase"]
+  hasLater?: boolean
+  terminal?: boolean
+  error?: boolean
+}): StatusTimelineEntry["tone"] {
+  if (input.error) return "error"
+  if (input.terminal) return "done"
+  if (input.live && input.phase && input.activePhase === input.phase) return "running"
+  if (input.live && !input.hasLater && !input.phase) return "running"
+  return "done"
+}
+
+function buildLifecycleStatusEntries(input: {
+  events: AgentEvent[]
+  activity?: AgentActivity
+  partSnapshot?: AgentPartSnapshot
+  visibleOutput?: string
+  hasOperationalEvidence?: boolean
+  live: boolean
+}): StatusTimelineEntry[] {
+  const entries: StatusTimelineEntry[] = []
+  const phase = getCurrentPhase(input)
+  const started = hasEvent(input.events, ["agent.started"])
+  const planning = hasEvent(input.events, ["agent.planning"])
+  const requestedModel = hasEvent(input.events, ["model.request.started", "model.response.received"])
+  const thought = hasEvent(input.events, ["thought", "thought.updated"])
+  const hasTool = input.hasOperationalEvidence || hasEvent(input.events, ["action", "action.parsed", "tool", "tool.updated", "tool.batch.started", "tool.batch.finished", "tool.execution.started", "tool.execution.finished"])
+  const waiting = hasEvent(input.events, ["confirmation.waiting"])
+  const outputStarted = hasEvent(input.events, ["agent.stream.delta", "final", "final.answer.rendered"])
+  const outputFinished = hasEvent(input.events, ["agent.stream.finished", "final.answer.rendered"])
+  const completed = hasEvent(input.events, ["agent.completed"]) || input.partSnapshot?.status === "completed"
+  const stopped = hasEvent(input.events, ["agent.stopped"]) || input.partSnapshot?.status === "stopped"
+  const failed = hasEvent(input.events, ["error"]) || input.partSnapshot?.status === "error"
+  const hasAnyEvent = input.events.length > 0
+  const hasSnapshot = Boolean(input.partSnapshot)
+  const preparing = phase === "preparing" || input.partSnapshot?.visibleStatus?.label === "准备中" || input.activity?.phase === "preparing"
+  const hasReasoningText = hasVisibleReasoningPart(input.partSnapshot)
+  const hasFinalOutput = hasVisibleFinalOutput(input)
+  const terminal = completed || stopped || failed
+  const hasReachedModel = requestedModel || thought || hasReasoningText || hasTool || waiting || outputStarted || outputFinished || hasFinalOutput || terminal
+  const hasReachedThinking = thought || hasReasoningText || hasTool || waiting || outputStarted || outputFinished || hasFinalOutput || terminal
+  const hasReachedOutput = outputStarted || outputFinished || hasFinalOutput || completed
+  const hasLaterThanPreparing = planning || hasReachedModel
+
+  if (started || input.live || hasAnyEvent || hasSnapshot || hasTool || hasFinalOutput) {
+    entries.push(createStatusEntry({
+      id: "status-received",
+      label: "已接收任务",
+      tone: input.live && !preparing && !hasLaterThanPreparing ? "running" : "done",
+      phase: "preparing",
+      timestamp: getLatestEventTimestamp(input.events, ["agent.started"]),
+    }))
+  }
+
+  if (started || input.live || hasAnyEvent || hasSnapshot || hasTool || hasFinalOutput) {
+    const running = input.live && preparing && !hasLaterThanPreparing
+    entries.push(createStatusEntry({
+      id: "status-preparing",
+      label: running ? input.activity?.label || "正在准备" : getCompletedPreparingLabel(input.activity),
+      detail: compactText(input.activity?.detail || input.partSnapshot?.visibleStatus?.detail, 120),
+      tone: running ? "running" : "done",
+      phase: "preparing",
+      timestamp: input.activity?.startedAt || getLatestEventTimestamp(input.events, ["agent.started"]),
+    }))
+  }
+
+  if (planning) {
+    const running = input.live && phase === "planning"
+    entries.push(createStatusEntry({
+      id: "status-planning",
+      label: running ? "正在组织步骤" : "已组织步骤",
+      detail: compactText(String(getLatestEventPayload(input.events, ["agent.planning"]).summary || ""), 120),
+      tone: getStatusTone({ live: input.live, phase: "planning", activePhase: phase, hasLater: requestedModel || thought || hasTool || outputStarted || completed || failed }),
+      phase: "planning",
+      timestamp: getLatestEventTimestamp(input.events, ["agent.planning"]),
+    }))
+  }
+
+  if (requestedModel || (input.live && phase === "thinking" && !thought)) {
+    const running = input.live && phase === "thinking" && !thought && !hasTool && !outputStarted
+    entries.push(createStatusEntry({
+      id: "status-model-request",
+      label: running ? "正在请求模型" : "已请求模型",
+      tone: running ? "running" : "done",
+      phase: "thinking",
+      timestamp: getLatestEventTimestamp(input.events, ["model.request.started", "model.response.received"]),
+    }))
+  } else if (hasReachedModel) {
+    entries.push(createStatusEntry({
+      id: "status-model-request",
+      label: "已请求模型",
+      tone: "done",
+      phase: "thinking",
+    }))
+  }
+
+  if (!hasReasoningText && !thought && (hasReachedThinking || (input.live && phase === "thinking"))) {
+    const running = input.live && phase === "thinking" && !hasTool && !hasReachedOutput
+    entries.push(createStatusEntry({
+      id: "status-thinking",
+      label: running ? "思考中" : "已思考",
+      detail: running ? compactText(input.activity?.detail || input.partSnapshot?.visibleStatus?.detail, 120) : undefined,
+      tone: running ? "running" : "done",
+      phase: "thinking",
+      timestamp: getLatestEventTimestamp(input.events, ["thought", "thought.updated", "model.response.received"]),
+    }))
+  }
+
+  if (waiting || phase === "waiting-confirmation") {
+    const payload = getLatestEventPayload(input.events, ["confirmation.waiting"])
+    entries.push(createStatusEntry({
+      id: "status-waiting-confirmation",
+      label: "等待确认",
+      detail: compactText(String(payload.reason || input.activity?.detail || input.partSnapshot?.visibleStatus?.detail || ""), 120),
+      tone: input.live ? "running" : "done",
+      phase: "waiting-confirmation",
+      timestamp: getLatestEventTimestamp(input.events, ["confirmation.waiting"]),
+    }))
+  }
+
+  if (hasReachedOutput || phase === "answering" || input.partSnapshot?.visibleStatus?.label === "正在写答案") {
+    const running = input.live && phase === "answering"
+    entries.push(createStatusEntry({
+      id: "status-output",
+      label: running ? "正在输出" : "输出完成",
+      tone: running ? "running" : "done",
+      phase: "answering",
+      timestamp: getLatestEventTimestamp(input.events, ["agent.stream.delta", "final", "final.answer.rendered"]),
+    }))
+  } else if (outputFinished) {
+    entries.push(createStatusEntry({
+      id: "status-output",
+      label: "输出完成",
+      tone: "done",
+      phase: "answering",
+      timestamp: getLatestEventTimestamp(input.events, ["agent.stream.finished", "final.answer.rendered"]),
+    }))
+  }
+
+  if (completed) {
+    entries.push(createStatusEntry({
+      id: "status-completed",
+      label: "完成",
+      tone: "done",
+      phase: "completed",
+      timestamp: getLatestEventTimestamp(input.events, ["agent.completed"]),
+    }))
+  } else if (stopped) {
+    entries.push(createStatusEntry({
+      id: "status-stopped",
+      label: "已停止",
+      tone: "done",
+      phase: "completed",
+      timestamp: getLatestEventTimestamp(input.events, ["agent.stopped"]),
+    }))
+  } else if (failed) {
+    const payload = getLatestEventPayload(input.events, ["error"])
+    entries.push(createStatusEntry({
+      id: "status-error",
+      label: "执行失败",
+      detail: compactText(String(payload.friendlyMessage || payload.error || input.partSnapshot?.visibleStatus?.detail || ""), 160),
+      tone: "error",
+      phase: "error",
+      timestamp: getLatestEventTimestamp(input.events, ["error"]),
+    }))
+  }
+
+  return entries
+}
+
+function getThoughtText(input: {
+  currentThought?: string
+  activity?: AgentActivity
+  partSnapshot?: AgentPartSnapshot
+  steps?: ReActStep[]
+}) {
+  // 优先使用 partSnapshot 中最新的 reasoning part 文本，完成后也保留这段过程。
   const parts = input.partSnapshot?.parts
   let reasoningText: string | undefined
   if (Array.isArray(parts) && parts.length > 0) {
@@ -1029,15 +1295,37 @@ function getLiveThoughtText(input: {
       }
     }
   }
-  return compactText(reasoningText || input.currentThought, 360)
+  const stepThought = [...(input.steps || [])].reverse().find(step => step.thought?.trim())?.thought
+  return compactText(reasoningText || input.currentThought || stepThought, 360)
 }
 
 function hasLiveActivity(input: {
   activity?: AgentActivity
   partSnapshot?: AgentPartSnapshot
 }) {
-  const phase = input.partSnapshot?.activity?.phase || input.partSnapshot?.telemetry?.currentPhase || input.activity?.phase
+  const phase = getCurrentPhase(input)
   return Boolean(phase && phase !== "idle" && phase !== "completed" && phase !== "error")
+}
+
+function getThoughtTimelineTone(input: {
+  activity?: AgentActivity
+  partSnapshot?: AgentPartSnapshot
+  live: boolean
+}): ThoughtTimelineEntry["tone"] {
+  const phase = getCurrentPhase(input)
+  if (phase === "error" || input.partSnapshot?.status === "error" || input.partSnapshot?.visibleStatus?.tone === "error") return "error"
+  if (
+    input.live &&
+    (
+      phase === "thinking" ||
+      phase === "planning" ||
+      input.partSnapshot?.visibleStatus?.label === "思考中" ||
+      (!phase && hasLiveActivity(input))
+    )
+  ) {
+    return "running"
+  }
+  return "done"
 }
 
 function buildThoughtTimeline(input: {
@@ -1048,9 +1336,23 @@ function buildThoughtTimeline(input: {
   currentThought?: string
   activity?: AgentActivity
   partSnapshot?: AgentPartSnapshot
+  visibleOutput?: string
   live: boolean
 }): TimelineEntry[] {
-  const entries: TimelineEntry[] = []
+  const entries: TimelineEntry[] = [
+    ...buildLifecycleStatusEntries({
+      events: input.events,
+      activity: input.activity,
+      partSnapshot: input.partSnapshot,
+      visibleOutput: input.visibleOutput,
+      hasOperationalEvidence: input.toolCalls.length > 0 || input.steps.some(step => Boolean(step.action?.tool)) || input.runSteps.some(step => (
+        !step.summary &&
+        step.id !== "no-tool-final" &&
+        step.id !== "no-tool-live"
+      )),
+      live: input.live,
+    }),
+  ]
   const toolSteps = input.runSteps.filter(step => (
     !step.summary &&
     step.id !== "no-tool-final" &&
@@ -1079,6 +1381,7 @@ function buildThoughtTimeline(input: {
       stepToolKeys.add(`${call.toolName}:${JSON.stringify(call.params || {})}`)
       entries.push({
         id: `tool-step-${index}`,
+        timestamp: undefined,
         type: "tool",
         step: {
           id: `tool-react-step-${index}`,
@@ -1100,17 +1403,30 @@ function buildThoughtTimeline(input: {
       .filter(Boolean),
   )
 
-  const liveThoughtText = getLiveThoughtText({
+  const thoughtText = getThoughtText({
     currentThought: input.currentThought,
     activity: input.activity,
     partSnapshot: input.partSnapshot,
+    steps: input.steps,
   })
-  const shouldShowThinking = input.live && Boolean(liveThoughtText)
+  const thoughtTimestamp = getLatestEventTimestamp(input.events, ["thought", "thought.updated"])
+    ?? input.partSnapshot?.parts
+      ?.filter(part => part.type === "reasoning" && part.visibility !== "hidden")
+      .reduce<number | undefined>((latest, part) => (
+        typeof latest === "number" ? Math.max(latest, part.updatedAt) : part.updatedAt
+      ), undefined)
+  const phase = getCurrentPhase(input)
+  const shouldShowThinking = Boolean(thoughtText) || (input.live && (phase === "thinking" || phase === "planning"))
   if (shouldShowThinking) {
     entries.push(createThoughtEntry({
       id: "thought-live",
-      text: liveThoughtText,
-      tone: "running",
+      text: thoughtText,
+      tone: getThoughtTimelineTone({
+        activity: input.activity,
+        partSnapshot: input.partSnapshot,
+        live: input.live,
+      }),
+      timestamp: thoughtTimestamp,
     }))
   }
 
@@ -1123,6 +1439,7 @@ function buildThoughtTimeline(input: {
     }
     entries.push({
       id: `timeline-${step.id}`,
+      timestamp: toolCall?.timestamp,
       type: "tool",
       step,
       toolCall,
@@ -1145,15 +1462,41 @@ function buildThoughtTimeline(input: {
     }
   }
 
-  return entries.slice(-8)
+  const sortedEntries = entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((left, right) => {
+      if (typeof left.entry.timestamp === "number" && typeof right.entry.timestamp === "number") {
+        return (left.entry.timestamp - right.entry.timestamp) || (left.index - right.index)
+      }
+      return left.index - right.index
+    })
+    .map(item => item.entry)
+
+  if (sortedEntries.length <= 24) return sortedEntries
+
+  const pinnedEntries = sortedEntries.filter(entry => entry.type !== "tool")
+  const toolBudget = Math.max(6, 24 - pinnedEntries.length)
+  const retainedToolIds = new Set(
+    sortedEntries
+      .filter((entry): entry is Extract<TimelineEntry, { type: "tool" }> => entry.type === "tool")
+      .slice(-toolBudget)
+      .map(entry => entry.id),
+  )
+
+  return sortedEntries.filter(entry => entry.type !== "tool" || retainedToolIds.has(entry.id))
 }
 
 function buildTimelineGroups(entries: TimelineEntry[]): TimelineGroup[] {
   const groups: TimelineGroup[] = []
 
   for (const entry of entries) {
+    if (entry.type === "status") {
+      groups.push({ id: entry.id, statuses: [entry], tools: [] })
+      continue
+    }
+
     if (entry.type === "thought") {
-      groups.push({ id: entry.id, thought: entry, tools: [] })
+      groups.push({ id: entry.id, statuses: [], thought: entry, tools: [] })
       continue
     }
 
@@ -1161,15 +1504,54 @@ function buildTimelineGroups(entries: TimelineEntry[]): TimelineGroup[] {
     if (current) {
       current.tools.push(entry)
     } else {
-      groups.push({ id: `tools-${entry.id}`, tools: [entry] })
+      groups.push({ id: `tools-${entry.id}`, statuses: [], tools: [entry] })
     }
   }
 
-  const renderableGroups = groups.filter(group => group.thought || group.tools.length > 0)
-  return renderableGroups.slice(-1).map(group => ({
+  const renderableGroups = groups.filter(group => group.statuses.length > 0 || group.thought || group.tools.length > 0)
+  const pinnedGroupIds = new Set(
+    renderableGroups
+      .filter(group => group.statuses.length > 0 || group.thought)
+      .map(group => group.id),
+  )
+  const recentToolGroupIds = new Set(
+    renderableGroups
+      .filter(group => group.tools.length > 0 && !pinnedGroupIds.has(group.id))
+      .slice(-6)
+      .map(group => group.id),
+  )
+
+  return renderableGroups.filter(group => pinnedGroupIds.has(group.id) || recentToolGroupIds.has(group.id)).map(group => ({
     ...group,
     tools: group.tools.slice(-4),
   }))
+}
+
+function compactSettledTimelineEntries(entries: TimelineEntry[]) {
+  const tools = entries.filter((entry): entry is Extract<TimelineEntry, { type: "tool" }> => entry.type === "tool")
+  const thought = [...entries].reverse().find(entry => entry.type === "thought")
+  const thinkingStatus = [...entries].reverse().find(entry => entry.type === "status" && entry.id === "status-thinking")
+  const waitingStatus = [...entries].reverse().find(entry => entry.type === "status" && entry.id === "status-waiting-confirmation")
+  const outputStatus = [...entries].reverse().find(entry => entry.type === "status" && entry.id === "status-output")
+  const terminalStatus = [...entries].reverse().find(entry => (
+    entry.type === "status" &&
+    ["status-completed", "status-stopped", "status-error"].includes(entry.id)
+  ))
+
+  const selectedIds = new Set<string>()
+  for (const entry of [
+    thought,
+    thought ? undefined : thinkingStatus,
+    waitingStatus,
+    outputStatus,
+    terminalStatus,
+    ...tools.slice(-8),
+  ]) {
+    if (entry) selectedIds.add(entry.id)
+  }
+
+  if (selectedIds.size === 0) return entries.slice(-8)
+  return entries.filter(entry => selectedIds.has(entry.id))
 }
 
 function getSummaryTitle(input: {
@@ -1181,6 +1563,133 @@ function getSummaryTitle(input: {
   if (input.partSnapshot?.visibleStatus?.label) return input.partSnapshot.visibleStatus.label
   if (input.activity?.label) return input.activity.label
   return "正在处理"
+}
+
+function getTimelineEntryRank(entry: TimelineEntry) {
+  if (entry.type === "tool") return 30
+  if (entry.type === "thought") return 40
+  switch (entry.phase) {
+    case "waiting-confirmation":
+      return 70
+    case "answering":
+      return 60
+    case "thinking":
+      return 50
+    case "tool":
+      return 45
+    case "planning":
+      return 35
+    case "preparing":
+      return 20
+    case "completed":
+      return 10
+    case "error":
+      return 90
+    default:
+      return 25
+  }
+}
+
+function getLivePrimaryEntry(entries: TimelineEntry[]) {
+  const running = entries.filter(entry => (
+    entry.type === "thought"
+      ? entry.tone === "running"
+      : entry.type === "status"
+        ? entry.tone === "running"
+        : entry.step.tone === "running"
+  ))
+  const source = running.length > 0 ? running : entries
+  return [...source].sort((left, right) => getTimelineEntryRank(right) - getTimelineEntryRank(left)).at(0)
+}
+
+function getLiveStatusLabel(entry: TimelineEntry | undefined, activity?: AgentActivity) {
+  if (!entry) return activity?.label || "正在处理"
+  if (entry.type === "status") {
+    if (entry.label === "正在请求模型" || entry.label === "思考中") return "正在思考"
+    if (entry.label === "正在输出") return "正在整理回答"
+    return entry.label
+  }
+  if (entry.type === "thought") return entry.tone === "running" ? "正在思考" : "已思考"
+  if (entry.toolCall) return getToolProgressVerb(entry.step)
+  return entry.step.label
+}
+
+function getLiveStatusDetail(input: {
+  entry?: TimelineEntry
+  activity?: AgentActivity
+}) {
+  return input.entry?.type === "status"
+    ? input.entry.detail
+    : input.entry?.type === "thought"
+      ? compactText(input.entry.text, 90)
+      : input.entry?.type === "tool"
+        ? input.entry.step.detail || input.entry.step.meta
+        : input.activity?.detail
+}
+
+function getLiveStatusTone(entry?: TimelineEntry): "running" | "done" | "error" {
+  if (!entry) return "running"
+  if (entry.type === "status") return getTimelineStatusTone(entry.tone)
+  if (entry.type === "thought") return getThoughtStatusTone(entry.tone)
+  if (entry.step.tone === "error") return "error"
+  if (entry.step.tone === "running") return "running"
+  return "done"
+}
+
+function LiveRunStatus({
+  entries,
+  activity,
+  elapsedLabel,
+}: {
+  entries: TimelineEntry[]
+  activity?: AgentActivity
+  elapsedLabel?: string
+}) {
+  const primary = getLivePrimaryEntry(entries)
+  const tone = getLiveStatusTone(primary)
+  const running = tone === "running"
+  const failed = tone === "error"
+  const frameIndex = useClawFrame(running)
+  const label = getLiveStatusLabel(primary, activity)
+  const detail = getLiveStatusDetail({ entry: primary, activity })
+
+  return (
+    <div className="w-full" data-agent-live-status>
+      <div className="flex min-w-0 items-start gap-2 text-muted-foreground">
+        <span
+          className={cn(
+            "mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-full font-mono text-[12px] leading-none",
+            failed ? "text-destructive/70" : running ? "text-primary/70" : "text-emerald-600/65",
+          )}
+          aria-hidden="true"
+        >
+          {getClawStatusGlyph(tone, frameIndex)}
+        </span>
+        <div className="min-w-0">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <span
+              className={cn(
+                "text-sm font-medium leading-6",
+                failed ? "text-destructive/80" : running ? "text-foreground/88" : "text-foreground/72",
+              )}
+            >
+              {label}
+            </span>
+            {elapsedLabel && (
+              <span className="font-mono text-[11px] tabular-nums text-muted-foreground/45">
+                {elapsedLabel}
+              </span>
+            )}
+          </div>
+          {detail && (
+            <div className="mt-0.5 max-w-xl truncate text-[12px] leading-5 text-muted-foreground/55" title={detail}>
+              {detail}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function getToolProgressVerb(step: RunStep) {
@@ -1320,11 +1829,76 @@ function TimelineToolDetails({
 }
 
 type ThoughtTimelineEntry = Extract<TimelineEntry, { type: "thought" }>
+type StatusTimelineEntry = Extract<TimelineEntry, { type: "status" }>
 
 function getThoughtStatusTone(tone: ThoughtTimelineEntry["tone"]): "running" | "done" | "error" {
   if (tone === "error") return "error"
   if (tone === "running") return "running"
   return "done"
+}
+
+function getTimelineStatusTone(tone: StatusTimelineEntry["tone"]): "running" | "done" | "error" {
+  if (tone === "error") return "error"
+  if (tone === "running") return "running"
+  return "done"
+}
+
+function TimelineStatusRow({
+  status,
+  frameIndex,
+}: {
+  status: StatusTimelineEntry
+  frameIndex: number
+}) {
+  const statusTone = getTimelineStatusTone(status.tone)
+  const running = statusTone === "running"
+  const failed = statusTone === "error"
+
+  return (
+    <div className="min-w-0">
+      <div
+        className={cn(
+          "flex h-4 min-w-0 items-center gap-1.5 text-[10px] leading-none",
+          failed ? "text-destructive/70" : "text-muted-foreground/50",
+        )}
+        aria-label={status.label}
+      >
+        <span
+          className={cn(
+            "inline-flex w-3 shrink-0 justify-center font-mono text-[11px] leading-none",
+            failed ? "text-destructive/70" : running ? "text-primary/65" : "text-emerald-600/60",
+          )}
+        >
+          {getClawStatusGlyph(statusTone, frameIndex)}
+        </span>
+        <span
+          className={cn(
+            "shrink-0 text-[10px] font-medium leading-none tracking-normal",
+            running ? "agent-thinking-label-active" : "text-muted-foreground/48",
+            failed && "text-destructive/70",
+          )}
+        >
+          {status.label}
+        </span>
+        {status.durationLabel && (
+          <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground/32">
+            {status.durationLabel}
+          </span>
+        )}
+      </div>
+      {status.detail && (
+        <div
+          className={cn(
+            "mt-1 truncate pl-5 text-[11px] leading-relaxed",
+            failed ? "text-destructive/75" : "text-muted-foreground/55",
+          )}
+          title={status.detail}
+        >
+          {status.detail}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function TimelineThought({
@@ -1337,7 +1911,7 @@ function TimelineThought({
   const statusTone = getThoughtStatusTone(thought.tone)
   const running = statusTone === "running"
   const failed = statusTone === "error"
-  const label = failed ? "思考受阻" : running ? "思考中" : "思路"
+  const label = failed ? "思考受阻" : running ? "思考中" : "已思考"
 
   return (
     <div className="min-w-0">
@@ -1430,14 +2004,14 @@ function TimelineToolRow({
   )
 }
 
-function LiveTimeline({
+function RunTimeline({
   groups,
   partSnapshot,
 }: {
   groups: TimelineGroup[]
   partSnapshot?: AgentPartSnapshot
 }) {
-  const frameIndex = useClawFrame(groups.some(group => group.thought?.tone === "running"))
+  const frameIndex = useClawFrame(groups.some(group => group.thought?.tone === "running" || group.statuses.some(status => status.tone === "running")))
   if (groups.length === 0) return null
 
   return (
@@ -1449,6 +2023,9 @@ function LiveTimeline({
         const thought = group.thought
         return (
           <div key={group.id} className="min-w-0">
+            {group.statuses.map(status => (
+              <TimelineStatusRow key={status.id} status={status} frameIndex={frameIndex} />
+            ))}
             {thought ? (
               <TimelineThought thought={thought} frameIndex={frameIndex} />
             ) : null}
@@ -1481,6 +2058,7 @@ export function AgentRunSummary({
   const [expanded, setExpanded] = React.useState(false)
   const effectiveElapsedMs = elapsedMs ?? telemetry?.elapsedMs
   const elapsedLabel = formatElapsed(effectiveElapsedMs)
+  const liveElapsedLabel = formatLiveElapsed(effectiveElapsedMs)
   const tokenLabel = formatTokenCount(getVisibleOutputTokens({ telemetry, visibleOutput, live }))
   const visibleToolCalls = React.useMemo(
     () => toolCalls.filter(call => call.toolName && !isSupportOnlyToolName(call.toolName)),
@@ -1491,12 +2069,12 @@ export function AgentRunSummary({
     [activity, currentAction, currentObservation, currentThought, events, live, partSnapshot, steps, visibleToolCalls],
   )
   const timelineEntries = React.useMemo(
-    () => buildThoughtTimeline({ runSteps, toolCalls: visibleToolCalls, events, steps, currentThought, activity, partSnapshot, live }),
-    [activity, currentThought, events, live, partSnapshot, runSteps, steps, visibleToolCalls],
+    () => buildThoughtTimeline({ runSteps, toolCalls: visibleToolCalls, events, steps, currentThought, activity, partSnapshot, visibleOutput, live }),
+    [activity, currentThought, events, live, partSnapshot, runSteps, steps, visibleOutput, visibleToolCalls],
   )
   const timelineGroups = React.useMemo(
-    () => buildTimelineGroups(timelineEntries),
-    [timelineEntries],
+    () => buildTimelineGroups(live ? timelineEntries : compactSettledTimelineEntries(timelineEntries)),
+    [live, timelineEntries],
   )
 
   const hasSummary = Boolean(elapsedLabel || tokenLabel || runSteps.length > 0 || timelineGroups.length > 0 || visibleToolCalls.length > 0)
@@ -1507,12 +2085,13 @@ export function AgentRunSummary({
   const canExpand = !live
 
   if (live) {
-    if (timelineGroups.length === 0) return null
+    if (timelineEntries.length === 0) return null
     return (
       <div className="w-full" data-agent-run-summary="live">
-        <LiveTimeline
-          groups={timelineGroups}
-          partSnapshot={partSnapshot}
+        <LiveRunStatus
+          entries={timelineEntries}
+          activity={activity}
+          elapsedLabel={liveElapsedLabel}
         />
       </div>
     )
@@ -1548,8 +2127,18 @@ export function AgentRunSummary({
       </button>
 
       {expanded && (
-        <div className="mt-2 max-h-80 overflow-auto rounded-md border border-border/15 bg-muted/10 px-3 py-2.5">
-          <RunStepList steps={runSteps} />
+        <div className="mt-2 max-h-96 overflow-auto rounded-md border border-border/15 bg-muted/10 px-3 py-2.5">
+          {timelineGroups.length > 0 && (
+            <RunTimeline
+              groups={timelineGroups}
+              partSnapshot={partSnapshot}
+            />
+          )}
+          {runSteps.length > 0 && (
+            <div className={cn(timelineGroups.length > 0 && "mt-3 border-t border-border/10 pt-2.5")}>
+              <RunStepList steps={runSteps} />
+            </div>
+          )}
         </div>
       )}
     </div>

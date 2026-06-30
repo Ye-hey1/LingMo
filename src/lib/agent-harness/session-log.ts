@@ -7,6 +7,7 @@ export type AgentSessionEntryType =
   | 'turn_started'
   | 'turn_finished'
   | 'message'
+  | 'thinking'
   | 'tool_call_started'
   | 'tool_result'
   | 'runtime_snapshot'
@@ -46,6 +47,12 @@ export interface AgentTurnFinishedEntry extends AgentSessionEntryBase {
 export interface AgentMessageEntry extends AgentSessionEntryBase {
   type: 'message'
   role: 'user' | 'assistant' | 'system'
+  content: string
+  iteration?: number
+}
+
+export interface AgentThinkingEntry extends AgentSessionEntryBase {
+  type: 'thinking'
   content: string
   iteration?: number
 }
@@ -109,6 +116,7 @@ export type AgentSessionEntry =
   | AgentTurnStartedEntry
   | AgentTurnFinishedEntry
   | AgentMessageEntry
+  | AgentThinkingEntry
   | AgentToolCallStartedEntry
   | AgentToolResultEntry
   | AgentRuntimeSnapshotEntry
@@ -214,6 +222,21 @@ export function reduceAgentSessionLogFromEvents(input: {
       continue
     }
 
+    if ((event.type === 'thought' || event.type === 'thought.updated') && typeof payload.content === 'string') {
+      if (payload.internal === true || payload.visibility === 'hidden' || !payload.content.trim()) {
+        continue
+      }
+      log = appendAgentSessionEntry(log, {
+        entry: {
+          type: 'thinking',
+          content: payload.content,
+          iteration: event.iteration,
+          timestamp: event.timestamp,
+        },
+      })
+      continue
+    }
+
     if (event.type === 'tool.execution.finished') {
       const toolCall = payload.toolCall
       log = appendAgentSessionEntry(log, {
@@ -267,6 +290,22 @@ export function reduceAgentSessionLogFromEvents(input: {
           role: 'assistant',
           content: payload.content,
           iteration: event.iteration,
+          timestamp: event.timestamp,
+        },
+      })
+      continue
+    }
+
+    if (event.type === 'agent.context.compacted') {
+      log = appendAgentSessionEntry(log, {
+        entry: {
+          type: 'compaction',
+          summary: typeof payload.summary === 'string'
+            ? payload.summary
+            : typeof payload.snapshot?.userGoal === 'string'
+              ? `Compacted context for ${payload.snapshot.userGoal}`
+              : 'Agent context compacted',
+          details: payload.snapshot || payload,
           timestamp: event.timestamp,
         },
       })

@@ -14,6 +14,7 @@ export type SelfEvolutionFindingKind =
   | 'workflow'
   | 'failure'
   | 'skill_followup'
+  | 'governance'
   | 'skipped'
 
 export interface SelfEvolutionFinding {
@@ -28,6 +29,20 @@ export interface SelfEvolutionFinding {
 export interface SelfEvolutionCandidatePlan {
   candidates: AgentMemoryCandidateInput[]
   findings: SelfEvolutionFinding[]
+  governance: SelfEvolutionGovernanceResult
+}
+
+export interface SelfEvolutionGovernanceDecision {
+  candidate: AgentMemoryCandidateInput
+  ok: boolean
+  reasons: string[]
+  warnings: string[]
+}
+
+export interface SelfEvolutionGovernanceResult {
+  accepted: AgentMemoryCandidateInput[]
+  rejected: SelfEvolutionGovernanceDecision[]
+  warnings: SelfEvolutionGovernanceDecision[]
 }
 
 export interface RunSelfEvolutionInput {
@@ -45,6 +60,14 @@ export interface RunSelfEvolutionResult {
 }
 
 const PREFERENCE_SIGNAL_RE = /以后|下次|默认|记住|偏好|我喜欢|我希望|不要再|always|prefer|remember|default/i
+const SENSITIVE_OR_DESTRUCTIVE_RE = /api[_-]?key|secret|token|password|密码|密钥|删除所有|清空|rm\s+-rf|drop\s+table|truncate\s+table/i
+const MAX_CANDIDATE_CONTENT_LENGTH = 1800
+const MIN_EVIDENCE_COUNT: Record<AgentMemoryCandidateKind, number> = {
+  preference: 1,
+  memory: 1,
+  workflow: 2,
+  failure: 1,
+}
 
 function normalizeText(value?: string | null) {
   return (value || '').replace(/\s+/g, ' ').trim()
@@ -97,6 +120,107 @@ function createCandidate(input: {
       ...input.payload,
     },
   }
+}
+
+function candidateGovernanceKey(candidate: AgentMemoryCandidateInput) {
+  return `${candidate.kind}:${normalizeText(candidate.content).toLowerCase()}`
+}
+
+export function governSelfEvolutionCandidates(
+  candidates: AgentMemoryCandidateInput[],
+): SelfEvolutionGovernanceResult {
+  const seen = new Set<string>()
+  const accepted: AgentMemoryCandidateInput[] = []
+  const rejected: SelfEvolutionGovernanceDecision[] = []
+  const warnings: SelfEvolutionGovernanceDecision[] = []
+
+  for (const candidate of candidates) {
+    const reasons: string[] = []
+    const decisionWarnings: string[] = []
+    const normalizedContent = normalizeText(candidate.content)
+    const evidence = unique(candidate.evidence || [])
+    const sourceRunIds = unique(candidate.sourceRunIds || [])
+    const key = candidateGovernanceKey(candidate)
+
+    if (!normalizedContent) {
+      reasons.push('empty-content')
+    }
+    if (seen.has(key)) {
+      reasons.push('duplicate-candidate')
+    }
+    if (normalizedContent.length > MAX_CANDIDATE_CONTENT_LENGTH) {
+      reasons.push('content-too-long')
+    }
+    if (SENSITIVE_OR_DESTRUCTIVE_RE.test(normalizedContent) || evidence.some(item => SENSITIVE_OR_DESTRUCTIVE_RE.test(item))) {
+      reasons.push('sensitive-or-destructive-signal')
+    }
+    if (evidence.length < MIN_EVIDENCE_COUNT[candidate.kind]) {
+      reasons.push('insufficient-evidence')
+    }
+    if (candidate.kind === 'workflow' && sourceRunIds.length === 0 && candidate.confidence !== 'low') {
+      decisionWarnings.push('workflow-without-source-run')
+    }
+    if (candidate.confidence === 'low' && candidate.kind !== 'failure') {
+      decisionWarnings.push('low-confidence-candidate')
+    }
+
+    const normalizedCandidate: AgentMemoryCandidateInput = {
+      ...candidate,
+      content: normalizedContent,
+      evidence,
+      sourceRunIds,
+      confidence: reasons.length > 0 ? 'low' : candidate.confidence,
+      payload: {
+        ...(candidate.payload && typeof candidate.payload === 'object' ? candidate.payload as Record<string, unknown> : {}),
+        governance: {
+          checked: true,
+          warnings: decisionWarnings,
+        },
+      },
+    }
+    const decision: SelfEvolutionGovernanceDecision = {
+      candidate: normalizedCandidate,
+      ok: reasons.length === 0,
+      reasons,
+      warnings: decisionWarnings,
+    }
+
+    if (decision.ok) {
+      accepted.push(normalizedCandidate)
+      seen.add(key)
+      if (decisionWarnings.length > 0) {
+        warnings.push(decision)
+      }
+    } else {
+      rejected.push(decision)
+      seen.add(key)
+    }
+  }
+
+  return { accepted, rejected, warnings }
+}
+
+function governanceFindings(governance: SelfEvolutionGovernanceResult): SelfEvolutionFinding[] {
+  const findings: SelfEvolutionFinding[] = []
+  if (governance.rejected.length > 0) {
+    findings.push({
+      kind: 'governance',
+      title: '候选治理过滤',
+      summary: `过滤 ${governance.rejected.length} 条不适合进入审核队列的候选。`,
+      evidence: governance.rejected.slice(0, 6).map(item => `${item.candidate.kind}: ${item.reasons.join(', ')}`),
+      confidence: 'high',
+    })
+  }
+  if (governance.warnings.length > 0) {
+    findings.push({
+      kind: 'governance',
+      title: '候选治理提醒',
+      summary: `${governance.warnings.length} 条候选可进入审核，但需要人工注意来源或可信度。`,
+      evidence: governance.warnings.slice(0, 6).map(item => `${item.candidate.kind}: ${item.warnings.join(', ')}`),
+      confidence: 'medium',
+    })
+  }
+  return findings
 }
 
 function recommendationSourceRunIds(recommendation: DistillRecommendation, summaries: AgentRunSummary[]) {
@@ -290,9 +414,14 @@ export function buildSelfEvolutionCandidatePlan(input: {
     })
   }
 
+  const governance = governSelfEvolutionCandidates(candidates)
   return {
-    candidates,
-    findings,
+    candidates: governance.accepted,
+    findings: [
+      ...findings,
+      ...governanceFindings(governance),
+    ],
+    governance,
   }
 }
 
