@@ -77,7 +77,7 @@ helperSource = helperSource.replace(/^function /gm, 'export function ')
 
 // 3. 写 shared/builder-utils.ts
 const builderUtils = `/**
- * 输出工坊 HTML 构建器共享层
+ * 智能排版 HTML 构建器共享层
  * 类型 + 各风格构建器共用的辅助函数，从 html-builders.ts 提取。
  */
 import { escapeHtml } from "./escape"
@@ -111,7 +111,7 @@ const importLines = fns.map((f) => `import { ${f.name} } from "./${FN_TO_ID[f.na
 const reExportLines = fns.map((f) => `export { ${f.name} } from "./${FN_TO_ID[f.name]}"`).join('\n')
 const registryEntries = fns.map((f) => `  "${FN_TO_ID[f.name]}": ${f.name},`).join('\n')
 const indexTs = `/**
- * 输出工坊风格构建器注册表
+ * 智能排版风格构建器注册表
  * 按 templateId 分发到对应 build* 函数，替代 use-output-generation 里的 19-case switch。
  */
 import type { BuildHtmlOptions } from "../shared/builder-utils"
@@ -136,7 +136,7 @@ console.log('  ✓ styles/index.ts (注册表 + buildStyle)')
 
 // 6. 覆盖 html-builders.ts 为 facade
 const facade = `/**
- * 输出工坊 HTML 构建器（facade）
+ * 智能排版 HTML 构建器（facade）
  * 实际实现已按风格拆分到 ./styles/*，本文件仅 re-export 以保持对外 API 不变。
  * 调用方可改用 ./styles 的 buildStyle(templateId, options) 替代 switch 分发。
  */

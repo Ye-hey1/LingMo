@@ -140,6 +140,18 @@ try {
     replayAgentEvents,
   } = await importTsModule('src/lib/agent/event-bus.ts')
   const {
+    AGENT_EVENT_SCHEMA_VERSION,
+    AGENT_EVENT_ENVELOPE_VERSION,
+  } = await importTsModule('src/lib/agent/types.ts')
+  const {
+    getAgentEventEnvelope,
+  } = await importTsModule('src/lib/agent/event-envelope.ts')
+  const {
+    buildAgentTraceTimeline,
+    normalizeAgentTraceEvents,
+    renderAgentTraceTimelineMarkdown,
+  } = await importTsModule('src/lib/agent/trace-timeline.ts')
+  const {
     getConcreteToolCompletionBlockReason,
     isProgressOnlyFinalAnswer,
     isConcreteArtifactRequest,
@@ -186,6 +198,12 @@ try {
     getConfiguredProviderDisplayTitle,
   } = await importTsModule('src/lib/ai/provider-display.ts')
   const {
+    getConfiguredThinkingLevel,
+    getModelCapabilityProfile,
+    getThinkingLevelRequestPatch,
+    resolveThinkingSettings,
+  } = await importTsModule('src/lib/ai/model-capabilities.ts')
+  const {
     classifyError: classifyAiError,
     formatError: formatAiError,
   } = await importTsModule('src/lib/ai/error-handler.ts')
@@ -223,11 +241,16 @@ try {
     getAdaptiveCharsPerSecond,
   } = await importTsModule('src/app/core/main/chat/streaming-smoother.ts')
   const {
+    renderStreamingMarkdownSegments,
+    splitStreamingMarkdownSegments,
+  } = await importTsModule('src/app/core/main/chat/streaming-markdown-segments.ts')
+  const {
     normalizeCallToolResult,
   } = await importTsModule('src/lib/mcp/result.ts')
   const {
     resolveMcpConfigValue,
     resolveMcpHeaders,
+    resolveMcpEnv,
   } = await importTsModule('src/lib/mcp/config-values.ts')
   const {
     classifyMcpToolError,
@@ -259,12 +282,19 @@ try {
   } = await importTsModule('src/lib/agent/dream.ts')
   const {
     buildSelfEvolutionCandidatePlan,
+    governSelfEvolutionCandidates,
     shouldRunSelfEvolutionReview,
   } = await importTsModule('src/lib/agent/self-evolution.ts')
   const {
     formatWorkflowTemplatesForPrompt,
     scoreWorkflowTemplateForGoal,
   } = await importTsModule('src/lib/agent/workflow-templates.ts')
+  const {
+    formatAgentLoopSpecForPrompt,
+    getAgentLoopExecutionOrder,
+    parseAgentLoopSpec,
+    validateAgentLoopSpec,
+  } = await importTsModule('src/lib/agent/loop-spec.ts')
   const {
     appendAgentSessionEntry,
     createAgentSessionLog,
@@ -370,6 +400,8 @@ try {
   assert.match(mcpEmptyObjectMessage, /没有返回可解析的错误详情/)
   assert.equal(resolveMcpConfigValue('${as_sk_e08b326dea256bb11a261e373e615e44}'), 'as_sk_e08b326dea256bb11a261e373e615e44')
   assert.equal(resolveMcpHeaders({ Authorization: 'Bearer ${as_sk_e08b326dea256bb11a261e373e615e44}' }).Authorization, 'Bearer as_sk_e08b326dea256bb11a261e373e615e44')
+  assert.deepEqual(resolveMcpHeaders({ Authorization: 'Bearer ${ANYSEARCH_API_KEY}' }), {})
+  assert.deepEqual(resolveMcpEnv({ ANYSEARCH_API_KEY: '${ANYSEARCH_API_KEY}' }), {})
   assert.equal(classifyError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}'), 'billing')
   const agentBillingError = formatFriendlyError('AI_HTTP_ERROR status=402 retryable=false body={"error":{"message":"Insufficient Balance"}}')
   assert.equal(agentBillingError.title, '余额不足')
@@ -391,6 +423,43 @@ try {
   assert.match(getAiRateLimitUserMessage(tpmError), /TPM/)
   const generic429 = 'AI_HTTP_ERROR status=429 retryable=true body={"message":"Too many requests"}'
   assert.equal(isRetryableTransientError(new Error(generic429)).retryable, true)
+
+  const gpt5Capabilities = getModelCapabilityProfile({
+    key: 'chatgpt',
+    title: 'OpenAI',
+    baseURL: 'https://api.openai.com/v1',
+    model: 'gpt-5.5',
+  })
+  assert.equal(gpt5Capabilities.supportsThinkingLevel, true)
+  assert.equal(gpt5Capabilities.thinkingRequestMode, 'reasoning_effort')
+  assert.deepEqual(getThinkingLevelRequestPatch(gpt5Capabilities, 'high'), { reasoning_effort: 'high' })
+  const gpt4oCapabilities = getModelCapabilityProfile({
+    key: 'chatgpt',
+    title: 'OpenAI',
+    baseURL: 'https://api.openai.com/v1',
+    model: 'gpt-4o',
+  })
+  assert.equal(gpt4oCapabilities.supportsThinkingLevel, false)
+  assert.deepEqual(getThinkingLevelRequestPatch(gpt4oCapabilities, 'high'), {})
+  const deepseekCapabilities = getModelCapabilityProfile({
+    key: 'deepseek',
+    title: 'DeepSeek',
+    baseURL: 'https://api.deepseek.com/v1',
+    model: 'deepseek-reasoner',
+  })
+  assert.equal(deepseekCapabilities.supportsReasoningContent, true)
+  assert.equal(deepseekCapabilities.thinkingRequestMode, 'provider_default')
+  assert.deepEqual(getThinkingLevelRequestPatch(deepseekCapabilities, 'high'), {})
+  const configuredThinking = resolveThinkingSettings({
+    key: 'chatgpt',
+    title: 'OpenAI',
+    baseURL: 'https://api.openai.com/v1',
+    model: 'gpt-5.5',
+    thinkingLevel: 'low',
+  })
+  assert.equal(getConfiguredThinkingLevel({ key: 'chatgpt', title: 'OpenAI', model: 'gpt-5.5', thinkingLevel: 'low' }), 'low')
+  assert.equal(configuredThinking.level, 'low')
+  assert.deepEqual(configuredThinking.requestPatch, { reasoning_effort: 'low' })
 
   const editorLanguageRegistry = {
     supportedLanguages: ['bash', 'javascript', 'markdown', 'plaintext', 'powershell', 'typescript'],
@@ -632,6 +701,13 @@ try {
         description: 'Generate daily reports',
         scope: 'project',
         allowedTools: ['create_file'],
+        lazyLoad: true,
+        permissionManifest: {
+          tools: ['create_file'],
+          capabilities: ['write'],
+          requiresConfirmation: true,
+        },
+        artifactSchema: [{ type: 'markdown', path: 'reports/*.md' }],
         userInvocable: true,
         enabled: true,
         createdAt: 1,
@@ -646,6 +722,9 @@ try {
   assert.equal(skillRuntimeSnapshot.skills[0].source, 'project')
   assert.equal(skillRuntimeSnapshot.skills[0].selected, true)
   assert.deepEqual(skillRuntimeSnapshot.skills[0].allowedTools, ['create_file'])
+  assert.equal(skillRuntimeSnapshot.skills[0].lazyLoad, true)
+  assert.deepEqual(skillRuntimeSnapshot.skills[0].permissionManifest?.capabilities, ['write'])
+  assert.deepEqual(skillRuntimeSnapshot.skills[0].artifactSchema?.map(item => item.type), ['markdown'])
   assert.equal(skillRuntimeSnapshot.skills[0].scriptCount, 1)
   assert.equal(skillRuntimeSnapshot.skills[0].referenceCount, 1)
   assert.deepEqual(normalizeCallToolResult(undefined), {
@@ -689,14 +768,58 @@ try {
     advanceStreamingSmoother({ carryChars: 0, displayedLength: 0 }, 500, 1000).charsAdded,
     500,
   )
+  const streamingSegments = splitStreamingMarkdownSegments([
+    '# 标题',
+    '',
+    '正文第一段',
+    '',
+    '```ts',
+    'const x = 1',
+    '',
+    'const y = 2',
+    '```',
+    '',
+    '尾段还在生成',
+  ].join('\n'))
+  assert.equal(streamingSegments.length, 4)
+  assert.deepEqual(streamingSegments.map(segment => segment.stable), [true, true, true, false])
+  assert.match(streamingSegments[2].text, /const y = 2/)
+  const segmentCache = new Map()
+  let renderCount = 0
+  const firstSegmentRender = renderStreamingMarkdownSegments({
+    text: '# 标题\n\n正文',
+    cache: segmentCache,
+    renderMarkdown: (value) => {
+      renderCount += 1
+      return `<p>${value}</p>`
+    },
+  })
+  assert.equal(firstSegmentRender.segmentCount, 2)
+  assert.equal(firstSegmentRender.stableSegmentCount, 1)
+  assert.equal(firstSegmentRender.cacheHits, 0)
+  const secondSegmentRender = renderStreamingMarkdownSegments({
+    text: '# 标题\n\n正文继续',
+    cache: segmentCache,
+    renderMarkdown: (value) => {
+      renderCount += 1
+      return `<p>${value}</p>`
+    },
+  })
+  assert.equal(secondSegmentRender.cacheHits, 1)
+  assert.equal(renderCount, 3)
   assert.equal(isConcreteArtifactRequest('使用 aihot 技能获取最新 AI 信息并直接输出文字', true), false)
   assert.equal(isConcreteArtifactRequest('根据上面3天行程重新规划旅游攻略，并输出到笔记中', true), true)
   assert.equal(isConcreteArtifactRequest('规划设计一份19日-21日出行方案', true), false)
   assert.equal(isConcreteArtifactRequest('帮我规划一份三天旅行方案', true), false)
   assert.equal(isConcreteArtifactRequest('生成一份学习计划', true), false)
   assert.equal(isConcreteArtifactRequest('生成一份学习计划并保存到笔记', true), true)
+  assert.equal(isConcreteArtifactRequest('使用 rednote-director-skill 帮我把这个选题做成 6 页小红书图文，输出风格判断、页面结构、图像提示词和发布文案。', true), false)
   assert.equal(isProgressOnlyFinalAnswer('收到。我现在先确认行程核心数据，然后输出到笔记中。'), true)
   assert.equal(isProgressOnlyFinalAnswer('充分理解。原图存在问题，我会重新规划一版完整方案。'), true)
+  assert.equal(
+    validateFinalAnswer('我已经基于 rednote-director-skill 完成完整的小红书图文方案：\n\n1. 选题判断\n2. 页面结构\n3. 图像提示词\n4. 发布文案', '使用 rednote-director-skill 帮我把这个选题做成 6 页小红书图文，输出风格判断、页面结构、图像提示词和发布文案。', false).ok,
+    true,
+  )
   assert.equal(
     validateFinalAnswer('收到。我现在先确认行程核心数据，然后输出到笔记中。', '根据上面3天行程重新规划旅游攻略，并输出到笔记中', false).ok,
     false,
@@ -763,6 +886,9 @@ try {
   assert.match(agentDbSource, /export async function listAgentRunsFromDb/)
   assert.match(agentDbSource, /export async function listAgentStepsFromDb/)
   assert.match(agentDbSource, /export async function getAgentRunDetailFromDb/)
+  assert.match(agentDbSource, /envelope_json text default null/)
+  assert.match(agentDbSource, /event\.envelope \? safeJson\(event\.envelope\) : null/)
+  assert.match(agentDbSource, /envelope_json as envelopeJson/)
   assert.match(agentDbSource, /export async function upsertAgentMemoryCandidatesInDb/)
   assert.match(agentDbSource, /export async function reviewAgentMemoryCandidateInDb/)
   assert.match(agentDbSource, /export async function insertAgentWorkflowTemplateInDb/)
@@ -776,6 +902,8 @@ try {
   const orchestratorPersistenceSource = await readFile(join(repoRoot, 'src/lib/agent-harness/orchestrator.ts'), 'utf8')
   assert.match(orchestratorPersistenceSource, /persistAgentRuntimeEvent/)
   assert.match(orchestratorPersistenceSource, /conversationId/)
+  assert.match(orchestratorPersistenceSource, /runtimeSnapshot = middlewareRuntime\.getState\(\)\.runtime\?\.snapshot/)
+  assert.match(orchestratorPersistenceSource, /partSnapshot:\s*\{[\s\S]*runtimeSnapshot,/)
   const agentRunsStoreSource = await readFile(join(repoRoot, 'src/stores/agent-runs.ts'), 'utf8')
   assert.match(agentRunsStoreSource, /listAgentRunsFromDb/)
   assert.match(agentRunsStoreSource, /getAgentRunDetailFromDb/)
@@ -791,16 +919,47 @@ try {
   assert.match(agentWorkspaceSource, /运行/)
   assert.match(agentWorkspaceSource, /上下文/)
   assert.match(agentWorkspaceSource, /执行树/)
+  assert.match(agentWorkspaceSource, /运行时/)
+  assert.match(agentWorkspaceSource, /运行时审计/)
   assert.match(agentWorkspaceSource, /概览/)
   assert.match(agentWorkspaceSource, /实时/)
   assert.match(agentWorkspaceSource, /失败/)
   assert.match(agentWorkspaceSource, /知识库/)
   assert.match(agentWorkspaceSource, /KnowledgeHealthPanel/)
+  assert.match(agentWorkspaceSource, /RuntimePanel/)
+  assert.match(agentWorkspaceSource, /data-agent-runtime-console="rich"/)
+  assert.match(agentWorkspaceSource, /Think Mode/)
+  assert.match(agentWorkspaceSource, /Session Binding/)
+  assert.match(agentWorkspaceSource, /SSE \/ Event Envelope/)
+  assert.match(agentWorkspaceSource, /Skills Governance/)
+  assert.match(agentWorkspaceSource, /getRuntimeSnapshot/)
+  assert.match(agentWorkspaceSource, /getEnvelopeAuditRows/)
+  assert.match(agentWorkspaceSource, /buildAgentEventEnvelope/)
+  assert.match(agentWorkspaceSource, /permissionManifest/)
+  assert.match(agentWorkspaceSource, /artifactSchema/)
+  assert.match(agentWorkspaceSource, /lazyLoad/)
   assert.match(agentWorkspaceSource, /知识库健康检查/)
   assert.match(agentWorkspaceSource, /刷新索引/)
   assert.match(agentWorkspaceSource, /残留清理/)
   assert.match(agentWorkspaceSource, /上下文拼接/)
   assert.match(agentWorkspaceSource, /失败聚合/)
+  assert.match(agentWorkspaceSource, /type ExecutionTreeNode/)
+  assert.match(agentWorkspaceSource, /function createExecutionTreeNodePusher/)
+  assert.match(agentWorkspaceSource, /seenIds\.get\(baseId\)/)
+  assert.match(agentWorkspaceSource, /`\$\{baseId\}#\$\{seenCount \+ 1\}`/)
+  assert.match(agentWorkspaceSource, /id: `run:\$\{detail\.run\.id\}`/)
+  assert.match(agentWorkspaceSource, /id: `step:\$\{step\.id\}`/)
+  assert.match(agentWorkspaceSource, /id: `step-tool:\$\{step\.stepIndex\}:\$\{call\.id\}`/)
+  assert.match(agentWorkspaceSource, /id: `tool:\$\{call\.id\}`/)
+  assert.match(agentWorkspaceSource, /id: `event:\$\{event\.id \|\| event\.seq \|\| event\.createdAt \|\| index\}`/)
+  const mcpImportSource = await readFile(join(repoRoot, 'src/app/core/setting/mcp/json-import-dialog.tsx'), 'utf8')
+  assert.match(mcpImportSource, /streamable-http/)
+  assert.match(mcpImportSource, /normalizeImportedMcpType/)
+  const mcpClientSource = await readFile(join(repoRoot, 'src/lib/mcp/client.ts'), 'utf8')
+  assert.match(mcpClientSource, /MCP-Protocol-Version': protocolVersion/)
+  assert.match(mcpClientSource, /Mcp-Session-Id/)
+  assert.match(mcpClientSource, /streamable-http/)
+  assert.match(mcpClientSource, /getProtocolVersion/)
   const agentMemoryToolsQueueSource = await readFile(join(repoRoot, 'src/lib/agent/tools/agent-memory-tools.ts'), 'utf8')
   assert.match(agentMemoryToolsQueueSource, /distillWorkflowRecommendationsTool/)
   assert.match(agentMemoryToolsQueueSource, /generateAgentMemoryCandidates/)
@@ -892,9 +1051,17 @@ try {
         payload: { visibleToolNames: ['safe_read_file'] },
       },
       {
-        type: 'tool.execution.started',
+        type: 'thought.updated',
         runId: 'event-run',
         sequence: 2,
+        timestamp: 112,
+        iteration: 1,
+        payload: { content: '需要先读取 daily.md' },
+      },
+      {
+        type: 'tool.execution.started',
+        runId: 'event-run',
+        sequence: 3,
         timestamp: 115,
         iteration: 1,
         payload: {
@@ -906,7 +1073,7 @@ try {
       {
         type: 'tool.execution.finished',
         runId: 'event-run',
-        sequence: 3,
+        sequence: 4,
         timestamp: 120,
         iteration: 1,
         payload: {
@@ -920,9 +1087,17 @@ try {
         },
       },
       {
+        type: 'agent.context.compacted',
+        runId: 'event-run',
+        sequence: 5,
+        timestamp: 125,
+        iteration: 1,
+        payload: { snapshot: { userGoal: '执行工具并回答', sourceEventCount: 4 } },
+      },
+      {
         type: 'model.response.received',
         runId: 'event-run',
-        sequence: 4,
+        sequence: 6,
         timestamp: 130,
         iteration: 1,
         payload: { finishReason: 'stop', toolCallCount: 0 },
@@ -930,7 +1105,7 @@ try {
       {
         type: 'final.answer.rendered',
         runId: 'event-run',
-        sequence: 5,
+        sequence: 7,
         timestamp: 140,
         iteration: 1,
         payload: { content: '最终回答' },
@@ -938,7 +1113,7 @@ try {
       {
         type: 'agent.completed',
         runId: 'event-run',
-        sequence: 6,
+        sequence: 8,
         timestamp: 150,
         payload: { result: '最终回答' },
       },
@@ -946,11 +1121,13 @@ try {
   })
   assert.deepEqual(
     reducedSessionLog.entries.map(entry => entry.type),
-    ['run_started', 'turn_started', 'tool_call_started', 'tool_result', 'turn_finished', 'message', 'run_finished'],
+    ['run_started', 'turn_started', 'thinking', 'tool_call_started', 'tool_result', 'compaction', 'turn_finished', 'message', 'run_finished'],
   )
-  assert.equal(reducedSessionLog.entries[2].paramsSummary, '{"filePath":"daily.md"}')
-  assert.equal(reducedSessionLog.entries[3].parentId, reducedSessionLog.entries[2].id)
-  assert.equal(reducedSessionLog.entries[3].dataRef, 'agent://event-run/observation/file.txt')
+  assert.equal(reducedSessionLog.entries[2].content, '需要先读取 daily.md')
+  assert.equal(reducedSessionLog.entries[3].paramsSummary, '{"filePath":"daily.md"}')
+  assert.equal(reducedSessionLog.entries[4].parentId, reducedSessionLog.entries[3].id)
+  assert.equal(reducedSessionLog.entries[4].dataRef, 'agent://event-run/observation/file.txt')
+  assert.equal(reducedSessionLog.entries[5].type, 'compaction')
   assert.equal(reducedSessionLog.entries.at(-1).status, 'completed')
 
   const failedSessionLog = reduceAgentSessionLogFromEvents({
@@ -1238,6 +1415,25 @@ try {
   })
   assert.equal(partSnapshot.finalAnswerContent, '日报正文')
   assert.equal(partSnapshot.parts.find(part => part.type === 'text')?.text, '日报正文')
+
+  let leakedReportSnapshot = createInitialAgentPartSnapshot('leaked-report-run')
+  leakedReportSnapshot = reduceAgentPartSnapshot(leakedReportSnapshot, {
+    type: 'final.answer.rendered',
+    runId: 'leaked-report-run',
+    sequence: 1,
+    timestamp: 100,
+    payload: {
+      content: [
+        '我先基于目前已经确认的信息整理如下：',
+        '1. (select_skill) 已选择 1 个 Skills: aihot。 数据详情：{"compressed":true}',
+        '2. (load_skill_content) Skill "aihot" 没有找到额外的支持文件。',
+        '3. (mcp-1778814828490-4nh9c90__firecrawl_scrape) MCP 工具执行失败。',
+        '原始错误：ChunkLoadError: Loading chunk failed.',
+      ].join('\n'),
+    },
+  })
+  assert.equal(leakedReportSnapshot.finalAnswerContent, undefined)
+  assert.equal(leakedReportSnapshot.parts.some(part => part.type === 'text'), false)
   const repeatedSummary = {
     id: 'agent-run-1',
     userGoal: '生成 AI 日报',
@@ -1289,6 +1485,7 @@ try {
   })
   assert.ok(selfEvolutionPlan.candidates.some(candidate => candidate.kind === 'workflow'))
   assert.ok(selfEvolutionPlan.findings.some(finding => finding.kind === 'workflow'))
+  assert.equal(selfEvolutionPlan.governance.rejected.length, 0)
   const failedSelfEvolutionPlan = buildSelfEvolutionCandidatePlan({
     currentSummary: {
       ...repeatedSummary,
@@ -1301,6 +1498,42 @@ try {
   })
   assert.ok(failedSelfEvolutionPlan.candidates.some(candidate => candidate.kind === 'failure'))
   assert.ok(failedSelfEvolutionPlan.findings.some(finding => finding.kind === 'skill_followup'))
+  const governedCandidates = governSelfEvolutionCandidates([
+    {
+      kind: 'workflow',
+      content: '复用日报生成流程',
+      evidence: ['目标：生成日报', '工具：execute_skill_script'],
+      sourceRunIds: ['agent-run-1'],
+      confidence: 'high',
+    },
+    {
+      kind: 'workflow',
+      content: '复用日报生成流程',
+      evidence: ['目标：生成日报', '工具：execute_skill_script'],
+      sourceRunIds: ['agent-run-1'],
+      confidence: 'high',
+    },
+    {
+      kind: 'memory',
+      content: 'api_key=secret-token',
+      evidence: ['api_key=secret-token'],
+      sourceRunIds: ['agent-run-2'],
+      confidence: 'high',
+    },
+    {
+      kind: 'workflow',
+      content: '没有证据的流程',
+      evidence: [],
+      sourceRunIds: [],
+      confidence: 'medium',
+    },
+  ])
+  assert.equal(governedCandidates.accepted.length, 1)
+  assert.equal(governedCandidates.accepted[0].payload.governance.checked, true)
+  assert.equal(governedCandidates.rejected.length, 3)
+  assert.ok(governedCandidates.rejected.some(item => item.reasons.includes('duplicate-candidate')))
+  assert.ok(governedCandidates.rejected.some(item => item.reasons.includes('sensitive-or-destructive-signal')))
+  assert.ok(governedCandidates.rejected.some(item => item.reasons.includes('insufficient-evidence')))
   const workflowTemplateScore = scoreWorkflowTemplateForGoal('帮我生成日报并执行脚本', {
     id: 'tpl-1',
     title: '日报生成',
@@ -1322,6 +1555,65 @@ try {
     riskNotes: ['执行前确认脚本权限'],
     score: workflowTemplateScore,
   }]), /Approved Workflow Templates/)
+
+  const parsedLoopSpec = parseAgentLoopSpec({
+    id: 'daily-report-loop',
+    name: '日报循环',
+    phases: [
+      { id: 'context', type: 'tool', tool: 'safe_read_file', args: { filePath: 'daily.md' } },
+      { id: 'draft', type: 'agent', prompt: '基于 {{context}} 生成日报' },
+      { id: 'review', type: 'review', prompt: '检查日报是否完整', depends_on: ['draft'] },
+    ],
+    gates: [
+      { after: 'draft', type: 'output_contains', expected_contains: '日报' },
+    ],
+    execution_limits: {
+      max_total_phases: 5,
+      max_phase_retries: 1,
+    },
+  })
+  assert.deepEqual(parsedLoopSpec.phases.map(phase => phase.dependsOn), [[], ['context'], ['draft']])
+  assert.deepEqual(getAgentLoopExecutionOrder(parsedLoopSpec), ['context', 'draft', 'review'])
+  const loopValidation = validateAgentLoopSpec(parsedLoopSpec)
+  assert.equal(loopValidation.ok, true)
+  assert.match(formatAgentLoopSpecForPrompt(parsedLoopSpec), /Agent LoopSpec Lite/)
+  assert.match(formatAgentLoopSpecForPrompt(parsedLoopSpec), /context -> draft -> review/)
+  const missingDependencyValidation = validateAgentLoopSpec({
+    id: 'bad-loop',
+    phases: [
+      { id: 'draft', type: 'agent', name: 'draft', args: {}, dependsOn: ['missing'], continueOnError: false, retries: 0, prompt: 'draft' },
+    ],
+    gates: [],
+    name: 'bad-loop',
+    description: '',
+    version: '1',
+    trigger: { type: 'manual' },
+    artifacts: [],
+    executionLimits: {},
+  })
+  assert.equal(missingDependencyValidation.ok, false)
+  assert.ok(missingDependencyValidation.errors.some(error => /depends on missing phase missing/.test(error)))
+  const cyclicLoopSpec = parseAgentLoopSpec({
+    id: 'cycle-loop',
+    phases: [
+      { id: 'a', type: 'agent', prompt: 'a', depends_on: ['b'] },
+      { id: 'b', type: 'agent', prompt: 'b', depends_on: ['a'] },
+    ],
+  })
+  const cyclicValidation = validateAgentLoopSpec(cyclicLoopSpec)
+  assert.equal(cyclicValidation.ok, false)
+  assert.ok(cyclicValidation.errors.some(error => /dependency cycle/.test(error)))
+  const badGateValidation = validateAgentLoopSpec(parseAgentLoopSpec({
+    id: 'bad-gate-loop',
+    phases: [
+      { id: 'draft', type: 'agent', prompt: 'draft' },
+    ],
+    gates: [
+      { after: 'draft', type: 'output_contains' },
+    ],
+  }))
+  assert.equal(badGateValidation.ok, false)
+  assert.ok(badGateValidation.errors.some(error => /missing expectedContains/.test(error)))
 
 
   assert.equal(getToolRiskLevel('read_markdown_file', 'note'), 'low')
@@ -1531,6 +1823,19 @@ try {
     sanitizeVisibleAssistantContent('抓取工具持续异常，先不要输出正式回答。'),
     '',
   )
+  const internalToolReport = [
+    '我先基于目前已经确认的信息整理如下：',
+    '',
+    '1. (select_skill) 已选择 1 个 Skills: aihot。这些 Skills 的完整指令将在后续步骤中提供。 数据详情：{"compressed":true}',
+    '2. (load_skill_content) Skill "aihot" 没有找到额外的支持文件。所有必要信息已包含在主 Skill 指令中。',
+    '3. (mcp-1778814828490-4nh9c90__firecrawl_scrape) MCP 工具执行失败：firecrawl-mcp/firecrawl_scrape 调用失败。',
+    '原始错误：ChunkLoadError: Loading chunk app-pages-browser_src_lib_mcp_tools_ts failed.',
+    '',
+    '仍未确认的部分我会标明为待核实，并给出下一步建议。',
+  ].join('\n')
+  assert.equal(isInternalAgentInstruction(internalToolReport), true)
+  assert.equal(sanitizeVisibleAssistantContent(internalToolReport), '')
+  assert.equal(validateFinalAnswer(internalToolReport, '使用 aihot 获取最新 AI 资讯', true).ok, false)
   assert.equal(isSupportOnlyToolName('select_skill'), true)
   assert.equal(isSupportOnlyToolName('mcp__safe_read_file'), false)
   assert.equal(isSupportOnlyObservationText('已选择 1 个 Skills: excalidraw-diagram。这些 Skills 的完整说明已加载。'), true)
@@ -1576,11 +1881,90 @@ try {
     },
   })
   bus.emit('final', { content: 'done' })
+  const busEvents = bus.getEvents()
+  assert.equal(busEvents[0].schemaVersion, AGENT_EVENT_SCHEMA_VERSION)
+  assert.equal(busEvents[0].envelope?.version, AGENT_EVENT_ENVELOPE_VERSION)
+  assert.equal(busEvents[1].envelope?.channel, 'reasoning')
+  assert.equal(busEvents[2].envelope?.tool?.name, 'safe_read_file')
+  assert.equal(getAgentEventEnvelope(busEvents[4]).content, 'done')
+  assert.equal(busEvents[0].spanId, 'span:agent-started:1')
+  assert.equal(busEvents[0].parentId, undefined)
+  assert.equal(busEvents[1].parentId, busEvents[0].id)
+  const normalizedTrace = normalizeAgentTraceEvents(busEvents)
+  assert.equal(normalizedTrace.length, busEvents.length)
+  assert.equal(normalizedTrace[0].schemaVersion, AGENT_EVENT_SCHEMA_VERSION)
+  assert.equal(normalizedTrace[1].parentId, busEvents[0].id)
+  const traceTimeline = buildAgentTraceTimeline(busEvents)
+  assert.equal(traceTimeline[0].eventId, busEvents[0].id)
+  assert.ok(traceTimeline.every(item => item.offsetMs >= 0))
+  assert.match(renderAgentTraceTimelineMarkdown(busEvents), /Agent trace timeline/)
+  assert.match(renderAgentTraceTimelineMarkdown(busEvents), /span:agent-started:1/)
   const replay = replayAgentEvents(bus.getEvents())
   assert.equal(replay.runId, 'test-run')
   assert.equal(replay.currentThought, 'Need to read a file')
   assert.equal(replay.toolCalls.length, 1)
   assert.equal(replay.finalAnswer, 'done')
+
+  const envelopeOnlyReplay = replayAgentEvents([
+    {
+      id: 'envelope-run:1',
+      runId: 'envelope-run',
+      sequence: 1,
+      schemaVersion: AGENT_EVENT_SCHEMA_VERSION,
+      type: 'model.response.received',
+      timestamp: 10,
+      envelope: {
+        version: AGENT_EVENT_ENVELOPE_VERSION,
+        eventId: 'envelope-run:1',
+        runId: 'envelope-run',
+        sequence: 1,
+        type: 'model.response.received',
+        timestamp: 10,
+        source: 'model',
+        channel: 'status',
+        phase: 'thinking',
+        visibility: 'visible',
+        status: 'finished',
+        stream: { contentLength: 42, finishReason: 'stop' },
+        usage: { inputTokens: 12, outputTokens: 7, totalTokens: 19 },
+      },
+    },
+    {
+      id: 'envelope-run:2',
+      runId: 'envelope-run',
+      sequence: 2,
+      schemaVersion: AGENT_EVENT_SCHEMA_VERSION,
+      type: 'final',
+      timestamp: 20,
+      envelope: {
+        version: AGENT_EVENT_ENVELOPE_VERSION,
+        eventId: 'envelope-run:2',
+        runId: 'envelope-run',
+        sequence: 2,
+        type: 'final',
+        timestamp: 20,
+        source: 'model',
+        channel: 'answer',
+        phase: 'answering',
+        visibility: 'visible',
+        status: 'completed',
+        content: 'envelope answer',
+      },
+    },
+  ])
+  assert.equal(envelopeOnlyReplay.telemetry.outputChars, 42)
+  assert.equal(envelopeOnlyReplay.telemetry.inputTokens, 12)
+  assert.equal(envelopeOnlyReplay.telemetry.outputTokens, 7)
+  assert.equal(envelopeOnlyReplay.finalAnswer, 'envelope answer')
+
+  const linkedBus = createAgentEventBus({ runId: 'linked-run' })
+  const rootEvent = linkedBus.emit('agent.started', { userInput: 'linked' }, { spanId: 'root-span', parentId: null })
+  const childEvent = linkedBus.emit('tool.execution.started', { toolName: 'safe_read_file' }, { spanId: 'tool-span', parentId: rootEvent.id })
+  const linkedTimeline = buildAgentTraceTimeline(linkedBus.getEvents())
+  assert.equal(linkedTimeline[0].spanId, 'root-span')
+  assert.equal(linkedTimeline[0].parentId, undefined)
+  assert.equal(linkedTimeline[1].eventId, childEvent.id)
+  assert.equal(linkedTimeline[1].parentId, rootEvent.id)
 
   const observedEvents = []
   const observedBus = createAgentEventBus({
@@ -1695,6 +2079,12 @@ capabilities: [generate_text, revise_text]
 contextPolicy:
   load: summary-first
   references: on-demand
+lazyLoad: true
+permissionManifest:
+  tools: create_file web_fetch
+  capabilities: write network
+  requiresConfirmation: true
+artifactSchema: markdown json
 ---
 # Writing Skills
 `)
@@ -1704,6 +2094,11 @@ contextPolicy:
     load: 'summary-first',
     references: 'on-demand',
   })
+  assert.equal(parsedRuntimeSkill.metadata.lazyLoad, true)
+  assert.deepEqual(parsedRuntimeSkill.metadata.permissionManifest?.tools, ['create_file', 'web_fetch'])
+  assert.deepEqual(parsedRuntimeSkill.metadata.permissionManifest?.capabilities, ['write', 'network'])
+  assert.equal(parsedRuntimeSkill.metadata.permissionManifest?.requiresConfirmation, true)
+  assert.deepEqual(parsedRuntimeSkill.metadata.artifactSchema?.map(item => item.type), ['markdown', 'json'])
   assert.equal(validateSkillYamlMetadata(parsedRuntimeSkill.metadata).valid, true)
   const parsedAihotSkill = parseSkillFile(await readFile(join(repoRoot, 'skills/ai-hots/SKILL.md'), 'utf8'))
   assert.equal(parsedAihotSkill.metadata.name, 'aihot')
@@ -1748,6 +2143,8 @@ contextPolicy:
   }).valid, true)
   assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /runtimeProfile: writer/)
   assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /capabilities: generate_text revise_text/)
+  assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /permissionManifest:/)
+  assert.match(serializeSkillFile(parsedRuntimeSkill.metadata, parsedRuntimeSkill.content), /artifactSchema: markdown json/)
   assert.equal(resolveSkillRuntimeProfile({
     metadata: {
       id: 'writing-skills',
@@ -2003,11 +2400,18 @@ contextPolicy:
   assert.match(orchestratorSource, /setSessionLog:\s*\(log\)/)
   assert.match(orchestratorSource, /latestSessionLog/)
   assert.match(orchestratorSource, /input\.sessionLog \|\| reduceAgentSessionLogFromEvents/)
+  assert.match(orchestratorSource, /reduceAgentPartSnapshot/)
+  assert.match(orchestratorSource, /buildSessionTreeBinding/)
+  assert.match(orchestratorSource, /compactionRefs/)
+  assert.match(orchestratorSource, /assistantChatId/)
   assert.match(orchestratorSource, /runAfterRunMiddleware/)
   assert.match(orchestratorSource, /afterRun middleware failed/)
 
   const harnessRunnerSource = await readFile(join(repoRoot, 'src/lib/agent-harness/harness-agent-runner.ts'), 'utf8')
   assert.match(harnessRunnerSource, /export class HarnessAgentRunner/)
+  assert.match(harnessRunnerSource, /resolveThinkingSettings/)
+  assert.match(harnessRunnerSource, /thinkingSettings\.requestPatch/)
+  assert.match(harnessRunnerSource, /thinkingLevel/)
   assert.match(harnessRunnerSource, /tools:\s*input\.tools\.map\(toolToOpenAiTool\)/)
   assert.match(harnessRunnerSource, /tool_choice\s*=\s*'auto'/)
   assert.match(harnessRunnerSource, /prepareHarnessModelStep/)
@@ -2042,6 +2446,11 @@ contextPolicy:
   assert.match(harnessRunnerSource, /getFinalAnswerRejectionDisplayReason/)
   assert.match(harnessRunnerSource, /buildFinalAnswerRecoveryPrompt/)
   assert.match(harnessRunnerSource, /buildMaxIterationFallback/)
+  assert.match(harnessRunnerSource, /sanitizeVisibleAssistantContent/)
+  assert.match(harnessRunnerSource, /isInternalAgentInstruction/)
+  assert.match(harnessRunnerSource, /内部工具结果和错误已保留在运行记录中/)
+  assert.doesNotMatch(harnessRunnerSource, /我先基于目前已经确认的信息整理如下/)
+  assert.doesNotMatch(harnessRunnerSource, /仍未确认的部分我会标明为待核实/)
   assert.match(harnessRunnerSource, /buildForcedFinalAnswerPrompt/)
   assert.match(harnessRunnerSource, /synthesizeFinalAnswer/)
   assert.match(harnessRunnerSource, /FINAL_ANSWER_RESERVE_ITERATIONS/)
@@ -2081,6 +2490,16 @@ contextPolicy:
   assert.doesNotMatch(harnessRunnerSource, /ReActAgent/)
   assert.equal(existsSync(join(repoRoot, 'src/lib/agent/react.ts')), false)
   assert.equal(existsSync(join(repoRoot, 'src/lib/agent/base-agent.ts')), false)
+
+  const agentHandlerSourceForRejectedAnswer = await readFile(join(repoRoot, 'src/lib/agent/agent-handler.ts'), 'utf8')
+  assert.match(agentHandlerSourceForRejectedAnswer, /onAnswerRejected\?: \(\) => void/)
+  assert.match(agentHandlerSourceForRejectedAnswer, /this\.lastAnswerDeltaContent = ''/)
+  assert.match(agentHandlerSourceForRejectedAnswer, /this\.config\.onAnswerRejected\?\.\(\)/)
+
+  const chatSendSourceForRejectedAnswer = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-send.tsx'), 'utf8')
+  assert.match(chatSendSourceForRejectedAnswer, /const clear = \(\) => \{/)
+  assert.match(chatSendSourceForRejectedAnswer, /content: '',/)
+  assert.match(chatSendSourceForRejectedAnswer, /onAnswerRejected: liveAnswerUpdater\.clear/)
 
   const toolGovernanceSource = await readFile(join(repoRoot, 'src/lib/agent-harness/tool-governance.ts'), 'utf8')
   assert.match(toolGovernanceSource, /export async function executeGovernedHarnessTool/)
@@ -2251,14 +2670,21 @@ contextPolicy:
   assert.match(chatSendSource, /liveAnswerUpdater\.cancel\(\)/)
   assert.match(chatSendSource, /saveChat\(\{[\s\S]{0,700}content:\s*visibleContent,[\s\S]{0,80}\}, false\)/)
   assert.match(chatSendSource, /const isRunning = researchRunning \|\| \(isAgentMode \? agentState\.isRunning : loading\)/)
-  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,240}setAgentState\(\{\s*agentRunId:\s*undefined/)
-  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,900}toolCalls:\s*\[\]/)
-  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,900}agentEvents:\s*\[\]/)
-  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,1200}agentPartSnapshot:\s*undefined/)
-  assert.match(chatSendSource, /const primeAgentRunStatus = \(activeChatId\?: number, startedAt = Date\.now\(\)\) => \{[\s\S]{0,1400}finalAnswerContent:\s*undefined/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \([\s\S]{0,220}context\?: \{ userInput\?: string; imageCount\?: number \}/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \([\s\S]{0,420}setAgentState\(\{\s*agentRunId:\s*undefined/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \([\s\S]{0,1100}toolCalls:\s*\[\]/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \([\s\S]{0,1100}agentEvents:\s*\[\]/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \([\s\S]{0,1400}agentPartSnapshot:\s*undefined/)
+  assert.match(chatSendSource, /const primeAgentRunStatus = \([\s\S]{0,1600}finalAnswerContent:\s*undefined/)
+  assert.match(chatSendSource, /isLikelyVisualCreationRequest/)
+  assert.match(chatSendSource, /正在读取图片/)
+  assert.match(chatSendSource, /正在理解创作需求/)
+  assert.match(chatSendSource, /正在准备任务/)
+  assert.match(chatSendSource, /userInput:\s*requestText/)
+  assert.match(chatSendSource, /imageCount:\s*imageUrls\.length/)
   assert.match(chatSendSource, /const shouldPrimeAgentRunStatus = effectiveRoute === 'agent' \|\| effectiveRoute === 'workflow'/)
-  assert.match(chatSendSource, /primeAgentRunStatus\(undefined, Date\.now\(\)\)/)
-  assert.match(chatSendSource, /primeAgentRunStatus\(\s*placeholderMessage\.id,[\s\S]{0,160}currentStepStartTime/)
+  assert.match(chatSendSource, /primeAgentRunStatus\(undefined, Date\.now\(\), \{[\s\S]{0,160}imageCount:\s*imageUrls\.length/)
+  assert.match(chatSendSource, /primeAgentRunStatus\(\s*placeholderMessage\.id,[\s\S]{0,240}\{ userInput:\s*effectiveInstruction, imageCount:\s*imageUrls\.length \}/)
   assert.match(chatSendSource, /void triggerAutoExtractSuggestion/)
   assert.doesNotMatch(chatSendSource, /legacyAgentExecutor:\s*async \(runControl\)/)
   assert.match(chatSendSource, /runControl\.setContextPack/)
@@ -2268,6 +2694,9 @@ contextPolicy:
   assert.match(chatSendSource, /少用官方腔和学术腔/)
   assert.match(chatSendSource, /function formatEmptyAiResponseMessage/)
   assert.match(chatSendSource, /没有返回可展示正文/)
+  assert.match(chatSendSource, /function formatAgentNoVisibleAnswerMessage/)
+  assert.match(chatSendSource, /内部工具结果和错误已保留在运行记录中/)
+  assert.match(chatSendSource, /const visibleCurrentContent = sanitizeAgentFinalContent\(currentMessage\?\.content \|\| ''\)/)
   assert.match(chatSendSource, /createAgentEventBus/)
   assert.match(chatSendSource, /onError:\s*async \(error\)/)
   assert.match(chatSendSource, /function formatUserVisibleError/)
@@ -2330,6 +2759,8 @@ contextPolicy:
   assert.match(streamingPreviewSource, /pendingRenderTextRef/)
   assert.match(streamingPreviewSource, /schedulePendingMarkdownRender/)
   assert.match(streamingPreviewSource, /hasStableStreamingBoundary/)
+  assert.match(streamingPreviewSource, /renderStreamingMarkdownSegments/)
+  assert.match(streamingPreviewSource, /streamingSegmentHtmlCacheRef/)
   assert.doesNotMatch(streamingPreviewSource, /renderDisplayedText\(targetTextRef\.current,\s*true\)/)
 
   const chatStoreSource = await readFile(join(repoRoot, 'src/stores/chat.ts'), 'utf8')
@@ -2367,10 +2798,18 @@ contextPolicy:
   const agentRunSummarySource = await readFile(join(repoRoot, 'src/app/core/main/chat/agent-run-summary.tsx'), 'utf8')
   assert.match(agentRunSummarySource, /export function AgentRunSummary/)
   assert.match(agentRunSummarySource, /data-agent-run-summary="live"/)
-  assert.match(agentRunSummarySource, /function LiveTimeline/)
+  assert.match(agentRunSummarySource, /function RunTimeline/)
+  assert.match(agentRunSummarySource, /function LiveRunStatus/)
+  assert.match(agentRunSummarySource, /getLivePrimaryEntry/)
+  assert.match(agentRunSummarySource, /data-agent-live-status/)
+  assert.match(agentRunSummarySource, /\$`\$\{\(ms \/ 1000\)\.toFixed\(1\)\}s`|\(ms \/ 1000\)\.toFixed\(1\)/)
+  assert.doesNotMatch(agentRunSummarySource, /已等待 \{elapsedLabel\}/)
+  assert.doesNotMatch(agentRunSummarySource, /已完成 \{completedCount\} 项/)
   assert.match(agentRunSummarySource, /thought/)
+  assert.match(agentRunSummarySource, /type: "status"/)
   assert.match(agentRunSummarySource, /tokens/)
   assert.match(agentRunSummarySource, /formatElapsed/)
+  assert.match(agentRunSummarySource, /formatLiveElapsed/)
   assert.match(agentRunSummarySource, /formatTokenCount/)
   assert.match(agentRunSummarySource, /visibleOutput\?: string/)
   assert.match(agentRunSummarySource, /getVisibleOutputTokens/)
@@ -2378,7 +2817,27 @@ contextPolicy:
   assert.match(agentRunSummarySource, /if \(input\.live\) return 0/)
   assert.doesNotMatch(agentRunSummarySource, /inputTokens \+ outputTokens/)
   assert.match(agentRunSummarySource, /buildThoughtTimeline/)
-  assert.match(agentRunSummarySource, /getLiveThoughtText/)
+  assert.match(agentRunSummarySource, /getThoughtText/)
+  assert.match(agentRunSummarySource, /buildLifecycleStatusEntries/)
+  assert.match(agentRunSummarySource, /getCompletedPreparingLabel/)
+  assert.match(agentRunSummarySource, /hasVisibleReasoningPart/)
+  assert.match(agentRunSummarySource, /hasVisibleFinalOutput/)
+  assert.match(agentRunSummarySource, /hasOperationalEvidence/)
+  assert.match(agentRunSummarySource, /input\.toolCalls\.length > 0/)
+  assert.match(agentRunSummarySource, /已接收任务/)
+  assert.match(agentRunSummarySource, /status-preparing/)
+  assert.match(agentRunSummarySource, /正在准备/)
+  assert.match(agentRunSummarySource, /已准备任务/)
+  assert.match(agentRunSummarySource, /已读取图片/)
+  assert.match(agentRunSummarySource, /已理解创作需求/)
+  assert.match(agentRunSummarySource, /正在请求模型/)
+  assert.match(agentRunSummarySource, /已请求模型/)
+  assert.match(agentRunSummarySource, /status-thinking/)
+  assert.match(agentRunSummarySource, /正在输出/)
+  assert.match(agentRunSummarySource, /输出完成/)
+  assert.match(agentRunSummarySource, /已思考/)
+  assert.match(agentRunSummarySource, /const meta = \[elapsedLabel, tokenLabel \? `\$\{tokenLabel\} tokens` : ""\]\.filter\(Boolean\)/)
+  assert.match(agentRunSummarySource, /TimelineStatusRow/)
   assert.doesNotMatch(agentRunSummarySource, /正在准备 Agent。/)
   assert.doesNotMatch(agentRunSummarySource, /正在理解需求与上下文。/)
   assert.doesNotMatch(agentRunSummarySource, /正在加载可用技能。/)
@@ -2390,16 +2849,20 @@ contextPolicy:
   assert.doesNotMatch(agentRunSummarySource, /REASONING_RENDER_CAP_CHARS/)
   assert.doesNotMatch(agentRunSummarySource, /compactReasoningForDisplay/)
   assert.doesNotMatch(agentRunSummarySource, /getLatestReasoningText/)
-  assert.doesNotMatch(agentRunSummarySource, /partSnapshot\?\.visibleStatus\?\.detail/)
+  assert.match(agentRunSummarySource, /partSnapshot\?\.visibleStatus\?\.detail/)
   assert.doesNotMatch(agentRunSummarySource, /text:\s*input\.currentThought/)
   assert.match(agentRunSummarySource, /omittedChars/)
-  assert.match(agentRunSummarySource, /liveThoughtText/)
+  assert.doesNotMatch(agentRunSummarySource, /liveThoughtText/)
   assert.match(agentRunSummarySource, /function hasLiveActivity/)
-  assert.match(agentRunSummarySource, /const shouldShowThinking = input\.live && Boolean\(liveThoughtText\)/)
-  assert.doesNotMatch(agentRunSummarySource, /Boolean\(liveThoughtText\) \|\| hasLiveActivity/)
+  assert.match(agentRunSummarySource, /const shouldShowThinking = Boolean\(thoughtText\)/)
+  assert.doesNotMatch(agentRunSummarySource, /input\.live && Boolean\(liveThoughtText\)/)
   assert.match(agentRunSummarySource, /thought\.text && \(/)
   assert.doesNotMatch(agentRunSummarySource, /正在整理上下文和下一步动作。/)
-  assert.match(agentRunSummarySource, /group\.thought \|\| group\.tools\.length > 0/)
+  assert.match(agentRunSummarySource, /group\.statuses\.length > 0 \|\| group\.thought \|\| group\.tools\.length > 0/)
+  assert.match(agentRunSummarySource, /const pinnedEntries = sortedEntries\.filter\(entry => entry\.type !== "tool"\)/)
+  assert.match(agentRunSummarySource, /const pinnedGroupIds = new Set/)
+  assert.match(agentRunSummarySource, /compactSettledTimelineEntries/)
+  assert.match(agentRunSummarySource, /tools\.slice\(-8\)/)
   assert.match(agentRunSummarySource, /function isInternalLifecycleEvent/)
   assert.match(agentRunSummarySource, /event\.type === "mcp\.runtime\.warmup"/)
   assert.match(agentRunSummarySource, /event\.type === "agent\.stream\.started"/)
@@ -2410,7 +2873,10 @@ contextPolicy:
   assert.match(agentRunSummarySource, /正在读取/)
   assert.match(agentRunSummarySource, /正在调用/)
   assert.match(agentRunSummarySource, /if \(live\) \{/)
+  assert.match(agentRunSummarySource, /<LiveRunStatus[\s\S]{0,240}entries=\{timelineEntries\}/)
+  assert.doesNotMatch(agentRunSummarySource, /if \(live\) \{[\s\S]{0,260}<RunTimeline/)
   assert.doesNotMatch(agentRunSummarySource, /function LiveRunBody/)
+  assert.doesNotMatch(agentRunSummarySource, /function LiveTimeline/)
   assert.doesNotMatch(agentRunSummarySource, /getLiveStepSentence/)
   assert.doesNotMatch(agentRunSummarySource, /function LiveStepDetails/)
   assert.doesNotMatch(agentRunSummarySource, /<LiveRunBody/)
@@ -2433,7 +2899,6 @@ contextPolicy:
   assert.doesNotMatch(agentRunSummarySource, /未调用工具/)
   assert.doesNotMatch(agentRunSummarySource, /过程详情/)
   assert.doesNotMatch(agentRunSummarySource, /理解需求/)
-  assert.doesNotMatch(agentRunSummarySource, /请求模型/)
   assert.doesNotMatch(agentRunSummarySource, /读取模型响应/)
   assert.doesNotMatch(agentRunSummarySource, /整理最终回答/)
 

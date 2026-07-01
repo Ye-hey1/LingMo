@@ -77,8 +77,8 @@ tryTest('buildTemplatePreviewHtml(article)', () => {
   const h = mod.buildTemplatePreviewHtml(tpl)
   return typeof h === 'string' && h.length > 50
 })
-tryTest('buildTemplatePreviewHtml(moka)', () => {
-  const tpl = { id: 'moka-ai-single', name: 'M', nameEn: 'M', mode: 'moka', scenario: 'social', description: 'd', icon: 'i', designConstraints: '', outputHint: '', bestFor: '' }
+tryTest('buildTemplatePreviewHtml(social)', () => {
+  const tpl = { id: 'social-card', name: 'S', nameEn: 'S', mode: 'social', scenario: 'sharing', description: 'd', icon: 'i', designConstraints: '', outputHint: '', bestFor: '' }
   return typeof mod.buildTemplatePreviewHtml(tpl) === 'string'
 })
 
