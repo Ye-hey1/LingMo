@@ -48,6 +48,10 @@ export const STYLE_BUILDERS: Record<string, StyleBuilder> = {
   "read-dark-tech": buildDarkTechStyle,
 }
 
+export function hasStyleBuilder(templateId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(STYLE_BUILDERS, templateId)
+}
+
 /** 按 templateId 分发风格构建（未知 id 回退到第一个风格） */
 export function buildStyle(templateId: string, options: BuildHtmlOptions): string {
   return (STYLE_BUILDERS[templateId] ?? buildEditorialArticle)(options)

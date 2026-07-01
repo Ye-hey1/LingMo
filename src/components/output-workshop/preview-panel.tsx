@@ -93,6 +93,14 @@ function injectScrollbarStyles(html: string): string {
 
 const PREVIEW_OVERRIDE_STYLE_ID = "lingmo-output-preview-overrides"
 const REDBOOK_PREVIEW_GRID_STYLE_ID = "lingmo-redbook-two-column-preview"
+const REDBOOK_STANDALONE_PREVIEW_STYLE_ID = "lingmo-redbook-standalone-preview"
+const REDBOOK_SOURCE_CARD_WIDTH = 1080
+const REDBOOK_SOURCE_CARD_HEIGHT = 1440
+const REDBOOK_PREVIEW_CARD_WIDTH = 320
+const REDBOOK_PREVIEW_CARD_HEIGHT = Math.round(REDBOOK_PREVIEW_CARD_WIDTH * REDBOOK_SOURCE_CARD_HEIGHT / REDBOOK_SOURCE_CARD_WIDTH)
+const REDBOOK_PREVIEW_CARD_FRAME_WIDTH = REDBOOK_PREVIEW_CARD_WIDTH + 14
+const REDBOOK_PREVIEW_CARD_FRAME_HEIGHT = REDBOOK_PREVIEW_CARD_HEIGHT + 14
+const REDBOOK_PREVIEW_CARD_SCALE = REDBOOK_PREVIEW_CARD_WIDTH / REDBOOK_SOURCE_CARD_WIDTH
 
 function clampNumber(value: number, min: number, max: number, fallback: number): number {
   return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback
@@ -304,12 +312,83 @@ function injectRedbookPreviewGridStyles(html: string, templateId?: string): stri
   return `${style}${html}`
 }
 
-function buildPreviewSrcDoc(html: string, overrides: TemplateOverrides, templateId?: string): string {
+function injectRedbookStandalonePreviewStyles(html: string, templateId?: string): string {
+  if (!html || !isRedbookPreviewHtml(html, templateId) || !/\blingmo-smart-card-export-root\b/i.test(html)) return html
+
+  const css = `
+    html,
+    body {
+      width: 1080px !important;
+      height: 1440px !important;
+      min-height: 0 !important;
+      overflow: hidden !important;
+    }
+
+    body.redbook-output {
+      display: grid !important;
+      place-items: center !important;
+      padding: 0 !important;
+      background: transparent !important;
+    }
+
+    .lingmo-smart-card-export-root {
+      width: 1080px !important;
+      height: 1440px !important;
+      display: grid !important;
+      place-items: center !important;
+      overflow: hidden !important;
+    }
+
+    :root {
+      --lingmo-redbook-standalone-scale: 1;
+    }
+
+    .lingmo-smart-card-export-root > :is(.cover-container, .card-container, [data-redbook-card], [data-export-card]) {
+      width: 1080px !important;
+      height: 1440px !important;
+      min-height: 1440px !important;
+      max-width: none !important;
+      max-height: none !important;
+      transform: none !important;
+      transform-origin: center center !important;
+    }
+
+    .lingmo-smart-card-export-root .card-content,
+    .lingmo-smart-card-export-root .card-content-scale {
+      opacity: 1 !important;
+      visibility: visible !important;
+    }
+  `
+  const style = `<style id="${REDBOOK_STANDALONE_PREVIEW_STYLE_ID}">${css}</style>`
+  const existingStyleRegex = new RegExp(
+    `<style\\b(?=[^>]*\\bid=["']${REDBOOK_STANDALONE_PREVIEW_STYLE_ID}["'])[^>]*>[\\s\\S]*?<\\/style>`,
+    "i"
+  )
+  const withStyle = existingStyleRegex.test(html)
+    ? html.replace(existingStyleRegex, style)
+    : /<\/head>/i.test(html)
+      ? html.replace(/<\/head>/i, `${style}</head>`)
+      : /<body\b/i.test(html)
+        ? html.replace(/<body\b([^>]*)>/i, `<body$1>${style}`)
+        : `${style}${html}`
+
+  return withStyle
+}
+
+function buildPreviewSrcDoc(
+  html: string,
+  overrides: TemplateOverrides,
+  templateId?: string,
+  options?: { applyOverrides?: boolean }
+): string {
   if (!html) return ""
   const normalized = normalizeOutputWorkshopHtml(html)
   const withScrollbar = injectScrollbarStyles(normalized)
-  const withOverrides = injectTemplateOverrideStyles(withScrollbar, overrides)
-  return injectRedbookPreviewGridStyles(withOverrides, templateId)
+  const withOverrides = options?.applyOverrides === false
+    ? withScrollbar
+    : injectTemplateOverrideStyles(withScrollbar, overrides)
+  const withRedbookGrid = injectRedbookPreviewGridStyles(withOverrides, templateId)
+  return injectRedbookStandalonePreviewStyles(withRedbookGrid, templateId)
 }
 
 function LogRow({
@@ -370,6 +449,68 @@ function getGenerationWaitText(telemetry: ReturnType<typeof useWorkshopContext>[
   return `已收到响应 · ${telemetry.outputChars.toLocaleString()} chars`
 }
 
+function RedbookPreviewCard({
+  card,
+  templateOverrides,
+  selectedTemplateId,
+}: {
+  card: SmartCard
+  templateOverrides: TemplateOverrides
+  selectedTemplateId: string
+}) {
+  return (
+    <article
+      className="group shrink-0 overflow-hidden rounded-md border border-border/70 bg-background/95 p-1.5 shadow-[0_12px_30px_rgba(15,23,42,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-[0_18px_42px_rgba(15,23,42,0.14)]"
+      style={{
+        width: REDBOOK_PREVIEW_CARD_FRAME_WIDTH,
+        minWidth: REDBOOK_PREVIEW_CARD_FRAME_WIDTH,
+        maxWidth: REDBOOK_PREVIEW_CARD_FRAME_WIDTH,
+        height: REDBOOK_PREVIEW_CARD_FRAME_HEIGHT,
+        minHeight: REDBOOK_PREVIEW_CARD_FRAME_HEIGHT,
+        maxHeight: REDBOOK_PREVIEW_CARD_FRAME_HEIGHT,
+      }}
+    >
+      <div
+        className="relative shrink-0 overflow-hidden rounded-md bg-white ring-1 ring-black/5"
+        style={{
+          width: REDBOOK_PREVIEW_CARD_WIDTH,
+          minWidth: REDBOOK_PREVIEW_CARD_WIDTH,
+          maxWidth: REDBOOK_PREVIEW_CARD_WIDTH,
+          height: REDBOOK_PREVIEW_CARD_HEIGHT,
+          minHeight: REDBOOK_PREVIEW_CARD_HEIGHT,
+          maxHeight: REDBOOK_PREVIEW_CARD_HEIGHT,
+          aspectRatio: "3 / 4",
+        }}
+      >
+        <div
+          className="absolute left-0 top-0"
+          style={{
+            width: REDBOOK_SOURCE_CARD_WIDTH,
+            height: REDBOOK_SOURCE_CARD_HEIGHT,
+            transform: `scale(${REDBOOK_PREVIEW_CARD_SCALE})`,
+            transformOrigin: "top left",
+          }}
+        >
+          <iframe
+            title={`卡片预览 ${card.index + 1}: ${card.title}`}
+            srcDoc={buildPreviewSrcDoc(card.html, templateOverrides, selectedTemplateId, { applyOverrides: false })}
+            className="pointer-events-none block border-0 bg-white"
+            style={{
+              width: REDBOOK_SOURCE_CARD_WIDTH,
+              height: REDBOOK_SOURCE_CARD_HEIGHT,
+            }}
+            sandbox="allow-scripts allow-same-origin"
+            tabIndex={-1}
+          />
+        </div>
+        <div className="pointer-events-none absolute left-2 top-2 rounded-full border bg-background/90 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground shadow-sm backdrop-blur">
+          #{card.index + 1}
+        </div>
+      </div>
+    </article>
+  )
+}
+
 function RedbookCardWall({
   cards,
   templateOverrides,
@@ -380,30 +521,23 @@ function RedbookCardWall({
   selectedTemplateId: string
 }) {
   return (
-    <div className="flex min-h-full w-full justify-center overflow-y-auto bg-muted/20 px-4 py-5 [scrollbar-width:thin]">
-      <div className="grid w-full max-w-[640px] grid-cols-1 justify-center gap-3 sm:grid-cols-[repeat(2,minmax(0,300px))]">
+    <div
+      className="flex min-h-full w-full justify-center overflow-y-auto overflow-x-hidden px-5 py-6 [scrollbar-width:thin]"
+      style={{ background: "linear-gradient(180deg, #f8f8f6 0%, #f1f3f5 100%)" }}
+    >
+      <div
+        className="grid w-full justify-center gap-4"
+        style={{
+          gridTemplateColumns: `repeat(auto-fit, ${REDBOOK_PREVIEW_CARD_FRAME_WIDTH}px)`,
+        }}
+      >
         {cards.map((card) => (
-          <article
+          <RedbookPreviewCard
             key={card.index}
-            className="group overflow-hidden rounded-md border bg-background shadow-sm transition-colors hover:border-primary/40"
-          >
-            <div className="relative aspect-[3/4] w-full overflow-hidden bg-muted/20">
-              <iframe
-                title={`卡片预览 ${card.index + 1}: ${card.title}`}
-                srcDoc={buildPreviewSrcDoc(card.html, templateOverrides, selectedTemplateId)}
-                className="h-full w-full border-0 bg-background"
-                sandbox="allow-same-origin"
-                tabIndex={-1}
-              />
-              <div className="pointer-events-none absolute left-2 top-2 rounded bg-background/90 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground shadow-sm">
-                #{card.index + 1}
-              </div>
-            </div>
-            <div className="flex h-8 items-center justify-between gap-2 border-t px-2">
-              <p className="truncate text-[11px] font-medium text-foreground">{card.title}</p>
-              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">3:4</span>
-            </div>
-          </article>
+            card={card}
+            templateOverrides={templateOverrides}
+            selectedTemplateId={selectedTemplateId}
+          />
         ))}
       </div>
     </div>

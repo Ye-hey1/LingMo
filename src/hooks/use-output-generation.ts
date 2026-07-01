@@ -15,7 +15,10 @@ import type {
   TemplateOverrides,
 } from "@/components/output-workshop/types"
 import type { OutputTemplate } from "@/lib/output-workshop/templates"
-import { isLocalWechatOutputTemplate } from "@/lib/output-workshop/template-routing"
+import {
+  isLocalStyleOutputTemplate,
+  isLocalWechatOutputTemplate,
+} from "@/lib/output-workshop/template-routing"
 import {
   REFINE_PROMPT,
   cleanStreamingHtml,
@@ -35,6 +38,8 @@ import {
   isAutoRedbookTemplateId,
 } from "@/lib/output-workshop/social-redbook-builder"
 import { buildWechatArticle } from "@/lib/output-workshop/wechat-builder"
+import { buildStyle } from "@/lib/output-workshop/styles"
+import { splitPlainTextIntoSections } from "@/lib/output-workshop/extraction"
 
 interface UseOutputGenerationOptions {
   // 外部只读值（通过 ref 避免频繁闭包更新）
@@ -96,6 +101,21 @@ function summarizeLintResult(lintResult: OutputLintResult): string {
 
 function hasMissingAutoRedbookCards(lintResult: OutputLintResult): boolean {
   return lintResult.severeFindings.some((finding) => finding.id === "missing-auto-redbook-cards")
+}
+
+function stripMarkdownTitle(value: string): string {
+  return value
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^\*\*(.*)\*\*$/, "$1")
+    .trim()
+}
+
+function getFirstMarkdownTitle(markdown: string): string {
+  const heading = markdown
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /^#{1,6}\s+/.test(line))
+  return heading ? stripMarkdownTitle(heading) : ""
 }
 
 function fetchOutputWorkshopAiStream(
@@ -466,12 +486,111 @@ export function useOutputGeneration({
     updateTelemetry,
   ])
 
+  const generateLocalStyleOutput = React.useCallback(async () => {
+    const latestTemplate = selectedTemplateRef.current
+    const latestTemplateId = selectedTemplateIdRef.current
+    generationRunIdRef.current += 1
+    abortRef.current?.abort()
+    abortRef.current = null
+
+    try {
+      const startedAt = Date.now()
+      setStatus("generating")
+      setStreamingHtml("")
+      setErrorMessage(null)
+      setBuildStageId("template")
+      setProgressText("正在套用模板结构...")
+      updateTelemetry({
+        phase: "local-build",
+        phaseLabel: "正在套用模板结构",
+        startedAt,
+        requestStartedAt: null,
+        firstByteAt: null,
+        lastChunkAt: null,
+        completedAt: null,
+        outputChars: 0,
+        promptChars: 0,
+        qualityChecked: false,
+        qualityFindingCount: 0,
+        severeFindingCount: 0,
+        repairTriggered: false,
+        qualitySummary: "尚未检查",
+      })
+
+      const normalizedSourceContent = typeof sourceContent === "string" ? sourceContent.trim() : ""
+      const normalizedTitle = typeof title === "string" ? title.trim() : ""
+      const normalizedCustomInstructions = typeof customInstructions === "string" ? customInstructions.trim() : ""
+      const reportTitle = normalizedTitle || getFirstMarkdownTitle(normalizedSourceContent) || latestTemplate?.name || "智能排版"
+      const sections = splitPlainTextIntoSections(normalizedSourceContent || reportTitle)
+      const html = prepareOutputHtml(buildStyle(latestTemplateId, {
+        title: reportTitle,
+        subtitle: normalizedCustomInstructions || latestTemplate?.description || "",
+        sections,
+        sourceLabel: typeof sourceLabel === "string" ? sourceLabel : "",
+        generatedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+      }))
+      const lintResult = lintOutputWorkshopHtml(html, { templateId: latestTemplateId })
+
+      console.info("【智能排版】本地模板生成完成:", latestTemplateId)
+      setGeneratedHtml(html)
+      saveSnapshot(html, reportTitle, latestTemplateId, normalizedCustomInstructions, normalizedSourceContent)
+      setStatus("done")
+      setBuildStageId("preview")
+      setProgressText("生成完成")
+      updateTelemetry({
+        phase: "done",
+        phaseLabel: "生成完成",
+        completedAt: Date.now(),
+        outputChars: html.length,
+        qualityChecked: true,
+        qualityFindingCount: lintResult.findings.length,
+        severeFindingCount: lintResult.severeFindings.length,
+        qualitySummary: summarizeLintResult(lintResult),
+      })
+      toast({ title: `${latestTemplate?.name || "模板"}生成完成` })
+
+      try {
+        await saveCachedOutput(html)
+      } catch (debugError) {
+        console.error("缓存写入失败:", debugError)
+      }
+    } catch (error) {
+      console.error("本地模板生成失败:", error)
+      setStatus("error")
+      setBuildStageId("preview")
+      setErrorMessage(error instanceof Error ? error.message : "模板生成失败，请稍后重试")
+      updateTelemetry({
+        phase: "error",
+        phaseLabel: "模板生成失败",
+        completedAt: Date.now(),
+      })
+      toast({
+        title: "模板生成失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      })
+    }
+  }, [
+    customInstructions,
+    saveSnapshot,
+    setGeneratedHtml,
+    sourceContent,
+    sourceLabel,
+    title,
+    updateTelemetry,
+  ])
+
   const generateCreativeOutput = React.useCallback(async () => {
     const latestTemplate = selectedTemplateRef.current
     const latestTemplateId = selectedTemplateIdRef.current
     if (isLocalWechatOutputTemplate(latestTemplate, latestTemplateId)) {
       console.warn("【智能排版】已拦截一键排版模板进入 AI 直绘，改用本地排版:", latestTemplateId)
       void generateLocalWechatOutput()
+      return
+    }
+    if (isLocalStyleOutputTemplate(latestTemplate, latestTemplateId)) {
+      console.warn("【智能排版】已拦截本地样式模板进入 AI 直绘，改用模板构建器:", latestTemplateId)
+      void generateLocalStyleOutput()
       return
     }
 
@@ -612,6 +731,7 @@ export function useOutputGeneration({
     }
   }, [
     customInstructions,
+    generateLocalStyleOutput,
     generateLocalWechatOutput,
     markAiChunkThrottled,
     markAiRequestStarted,
@@ -633,8 +753,12 @@ export function useOutputGeneration({
       void generateLocalWechatOutput()
       return
     }
+    if (isLocalStyleOutputTemplate(selectedTemplateRef.current, selectedTemplateIdRef.current)) {
+      void generateLocalStyleOutput()
+      return
+    }
     void generateCreativeOutput()
-  }, [generateCreativeOutput, generateLocalWechatOutput])
+  }, [generateCreativeOutput, generateLocalStyleOutput, generateLocalWechatOutput])
 
   const handleRefine = React.useCallback(async () => {
     const query = typeof refineQuery === "string" ? refineQuery.trim() : ""
@@ -851,6 +975,7 @@ export function useOutputGeneration({
     handleGenerate,
     handleRefine,
     generateLocalWechatOutput,
+    generateLocalStyleOutput,
     generateCreativeOutput,
   }
 }

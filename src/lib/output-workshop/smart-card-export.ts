@@ -128,6 +128,15 @@ function dropNestedDuplicateMatches(elements: HTMLElement[]): HTMLElement[] {
   })
 }
 
+function shouldTryCombinedCardSelectors(selectors: string[]): boolean {
+  return selectors.some((selector) =>
+    selector.includes("cover-container") ||
+    selector.includes("card-container") ||
+    selector.includes("data-redbook-card") ||
+    selector.includes("data-export-card")
+  )
+}
+
 /** 默认的卡片选择器级联（与原 getCardSliceLines 保持一致） */
 const DEFAULT_CARD_SELECTORS = [
   ".cover-container",
@@ -183,6 +192,13 @@ export function parseSmartCards(
 
   // Tier 1: 模板蓝图选择器
   if (blueprint?.cardSelectors?.length) {
+    const combinedCards = shouldTryCombinedCardSelectors(blueprint.cardSelectors)
+      ? tryCombinedSelectors(doc, blueprint.cardSelectors, head, bodyClass, bodyStyle, blueprint)
+      : []
+    if (combinedCards.length > 1) {
+      return { hasCards: true, cards: combinedCards, head, bodyClass, bodyStyle, detectionMethod: "blueprint", pagingMode }
+    }
+
     const cards = trySelectors(doc, blueprint.cardSelectors, head, bodyClass, bodyStyle, blueprint)
     if (cards.length > 1) {
       return { hasCards: true, cards, head, bodyClass, bodyStyle, detectionMethod: "blueprint", pagingMode }
@@ -239,6 +255,29 @@ function trySelectors(
   return []
 }
 
+function tryCombinedSelectors(
+  doc: Document,
+  selectors: string[],
+  head: string,
+  bodyClass: string,
+  bodyStyle: string,
+  blueprint?: ExportBlueprint
+): SmartCard[] {
+  const combinedSelector = selectors.join(",")
+  try {
+    const found = Array.from(doc.querySelectorAll(combinedSelector)).filter(
+      (el): el is HTMLElement => el instanceof HTMLElement
+    )
+    const valid = dropNestedDuplicateMatches(found).filter(isSemanticCardCandidate)
+    if (valid.length > 1) {
+      return valid.map((el, i) => buildStandaloneCardHtml(el, head, bodyClass, bodyStyle, i, combinedSelector, blueprint))
+    }
+  } catch {
+    // 组合选择器无效时回退到逐个选择器。
+  }
+  return []
+}
+
 /** 将一个 DOM 元素包装为自包含的 HTML 文档 */
 function buildStandaloneCardHtml(
   el: HTMLElement,
@@ -263,9 +302,46 @@ function buildStandaloneCardHtml(
 
   // 提取背景色
   const bg = resolveElementBackground(el)
+  const isRedbookCard = Boolean(
+    el.hasAttribute("data-redbook-card") ||
+    el.closest(".redbook-deck") ||
+    /\bredbook-output\b/.test(bodyClass)
+  )
 
   // 构建独立 HTML
   const cardHtml = el.outerHTML
+  const redbookAutoFitScript = isRedbookCard
+    ? `<script>
+      (function () {
+        function fitCardContent() {
+          document.querySelectorAll('.card-content').forEach(function (viewport) {
+            var scaleEl = viewport.querySelector('.card-content-scale');
+            if (!scaleEl) return;
+            scaleEl.style.transform = 'none';
+            scaleEl.style.width = '';
+            scaleEl.style.height = '';
+            var availableWidth = viewport.clientWidth;
+            var availableHeight = viewport.clientHeight;
+            var rect = scaleEl.getBoundingClientRect();
+            var contentWidth = Math.max(scaleEl.scrollWidth, rect.width);
+            var contentHeight = Math.max(scaleEl.scrollHeight, rect.height);
+            if (!availableWidth || !availableHeight || !contentWidth || !contentHeight) return;
+            var fitScale = Math.min(1, availableWidth / contentWidth, availableHeight / contentHeight);
+            scaleEl.style.width = (availableWidth / fitScale) + 'px';
+            scaleEl.style.transformOrigin = 'top left';
+            scaleEl.style.transform = 'scale(' + fitScale + ')';
+          });
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', fitCardContent, { once: true });
+        } else {
+          fitCardContent();
+        }
+        window.addEventListener('resize', fitCardContent);
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitCardContent).catch(function () {});
+      })();
+    </script>`
+    : ""
   const standalone =
     `<!DOCTYPE html><html><head>${head}\n` +
     `<style>
@@ -289,18 +365,25 @@ function buildStandaloneCardHtml(
         max-width: 100%;
         max-height: 100%;
       }
-      .lingmo-smart-card-export-root > .card-container,
-      .lingmo-smart-card-export-root > .cover-container,
+      body.redbook-output .lingmo-smart-card-export-root > .card-container,
+      body.redbook-output .lingmo-smart-card-export-root > .cover-container,
       .lingmo-smart-card-export-root > [data-redbook-card] {
-        width: 100% !important;
-        height: 100% !important;
-        min-height: 100% !important;
+        width: 1080px !important;
+        height: 1440px !important;
+        min-height: 1440px !important;
+        max-width: none !important;
+        max-height: none !important;
         overflow: hidden !important;
       }
       .lingmo-smart-card-export-root .card-inner,
       .lingmo-smart-card-export-root .cover-inner {
-        max-width: 100% !important;
-        max-height: 100% !important;
+        width: 100% !important;
+        height: 100% !important;
+      }
+      .lingmo-smart-card-export-root .card-content,
+      .lingmo-smart-card-export-root .card-content-scale {
+        opacity: 1 !important;
+        visibility: visible !important;
       }
       .lingmo-smart-card-export-root .slide,
       .lingmo-smart-card-export-root .deck-slide,
@@ -317,7 +400,7 @@ function buildStandaloneCardHtml(
         height: 100% !important;
       }
     </style></head>` +
-    `<body class="${bodyClass}"><div class="lingmo-smart-card-export-root">${cardHtml}</div></body></html>`
+    `<body class="${bodyClass}"><div class="lingmo-smart-card-export-root">${cardHtml}</div>${redbookAutoFitScript}</body></html>`
 
   return {
     html: standalone,
@@ -325,7 +408,7 @@ function buildStandaloneCardHtml(
     index,
     bg,
     matchedBy,
-    exportMode: normalizePagingMode(blueprint?.pagingMode),
+    exportMode: isRedbookCard ? "auto-fit" : normalizePagingMode(blueprint?.pagingMode),
     dynamicMaxHeight: blueprint?.dynamicMaxHeight,
   }
 }
