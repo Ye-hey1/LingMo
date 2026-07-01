@@ -336,6 +336,8 @@ try {
   // 导入我们要测试的模块
   const researchModule = await importTsModule('src/lib/research/deep-research.ts')
   const { runDeepResearch, searchProviderRegistry, performCrossVerification } = researchModule
+  const sessionStoreModule = await importTsModule('src/lib/research/session-store.ts')
+  const { isUnfinishedResearchSession } = sessionStoreModule
 
   // 1. 验证 Tavily 搜索熔断降级机制
   console.log('--- 开始测试 1：Tavily 熔断降级机制 ---')
@@ -447,6 +449,45 @@ try {
   // 检查恢复后的最终学习点和来源
   assert.equal(resumeResult.learnings.includes('旧学习点'), true, '应该保留旧有的学习点')
   assert.equal(resumeResult.session.sources.some(s => s.title === '旧来源'), true, '应该保留旧有的来源列表')
+  assert.equal(mockSessionDb[sessionId].status, 'completed', '恢复完成后应该把 Session 标记为 completed')
+  assert.equal(mockSessionDb[sessionId].pendingQueries.length, 0, '恢复完成后 pending 队列应该清空')
+
+  const writingCheckpoint = {
+    id: 'writing-checkpoint',
+    query: '断在写报告阶段的任务',
+    strategy: 'technical',
+    status: 'failed',
+    stage: 'writing',
+    startedAt: new Date().toISOString(),
+    visitedUrls: [],
+    sources: [{ id: 'S1', title: '来源', url: 'https://example.com', engine: 'web', credibilityScore: 0.8, retrievedAt: '' }],
+    evidences: [{ id: 'E1', sourceId: 'S1', sourceUrl: 'https://example.com', claim: '事实', relevanceScore: 0.9, confidence: 'medium' }],
+    learnings: ['已有发现'],
+    pendingQueries: [],
+    activeQueries: [],
+    currentDepth: 0,
+    totalDepth: 1,
+    currentBreadth: 0,
+    totalBreadth: 1,
+  }
+  assert.equal(isUnfinishedResearchSession(writingCheckpoint), true, '断在 writing/verifying 且没有 pending 队列时也应该可恢复')
+
+  mockSessionDb['active-query-checkpoint'] = {
+    ...writingCheckpoint,
+    id: 'active-query-checkpoint',
+    stage: 'searching',
+    status: 'running',
+    pendingQueries: [{ query: 'queued query', researchGoal: 'queued goal', depth: 1, breadth: 1 }],
+    activeQueries: [{ query: 'active query', researchGoal: 'active goal', depth: 1, breadth: 1 }],
+    completedQueries: 2,
+    totalQueries: 4,
+  }
+  const activeResumeResult = await runDeepResearch({
+    query: '断在搜索阶段的任务',
+    sessionId: 'active-query-checkpoint',
+  })
+  assert.equal(activeResumeResult.learnings.includes('已有发现'), true, '恢复 activeQueries 时应该保留已有发现')
+  assert.ok(mockSessionDb['active-query-checkpoint'].completedQueries >= 4, '恢复时应该把 activeQueries 重新并入执行队列')
   console.log('✅ 测试 3：断点续传与持久化状态机成功通过。')
 
   // 4. 验证统一的 Event Bus 发射与质量评分输出
@@ -498,13 +539,11 @@ try {
     buildUniqueResearchReportTarget,
     normalizeResearchReportTitle,
     formatResearchReportDate,
-    formatYamlScalar,
   } = reportFileModule
 
   assert.equal(formatResearchReportDate(new Date('2026-06-07T12:00:00Z')), '20260607', '日期格式应为 YYYYMMDD')
   assert.equal(normalizeResearchReportTitle('直接开始研究 AI Agent: 记忆/图谱?', ''), 'AI Agent_ 记忆_图谱', '文件名标题应清理控制词和非法字符')
   assert.equal(normalizeResearchReportTitle('针对用户"转型AI产品经理的个人学习路线', ''), '针对用户_转型AI产品经理的个人学习路线', 'Windows 双引号应从研究报告文件名中清理')
-  assert.equal(formatYamlScalar('AI "Research"'), '"AI \\"Research\\""', 'YAML 标量应安全转义')
 
   const target = await buildUniqueResearchReportTarget({
     query: 'AI Agent',
@@ -513,6 +552,7 @@ try {
   })
   assert.equal(target.fileName, 'AI Agent-20260607-2.md', '同日同题重名时应追加序号')
   assert.equal(target.sessionFileName, 'AI Agent-20260607-2.research.json', 'Session 文件应与报告文件同名')
+  assert.equal(target.relativeSessionFilePath, 'research/.sessions/AI Agent-20260607-2.research.json', 'Session sidecar 应放入隐藏子目录，避免污染报告列表')
 
   const quotedTarget = await buildUniqueResearchReportTarget({
     query: '针对用户"转型AI产品经理的个人学习路线',

@@ -51,7 +51,6 @@ import {
 } from "@/lib/research/progress-status"
 import {
   buildUniqueResearchReportTarget,
-  formatYamlScalar,
 } from "@/lib/research/report-file"
 import type { Chat } from "@/db/chats"
 import { toast } from "@/hooks/use-toast"
@@ -366,10 +365,19 @@ function formatResearchClarificationMessage(originalQuery: string, questions: st
 function formatResearchResumeMessage(session: DeepResearchSessionSummary) {
   const started = new Date(session.startedAt)
   const startedText = Number.isNaN(started.getTime()) ? session.startedAt : started.toLocaleString()
+  const stageText = session.stage
+    ? `**上次阶段：** ${session.stage}`
+    : ''
+  const currentQueryText = session.currentQuery
+    ? `**断点位置：** ${session.currentQuery}`
+    : ''
   const meta = encodeResearchResumeData({
     sessionId: session.id,
     query: session.query,
     startedAt: session.startedAt,
+    updatedAt: session.updatedAt,
+    currentStage: session.stage,
+    currentQuery: session.currentQuery,
     pendingQueriesCount: session.pendingQueriesCount,
     sourcesCount: session.sourcesCount,
     evidencesCount: session.evidencesCount,
@@ -380,12 +388,89 @@ function formatResearchResumeMessage(session: DeepResearchSessionSummary) {
     '',
     `**主题：** ${session.query}`,
     `**开始时间：** ${startedText}`,
+    stageText,
+    currentQueryText,
     `**剩余查询：** ${session.pendingQueriesCount}`,
     `**已找到来源：** ${session.sourcesCount}`,
     `**已提取证据：** ${session.evidencesCount}`,
     '',
     '点击下方「继续研究」按钮，或输入「继续研究」可从断点恢复。若要新建研究，请发送新主题并包含「直接开始研究」。',
   ].join('\n')
+}
+
+function formatResearchInterruptedMessage(input: {
+  sessionId?: string
+  query: string
+  startedAt: number
+  reason?: string
+}) {
+  if (!input.sessionId) {
+    return '深度研究已停止。'
+  }
+
+  const startedAt = new Date(input.startedAt).toISOString()
+  const meta = encodeResearchResumeData({
+    sessionId: input.sessionId,
+    query: input.query,
+    startedAt,
+    pendingQueriesCount: 1,
+    sourcesCount: 0,
+    evidencesCount: 0,
+  })
+
+  return [
+    meta,
+    input.reason ? '## 深度研究已保存断点' : '## 深度研究已中断',
+    '',
+    `**主题：** ${input.query}`,
+    input.reason ? `**原因：** ${input.reason}` : '',
+    '',
+    '已保存当前断点。点击下方「继续研究」按钮，或输入「继续研究」从断点恢复。',
+  ].filter(Boolean).join('\n')
+}
+
+function normalizeResearchTopicText(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function getResearchTopicTokens(text: string) {
+  const normalized = normalizeResearchTopicText(text)
+  const latinTokens = normalized.match(/[a-z0-9]{2,}/g) || []
+  const cjkTokens = normalized.match(/[\p{Script=Han}]{2,}/gu) || []
+  return new Set([...latinTokens, ...cjkTokens].filter(token => token.length >= 2))
+}
+
+function isSameResearchTopic(a: string, b: string) {
+  const normalizedA = normalizeResearchTopicText(a)
+  const normalizedB = normalizeResearchTopicText(b)
+  if (!normalizedA || !normalizedB) return false
+  if (normalizedA === normalizedB) return true
+  if (normalizedA.length >= 12 && normalizedB.includes(normalizedA)) return true
+  if (normalizedB.length >= 12 && normalizedA.includes(normalizedB)) return true
+
+  const aTokens = getResearchTopicTokens(normalizedA)
+  const bTokens = getResearchTopicTokens(normalizedB)
+  if (aTokens.size === 0 || bTokens.size === 0) return false
+
+  let overlap = 0
+  for (const token of aTokens) {
+    if (bTokens.has(token)) {
+      overlap += 1
+    }
+  }
+
+  return overlap / Math.min(aTokens.size, bTokens.size) >= 0.6
+}
+
+function stripResearchDirectStartWords(text: string) {
+  return text
+    .replace(/直接开始研究|直接研究|开始研究|跳过|不用问|no questions/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function trimResearchLocalText(text: string, limit = 12000) {
@@ -646,15 +731,19 @@ export const ChatSend = forwardRef<{
     }
   }
 
-  async function getLatestUnfinishedResearchSession(): Promise<DeepResearchSessionSummary | null> {
-    const sessions = await listUnfinishedResearchSessions(1)
+  async function getLatestUnfinishedResearchSession(query?: string): Promise<DeepResearchSessionSummary | null> {
+    const sessions = await listUnfinishedResearchSessions(query ? 10 : 1)
+    if (query?.trim()) {
+      return sessions.find(session => isSameResearchTopic(session.query, query)) || null
+    }
     return sessions[0] || null
   }
 
   function notifyResearchResumeAvailable(session: DeepResearchSessionSummary, onResume: () => void) {
+    const stageText = session.stage ? `，阶段 ${session.stage}` : ''
     toast({
       title: '发现未完成的研究任务',
-      description: `还有 ${session.pendingQueriesCount} 个查询未完成，来源 ${session.sourcesCount} 个。点击下方按钮或输入「继续研究」恢复。`,
+      description: `还有 ${session.pendingQueriesCount} 个查询未完成${stageText}，来源 ${session.sourcesCount} 个。点击下方按钮或输入「继续研究」恢复。`,
       duration: 15000,
       action: (
         <ToastAction
@@ -1276,10 +1365,14 @@ export const ChatSend = forwardRef<{
     const startedAt = Date.now()
     let researchFinished = false
     let lastProgressSavedAt = 0
+    let activeSessionId = options.sessionId
     const researchRunId = `research-${placeholderMessage.id}-${startedAt}`
     const eventBus = createAgentEventBus({
       runId: researchRunId,
       onEvent: (event) => {
+        if (event.type === 'research.started' && typeof event.payload?.sessionId === 'string') {
+          activeSessionId = event.payload.sessionId
+        }
         useChatStore.getState().recordResearchEvent(event)
       },
     })
@@ -1289,7 +1382,7 @@ export const ChatSend = forwardRef<{
       activeChatId: placeholderMessage.id,
       query,
       startedAt,
-      sessionId: options.sessionId,
+      sessionId: activeSessionId,
     })
 
     try {
@@ -1298,7 +1391,7 @@ export const ChatSend = forwardRef<{
       await saveChat({
         ...placeholderMessage,
         content: encodeResearchProgressView(startingView),
-      }, false)
+      }, true)
 
       const result = await runDeepResearch({
         query,
@@ -1322,7 +1415,7 @@ export const ChatSend = forwardRef<{
 
           const now = Date.now()
           const shouldSaveImmediately = progress.stage === 'writing' || progress.stage === 'done'
-          if (!shouldSaveImmediately && now - lastProgressSavedAt < 700) {
+          if (!shouldSaveImmediately && now - lastProgressSavedAt < 1500) {
             return
           }
           lastProgressSavedAt = now
@@ -1330,12 +1423,13 @@ export const ChatSend = forwardRef<{
           void saveChat({
             ...placeholderMessage,
             content: formatResearchProgress(progress, query, startedAt),
-          }, false).catch(error => {
+          }, true).catch(error => {
             console.error('[DeepResearch] Failed to save progress:', error)
           })
         },
       })
       researchFinished = true
+      activeSessionId = result.session.id
 
       const evidenceBySource = new Map<string, string[]>()
       result.evidences.forEach((evidence) => {
@@ -1398,44 +1492,10 @@ export const ChatSend = forwardRef<{
           })
           const quality = result.quality
           const qualityNote = formatResearchQualityNote(result)
-          const frontmatter = [
-            '---',
-            `title: ${formatYamlScalar(reportTarget.title)}`,
-            `date: ${now.toISOString()}`,
-            'type: research_report',
-            `session_id: ${result.session.id}`,
-            `strategy: ${result.session.strategy}`,
-            typeof result.session.breadth === 'number' ? `research_breadth: ${result.session.breadth}` : '',
-            typeof result.session.depth === 'number' ? `research_depth: ${result.session.depth}` : '',
-            `sources_count: ${result.sources.length}`,
-            `evidence_count: ${result.evidences.length}`,
-            `visited_urls: ${result.visitedUrls.length}`,
-            result.session.cacheStats ? `search_cache_hits: ${result.session.cacheStats.hits}` : '',
-            result.session.cacheStats ? `search_cache_misses: ${result.session.cacheStats.misses}` : '',
-            result.session.cacheStats ? `search_cache_writes: ${result.session.cacheStats.writes}` : '',
-            result.session.cacheStats
-              ? `search_cache_hit_rate: ${(
-                  result.session.cacheStats.hits /
-                  Math.max(1, result.session.cacheStats.hits + result.session.cacheStats.misses)
-                ).toFixed(3)}`
-              : '',
-            result.session.providerHealth?.length
-              ? `search_provider_health: ${formatYamlScalar(JSON.stringify(result.session.providerHealth))}`
-              : '',
-            quality ? `quality_grade: ${quality.grade}` : '',
-            quality ? `quality_score: ${quality.overall}` : '',
-            quality ? `quality_source_diversity: ${quality.sourceDiversity}` : '',
-            quality ? `quality_evidence_strength: ${quality.evidenceStrength}` : '',
-            quality ? `quality_coverage: ${quality.coverage}` : '',
-            quality ? `quality_summary: ${formatYamlScalar(quality.summary)}` : '',
-            '---',
-          ].filter(Boolean)
           const reportFileContent = [
-            ...frontmatter,
-            '',
             qualityNote,
             result.report,
-          ].join('\n')
+          ].filter(Boolean).join('\n')
 
           // 确保 research 目录存在
           const dirOptions = await getFilePathOptions(researchDir)
@@ -1450,7 +1510,28 @@ export const ChatSend = forwardRef<{
           // 写入文件
           const fileOptions = await getFilePathOptions(reportTarget.relativeFilePath)
           const sessionOptions = await getFilePathOptions(reportTarget.relativeSessionFilePath)
-          const sessionJson = JSON.stringify(result.session, null, 2)
+          const sessionDir = reportTarget.relativeSessionFilePath.split('/').slice(0, -1).join('/')
+          const sessionDirOptions = await getFilePathOptions(sessionDir)
+          const sessionPayload = {
+            ...result.session,
+            report: {
+              title: reportTarget.title,
+              filePath: reportTarget.relativeFilePath,
+              savedAt: now.toISOString(),
+            },
+            mode: {
+              breadth: result.session.breadth,
+              depth: result.session.depth,
+            },
+          }
+          const sessionJson = JSON.stringify(sessionPayload, null, 2)
+          if (workspace.isCustom) {
+            const sessionDirExists = await exists(sessionDirOptions.path)
+            if (!sessionDirExists) await mkdir(sessionDirOptions.path, { recursive: true })
+          } else {
+            const sessionDirExists = await exists(sessionDirOptions.path, { baseDir: sessionDirOptions.baseDir })
+            if (!sessionDirExists) await mkdir(sessionDirOptions.path, { baseDir: sessionDirOptions.baseDir, recursive: true })
+          }
           if (workspace.isCustom) {
             await writeTextFile(fileOptions.path, reportFileContent)
             await writeTextFile(sessionOptions.path, sessionJson)
@@ -1499,13 +1580,20 @@ export const ChatSend = forwardRef<{
     } catch (error) {
       researchFinished = true
       eventBus.emit('research.error', {
-        sessionId: options.sessionId,
+        sessionId: activeSessionId,
         error: error instanceof Error ? error.message : String(error),
       }, { level: 'error' })
       await saveChat({
         ...placeholderMessage,
-        content: abortController.signal.aborted
-          ? t('record.chat.input.stopped')
+        content: activeSessionId
+          ? formatResearchInterruptedMessage({
+              sessionId: activeSessionId,
+              query,
+              startedAt,
+              reason: abortController.signal.aborted
+                ? undefined
+                : (error instanceof Error ? error.message : String(error)),
+            })
           : `## 深度研究失败\n\n${error instanceof Error ? error.message : String(error)}`,
       }, true)
 
@@ -1571,6 +1659,8 @@ export const ChatSend = forwardRef<{
 
     try {
       const wantsDirectStart = /直接开始研究|直接研究|开始研究|跳过|不用问|no questions/i.test(trimmedInstruction)
+      const directStartTopic = stripResearchDirectStartWords(trimmedInstruction)
+      const isBareDirectStart = wantsDirectStart && directStartTopic.length === 0
       const wantsResume = /继续研究|恢复研究|接着研究|继续.*研究|resume\s*research/i.test(trimmedInstruction)
 
       // ── 恢复研究：用户输入"继续研究"等关键词时，直接从断点恢复 ──
@@ -1600,7 +1690,11 @@ export const ChatSend = forwardRef<{
         return
       }
 
-      researchLocalContextResult = await buildResearchLocalContext(trimmedInstruction)
+      const effectiveResearchQuery = wantsDirectStart && directStartTopic
+        ? directStartTopic
+        : trimmedInstruction
+
+      researchLocalContextResult = await buildResearchLocalContext(effectiveResearchQuery)
       const { chats: currentChats } = useChatStore.getState()
       const previousResearchMessage = [...currentChats]
         .reverse()
@@ -1609,7 +1703,7 @@ export const ChatSend = forwardRef<{
 
       // 如果当前会话中找不到澄清消息，但用户想直接开始研究，
       // 尝试从最近的其他会话中查找（处理会话切换/重建的情况）
-      if (!pendingClarification && wantsDirectStart) {
+      if (!pendingClarification && isBareDirectStart) {
         try {
           const { getDb } = await import('@/db')
           const db = await getDb()
@@ -1674,26 +1768,32 @@ export const ChatSend = forwardRef<{
 
       await saveChat({
         ...placeholderMessage,
-        content: '正在梳理你的研究需求...',
+        content: wantsDirectStart ? '正在开始深度研究...' : '正在梳理你的研究需求...',
       }, false)
 
-      const clarification = await generateResearchClarification({
-        query: trimmedInstruction,
-        localContextBrief: researchLocalContextResult.localContext?.brief,
-        abortSignal: abortController.signal,
-      })
+      const clarification = wantsDirectStart
+        ? {
+            canStart: true,
+            questions: [],
+            researchBrief: effectiveResearchQuery,
+          }
+        : await generateResearchClarification({
+            query: effectiveResearchQuery,
+            localContextBrief: researchLocalContextResult.localContext?.brief,
+            abortSignal: abortController.signal,
+          })
 
       if (!clarification.canStart && clarification.questions.length > 0) {
         await saveChat({
           ...placeholderMessage,
-          content: formatResearchClarificationMessage(trimmedInstruction, clarification.questions),
+          content: formatResearchClarificationMessage(effectiveResearchQuery, clarification.questions),
         }, true)
         return
       }
 
       backgroundResearchStarted = true
-      const resumeSession = await getLatestUnfinishedResearchSession()
       const researchBrief = clarification.researchBrief || trimmedInstruction
+      const resumeSession = await getLatestUnfinishedResearchSession(researchBrief)
 
       if (resumeSession && !wantsDirectStart) {
         await saveChat({

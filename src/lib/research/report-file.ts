@@ -4,6 +4,7 @@ import { sanitizeFileName, sanitizeFilePath } from '@/lib/sync/filename-utils'
 
 const DEFAULT_RESEARCH_REPORT_TITLE = '研究报告'
 const MAX_RESEARCH_REPORT_TITLE_LENGTH = 70
+export const RESEARCH_SESSION_DIR = '.sessions'
 
 export type ResearchReportFileTarget = {
   title: string
@@ -73,10 +74,6 @@ export function buildResearchReportBaseName(query: string, report: string, date:
   }
 }
 
-export function formatYamlScalar(value: string) {
-  return JSON.stringify(value)
-}
-
 async function workspaceRelativePathExists(relativePath: string) {
   const workspace = await getWorkspacePath()
   const pathOptions = await getFilePathOptions(relativePath)
@@ -105,7 +102,7 @@ export async function buildUniqueResearchReportTarget(params: {
     const fileName = `${candidateBaseName}.md`
     const sessionFileName = `${candidateBaseName}.research.json`
     const relativeFilePath = sanitizeFilePath(`${researchDir}/${fileName}`)
-    const relativeSessionFilePath = sanitizeFilePath(`${researchDir}/${sessionFileName}`)
+    const relativeSessionFilePath = sanitizeFilePath(`${researchDir}/${RESEARCH_SESSION_DIR}/${sessionFileName}`)
 
     const [reportExists, sessionExists] = await Promise.all([
       workspaceRelativePathExists(relativeFilePath),
@@ -133,6 +130,6 @@ export async function buildUniqueResearchReportTarget(params: {
     fileName: `${fallbackBaseName}.md`,
     sessionFileName: `${fallbackBaseName}.research.json`,
     relativeFilePath: sanitizeFilePath(`${researchDir}/${fallbackBaseName}.md`),
-    relativeSessionFilePath: sanitizeFilePath(`${researchDir}/${fallbackBaseName}.research.json`),
+    relativeSessionFilePath: sanitizeFilePath(`${researchDir}/${RESEARCH_SESSION_DIR}/${fallbackBaseName}.research.json`),
   }
 }

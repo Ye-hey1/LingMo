@@ -7,6 +7,7 @@ import ts from 'typescript'
 
 const root = process.cwd()
 const researchDir = join(root, 'research')
+const researchSessionDirName = '.sessions'
 const defaultBenchmarkPath = join(root, 'scripts', 'research-benchmark-cases.json')
 
 function parseArgs(argv) {
@@ -21,7 +22,9 @@ function parseArgs(argv) {
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
-    if (arg === '--benchmark') {
+    if (arg === '--') {
+      continue
+    } else if (arg === '--benchmark') {
       args.benchmarkPath = resolve(argv[++index])
     } else if (arg === '--no-benchmark') {
       args.benchmarkPath = null
@@ -62,10 +65,21 @@ async function importHistoryIndexModule() {
 }
 
 function listSessionFiles(dir) {
+  const paths = [
+    dir,
+    join(dir, researchSessionDirName),
+  ]
+
   try {
-    return readdirSync(dir)
-      .filter(name => name.endsWith('.research.json'))
-      .map(name => join(dir, name))
+    return paths.flatMap(path => {
+      try {
+        return readdirSync(path)
+          .filter(name => name.endsWith('.research.json'))
+          .map(name => join(path, name))
+      } catch {
+        return []
+      }
+    })
   } catch {
     return []
   }

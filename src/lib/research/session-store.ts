@@ -10,6 +10,9 @@ export type ResearchResumeMeta = {
   sessionId: string
   query: string
   startedAt: string
+  updatedAt?: string
+  currentStage?: DeepResearchSessionStage
+  currentQuery?: string
   pendingQueriesCount: number
   sourcesCount: number
   evidencesCount: number
@@ -41,12 +44,21 @@ export interface DeepResearchSessionState {
   id: string
   query: string
   strategy: string
+  status?: DeepResearchSessionStatus
+  stage?: DeepResearchSessionStage
   startedAt: string
+  updatedAt?: string
+  completedAt?: string
+  lastError?: string
   visitedUrls: string[]
   sources: any[]
   evidences: any[]
   learnings: string[]
   pendingQueries: Array<{ query: string; researchGoal: string; depth: number; breadth: number }>
+  activeQueries?: Array<{ query: string; researchGoal: string; depth: number; breadth: number }>
+  completedQueries?: number
+  totalQueries?: number
+  currentQuery?: string
   currentDepth: number
   totalDepth: number
   currentBreadth: number
@@ -59,12 +71,19 @@ export interface DeepResearchSessionSummary {
   id: string
   query: string
   strategy: string
+  status?: DeepResearchSessionStatus
+  stage?: DeepResearchSessionStage
   startedAt: string
+  updatedAt?: string
+  currentQuery?: string
   pendingQueriesCount: number
   sourcesCount: number
   evidencesCount: number
   learningsCount: number
 }
+
+export type DeepResearchSessionStatus = 'running' | 'completed' | 'failed' | 'cancelled'
+export type DeepResearchSessionStage = 'initializing' | 'planning' | 'searching' | 'analyzing' | 'verifying' | 'writing' | 'done'
 
 // 缓存文件相对路径
 function getSessionRelativePath(sessionId: string): string {
@@ -97,7 +116,10 @@ export async function saveSessionState(state: DeepResearchSessionState): Promise
       }
     }
 
-    const data = JSON.stringify(state, null, 2)
+    const data = JSON.stringify({
+      ...state,
+      updatedAt: state.updatedAt || new Date().toISOString(),
+    }, null, 2)
     if (workspace.isCustom) {
       await writeTextFile(options.path, data)
     } else {
@@ -138,24 +160,51 @@ export async function listUnfinishedResearchSessions(limit = 5): Promise<DeepRes
 
     return states
       .filter((state): state is DeepResearchSessionState => {
-        return !!state && Array.isArray(state.pendingQueries) && state.pendingQueries.length > 0
+        return isUnfinishedResearchSession(state)
       })
       .map(state => ({
         id: state.id,
         query: state.query,
         strategy: state.strategy,
+        status: state.status,
+        stage: state.stage,
         startedAt: state.startedAt,
-        pendingQueriesCount: state.pendingQueries.length,
+        updatedAt: state.updatedAt,
+        currentQuery: state.currentQuery,
+        pendingQueriesCount: getRecoverableQueryCount(state),
         sourcesCount: state.sources?.length || 0,
         evidencesCount: state.evidences?.length || 0,
         learningsCount: state.learnings?.length || 0,
       }))
-      .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
+      .sort((a, b) => {
+        const aTime = new Date(a.updatedAt || a.startedAt).getTime()
+        const bTime = new Date(b.updatedAt || b.startedAt).getTime()
+        return bTime - aTime
+      })
       .slice(0, limit)
   } catch (error) {
     console.error('[DeepResearch] 无法列出未完成 Session:', error)
     return []
   }
+}
+
+function getRecoverableQueryCount(state: DeepResearchSessionState): number {
+  const pendingCount = Array.isArray(state.pendingQueries) ? state.pendingQueries.length : 0
+  const activeCount = Array.isArray(state.activeQueries) ? state.activeQueries.length : 0
+  return pendingCount + activeCount
+}
+
+export function isUnfinishedResearchSession(state: DeepResearchSessionState | null | undefined): state is DeepResearchSessionState {
+  if (!state) return false
+  if (state.status === 'completed' || state.stage === 'done' || state.completedAt) return false
+  if (getRecoverableQueryCount(state) > 0) return true
+  return (state.status === 'running' || state.status === 'failed' || state.status === 'cancelled')
+    && (
+      state.stage === 'initializing'
+      || state.stage === 'planning'
+      || state.stage === 'verifying'
+      || state.stage === 'writing'
+    )
 }
 
 /**

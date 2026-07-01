@@ -1,6 +1,7 @@
 import { exists, mkdir, readDir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
 import type { ResearchSession } from './deep-research'
+import { RESEARCH_SESSION_DIR } from './report-file'
 import {
   RESEARCH_HISTORY_INDEX_VERSION,
   buildResearchHistoryIndex,
@@ -112,23 +113,36 @@ export async function rebuildResearchHistoryIndexFromReports(researchDir = 'rese
     return emptyIndex
   }
 
-  const entries = workspace.isCustom
-    ? await readDir(dirOptions.path)
-    : await readDir(dirOptions.path, { baseDir: dirOptions.baseDir })
   const sessions: ResearchSession[] = []
 
-  for (const entry of entries) {
-    if (!entry.isFile || !entry.name.endsWith('.research.json')) {
-      continue
-    }
+  const readSessionFiles = async (relativeDir: string) => {
+    const options = await getFilePathOptions(relativeDir)
+    const existsDir = workspace.isCustom
+      ? await exists(options.path)
+      : await exists(options.path, { baseDir: options.baseDir })
 
-    try {
-      const relativePath = `${researchDir}/${entry.name}`
-      sessions.push(JSON.parse(await readWorkspaceText(relativePath)) as ResearchSession)
-    } catch (error) {
-      console.warn(`[ResearchHistory] Failed to read ${entry.name}:`, error)
+    if (!existsDir) return
+
+    const entries = workspace.isCustom
+      ? await readDir(options.path)
+      : await readDir(options.path, { baseDir: options.baseDir })
+
+    for (const entry of entries) {
+      if (!entry.isFile || !entry.name.endsWith('.research.json')) {
+        continue
+      }
+
+      const relativePath = `${relativeDir}/${entry.name}`
+      try {
+        sessions.push(JSON.parse(await readWorkspaceText(relativePath)) as ResearchSession)
+      } catch (error) {
+        console.warn(`[ResearchHistory] Failed to read ${relativePath}:`, error)
+      }
     }
   }
+
+  await readSessionFiles(researchDir)
+  await readSessionFiles(`${researchDir}/${RESEARCH_SESSION_DIR}`)
 
   const index = buildResearchHistoryIndex(sessions)
   await saveResearchHistoryIndex(index)

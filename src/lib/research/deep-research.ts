@@ -10,6 +10,7 @@ import { buildXiaoMoDeepResearchSystemPrompt } from '@/lib/ai/xiaomo-prompt'
 import { tavilyExtract, requestDuckDuckGoFallback, searchWeb, type TavilySearchDepth } from '@/lib/tavily'
 import type { AgentEventBus } from '@/lib/agent'
 import { saveSessionState, loadSessionState } from './session-store'
+import type { DeepResearchSessionStage, DeepResearchSessionState } from './session-store'
 import { assessResearchQuality, type ResearchQualityScore } from './research-enhancements'
 
 interface ProviderState {
@@ -80,6 +81,13 @@ export const searchProviderRegistry = new SearchProviderRegistry()
 type SerpQuery = {
   query: string
   researchGoal: string
+}
+
+type ResearchQueueTask = {
+  query: string
+  researchGoal: string
+  depth: number
+  breadth: number
 }
 
 type ProcessedSerpResult = {
@@ -1421,10 +1429,11 @@ export async function generateResearchClarification(params: {
     'You are preparing a deep research task. Before searching the web, decide what clarification is needed.',
     'Return strict JSON: {"canStart":false,"questions":["..."],"researchBrief":"..."}',
     'Rules:',
-    '- Ask 3 to 5 concrete questions in Simplified Chinese when the user request is broad, ambiguous, or missing audience/scope/output needs.',
-    '- Questions should help clarify role, goal, scope, application scenario, depth, deliverable format, and constraints.',
-    '- If the request is already sufficiently specific, set canStart=true and ask no questions.',
-    '- researchBrief should summarize the current research intent and known constraints.',
+    '- Default to canStart=true. A short topic, role, company, technology, paper, market, or event is enough to begin useful research.',
+    '- Ask clarification only when missing information would materially change the research direction or make the result misleading.',
+    '- If clarification is needed, ask 1 to 3 concrete questions in Simplified Chinese, not a long intake form.',
+    '- If the user asks to start directly, skip clarification and encode reasonable assumptions in researchBrief.',
+    '- researchBrief should summarize the current research intent, known constraints, and any explicit assumptions you will use.',
     '- If local context is provided, use it to infer scope and avoid asking questions that the local material already answers.',
     '',
     `<user_query>${params.query}</user_query>`,
@@ -1960,22 +1969,20 @@ function formatEvidenceForReport(sources: ResearchSource[], evidences: ResearchE
   }).join('\n\n')
 }
 
-function formatCompactReferenceSection(sources: ResearchSource[]) {
-  // Only keep top sources sorted by credibility, max 15
+function formatCompactReferenceSection(sources: ResearchSource[], limit = 15) {
   const topSources = sources
     .slice()
     .sort((a, b) => b.credibilityScore - a.credibilityScore)
-    .slice(0, 15)
+    .slice(0, limit)
 
   const rows = topSources.map((source, index) => {
     const published = source.publishedAt ? `，${source.publishedAt}` : ''
     const host = hostFromUrl(source.url)
     const label = source.title || host || source.url
-    const score = `（置信度 ${(source.credibilityScore * 100).toFixed(0)}%）`
     if (source.url.startsWith('local:')) {
-      return `${index + 1}. ${label}，本地来源${published} ${score}`
+      return `${index + 1}. ${label}，本地来源${published}`
     }
-    return `${index + 1}. [${label}](${source.url})${host ? `，${host}` : ''}${published} ${score}`
+    return `${index + 1}. [${label}](${source.url})${host ? `，${host}` : ''}${published}`
   })
 
   const omittedCount = sources.length - topSources.length
@@ -1987,7 +1994,7 @@ function formatCompactReferenceSection(sources: ResearchSource[]) {
     '## 参考来源',
     '',
     '<details>',
-    `<summary>📊 点击展开 ${topSources.length} 个核心来源${omittedCount > 0 ? `（共 ${sources.length} 个）` : ''}</summary>`,
+    `<summary>展开 ${topSources.length} 个核心来源${omittedCount > 0 ? `（共 ${sources.length} 个）` : ''}</summary>`,
     '',
     ...rows,
     ...omittedNote,
@@ -1996,59 +2003,98 @@ function formatCompactReferenceSection(sources: ResearchSource[]) {
   ].join('\n')
 }
 
-function appendFallbackSourceSection(report: string, sources: ResearchSource[]) {
+function appendFallbackSourceSection(report: string, sources: ResearchSource[], limit = 15) {
   if (report.includes('## 参考来源') || report.includes('## 来源') || sources.length === 0) {
     return report.trim()
   }
 
-  return `${report.trim()}\n\n${formatCompactReferenceSection(sources)}`
+  return `${report.trim()}\n\n${formatCompactReferenceSection(sources, limit)}`
 }
 
-function formatEvidenceAppendix(sources: ResearchSource[], evidences: ResearchEvidence[]) {
-  if (evidences.length === 0) {
-    return ''
+type ResearchReportProfile = {
+  id: 'quick' | 'standard' | 'deep'
+  label: string
+  targetLength: string
+  sourceLimit: number
+  structure: string[]
+  guidance: string[]
+}
+
+function getResearchReportProfile(input: {
+  breadth: number
+  depth: number
+  strategy: ResearchStrategyConfig
+}): ResearchReportProfile {
+  if (input.depth <= 1 && input.breadth <= 2) {
+    return {
+      id: 'quick',
+      label: '快速',
+      targetLength: '900-1400 Chinese characters unless evidence is thin.',
+      sourceLimit: 8,
+      structure: [
+        '# {report title}',
+        '## 一句话结论',
+        '## 关键发现',
+        '## 必要背景',
+        '## 证据与不确定性',
+        '## 参考来源',
+      ],
+      guidance: [
+        'Prioritize the answer and the highest-value facts.',
+        'Use one compact table only when comparison is useful.',
+        'Keep references short and only include the most important sources.',
+      ],
+    }
   }
 
-  // Only keep high/medium confidence evidences, sorted by relevance, max 20
-  const filteredEvidences = evidences
-    .filter(ev => ev.confidence !== 'low')
-    .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, 20)
-
-  if (filteredEvidences.length === 0) {
-    return ''
+  if (input.depth >= 4 || input.breadth >= 6) {
+    return {
+      id: 'deep',
+      label: '深入',
+      targetLength: '3000-5000 Chinese characters, with depth proportional to evidence quality.',
+      sourceLimit: 20,
+      structure: [
+        '# {report title}',
+        '## 执行摘要',
+        '## 研究范围与方法',
+        '## 背景与问题定义',
+        '## 核心发现',
+        '## 分主题深入分析',
+        '## 对比、分歧与证据强度',
+        '## 影响、风险与后续问题',
+        '## 结论',
+        '## 参考来源',
+      ],
+      guidance: [
+        'Use subheadings under the deep-analysis section when the topic naturally splits into branches.',
+        'Include comparison tables for actors, products, timelines, or claims when useful.',
+        'Call out disagreements and single-source claims plainly.',
+      ],
+    }
   }
 
-  const rows = filteredEvidences.map(ev => {
-    const source = sources.find(s => s.id === ev.sourceId)
-    const sourceTitle = source ? source.title : '未知来源'
-    const sourceRef = ev.sourceUrl.startsWith('local:')
-      ? `${sourceTitle}（本地来源）`
-      : `[${sourceTitle}](${ev.sourceUrl})`
-    const confidenceEmoji = ev.confidence === 'high' ? '🟢' : '🟡'
-    return `| ${confidenceEmoji} ${ev.confidence.toUpperCase()} | ${ev.claim.slice(0, 80)}${ev.claim.length > 80 ? '…' : ''} | ${sourceRef} |`
-  })
-
-  const omittedCount = evidences.length - filteredEvidences.length
-  const omittedNote = omittedCount > 0
-    ? [``, `> 共 ${evidences.length} 条证据，展示置信度中/高的前 ${filteredEvidences.length} 条。`]
-    : []
-
-  return [
-    '## 附录：证据索引',
-    '',
-    '以下内容用于追溯事实依据，默认折叠。',
-    '',
-    '<details>',
-    `<summary>📋 点击展开 ${filteredEvidences.length} 条核心证据</summary>`,
-    '',
-    '| 置信度 | 事实主张 | 引用来源 |',
-    '|---|---|---|',
-    ...rows,
-    ...omittedNote,
-    '',
-    '</details>',
-  ].join('\n')
+  return {
+    id: 'standard',
+    label: '标准',
+    targetLength: '1800-3000 Chinese characters unless evidence is thin.',
+    sourceLimit: 15,
+    structure: [
+      '# {report title}',
+      '## 摘要',
+      '## 研究范围',
+      '## 关键发现',
+      '## 背景与现状',
+      '## 核心分析',
+      '## 不确定性与局限',
+      '## 结论与建议',
+      '## 参考来源',
+    ],
+    guidance: [
+      'Balance readability and evidence density.',
+      'Use tables for comparison-heavy sections.',
+      'Keep the main body focused on synthesis, not source-by-source summaries.',
+    ],
+  }
 }
 
 export async function runDeepResearch(params: {
@@ -2061,55 +2107,137 @@ export async function runDeepResearch(params: {
   localContext?: ResearchLocalContext
   eventBus?: AgentEventBus
 }): Promise<DeepResearchResult> {
-  const startedAt = new Date().toISOString()
+  const runStartedAt = new Date().toISOString()
   const localContextPrompt = formatLocalContextForPrompt(params.localContext)
   const localResearchInputs = createLocalResearchInputs(params.localContext)
-  const strategyId = await classifyResearchIntent({
+  const cacheStats = createResearchSearchCacheStats()
+
+  let sessionId = params.sessionId || createResearchId()
+  let savedState: DeepResearchSessionState | null = null
+  if (params.sessionId) {
+    savedState = await loadSessionState(params.sessionId)
+    if (savedState) {
+      sessionId = savedState.id
+    }
+  }
+
+  if (!savedState) {
+    await saveSessionState({
+      id: sessionId,
+      query: params.query,
+      strategy: 'comprehensive',
+      status: 'running',
+      stage: 'initializing',
+      startedAt: runStartedAt,
+      visitedUrls: [],
+      sources: localResearchInputs.sources,
+      evidences: localResearchInputs.evidences,
+      learnings: localResearchInputs.learnings,
+      pendingQueries: [],
+      activeQueries: [],
+      completedQueries: 0,
+      totalQueries: 0,
+      currentQuery: params.query,
+      currentDepth: 0,
+      totalDepth: DEFAULT_DEPTH,
+      currentBreadth: 0,
+      totalBreadth: DEFAULT_BREADTH,
+      cacheStats: snapshotSearchCacheStats(cacheStats),
+    })
+  }
+
+  const strategy = researchStrategyRegistry.get(savedState?.strategy || await classifyResearchIntent({
     query: params.query,
     localContextBrief: localContextPrompt,
     abortSignal: params.abortSignal,
-  })
-  const strategy = researchStrategyRegistry.get(strategyId)
-  const defaultBreadth = clampInteger(params.breadth, strategy.breadth || DEFAULT_BREADTH, 1, 6)
-  const defaultDepth = clampInteger(params.depth, strategy.depth || DEFAULT_DEPTH, 1, 4)
+  }))
+  const defaultBreadth = clampInteger(params.breadth, savedState?.totalBreadth || strategy.breadth || DEFAULT_BREADTH, 1, 6)
+  const defaultDepth = clampInteger(params.depth, savedState?.totalDepth || strategy.depth || DEFAULT_DEPTH, 1, 4)
   const providers = await buildSearchProviders()
-  const cacheStats = createResearchSearchCacheStats()
   const getProviderHealth = () => searchProviderRegistry.snapshot(providers.map(provider => provider.name))
+  const startedAt = savedState?.startedAt || runStartedAt
 
-  let sessionId = params.sessionId || createResearchId()
   let allLearnings: string[] = []
   let allUrls: string[] = []
   let allSources: ResearchSource[] = []
   let allEvidences: ResearchEvidence[] = []
-  let pendingQueries: Array<{ query: string; researchGoal: string; depth: number; breadth: number }> = []
+  let pendingQueries: ResearchQueueTask[] = []
+  let activeQueries: ResearchQueueTask[] = []
   let localSourcesCount = localResearchInputs.sources.length
+  let completedQueriesCount = 0
+  let totalQueriesCount = 0
+  let lastStage: DeepResearchSessionStage = savedState?.stage || 'initializing'
+  let lastCurrentQuery = savedState?.currentQuery || ''
 
-  // 尝试加载 Session 状态
-  if (params.sessionId) {
-    const savedState = await loadSessionState(params.sessionId)
-    if (savedState) {
-      sessionId = savedState.id
-      allLearnings = savedState.learnings || []
-      allUrls = savedState.visitedUrls || []
-      allSources = savedState.sources || []
-      allEvidences = savedState.evidences || []
-      pendingQueries = savedState.pendingQueries || []
-      localSourcesCount = allSources.filter(source => source.engine.startsWith('local:')).length
-      if (savedState.cacheStats) {
-        cacheStats.hits = savedState.cacheStats.hits || 0
-        cacheStats.misses = savedState.cacheStats.misses || 0
-        cacheStats.writes = savedState.cacheStats.writes || 0
-        cacheStats.bypasses = savedState.cacheStats.bypasses || 0
-      }
-      console.log(`[DeepResearch] Resumed from session ${sessionId}. Pending queries count: ${pendingQueries.length}`)
+  const checkpoint = async (stage: DeepResearchSessionStage, extras: Partial<DeepResearchSessionState> = {}) => {
+    lastStage = stage
+    if (typeof extras.currentQuery === 'string') {
+      lastCurrentQuery = extras.currentQuery
     }
+
+    await saveSessionState({
+      id: sessionId,
+      query: params.query,
+      strategy: strategy.id,
+      status: stage === 'done' ? 'completed' : 'running',
+      stage,
+      startedAt,
+      visitedUrls: uniqueStrings(allUrls),
+      sources: allSources,
+      evidences: allEvidences,
+      learnings: uniqueStrings(allLearnings),
+      pendingQueries,
+      activeQueries,
+      completedQueries: completedQueriesCount,
+      totalQueries: totalQueriesCount || completedQueriesCount + activeQueries.length + pendingQueries.length,
+      currentQuery: lastCurrentQuery,
+      currentDepth: activeQueries[0]?.depth || pendingQueries[0]?.depth || 0,
+      totalDepth: defaultDepth,
+      currentBreadth: activeQueries[0]?.breadth || pendingQueries[0]?.breadth || 0,
+      totalBreadth: defaultBreadth,
+      cacheStats: snapshotSearchCacheStats(cacheStats),
+      providerHealth: getProviderHealth(),
+      ...extras,
+    })
   }
 
-  // 若无可用 Session 则初始化任务队列
-  if (pendingQueries.length === 0) {
+  if (savedState) {
+    allLearnings = savedState.learnings || []
+    allUrls = savedState.visitedUrls || []
+    allSources = savedState.sources || []
+    allEvidences = savedState.evidences || []
+    pendingQueries = [
+      ...(savedState.activeQueries || []),
+      ...(savedState.pendingQueries || []),
+    ]
+    activeQueries = []
+    completedQueriesCount = savedState.completedQueries || 0
+    totalQueriesCount = Math.max(
+      savedState.totalQueries || 0,
+      completedQueriesCount + pendingQueries.length,
+    )
+    localSourcesCount = allSources.filter(source => source.engine.startsWith('local:')).length
+    if (savedState.cacheStats) {
+      cacheStats.hits = savedState.cacheStats.hits || 0
+      cacheStats.misses = savedState.cacheStats.misses || 0
+      cacheStats.writes = savedState.cacheStats.writes || 0
+      cacheStats.bypasses = savedState.cacheStats.bypasses || 0
+    }
+    console.log(`[DeepResearch] Resumed from session ${sessionId}. Stage: ${savedState.stage || 'unknown'}, pending: ${pendingQueries.length}`)
+  }
+
+  const shouldPlanQueries = !savedState || (
+    pendingQueries.length === 0
+    && !['verifying', 'writing'].includes(savedState.stage || '')
+  )
+
+  try {
+    if (shouldPlanQueries) {
     allSources = mergeSources(allSources, localResearchInputs.sources)
     allEvidences = remapEvidenceSources([...allEvidences, ...localResearchInputs.evidences], allSources)
     allLearnings = uniqueStrings([...allLearnings, ...localResearchInputs.learnings])
+
+      await checkpoint('initializing')
 
     params.onProgress?.({
       stage: 'initializing',
@@ -2140,6 +2268,8 @@ export async function runDeepResearch(params: {
       providerHealth: getProviderHealth(),
     })
 
+      await checkpoint('planning')
+
     const serpQueries = await generateSerpQueries({
       query: params.query,
       breadth: defaultBreadth,
@@ -2155,24 +2285,9 @@ export async function runDeepResearch(params: {
       depth: defaultDepth,
       breadth: defaultBreadth,
     }))
+      totalQueriesCount = pendingQueries.length
 
-    await saveSessionState({
-      id: sessionId,
-      query: params.query,
-      strategy: strategy.id,
-      startedAt,
-      visitedUrls: allUrls,
-      sources: allSources,
-      evidences: allEvidences,
-      learnings: allLearnings,
-      pendingQueries,
-      currentDepth: defaultDepth,
-      totalDepth: defaultDepth,
-      currentBreadth: defaultBreadth,
-      totalBreadth: defaultBreadth,
-      cacheStats: snapshotSearchCacheStats(cacheStats),
-      providerHealth: getProviderHealth(),
-    })
+      await checkpoint('searching')
   } else {
     params.eventBus?.emit('research.started', {
       query: params.query,
@@ -2181,19 +2296,23 @@ export async function runDeepResearch(params: {
       isResumed: true,
       breadth: defaultBreadth,
       depth: defaultDepth,
+        stage: savedState?.stage,
       cacheStats: snapshotSearchCacheStats(cacheStats),
       providerHealth: getProviderHealth(),
     })
   }
 
-  let completedQueriesCount = 0
-
   // 扁平任务循环，支持断点续传
   while (pendingQueries.length > 0) {
     params.abortSignal?.throwIfAborted()
 
-    const currentBatch = pendingQueries.slice(0, MAX_PARALLEL_SEARCHES)
+      const currentBatch: ResearchQueueTask[] = pendingQueries.slice(0, MAX_PARALLEL_SEARCHES)
     pendingQueries = pendingQueries.slice(MAX_PARALLEL_SEARCHES)
+      activeQueries = currentBatch
+      totalQueriesCount = Math.max(
+        totalQueriesCount,
+        completedQueriesCount + activeQueries.length + pendingQueries.length,
+      )
 
     const providerNames = providers.map(p => {
       if (searchProviderRegistry.isBroken(p.name)) {
@@ -2201,6 +2320,13 @@ export async function runDeepResearch(params: {
       }
       return p.name
     }).join(', ')
+      const currentBatchQuery = currentBatch.map(q => q.query).join(' | ')
+
+      await checkpoint('searching', {
+        currentQuery: currentBatchQuery,
+        currentDepth: currentBatch[0]?.depth || 1,
+        currentBreadth: currentBatch[0]?.breadth || 1,
+      })
 
     params.onProgress?.({
       stage: 'searching',
@@ -2208,9 +2334,9 @@ export async function runDeepResearch(params: {
       totalDepth: defaultDepth,
       currentBreadth: currentBatch[0]?.breadth || 1,
       totalBreadth: defaultBreadth,
-      currentQuery: currentBatch.map(q => q.query).join(' | '),
+        currentQuery: currentBatchQuery,
       completedQueries: completedQueriesCount,
-      totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+        totalQueries: totalQueriesCount,
       learningsCount: allLearnings.length,
       visitedUrlsCount: allUrls.length,
       providerStatus: providerNames,
@@ -2223,9 +2349,9 @@ export async function runDeepResearch(params: {
 
     params.eventBus?.emit('research.progress', {
       stage: 'searching',
-      currentQuery: currentBatch.map(q => q.query).join(' | '),
+        currentQuery: currentBatchQuery,
       completedQueries: completedQueriesCount,
-      totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+        totalQueries: totalQueriesCount,
       learningsCount: allLearnings.length,
       cacheStats: snapshotSearchCacheStats(cacheStats),
       providerHealth: getProviderHealth(),
@@ -2266,6 +2392,12 @@ export async function runDeepResearch(params: {
           params.eventBus?.emit('research.source_added', { source, sessionId })
         })
 
+          await checkpoint('searching', {
+            currentQuery: `定向爬取二级链接: ${task.query}`,
+            currentDepth: task.depth,
+            currentBreadth: task.breadth,
+          })
+
         // 定向爬取二级链接 (Deep Crawler)
         params.onProgress?.({
           stage: 'searching',
@@ -2275,7 +2407,7 @@ export async function runDeepResearch(params: {
           totalBreadth: defaultBreadth,
           currentQuery: `定向爬取二级链接: ${task.query}`,
           completedQueries: completedQueriesCount,
-          totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+            totalQueries: totalQueriesCount,
           learningsCount: allLearnings.length,
           visitedUrlsCount: allUrls.length,
           providerStatus: `${providerNames} | crawler`,
@@ -2322,6 +2454,12 @@ export async function runDeepResearch(params: {
     }
 
     if (batchItems.length > 0) {
+        await checkpoint('analyzing', {
+          currentQuery: batchItems.map(b => b.task.query).join(' | '),
+          currentDepth: currentBatch[0]?.depth || 1,
+          currentBreadth: currentBatch[0]?.breadth || 1,
+        })
+
       params.onProgress?.({
         stage: 'analyzing',
         currentDepth: currentBatch[0]?.depth || 1,
@@ -2330,7 +2468,7 @@ export async function runDeepResearch(params: {
         totalBreadth: defaultBreadth,
         currentQuery: batchItems.map(b => b.task.query).join(' | '),
         completedQueries: completedQueriesCount,
-        totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+          totalQueries: totalQueriesCount,
         learningsCount: allLearnings.length,
         visitedUrlsCount: allUrls.length,
         strategy: strategy.id,
@@ -2344,7 +2482,7 @@ export async function runDeepResearch(params: {
         stage: 'analyzing',
         currentQuery: batchItems.map(b => b.task.query).join(' | '),
         completedQueries: completedQueriesCount + currentBatch.length,
-        totalQueries: completedQueriesCount + currentBatch.length + pendingQueries.length,
+          totalQueries: totalQueriesCount,
         learningsCount: allLearnings.length,
         cacheStats: snapshotSearchCacheStats(cacheStats),
         providerHealth: getProviderHealth(),
@@ -2399,36 +2537,31 @@ export async function runDeepResearch(params: {
 
       if (followUpTasks.length > 0) {
         pendingQueries.push(...followUpTasks)
+          totalQueriesCount += followUpTasks.length
       }
     }
 
     completedQueriesCount += currentBatch.length
+      activeQueries = []
 
     allLearnings = uniqueStrings(allLearnings)
     allUrls = uniqueStrings(allUrls)
     allSources = mergeSources(allSources, [])
     allEvidences = remapEvidenceSources(allEvidences, allSources)
 
-    await saveSessionState({
-      id: sessionId,
-      query: params.query,
-      strategy: strategy.id,
-      startedAt,
-      visitedUrls: allUrls,
-      sources: allSources,
-      evidences: allEvidences,
-      learnings: allLearnings,
-      pendingQueries,
+      await checkpoint(pendingQueries.length > 0 ? 'searching' : 'verifying', {
       currentDepth: currentBatch[0]?.depth || 1,
-      totalDepth: defaultDepth,
       currentBreadth: currentBatch[0]?.breadth || 1,
-      totalBreadth: defaultBreadth,
-      cacheStats: snapshotSearchCacheStats(cacheStats),
-      providerHealth: getProviderHealth(),
     })
   }
 
   // 1. 证据交叉验证置信度重算 (Cross-Verification)
+    await checkpoint('verifying', {
+      currentQuery: '多源交叉验证与冲突检测',
+      currentDepth: 0,
+      currentBreadth: 0,
+    })
+
   params.onProgress?.({
     stage: 'verifying',
     currentDepth: 0,
@@ -2436,7 +2569,7 @@ export async function runDeepResearch(params: {
     currentBreadth: 0,
     totalBreadth: defaultBreadth,
     completedQueries: completedQueriesCount,
-    totalQueries: completedQueriesCount,
+      totalQueries: totalQueriesCount || completedQueriesCount,
     learningsCount: allLearnings.length,
     visitedUrlsCount: allUrls.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
@@ -2459,6 +2592,12 @@ export async function runDeepResearch(params: {
   allEvidences = verificationResult.evidences
   const verifiedProgressStats = buildProgressStats(allSources, allEvidences, localSourcesCount, verificationResult.stats)
 
+    await checkpoint('writing', {
+      currentQuery: '生成研究报告',
+      currentDepth: 0,
+      currentBreadth: 0,
+    })
+
   // 2. 生成最终报告
   params.onProgress?.({
     stage: 'writing',
@@ -2467,7 +2606,7 @@ export async function runDeepResearch(params: {
     currentBreadth: 0,
     totalBreadth: defaultBreadth,
     completedQueries: completedQueriesCount,
-    totalQueries: completedQueriesCount,
+      totalQueries: totalQueriesCount || completedQueriesCount,
     learningsCount: allLearnings.length,
     visitedUrlsCount: allUrls.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
@@ -2486,6 +2625,11 @@ export async function runDeepResearch(params: {
   })
 
   const learnings = allLearnings.slice(0, MAX_LEARNINGS_FOR_REPORT)
+  const reportProfile = getResearchReportProfile({
+    breadth: defaultBreadth,
+    depth: defaultDepth,
+    strategy,
+  })
   const report = await askText([
     'Write a substantial deep-research article in Markdown. It must read like a knowledgeable human analyst wrote it, not like AI-generated content.',
     'Your visible role is 小墨: wise, considerate, root-cause oriented, and clear enough that a non-expert can follow.',
@@ -2493,14 +2637,15 @@ export async function runDeepResearch(params: {
     '## Language & Strategy',
     '- Write in Simplified Chinese. Section headings use sentence case (e.g. "背景与发展" not "背景与发展概述").',
     `- Research strategy: ${strategy.label}. ${strategy.reportFocus}`,
+    `- Research mode: ${reportProfile.label}. Target length: ${reportProfile.targetLength}`,
     '',
-    '## Structure — Self-directed, NOT a fixed template',
-    '- Design the report structure yourself based on the topic and the evidence. Do NOT use a preset skeleton.',
-    '- The ONLY structural requirements:',
-    '  1. Open with a short orientation (1–2 paragraphs) on the question and why it matters.',
-    '  2. Core body MUST be ≥70% of total output. Develop arguments in depth with multiple sections and subsections.',
-    '  3. End with a compact reference section.',
-    '- Let the topic guide structure: chronological narrative, thematic decomposition, problem→solution arc, comparative review — choose what fits.',
+    '## Required Report Shape',
+    '- Output only the reader-facing Markdown report. Do not output YAML frontmatter, JSON, metadata keys, session IDs, cache stats, provider health, or raw evidence objects.',
+    '- Use this section plan as the default shape, but rename headings naturally for the topic:',
+    ...reportProfile.structure.map(item => `  - ${item}`),
+    '- The first visible line must be a Markdown H1 title, not metadata.',
+    '- The report must synthesize evidence; do not summarize each source one by one.',
+    ...reportProfile.guidance.map(item => `- ${item}`),
     '',
     '## Visual Richness',
     '- Include Mermaid diagrams (flowchart, sequence, timeline, mindmap) wherever they genuinely clarify a process, relationship, or timeline.',
@@ -2545,6 +2690,7 @@ export async function runDeepResearch(params: {
     '',
     '## Reference Section',
     '- End with a compact "参考来源" section in a folded <details> block, max 15 sources by credibility.',
+    `- In this mode, show at most ${reportProfile.sourceLimit} references in the reader-facing report.`,
     '- Keep references lightweight — they must not dominate the report.',
     '',
     `<user_query>${params.query}</user_query>`,
@@ -2572,14 +2718,7 @@ export async function runDeepResearch(params: {
     '</learnings>',
   ].join('\n'), params.abortSignal)
 
-  const finalReport = appendFallbackSourceSection(report, allSources)
-
-  // 整理并附加可折叠的证据索引，避免干扰正文阅读。
-  let appendedReport = finalReport.trim()
-  const evidenceAppendix = formatEvidenceAppendix(allSources, allEvidences)
-  if (evidenceAppendix) {
-    appendedReport += `\n\n${evidenceAppendix}`
-  }
+  const appendedReport = appendFallbackSourceSection(report, allSources, reportProfile.sourceLimit).trim()
 
   // 5. 广播研究结束
   const visitedUrls = uniqueStrings(allSources.map(source => source.url).concat(allUrls))
@@ -2612,6 +2751,16 @@ export async function runDeepResearch(params: {
   finalResult.quality = quality
   finalResult.session.quality = quality
 
+    await checkpoint('done', {
+      status: 'completed',
+      completedAt: session.completedAt,
+      currentQuery: '',
+      currentDepth: 0,
+      currentBreadth: 0,
+      activeQueries: [],
+      pendingQueries: [],
+    })
+
   params.onProgress?.({
     stage: 'done',
     currentDepth: 0,
@@ -2619,7 +2768,7 @@ export async function runDeepResearch(params: {
     currentBreadth: 0,
     totalBreadth: defaultBreadth,
     completedQueries: completedQueriesCount,
-    totalQueries: completedQueriesCount,
+      totalQueries: totalQueriesCount || completedQueriesCount,
     learningsCount: allLearnings.length,
     visitedUrlsCount: visitedUrls.length,
     providerStatus: providers.map(provider => provider.name).join(', '),
@@ -2646,4 +2795,36 @@ export async function runDeepResearch(params: {
   })
 
   return finalResult
+  } catch (error) {
+    const isAbortError = params.abortSignal?.aborted || (error instanceof Error && error.name === 'AbortError')
+    await saveSessionState({
+      id: sessionId,
+      query: params.query,
+      strategy: strategy.id,
+      status: isAbortError ? 'cancelled' : 'failed',
+      stage: lastStage,
+      startedAt,
+      updatedAt: new Date().toISOString(),
+      lastError: error instanceof Error ? error.message : String(error),
+      visitedUrls: uniqueStrings(allUrls),
+      sources: allSources,
+      evidences: allEvidences,
+      learnings: uniqueStrings(allLearnings),
+      pendingQueries: [
+        ...activeQueries,
+        ...pendingQueries,
+      ],
+      activeQueries: [],
+      completedQueries: completedQueriesCount,
+      totalQueries: totalQueriesCount || completedQueriesCount + activeQueries.length + pendingQueries.length,
+      currentQuery: lastCurrentQuery,
+      currentDepth: activeQueries[0]?.depth || pendingQueries[0]?.depth || 0,
+      totalDepth: defaultDepth,
+      currentBreadth: activeQueries[0]?.breadth || pendingQueries[0]?.breadth || 0,
+      totalBreadth: defaultBreadth,
+      cacheStats: snapshotSearchCacheStats(cacheStats),
+      providerHealth: getProviderHealth(),
+    })
+    throw error
+  }
 }
