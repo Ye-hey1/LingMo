@@ -142,6 +142,12 @@ try {
     isAutoRedbookTemplateId,
   } = await importTsModule('src/lib/output-workshop/social-redbook-builder.ts')
   const {
+    buildStyle,
+    hasStyleBuilder,
+    STYLE_BUILDERS,
+  } = await importTsModule('src/lib/output-workshop/styles/index.ts')
+  const {
+    isLocalStyleOutputTemplate,
     isLocalWechatOutputTemplate,
   } = await importTsModule('src/lib/output-workshop/template-routing.ts')
   const {
@@ -194,6 +200,8 @@ try {
   assert.match(templatesSource, /反 AI slop 规则/)
   assert.match(templatesSource, /assumptions、chosen philosophy、artifact type、content structure、known limitations/)
   assert.match(templateRoutingSource, /export function isLocalWechatOutputTemplate/)
+  assert.match(templateRoutingSource, /export function isLocalStyleOutputTemplate/)
+  assert.match(templateRoutingSource, /hasStyleBuilder\(id\)/)
   assert.match(templateRoutingSource, /template\?\.mode === "wechat"/)
   assert.match(templateRoutingSource, /isWechatStyleId\(id\)/)
   assert.match(templateRoutingSource, /id\.startsWith\("wechat-"\)/)
@@ -226,6 +234,31 @@ try {
   assert.equal(isLocalWechatOutputTemplate({ id: 'custom-wechat-preview', mode: 'creative', previewTone: 'wechat-article' }, 'custom-wechat-preview'), true)
   assert.equal(isLocalWechatOutputTemplate({ id: 'feature-wechat-copy', mode: 'creative', features: ['图文复制'] }, 'feature-wechat-copy'), true)
   assert.equal(isLocalWechatOutputTemplate({ id: 'creative-freeform', mode: 'creative' }, 'creative-freeform'), false)
+  const localStyleTemplateIds = Object.keys(STYLE_BUILDERS)
+  assert.ok(localStyleTemplateIds.includes('learning-mindmap'), 'mindmap template must have a local style builder')
+  assert.equal(hasStyleBuilder('learning-mindmap'), true)
+  for (const id of localStyleTemplateIds) {
+    assert.equal(
+      isLocalStyleOutputTemplate({ id, mode: id.startsWith('deck-') ? 'deck' : 'article' }, id),
+      true,
+      `${id} must be routed to its local style builder`
+    )
+  }
+  assert.equal(isLocalStyleOutputTemplate({ id: 'custom-ai-design', mode: 'creative' }, 'custom-ai-design'), false)
+  const mindmapHtml = buildStyle('learning-mindmap', {
+    title: 'AI产品经理发展史',
+    subtitle: '结构化脑图',
+    sourceLabel: '测试素材',
+    sections: [
+      { title: '起源', body: '- 技术土壤\n- 行业土壤\n- 人才断层' },
+      { title: '分化', body: '- AI产品经理\n- AI产品架构师' },
+    ],
+  })
+  assert.match(mindmapHtml, /mindmap-container/)
+  assert.match(mindmapHtml, /mindmap-svg/)
+  assert.match(mindmapHtml, /node-group/)
+  assert.match(mindmapHtml, /level-root/)
+  assert.match(mindmapHtml, /children-container/)
   assert.match(templatesSource, /iPhone 15 Pro bezel/)
   assert.match(templatesSource, /Playwright/)
   assert.match(templatesSource, /scripts\/export_deck_pptx\.mjs/)
@@ -471,7 +504,10 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.match(generationSource, /rebuildAutoRedbookIfNeeded/)
   assert.match(generationSource, /buildAutoRedbookHtmlFromSource/)
   assert.match(generationSource, /import \{ buildWechatArticle \} from "@\/lib\/output-workshop\/wechat-builder"/)
-  assert.match(generationSource, /import \{ isLocalWechatOutputTemplate \} from "@\/lib\/output-workshop\/template-routing"/)
+  assert.match(generationSource, /isLocalStyleOutputTemplate/)
+  assert.match(generationSource, /import \{ buildStyle \} from "@\/lib\/output-workshop\/styles"/)
+  assert.match(generationSource, /import \{ splitPlainTextIntoSections \} from "@\/lib\/output-workshop\/extraction"/)
+  assert.match(generationSource, /isLocalWechatOutputTemplate/)
   assert.match(generationSource, /generationRunIdRef/)
   assert.match(generationSource, /selectedTemplateRef/)
   assert.match(generationSource, /selectedTemplateIdRef/)
@@ -480,15 +516,22 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.match(generationSource, /已拦截一键排版模板进入 AI 直绘/)
   assert.doesNotMatch(generationSource, /localWechatGeneratorRef/)
   assert.match(generationSource, /const generateLocalWechatOutput = React\.useCallback/)
+  assert.match(generationSource, /const generateLocalStyleOutput = React\.useCallback/)
   assert.match(generationSource, /generationRunIdRef\.current \+= 1/)
   assert.match(generationSource, /abortRef\.current\?\.abort\(\)/)
   assert.match(generationSource, /buildWechatArticle\(\{/)
+  assert.match(generationSource, /buildStyle\(latestTemplateId/)
+  assert.match(generationSource, /splitPlainTextIntoSections/)
   assert.match(generationSource, /styleId: latestTemplateId/)
   assert.match(generationSource, /phase: "local-build"/)
   assert.match(generationSource, /isLocalWechatOutputTemplate\(latestTemplate, latestTemplateId\)/)
+  assert.match(generationSource, /isLocalStyleOutputTemplate\(latestTemplate, latestTemplateId\)/)
+  assert.match(generationSource, /已拦截本地样式模板进入 AI 直绘/)
   assert.match(generationSource, /isLocalWechatOutputTemplate\(selectedTemplateRef\.current, selectedTemplateIdRef\.current\)/)
+  assert.match(generationSource, /isLocalStyleOutputTemplate\(selectedTemplateRef\.current, selectedTemplateIdRef\.current\)/)
   assert.match(generationSource, /const isCurrentRun = \(\) => generationRunIdRef\.current === runId && !abortController\.signal\.aborted/)
   assert.match(generationSource, /void generateLocalWechatOutput\(\)/)
+  assert.match(generationSource, /void generateLocalStyleOutput\(\)/)
   assert.match(generationSource, /generateLocalWechatOutput,[\s\S]*?markAiChunkThrottled/)
   assert.match(generationSource, /toast\(\{ title: "一键排版完成" \}\)/)
   assert.match(generationSource, /function fetchOutputWorkshopAiStream/)
@@ -594,6 +637,17 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.match(smartCardExportSource, /function splitBySeparatorBoundaries/)
   assert.match(smartCardExportSource, /function splitByContentWeight/)
   assert.match(smartCardExportSource, /function applyAutoFitScale/)
+  assert.match(smartCardExportSource, /function shouldTryCombinedCardSelectors\(selectors: string\[\]\)/)
+  assert.match(smartCardExportSource, /function tryCombinedSelectors\(/)
+  assert.match(smartCardExportSource, /selectors\.join\(","\)/)
+  assert.match(smartCardExportSource, /tryCombinedSelectors\(doc, blueprint\.cardSelectors, head, bodyClass, bodyStyle, blueprint\)/)
+  assert.match(smartCardExportSource, /const isRedbookCard = Boolean\(/)
+  assert.match(smartCardExportSource, /el\.hasAttribute\("data-redbook-card"\)/)
+  assert.match(smartCardExportSource, /body\.redbook-output \.lingmo-smart-card-export-root > \.card-container/)
+  assert.match(smartCardExportSource, /width: 1080px !important/)
+  assert.match(smartCardExportSource, /height: 1440px !important/)
+  assert.match(smartCardExportSource, /redbookAutoFitScript/)
+  assert.match(smartCardExportSource, /exportMode: isRedbookCard \? "auto-fit"/)
   assert.match(smartCardExportSource, /"\.cover-container"/)
   assert.match(smartCardExportSource, /"\.card-container"/)
   assert.match(smartCardExportSource, /function getRenderViewport\(card: SmartCard, targetWidth: number, targetHeight: number\)/)
@@ -615,13 +669,38 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.doesNotMatch(workshopControlsSource, legacyRegex)
 
   assert.match(previewPanelSource, /REDBOOK_PREVIEW_GRID_STYLE_ID/)
+  assert.match(previewPanelSource, /REDBOOK_STANDALONE_PREVIEW_STYLE_ID/)
   assert.match(previewPanelSource, /function injectRedbookPreviewGridStyles/)
+  assert.match(previewPanelSource, /function injectRedbookStandalonePreviewStyles/)
+  assert.match(previewPanelSource, /function RedbookPreviewCard/)
   assert.match(previewPanelSource, /function RedbookCardWall/)
   assert.match(previewPanelSource, /parseSmartCards\(html, selectedTemplate\.exportBlueprint\)/)
-  assert.match(previewPanelSource, /grid-cols-1[\s\S]*sm:grid-cols-\[repeat\(2,minmax\(0,300px\)\)\]/)
+  assert.match(previewPanelSource, /const REDBOOK_SOURCE_CARD_WIDTH = 1080/)
+  assert.match(previewPanelSource, /const REDBOOK_SOURCE_CARD_HEIGHT = 1440/)
+  assert.match(previewPanelSource, /const REDBOOK_PREVIEW_CARD_WIDTH = 320/)
+  assert.match(previewPanelSource, /const REDBOOK_PREVIEW_CARD_HEIGHT = Math\.round\(REDBOOK_PREVIEW_CARD_WIDTH \* REDBOOK_SOURCE_CARD_HEIGHT \/ REDBOOK_SOURCE_CARD_WIDTH\)/)
+  assert.match(previewPanelSource, /const REDBOOK_PREVIEW_CARD_FRAME_WIDTH = REDBOOK_PREVIEW_CARD_WIDTH \+ 14/)
+  assert.match(previewPanelSource, /const REDBOOK_PREVIEW_CARD_FRAME_HEIGHT = REDBOOK_PREVIEW_CARD_HEIGHT \+ 14/)
+  assert.match(previewPanelSource, /const REDBOOK_PREVIEW_CARD_SCALE = REDBOOK_PREVIEW_CARD_WIDTH \/ REDBOOK_SOURCE_CARD_WIDTH/)
+  assert.doesNotMatch(previewPanelSource, /new ResizeObserver\(updateWidth\)/)
+  assert.match(previewPanelSource, /width: REDBOOK_PREVIEW_CARD_FRAME_WIDTH/)
+  assert.match(previewPanelSource, /minWidth: REDBOOK_PREVIEW_CARD_FRAME_WIDTH/)
+  assert.match(previewPanelSource, /height: REDBOOK_PREVIEW_CARD_FRAME_HEIGHT/)
+  assert.match(previewPanelSource, /minHeight: REDBOOK_PREVIEW_CARD_FRAME_HEIGHT/)
+  assert.match(previewPanelSource, /width: REDBOOK_PREVIEW_CARD_WIDTH/)
+  assert.match(previewPanelSource, /minWidth: REDBOOK_PREVIEW_CARD_WIDTH/)
+  assert.match(previewPanelSource, /height: REDBOOK_PREVIEW_CARD_HEIGHT/)
+  assert.match(previewPanelSource, /minHeight: REDBOOK_PREVIEW_CARD_HEIGHT/)
+  assert.match(previewPanelSource, /aspectRatio: "3 \/ 4"/)
+  assert.match(previewPanelSource, /transform: `scale\(\$\{REDBOOK_PREVIEW_CARD_SCALE\}\)`/)
+  assert.match(previewPanelSource, /gridTemplateColumns: `repeat\(auto-fit, \$\{REDBOOK_PREVIEW_CARD_FRAME_WIDTH\}px\)`/)
+  assert.match(previewPanelSource, /buildPreviewSrcDoc\(card\.html, templateOverrides, selectedTemplateId, \{ applyOverrides: false \}\)/)
+  assert.match(previewPanelSource, /sandbox="allow-scripts allow-same-origin"/)
+  assert.match(previewPanelSource, /pointer-events-none block border-0 bg-white/)
   assert.match(previewPanelSource, /智能排版导出源视口/)
   assert.match(previewPanelSource, /grid-template-columns: repeat\(2, max-content\) !important/)
   assert.match(previewPanelSource, /--lingmo-redbook-preview-zoom: 0\.46/)
+  assert.match(previewPanelSource, /--lingmo-redbook-standalone-scale: 1/)
   assert.match(previewPanelSource, /isRedbookPreview[\s\S]*?min-h-full w-full max-w-\[1180px\]/)
 
   assert.match(utilsTemplatePreviewSource, /overflow: auto !important/)
