@@ -446,11 +446,15 @@ pre.hljs {
 /* Mermaid 画布容器 */
 .mermaid-canvas-container {
   position: relative;
+  display: block;
   margin: 1rem 0;
   border-radius: 8px;
   overflow: visible;
   background: hsl(var(--background));
   user-select: none;
+  isolation: isolate;
+  touch-action: pan-y;
+  outline: none;
 }
 
 .mermaid-canvas-render {
@@ -461,6 +465,12 @@ pre.hljs {
   overflow: hidden;
   padding: 1rem;
   border-radius: inherit;
+  cursor: grab;
+  touch-action: none;
+}
+
+.mermaid-canvas-render:active {
+  cursor: grabbing;
 }
 
 .mermaid-canvas-viewport {
@@ -508,45 +518,62 @@ pre.hljs {
 /* 控制栏 */
 .mermaid-canvas-controls {
   position: absolute;
-  top: 2px;
-  right: 6px;
-  transform: translateY(-100%);
-  display: flex;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: nowrap;
   gap: 1px;
   padding: 2px;
   background: hsl(var(--background) / 0.68);
   backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   border: 1px solid hsl(var(--border) / 0.45);
   border-radius: 7px;
   box-shadow: none;
-  opacity: 0;
+  opacity: 0.72;
+  pointer-events: auto;
+  white-space: nowrap;
   transition: opacity 0.16s ease, background-color 0.16s ease;
   z-index: 10;
 }
 
-.mermaid-canvas-container:hover .mermaid-canvas-controls {
-  opacity: 0.86;
+.mermaid-canvas-container:hover .mermaid-canvas-controls,
+.mermaid-canvas-container:focus-within .mermaid-canvas-controls {
+  opacity: 0.96;
+  background: hsl(var(--background) / 0.9);
 }
 
 .mermaid-canvas-btn {
-  display: flex;
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
   width: 22px;
   height: 22px;
+  min-width: 22px;
+  min-height: 22px;
   padding: 0;
   border: none;
   border-radius: 5px;
   background: transparent;
   color: hsl(var(--muted-foreground) / 0.82);
   cursor: pointer;
+  line-height: 1;
+  font-size: 0;
   transition: background-color 0.12s ease, color 0.12s ease, transform 0.12s ease;
 }
 
 .mermaid-canvas-btn svg {
+  display: block;
   width: 13px;
   height: 13px;
+  flex: 0 0 auto;
+  pointer-events: none;
+  margin: 0;
 }
 
 .mermaid-canvas-btn:hover {
@@ -559,10 +586,34 @@ pre.hljs {
 }
 
 .mermaid-canvas-divider {
+  flex: 0 0 auto;
   width: 1px;
   height: 12px;
   margin: 0 1px;
   background: hsl(var(--border) / 0.65);
+}
+
+.markdown-body .mermaid-canvas-container {
+  max-width: 100%;
+}
+
+.markdown-body .mermaid-canvas-container .mermaid-canvas-controls {
+  box-sizing: border-box !important;
+}
+
+.markdown-body .mermaid-canvas-container .mermaid-canvas-btn {
+  box-sizing: border-box !important;
+  margin: 0 !important;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .mermaid-canvas-controls {
+    top: auto;
+    right: 8px;
+    bottom: 8px;
+    opacity: 0.9;
+    pointer-events: auto;
+  }
 }
 
 /* 复制成功反馈 */
