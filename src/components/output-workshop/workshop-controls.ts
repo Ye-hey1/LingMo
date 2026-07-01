@@ -51,7 +51,7 @@ export function getPresetById(id: PreviewSizePreset["id"]): PreviewSizePreset {
 }
 
 export function getTemplateDefaultSizePreset(templateId: string): PreviewSizePreset["id"] {
-  if (templateId.startsWith("moka-")) return "3:4"
+  if (templateId.startsWith("social-redbook-")) return "3:4"
 
   switch (templateId) {
     case "social-xiaohongshu":

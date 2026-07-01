@@ -1,12 +1,12 @@
 /**
- * Shared HTML normalization for Output Workshop previews and generated files.
+ * Shared HTML normalization for intelligent layout previews and generated files.
  */
 
 const STYLE_ID = "lingmo-output-workshop-layout-guard"
 const STYLE_VERSION = "2026-06-layout-animate-typeset"
 
 const LAYOUT_GUARD_CSS = `
-  /* Output Workshop quality guard: layout, motion, and typography polish. */
+  /* Intelligent layout quality guard: layout, motion, and typography polish. */
   *, *::before, *::after {
     box-sizing: border-box;
     min-width: 0;

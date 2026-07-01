@@ -1,5 +1,5 @@
 /**
- * 输出工坊 Prompt 构建器
+ * 智能排版 Prompt 构建器
  * 为 AI 生成提供结构化的提示词
  */
 
@@ -22,7 +22,7 @@ export interface BuildOutputPromptOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * 构建输出工坊的 AI 生成提示词
+ * 构建智能排版的 AI 生成提示词
  */
 export function buildOutputPrompt(options: BuildOutputPromptOptions): string {
   const { template, title, sourceContent, sourceLabel, customInstructions } = options

@@ -1,7 +1,7 @@
 /**
- * 输出工坊共享的 HTML 转义工具
+ * 智能排版共享的 HTML 转义工具
  *
- * 统一各 builder（wechat-builder / html-builders / moka）此前分散重复的
+ * 统一各 builder（wechat-builder / html-builders）此前分散重复的
  * escapeHtml / escapeAttr 实现。采用最健壮的 unknown 入参 + null 安全降级版本，
  * 对既有 string 调用完全向后兼容。
  */

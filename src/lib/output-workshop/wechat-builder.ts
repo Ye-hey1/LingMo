@@ -1,5 +1,5 @@
 /**
- * Deterministic WeChat article renderer for Output Workshop.
+ * Deterministic WeChat article renderer for intelligent layout.
  *
  * It intentionally avoids browser-only APIs so previews/tests can render in
  * Node, Next, and Tauri without embedding huasheng_editor's standalone app.

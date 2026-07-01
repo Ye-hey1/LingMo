@@ -171,6 +171,10 @@ export function useOutputGeneration({
   const abortRef = React.useRef<AbortController | null>(null)
   const lastStreamingUpdateRef = React.useRef(0)
   const generationRunIdRef = React.useRef(0)
+  const selectedTemplateRef = React.useRef(selectedTemplate)
+  const selectedTemplateIdRef = React.useRef(selectedTemplateId)
+  selectedTemplateRef.current = selectedTemplate
+  selectedTemplateIdRef.current = selectedTemplateId
 
   React.useEffect(() => {
     if (status !== "generating" && status !== "streaming") {
@@ -370,6 +374,8 @@ export function useOutputGeneration({
   ])
 
   const generateLocalWechatOutput = React.useCallback(async () => {
+    const latestTemplate = selectedTemplateRef.current
+    const latestTemplateId = selectedTemplateIdRef.current
     generationRunIdRef.current += 1
     abortRef.current?.abort()
     abortRef.current = null
@@ -402,18 +408,18 @@ export function useOutputGeneration({
       const normalizedTitle = typeof title === "string" ? title.trim() : ""
       const normalizedCustomInstructions = typeof customInstructions === "string" ? customInstructions.trim() : ""
       const html = prepareOutputHtml(buildWechatArticle({
-        styleId: selectedTemplateId,
-        title: normalizedTitle || selectedTemplate?.name || "一键排版",
+        styleId: latestTemplateId,
+        title: normalizedTitle || latestTemplate?.name || "一键排版",
         subtitle: normalizedCustomInstructions,
-        markdown: normalizedSourceContent || normalizedTitle || selectedTemplate?.description || "",
+        markdown: normalizedSourceContent || normalizedTitle || latestTemplate?.description || "",
         sourceLabel: typeof sourceLabel === "string" ? sourceLabel : "",
         generatedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
       }))
-      const lintResult = lintOutputWorkshopHtml(html, { templateId: selectedTemplateId })
+      const lintResult = lintOutputWorkshopHtml(html, { templateId: latestTemplateId })
 
-      console.info("【智能排版】一键排版本地生成完成:", selectedTemplateId)
+      console.info("【智能排版】一键排版本地生成完成:", latestTemplateId)
       setGeneratedHtml(html)
-      saveSnapshot(html, normalizedTitle || selectedTemplate?.name || "一键排版", selectedTemplateId, normalizedCustomInstructions, normalizedSourceContent)
+      saveSnapshot(html, normalizedTitle || latestTemplate?.name || "一键排版", latestTemplateId, normalizedCustomInstructions, normalizedSourceContent)
       setStatus("done")
       setBuildStageId("preview")
       setProgressText("排版完成")
@@ -453,8 +459,6 @@ export function useOutputGeneration({
   }, [
     customInstructions,
     saveSnapshot,
-    selectedTemplate,
-    selectedTemplateId,
     setGeneratedHtml,
     sourceContent,
     sourceLabel,
@@ -463,8 +467,10 @@ export function useOutputGeneration({
   ])
 
   const generateCreativeOutput = React.useCallback(async () => {
-    if (isLocalWechatOutputTemplate(selectedTemplate, selectedTemplateId)) {
-      console.warn("【智能排版】已拦截一键排版模板进入 AI 直绘，改用本地排版:", selectedTemplateId)
+    const latestTemplate = selectedTemplateRef.current
+    const latestTemplateId = selectedTemplateIdRef.current
+    if (isLocalWechatOutputTemplate(latestTemplate, latestTemplateId)) {
+      console.warn("【智能排版】已拦截一键排版模板进入 AI 直绘，改用本地排版:", latestTemplateId)
       void generateLocalWechatOutput()
       return
     }
@@ -623,12 +629,12 @@ export function useOutputGeneration({
   ])
 
   const handleGenerate = React.useCallback(() => {
-    if (isLocalWechatOutputTemplate(selectedTemplate, selectedTemplateId)) {
+    if (isLocalWechatOutputTemplate(selectedTemplateRef.current, selectedTemplateIdRef.current)) {
       void generateLocalWechatOutput()
       return
     }
     void generateCreativeOutput()
-  }, [generateCreativeOutput, generateLocalWechatOutput, selectedTemplate, selectedTemplateId])
+  }, [generateCreativeOutput, generateLocalWechatOutput])
 
   const handleRefine = React.useCallback(async () => {
     const query = typeof refineQuery === "string" ? refineQuery.trim() : ""

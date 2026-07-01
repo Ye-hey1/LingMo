@@ -1,5 +1,5 @@
 /**
- * 输出工坊风格构建器注册表
+ * 智能排版风格构建器注册表
  * 按 templateId 分发到对应 build* 函数，替代 use-output-generation 里的 19-case switch。
  */
 import type { BuildHtmlOptions } from "../shared/builder-utils"

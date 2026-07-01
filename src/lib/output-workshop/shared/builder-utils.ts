@@ -1,5 +1,5 @@
 /**
- * 输出工坊 HTML 构建器共享层
+ * 智能排版 HTML 构建器共享层
  * 类型 + 各风格构建器共用的辅助函数，从 html-builders.ts 提取。
  */
 import { escapeHtml } from "./escape"

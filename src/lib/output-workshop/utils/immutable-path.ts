@@ -1,6 +1,6 @@
 /**
  * 通用不可变路径工具：按 "a.b.0.c" 形式的路径读写嵌套对象/数组。
- * 从 use-output-generation hook 提取，供 moka 编辑等场景复用。
+ * 从 use-output-generation hook 提取，供结构化编辑场景复用。
  */
 
 export function isPathIndex(segment: string): boolean {

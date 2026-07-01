@@ -1,7 +1,7 @@
 /**
  * WeChat article style presets adapted from huasheng_editor.
  *
- * These are intentionally data-only so Output Workshop can reuse the theme
+ * These are intentionally data-only so intelligent layout can reuse the theme
  * recipes without embedding the standalone Vue editor.
  */
 
@@ -90,10 +90,10 @@ function withReadableBase(overrides: Partial<Record<WechatElementStyle, string>>
 export const WECHAT_STYLES: WechatStyleConfig[] = [
   {
     id: "wechat-default",
-    name: "默认公众号",
+    name: "通用图文",
     nameEn: "WeChat Default",
-    description: "稳妥通用的公众号正文排版，适合日常笔记、通知和轻量文章。",
-    bestFor: "公众号日常图文、项目记录、轻量知识整理",
+    description: "稳妥通用的正文排版，适合日常笔记、项目记录和轻量文章。",
+    bestFor: "日常图文、项目记录、轻量知识整理",
     styles: {
       container: 'max-width: 740px; margin: 0 auto; padding: 10px 12px 24px 12px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; font-size: 16px; line-height: 1.8 !important; color: #3f3f3f !important; background-color: #fff !important; word-wrap: break-word;',
       h1: "font-size: 24px; font-weight: 600; color: #2c3e50 !important; line-height: 1.4 !important; margin: 32px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #3498db;",
@@ -145,7 +145,7 @@ export const WECHAT_STYLES: WechatStyleConfig[] = [
     name: "Claude",
     nameEn: "Claude WeChat",
     description: "温暖纸感、柔和强调色和技术文档气质，适合 AI、产品、方法论文。",
-    bestFor: "AI 笔记、产品方法、技术解释、知识型公众号",
+    bestFor: "AI 笔记、产品方法、技术解释、知识型长文",
     recommended: true,
     styles: {
       container: 'max-width: 700px; margin: 0 auto; padding: 20px 24px 40px 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 17px; line-height: 1.75 !important; color: #2b2b2b !important; background-color: #faf9f7 !important; word-wrap: break-word; letter-spacing: 0;',

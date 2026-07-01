@@ -167,7 +167,7 @@ export function useOutputHistory({
       const pack = {
         version: 1,
         exportedAt: new Date().toISOString(),
-        source: "LingMo Output Workshop",
+        source: "LingMo 智能排版",
         snapshots: historyList,
       }
       const blob = new Blob([JSON.stringify(pack, null, 2)], { type: "application/json" })
