@@ -34,10 +34,10 @@ fuzzy-matcher = "0.3.7"
 rayon = "1.8.0"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
-reqwest = { version = "0.12", features = ["json", "multipart", "stream", "rustls-tls", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "rustls-tls", "blocking"] }
 futures-util = "0.3"
 url = "2.5"
-reqwest_dav = "=0.2.1"
+reqwest_dav = { version = "=0.2.1", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-opener = "2"
 uuid = { version = "1.10", features = ["v4"] }
 zip = { version = "4", default-features = false, features = ["deflate"] }
@@ -51,6 +51,7 @@ chrono = "0.4"
 thiserror = "1"
 tempfile = "3"
 tauri-plugin-notification = "2"
+regex = "1"
 
 [dependencies.tauri-plugin-sql]
 features = ["sqlite"]
@@ -62,18 +63,14 @@ tauri-plugin-updater = "=2.9.0"
 tauri-plugin-window-state = "=2.3.0"
 tauri-plugin-clipboard = "2"
 xcap = "=0.6.0"
-reqwest_dav = "=0.2.1"
+reqwest_dav = { version = "=0.2.1", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-process = "2"
 jieba-rs = { version = "0.7", features = ["textrank"] }
 machine-uid = "0.5"
-regex = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Threading"] }
 tauri-winrt-notification = "0.7.2"
-
-[target.'cfg(target_os = "android")'.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.23"

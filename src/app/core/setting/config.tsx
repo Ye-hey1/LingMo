@@ -145,6 +145,7 @@ export interface ModelConfig {
   contextWindow?: number
   voice?: string
   enableStream?: boolean
+  thinkingLevel?: 'none' | 'low' | 'medium' | 'high' | 'auto'
 }
 
 export interface AiConfig {
@@ -169,6 +170,7 @@ export interface AiConfig {
   voice?: string
   speed?: number
   enableStream?: boolean
+  thinkingLevel?: 'none' | 'low' | 'medium' | 'high' | 'auto'
 }
 
 export interface Model {

@@ -14,6 +14,7 @@
     "test:agent": "node scripts/agent-core-tests.mjs",
     "test:github-stars-agent": "node scripts/github-star-agent-service-tests.mjs",
     "test:ai-hotspots": "node scripts/ai-hotspots-core-tests.mjs",
+    "test:web-content": "node scripts/web-content-extractor-tests.mjs",
     "test:output-workshop": "node scripts/output-workshop-tests.mjs",
     "test:drawio": "node scripts/drawio-xml-tests.mjs",
     "test:drawio-tools": "node scripts/drawio-tool-exposure-tests.mjs",

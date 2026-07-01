@@ -1,11 +1,11 @@
 import { TooltipButton } from "@/components/tooltip-button"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { cn } from "@/lib/utils"
 import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -14,7 +14,6 @@ import {
 import {
   Drawer,
   DrawerContent,
-  DrawerDescription,
   DrawerFooter,
   DrawerHeader,
   DrawerTitle,
@@ -25,7 +24,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { getAllMarks, insertMark, updateMark as updateMarkRecord } from "@/db/marks"
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
-import { CircleX, Link, Sparkles, FolderOpen } from "lucide-react"
+import { CircleX, Link, FolderOpen } from "lucide-react"
 import { useState, useEffect, useCallback, useRef } from "react"
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import emitter from '@/lib/emitter'
@@ -36,7 +35,7 @@ import { isMobileDevice as checkIsMobileDevice } from '@/lib/check'
 import { hasText, readText } from 'tauri-plugin-clipboard-api'
 import { Store } from '@tauri-apps/plugin-store'
 import { toast } from "@/hooks/use-toast"
-import { normalizeWebContent, parseWebPageContent, type ParsedWebPageContent } from "@/lib/web/content-extractor"
+import { buildReadableWebMarkdown, normalizeWebContent, parseWebPageContent, type ParsedWebPageContent } from "@/lib/web/content-extractor"
 import { organizeLinkRecord } from "@/lib/ai/link-organizer"
 import { tavilyExtract } from "@/lib/tavily"
 import {
@@ -371,20 +370,23 @@ export function ControlLink() {
     ? `已识别${videoPlatformPreview === 'youtube' ? ' YouTube' : ' B站'}视频，将优先提取公开字幕并保存到「${VIDEO_TRANSCRIPT_TAG_NAME}」。`
     : ''
   const canSubmit = Boolean(url.trim()) && !loading
+  const hasVisibleHint = Boolean(
+    isLocalMedia || githubHint || wechatHint || xhsHint || videoHint || errorMessage
+  )
 
   const inputSection = (
     <div className="space-y-3">
       <div className="relative">
         <Link className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
-          placeholder="https://github.com/owner/repo"
+          placeholder="粘贴链接或选择本地音视频"
           value={url}
           onChange={(e) => {
             setUrl(e.target.value)
             if (errorMessage) setErrorMessage('')
           }}
           disabled={loading}
-          className="h-10 border-border/80 bg-muted/30 pl-9 pr-16 text-sm shadow-sm"
+          className="h-10 rounded-md border-border/60 bg-muted/30 pl-9 pr-16 text-sm"
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault()
@@ -392,13 +394,13 @@ export function ControlLink() {
             }
           }}
         />
-        <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-2">
+        <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
           {url && !loading && (
             <button
               type="button"
               onClick={handleClear}
-              className="text-muted-foreground transition-colors hover:text-foreground"
-              aria-label="清空链接"
+              className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="清空"
             >
               <CircleX className="size-4" />
             </button>
@@ -407,94 +409,91 @@ export function ControlLink() {
             type="button"
             onClick={handleLocalFileSelect}
             disabled={loading}
-            className="text-muted-foreground transition-colors hover:text-foreground"
-            aria-label="选择本地视频或音频"
+            className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+            aria-label="选择本地文件"
           >
             <FolderOpen className="size-4" />
           </button>
         </div>
       </div>
-      {isLocalMedia ? (
-        <div className="flex items-start gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-700">
-          <Sparkles className="mt-0.5 size-3.5 shrink-0 animate-pulse text-violet-600" />
-          <span>已选择本地媒体：{selectedLocalFile.split('/').pop()}。点击下方「开始识别」即可一键提取转译。</span>
-        </div>
-      ) : null}
-      {githubHint ? (
-        <div className={githubTokenConfigured
-          ? "flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700"
-          : "flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700"
-        }>
-          <Sparkles className="mt-0.5 size-3.5 shrink-0" />
-          <span>{githubHint}</span>
-        </div>
-      ) : null}
-      {!githubHint && wechatHint ? (
-        <div className="space-y-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-700">
-          <div className="flex items-start gap-2">
-            <Sparkles className="mt-0.5 size-3.5 shrink-0" />
-            <span className="flex-1">{wechatHint}</span>
-            <button
-              type="button"
-              className="shrink-0 font-medium text-sky-800 underline-offset-2 hover:underline"
-              onClick={() => setShowWechatHtmlFallback(value => !value)}
-            >
-              {showWechatHtmlFallback ? '收起 HTML' : '粘贴 HTML'}
-            </button>
-          </div>
-          {showWechatHtmlFallback ? (
-            <div className="space-y-1.5">
-              <Textarea
-                value={wechatHtmlFallback}
-                onChange={(event) => setWechatHtmlFallback(event.target.value)}
-                disabled={loading}
-                placeholder="如果直接抓取失败，可在浏览器打开文章后复制网页 HTML 源码粘贴到这里。"
-                className="max-h-40 min-h-24 resize-y border-sky-200 bg-white/80 text-xs text-slate-800 placeholder:text-sky-700/60"
-              />
-              <p className="text-[11px] leading-4 text-sky-700/80">
-                粘贴后会优先使用这段 HTML 提取正文，不再请求微信页面。
+
+      {hasVisibleHint ? (
+        <div className="space-y-1.5">
+          {isLocalMedia ? (
+            <p className="text-[11px] leading-4 text-muted-foreground">
+              已选本地媒体：{selectedLocalFile.split('/').pop()}
+            </p>
+          ) : null}
+          {githubHint ? (
+            <p className={githubTokenConfigured ? "text-[11px] leading-4 text-emerald-600" : "text-[11px] leading-4 text-amber-600"}>
+              {githubHint}
+            </p>
+          ) : null}
+          {!githubHint && wechatHint ? (
+            <div className="space-y-1">
+              <p className="text-[11px] leading-4 text-sky-600">
+                {wechatHint}
+                <button
+                  type="button"
+                  className="ml-1 underline-offset-2 hover:underline"
+                  onClick={() => setShowWechatHtmlFallback(value => !value)}
+                >
+                  {showWechatHtmlFallback ? '收起' : '粘贴 HTML'}
+                </button>
               </p>
+              {showWechatHtmlFallback ? (
+                <Textarea
+                  value={wechatHtmlFallback}
+                  onChange={(event) => setWechatHtmlFallback(event.target.value)}
+                  disabled={loading}
+                  placeholder="直接抓取失败时，可粘贴网页 HTML 源码"
+                  className="max-h-32 min-h-20 resize-y border-sky-200/70 bg-background text-xs"
+                />
+              ) : null}
             </div>
           ) : null}
-        </div>
-      ) : null}
-      {!githubHint && !wechatHint && xhsHint ? (
-        <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700">
-          <Sparkles className="mt-0.5 size-3.5 shrink-0" />
-          <span>{xhsHint}</span>
-        </div>
-      ) : null}
-      {!githubHint && !wechatHint && !xhsHint && videoHint ? (
-        <div className="flex items-start gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-700">
-          <Sparkles className="mt-0.5 size-3.5 shrink-0" />
-          <span>{videoHint}</span>
-        </div>
-      ) : null}
-      {errorMessage ? (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
-          {errorMessage}
+          {!githubHint && !wechatHint && xhsHint ? (
+            <p className="text-[11px] leading-4 text-rose-600">{xhsHint}</p>
+          ) : null}
+          {!githubHint && !wechatHint && !xhsHint && videoHint ? (
+            <p className="text-[11px] leading-4 text-violet-600">{videoHint}</p>
+          ) : null}
+          {errorMessage ? (
+            <p className="text-[11px] leading-4 text-red-600">{errorMessage}</p>
+          ) : null}
         </div>
       ) : null}
     </div>
   )
 
   const optionSection = (mobile = false) => (
-    <div className={mobile ? "grid gap-3" : "flex min-w-0 flex-wrap items-center gap-4"}>
-      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+    <div className={cn(
+      "gap-x-4 gap-y-2",
+      mobile ? "grid grid-cols-1" : "flex min-w-0 flex-wrap items-center"
+    )}>
+      <label
+        htmlFor={mobile ? "auto-read-clipboard-mobile" : "auto-read-clipboard"}
+        className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+      >
         <Checkbox
           id={mobile ? "auto-read-clipboard-mobile" : "auto-read-clipboard"}
           checked={autoReadClipboard}
           onCheckedChange={(checked) => handleAutoReadChange(checked === true)}
           disabled={loading}
+          className="size-3.5"
         />
-        <span>自动读取剪贴板链接</span>
+        <span>自动读取剪贴板</span>
       </label>
-      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+      <label
+        htmlFor={mobile ? "auto-organize-link-mobile" : "auto-organize-link"}
+        className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+      >
         <Checkbox
           id={mobile ? "auto-organize-link-mobile" : "auto-organize-link"}
           checked={organizeAfterSave}
           onCheckedChange={(checked) => handleOrganizeChange(checked === true)}
           disabled={loading}
+          className="size-3.5"
         />
         <span>保存后 AI 整理</span>
       </label>
@@ -1040,6 +1039,12 @@ export function ControlLink() {
 
       const rawDesc = [title, metaDesc].filter(Boolean).join('\n');
       const rawContent = mainContent || bodyText || metaDesc || `来源链接：${targetUrl}`;
+      const readableContent = buildReadableWebMarkdown({
+        title,
+        url: targetUrl,
+        metaDesc,
+        content: rawContent,
+      })
 
       if (!rawContent.trim()) {
         throw new LinkCaptureError('网页解析结果为空', 'parse')
@@ -1050,7 +1055,7 @@ export function ControlLink() {
         tagId: targetTagId,
         type: 'link',
         desc: rawDesc,
-        content: rawContent,
+        content: readableContent,
         url: targetUrl
       });
 
@@ -1071,7 +1076,7 @@ export function ControlLink() {
           targetUrl,
           title,
           metaDesc,
-          rawContent,
+          rawContent: readableContent,
         })
       } else {
         toast({
@@ -1079,7 +1084,6 @@ export function ControlLink() {
           description: '状态：完成。网页正文已保存。',
         })
       }
-
 
     } catch (error) {
       const typedError = toLinkCaptureError(error)
@@ -1306,15 +1310,12 @@ export function ControlLink() {
           </DrawerTrigger>
           <DrawerContent className="px-1">
             <DrawerHeader className="text-left">
-              <DrawerTitle className="text-base">链接记录</DrawerTitle>
-              <DrawerDescription className="text-xs">
-                输入网页链接，系统将在后台抓取内容并保存为记录。
-              </DrawerDescription>
+              <DrawerTitle className="text-base">链接</DrawerTitle>
             </DrawerHeader>
             <div className="px-4">
               {inputSection}
             </div>
-            <DrawerFooter className="gap-4">
+            <DrawerFooter className="gap-3">
               {optionSection(true)}
               <Button
                 type="submit"
@@ -1322,7 +1323,7 @@ export function ControlLink() {
                 disabled={!canSubmit}
                 className="h-10 w-full"
               >
-                {isLocalMedia ? '开始识别' : '保存并解析'}
+                {isLocalMedia ? '开始识别' : '保存'}
               </Button>
             </DrawerFooter>
           </DrawerContent>
@@ -1332,23 +1333,20 @@ export function ControlLink() {
           <DialogTrigger asChild>
             <TooltipButton icon={<Link />} tooltipText={t('record.mark.type.link') || '链接'} />
           </DialogTrigger>
-          <DialogContent className="w-[calc(100vw-2rem)] gap-5 rounded-lg border-border/80 p-5 shadow-2xl sm:max-w-[560px]">
-            <DialogHeader className="space-y-1 pr-6">
-              <DialogTitle className="text-base font-semibold">链接记录</DialogTitle>
-              <DialogDescription className="text-xs">
-                输入网页链接，系统将在后台抓取内容并保存为记录。
-              </DialogDescription>
+          <DialogContent className="w-[calc(100vw-2rem)] gap-4 rounded-lg border-border/80 p-5 shadow-2xl sm:max-w-[480px]">
+            <DialogHeader className="pr-6">
+              <DialogTitle className="text-sm font-semibold">链接</DialogTitle>
             </DialogHeader>
             {inputSection}
-            <DialogFooter className="flex-row items-center justify-between gap-4 sm:justify-between sm:space-x-0">
+            <DialogFooter className="flex-row items-center justify-between gap-3 sm:justify-between sm:space-x-0">
               {optionSection(false)}
               <Button
                 type="submit"
                 onClick={handleSuccess}
                 disabled={!canSubmit}
-                className="h-10 min-w-32 shrink-0"
+                className="h-9 shrink-0"
               >
-                {isLocalMedia ? '开始识别' : '保存并解析'}
+                {isLocalMedia ? '开始识别' : '保存'}
               </Button>
             </DialogFooter>
           </DialogContent>

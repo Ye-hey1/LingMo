@@ -261,7 +261,7 @@ export function LeftSidebarRail() {
         </div>
       </aside>
 
-      {/* 输出工坊弹窗 */}
+      {/* 智能排版弹窗 */}
       <OutputWorkshopModal
         open={outputWorkshopOpen}
         onClose={() => {

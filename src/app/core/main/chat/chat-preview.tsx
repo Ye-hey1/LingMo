@@ -21,6 +21,7 @@ import {
   getClawStreamVisibleMarkdown,
   normalizeClawNestedFences,
 } from './claw-stream-format';
+import { renderStreamingMarkdownSegments } from './streaming-markdown-segments';
 
 const GITHUB_REPO_REFERENCE_RE = /(^|[^\w./@-])([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100})(?=$|[^\w./-])/g;
 const GITHUB_REPO_SKIP_OWNERS = new Set([
@@ -541,6 +542,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
   const pendingRenderStartedAtRef = useRef(0);
   const scheduledRenderAtRef = useRef(0);
   const md = useRef<MarkdownIt | null>(null);
+  const streamingSegmentHtmlCacheRef = useRef<Map<string, string>>(new Map());
   const mermaidRenderCacheRef = useRef<Map<string, MermaidRenderCacheEntry>>(new Map());
   const mermaidViewStateRef = useRef<WeakMap<HTMLDivElement, MermaidViewState>>(new WeakMap());
   const [mermaidViewer, setMermaidViewer] = useState<MermaidViewerState | null>(null);
@@ -658,6 +660,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     pendingRenderStartedAtRef.current = 0;
     scheduledRenderAtRef.current = 0;
 
+    streamingSegmentHtmlCacheRef.current.clear();
     if (displayedTextRef.current) {
       lastCommittedTextRef.current = displayedTextRef.current;
       setHtmlContent(md.current.render(preprocessMarkdown(displayedTextRef.current, clawFormat)));
@@ -674,11 +677,22 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     pendingRenderStartedAtRef.current = 0;
     scheduledRenderAtRef.current = 0;
     if (md.current) {
-      setHtmlContent(md.current.render(preprocessMarkdown(nextText, clawFormat)));
+      const renderMarkdown = (value: string) => md.current!.render(preprocessMarkdown(value, clawFormat));
+      const rendered = streaming && !clawFormat
+        ? renderStreamingMarkdownSegments({
+            text: nextText,
+            cache: streamingSegmentHtmlCacheRef.current,
+            renderMarkdown,
+          }).html
+        : renderMarkdown(nextText);
+      if (!streaming || clawFormat) {
+        streamingSegmentHtmlCacheRef.current.clear();
+      }
+      setHtmlContent(rendered);
     } else {
       setHtmlContent(nextText);
     }
-  }, [clawFormat]);
+  }, [clawFormat, streaming]);
 
   const cancelScheduledMarkdownRender = useCallback(() => {
     if (pendingRenderTimeoutRef.current) {

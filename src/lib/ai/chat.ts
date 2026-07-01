@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { getAISettings, validateAIService, prepareMessages, createOpenAIClient, handleAIError } from './utils';
 import type { AiConfig } from '@/app/core/setting/config'
 import { estimateTokens } from './token-counter'
-import { getModelCapabilityProfile } from './model-capabilities'
+import { resolveThinkingSettings } from './model-capabilities'
 import { isVisionContentUnsupportedError, prepareMessagesWithImages } from './vision-bridge'
 import { createAiStreamContentProcessor } from './sanitize'
 import { getAiRateLimitUserMessage, isAiRateLimitError } from './rate-limit'
@@ -355,7 +355,8 @@ export async function fetchAiStream(
     }
 
     const openai = await createOpenAIClient(aiConfig)
-    const capabilities = getModelCapabilityProfile(aiConfig)
+    const thinkingSettings = resolveThinkingSettings(aiConfig)
+    const capabilities = thinkingSettings.profile
     const textPreparedMessages = preparedMessages
     preparedMessages = await prepareMessagesWithImages(textPreparedMessages, aiConfig, urls, signal)
 
@@ -366,6 +367,7 @@ export async function fetchAiStream(
       temperature: aiConfig?.temperature ?? 0.7,
       top_p: aiConfig?.topP ?? 1,
       stream: true,
+      ...thinkingSettings.requestPatch,
     }
 
     // 仅在调用方明确指定时设置 max_tokens，否则由模型自身决定上限
@@ -653,6 +655,7 @@ export async function fetchAiStream(
           top_p: aiConfig?.topP ?? 1,
           stream: true,
           tools: tools,
+          ...thinkingSettings.requestPatch,
         }
 
         if (tokens && tokens > 0) {
