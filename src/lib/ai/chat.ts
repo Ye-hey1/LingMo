@@ -66,7 +66,7 @@ function inferProvider(config?: AiConfig) {
 function getErrorKind(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   if (/Request was aborted|USER_STOPPED/i.test(message)) return 'aborted'
-  if (/AI_TRANSPORT_ERROR|error sending request|Failed to fetch|NetworkError|connect/i.test(message)) return 'connect'
+  if (/AI_STREAM_READ_ERROR|AI_TRANSPORT_ERROR|AI_JSON_PARSE_ERROR|error decoding response body|unexpected end of hex escape|error sending request|Failed to fetch|NetworkError|Load failed|connect/i.test(message)) return 'connect'
   if (/timeout|timed out/i.test(message)) return 'timeout'
   if (/status=401|401|Unauthorized/i.test(message)) return 'unauthorized'
   if (/status=402|402|payment required|insufficient.*balance|balance.*insufficient|insufficient.*quota|quota.*insufficient|quota exceeded|billing|credits?.*(?:exhausted|insufficient)|(?:exhausted|insufficient).*credits?/i.test(message)) return 'billing'

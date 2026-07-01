@@ -140,7 +140,7 @@ function getErrorMessage(error: unknown) {
 
 function isRetryableTransportError(error: unknown) {
   const message = getErrorMessage(error)
-  return /AI_TRANSPORT_ERROR|AI_JSON_PARSE_ERROR|error decoding response body|unexpected end of hex escape|error sending request|Failed to fetch|NetworkError|Load failed/i.test(message) &&
+  return /AI_STREAM_READ_ERROR|AI_TRANSPORT_ERROR|AI_JSON_PARSE_ERROR|error decoding response body|unexpected end of hex escape|error sending request|Failed to fetch|NetworkError|Load failed/i.test(message) &&
     !/Request was aborted/i.test(message)
 }
 
@@ -346,11 +346,16 @@ function createStreamingIterable<T>(
       return
     }
     if (event.type === 'error') {
-      if (event.data.trim() === 'Request was aborted.' || signal?.aborted) {
+      const eventError = toAbortError(event.data)
+      if (isAbortError(eventError) || signal?.aborted) {
         queue.close()
         return
       }
-      queue.fail(new Error(event.data))
+      if (receivedAnyChunk && isRetryableTransportError(eventError)) {
+        queue.close()
+        return
+      }
+      queue.fail(eventError)
       return
     }
     queue.close()
@@ -364,6 +369,10 @@ function createStreamingIterable<T>(
   }).catch((error) => {
     const normalizedError = toAbortError(error)
     if (isAbortError(normalizedError) || signal?.aborted) {
+      queue.close()
+      return
+    }
+    if (receivedAnyChunk && isRetryableTransportError(normalizedError)) {
       queue.close()
       return
     }

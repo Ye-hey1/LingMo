@@ -159,7 +159,7 @@ const MAX_TRANSPORT_BACKOFF = 30 * 60 * 1000  // 最多冷却 30 分钟
 const SERVICE_CONFIG_BACKOFF = 30 * 60 * 1000  // 账号/鉴权/额度错误后冷却 30 分钟
 
 function isAiTransportError(message: string) {
-  return /AI_TRANSPORT_ERROR|AI_JSON_PARSE_ERROR|unexpected end of hex escape|error decoding response body|error sending request|Failed to fetch|NetworkError|Load failed|plugin-http fallback failed|connect/i.test(message)
+  return /AI_STREAM_READ_ERROR|AI_TRANSPORT_ERROR|AI_JSON_PARSE_ERROR|unexpected end of hex escape|error decoding response body|error sending request|Failed to fetch|NetworkError|Load failed|plugin-http fallback failed|connect/i.test(message)
 }
 
 export async function fetchAiQuickPrompts(text: string): Promise<QuickPrompt[]> {
