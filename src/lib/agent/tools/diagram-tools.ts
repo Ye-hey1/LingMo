@@ -472,14 +472,14 @@ export const readDiagramFileTool: Tool = {
 
 export const createDiagramFileTool: Tool = {
   name: 'create_diagram_file',
-  description: 'Create a new diagram file. Use this when the user asks AI to create or complete a draw.io, mind map, whiteboard, flowchart, architecture diagram, or other standalone diagram. Prefer kind=mermaid for AI-generated diagrams (lowest token cost, native Markdown-friendly).',
+  description: 'Create a new diagram file. Use this when the user asks AI to create or complete a draw.io, mind map, whiteboard, flowchart, architecture diagram, or other standalone diagram.',
   category: 'note',
   requiresConfirmation: true,
   parameters: [
     {
       name: 'kind',
       type: 'string',
-      description: 'Diagram kind: drawio, mindmap, excalidraw, or mermaid. Defaults to drawio. Prefer mermaid for LLM-generated diagrams (pure text, no XML/JSON overhead).',
+      description: 'Diagram kind: drawio, mindmap, or excalidraw. Defaults to drawio.',
       required: false,
     },
     {
@@ -633,7 +633,7 @@ export const getDrawioShapeLibraryTool: Tool = {
 
 export const createDrawioDiagramFromCellsTool: Tool = {
   name: 'create_drawio_diagram_from_cells',
-  description: 'Create a .drawio diagram from bare mxCell XML. Generate only mxCell elements; LingMo wraps them in a valid mxfile and adds draw.io root cells automatically. Best for AI-generated draw.io diagrams when Mermaid is not enough.',
+  description: 'Create a .drawio diagram from bare mxCell XML. Generate only mxCell elements; LingMo wraps them in a valid mxfile and adds draw.io root cells automatically. Best for custom AI-generated draw.io diagrams.',
   category: 'note',
   requiresConfirmation: true,
   capabilities: ['write'],
@@ -987,7 +987,7 @@ export const createDiagramFromOutlineTool: Tool = {
     {
       name: 'kind',
       type: 'string',
-      description: 'Diagram kind: drawio, mindmap, excalidraw, or mermaid. Defaults to mindmap. Prefer mermaid for LLM-generated diagrams from outlines (pure text).',
+      description: 'Diagram kind: drawio, mindmap, or excalidraw. Defaults to mindmap.',
       required: false,
     },
     {

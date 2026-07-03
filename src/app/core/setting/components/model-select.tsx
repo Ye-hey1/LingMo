@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useEffect, useState } from "react"
-import { AiConfig, ModelConfig } from "../../setting/config"
+import { AiConfig, ModelConfig, getModelDisplayName } from "../../setting/config"
 import { Store } from "@tauri-apps/plugin-store"
 import useSettingStore from "@/stores/setting"
 import { ChevronsUpDown, X } from "lucide-react"
@@ -57,6 +57,7 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
     setCondenseModel,
     setInspirationModel,
     setPromptEnhancerModel,
+    setStructuredExtractionModel,
   } = useSettingStore()
   const [model, setModel] = useState<string>('')
   const [open, setOpen] = React.useState(false)
@@ -77,6 +78,7 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
       case 'condense': return state.condenseModel
       case 'inspiration': return state.inspirationModel
       case 'promptEnhancer': return state.promptEnhancerModel
+      case 'structuredExtraction': return state.structuredExtractionModel
       default: return ''
     }
   }
@@ -95,6 +97,7 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
       case 'condense': return 'condenseModel'
       case 'inspiration': return 'inspirationModel'
       case 'promptEnhancer': return 'promptEnhancerModel'
+      case 'structuredExtraction': return 'structuredExtractionModel'
       default: return `${modelKey}Model`
     }
   }
@@ -118,6 +121,7 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
       case 'condense': setCondenseModel(primaryModel); break
       case 'inspiration': setInspirationModel(primaryModel); break
       case 'promptEnhancer': setPromptEnhancerModel(primaryModel); break
+      case 'structuredExtraction': setStructuredExtractionModel(primaryModel); break
     }
   }
 
@@ -253,9 +257,10 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
     if (!model || !groupedModels.length) return null
     const selectedItem = groupedModels.find(item => modelMatchesSelection(item, model))
     if (selectedItem) {
+      const displayName = getModelDisplayName(selectedItem.model)
       return selectedItem.providerTitle
-        ? `${selectedItem.model.model} (${selectedItem.providerTitle})`
-        : selectedItem.model.model
+        ? `${displayName} (${selectedItem.providerTitle})`
+        : displayName
     }
     return null
   }
@@ -313,13 +318,13 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
                   <CommandItem
                     key={item.value}
                     value={item.value}
-                    keywords={[item.model.model, item.providerTitle, item.configKey]}
+                    keywords={[getModelDisplayName(item.model), item.model.model, item.providerTitle, item.configKey]}
                     onSelect={(currentValue) => {
                       modelSelectChangeHandler(currentValue)
                       setOpen(false)
                     }}
                   >
-                    {item.model.model}
+                    {getModelDisplayName(item.model)}
                     <Check
                       className={cn(
                         "ml-auto",

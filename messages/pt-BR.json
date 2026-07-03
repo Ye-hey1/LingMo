@@ -698,6 +698,10 @@
         "condense": {
           "title": "摘要模型",
           "desc": "用于压缩历史对话内容，节省 token 使用量"
+        },
+        "structuredExtraction": {
+          "title": "Modelo de extração",
+          "desc": "Modelo de chat opcional para extração semântica. Se não definido, usa o modelo principal."
         }
       },
       "mainModel": "Modelo principal"
@@ -1344,6 +1348,8 @@
       "addModel": "Adicionar modelo",
       "newModel": "Novo modelo",
       "checkConnection": "Testar conexão",
+      "modelDisplayName": "Nome de exibição",
+      "modelDisplayNamePlaceholder": "Mostra o ID do modelo quando vazio",
       "model": "Modelo"
     },
     "ocr": {
@@ -1465,6 +1471,59 @@
     "webSearch": {
       "title": "Pesquisa na Web",
       "desc": "Configure canais de busca web, o estado padrão da entrada e credenciais de identificação de projetos."
+    },
+    "structured-knowledge": {
+      "title": "Conhecimento estruturado",
+      "desc": "Configure a extração automática em segundo plano por LLM para grafos de conhecimento Markdown."
+    },
+    "structuredKnowledge": {
+      "title": "Conhecimento estruturado",
+      "desc": "Configure a extração automática em segundo plano por LLM. Por padrão ela não executa automaticamente e só chama o LLM após aceitar os avisos de custo e privacidade.",
+      "autoExtraction": {
+        "title": "Extração automática por LLM"
+      },
+      "mode": {
+        "title": "Modo de extração",
+        "desc": "Escolha quando o LingMo pode enviar blocos Markdown ao serviço LLM configurado.",
+        "options": {
+          "off": "Desativado",
+          "manual": "Somente manual",
+          "onSave": "Após salvar",
+          "onIdle": "Quando ocioso"
+        }
+      },
+      "maxBlocks": {
+        "title": "Máximo de blocos",
+        "desc": "Número máximo de blocos Markdown de evidência enviados por extração."
+      },
+      "idleSeconds": {
+        "title": "Segundos de ociosidade",
+        "desc": "Tempo de espera após atividade antes de iniciar a extração ociosa."
+      },
+      "cooldownMinutes": {
+        "title": "Minutos de espera",
+        "desc": "Tempo mínimo antes de extrair novamente a mesma nota sem alterações."
+      },
+      "maxNotesPerRun": {
+        "title": "Notas por execução",
+        "desc": "Máximo de notas processadas em um lote em segundo plano."
+      },
+      "dailyLimit": {
+        "title": "Limite diário",
+        "desc": "Máximo de chamadas automáticas de extração por dia. Use 0 para bloquear chamadas automáticas."
+      },
+      "costWarningAccepted": {
+        "title": "Aceitar aviso de custo",
+        "desc": "A extração automática pode consumir tokens pagos de LLM."
+      },
+      "privacyWarningAccepted": {
+        "title": "Aceitar aviso de privacidade",
+        "desc": "A extração automática envia blocos Markdown selecionados ao provedor LLM configurado."
+      },
+      "model": {
+        "title": "Modelo de extração",
+        "desc": "Modelo de chat opcional para extração semântica. Se não definido, usa o modelo principal."
+      }
     }
   },
   "record": {

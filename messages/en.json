@@ -824,6 +824,10 @@
         "condense": {
           "title": "Condense Model",
           "desc": "Used to compress historical conversation content to save token usage"
+        },
+        "structuredExtraction": {
+          "title": "Extraction model",
+          "desc": "Optional chat model for semantic extraction. Falls back to the primary model if unset."
         }
       },
       "mainModel": "Main Model"
@@ -1472,6 +1476,8 @@
       "addModel": "Add Model",
       "newModel": "New Model",
       "checkConnection": "Test Connection",
+      "modelDisplayName": "Display name",
+      "modelDisplayNamePlaceholder": "Shows the model ID when empty",
       "model": "Model"
     },
     "ocr": {
@@ -1539,6 +1545,59 @@
     "webSearch": {
       "title": "Web Search",
       "desc": "Configure web search channels, automatic web access behavior, and project identification credentials."
+    },
+    "structured-knowledge": {
+      "title": "Structured Knowledge",
+      "desc": "Configure automatic background LLM extraction for Markdown knowledge graphs."
+    },
+    "structuredKnowledge": {
+      "title": "Structured Knowledge",
+      "desc": "Configure automatic background LLM extraction. It is disabled by default and only runs after you accept the cost and privacy warnings.",
+      "autoExtraction": {
+        "title": "Automatic LLM Extraction"
+      },
+      "mode": {
+        "title": "Extraction mode",
+        "desc": "Choose when LingMo may send Markdown blocks to your configured LLM service.",
+        "options": {
+          "off": "Off",
+          "manual": "Manual only",
+          "onSave": "After save",
+          "onIdle": "When idle"
+        }
+      },
+      "maxBlocks": {
+        "title": "Maximum blocks",
+        "desc": "Maximum Markdown evidence blocks sent per extraction."
+      },
+      "idleSeconds": {
+        "title": "Idle wait seconds",
+        "desc": "How long to wait after activity before idle extraction starts."
+      },
+      "cooldownMinutes": {
+        "title": "Cooldown minutes",
+        "desc": "Minimum time before extracting the same unchanged note again."
+      },
+      "maxNotesPerRun": {
+        "title": "Notes per run",
+        "desc": "Maximum notes processed in one background batch."
+      },
+      "dailyLimit": {
+        "title": "Daily limit",
+        "desc": "Maximum automatic extraction calls per day. Set 0 to block automatic calls."
+      },
+      "costWarningAccepted": {
+        "title": "Accept API cost warning",
+        "desc": "Automatic extraction may consume paid LLM tokens."
+      },
+      "privacyWarningAccepted": {
+        "title": "Accept privacy warning",
+        "desc": "Automatic extraction sends selected Markdown content blocks to the configured LLM provider."
+      },
+      "model": {
+        "title": "Extraction model",
+        "desc": "Optional chat model for semantic extraction. Falls back to the primary model if unset."
+      }
     }
   },
   "record": {

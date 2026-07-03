@@ -1,3 +1,13 @@
+/**
+ * 小红书社交组图（social-redbook-* 系列）的本地构建器。
+ *
+ * 为何独立于 styles/index.ts 的 STYLE_BUILDERS 注册表：
+ * 组图不是「单段 HTML 映射」，而是需要「从源材料拆分多张卡片 + 应用主题配色 +
+ * 按 lint 反馈重建缺失卡片」的动态管线。use-output-generation 通过
+ * isAutoRedbookTemplateId() 识别后调用 buildAutoRedbookHtmlFromSource，
+ * 并在 rebuildAutoRedbookIfNeeded 中按 lint 结果重新拆分。注册表的同步分发模型
+ * 无法承载这种重建语义，故有意保持独立。
+ */
 import {
   escapeHtml,
   formatDate,
@@ -7,6 +17,7 @@ import {
   type BuildHtmlOptions,
   type ExtractedSection,
 } from "./shared/builder-utils"
+import { getOutputTemplate, type TemplatePreviewTheme } from "./templates"
 
 export interface AutoRedbookSourceBuildOptions {
   templateId: string
@@ -210,6 +221,60 @@ export function isAutoRedbookTemplateId(templateId?: string): boolean {
 
 function resolveTheme(templateId: string): RedbookTheme {
   return REDBOOK_THEMES[templateId] ?? REDBOOK_THEMES["social-redbook-clean"]
+}
+
+/**
+ * 7 个「主题化社交卡片」模板：它们在模板库可见、有 previewTheme（配色/字体/母题），
+ * 但此前没有内容渲染器，被错误路由到 AI 自由直绘。这里复用 redbook 组图管线，
+ * 把它们的 previewTheme 转换成 RedbookTheme 后走封面卡 + 多张内容卡的完整渲染。
+ */
+const THEMED_SOCIAL_TEMPLATE_IDS = new Set([
+  "social-editorial",
+  "social-geek-report",
+  "social-consulting-report",
+  "social-clean-review",
+  "social-terminal",
+  "social-story-field",
+  "social-dot-matrix",
+])
+
+export function isThemedSocialTemplate(templateId: string): boolean {
+  return THEMED_SOCIAL_TEMPLATE_IDS.has(templateId)
+}
+
+/**
+ * 把 TemplatePreviewTheme（templates.ts 的预览主题）转换成组图管线所需的 RedbookTheme。
+ * previewTheme 已包含完整的 bg/ink/accent/font 数据，按字段语义映射即可。
+ */
+function previewThemeToRedbookTheme(templateId: string, theme: TemplatePreviewTheme): RedbookTheme {
+  return {
+    id: templateId,
+    label: theme.cornerLabel || templateId,
+    accent: theme.accent,
+    accent2: theme.altAccent || theme.accent,
+    accent3: theme.accent,
+    deckBg: theme.bg,
+    outerBg: theme.bg,
+    paper: theme.bg,
+    ink: theme.ink,
+    muted: theme.muted,
+    border: theme.muted,
+    // 组图卡片用轻盈阴影，避免重色调模板（如 terminal-dark 黑底）阴影过重
+    shadow: "0 18px 40px -16px rgba(20,16,12,0.28), 0 4px 12px rgba(20,16,12,0.06)",
+    radius: "18px",
+    titleFont: theme.fontTitle,
+    bodyFont: theme.fontBody,
+    monoFont: theme.fontMono || theme.fontBody,
+    marker: theme.tagline || theme.cornerLabel || templateId,
+  }
+}
+
+/** 解析主题化社交模板的主题（从 previewTheme 转换），未命中返回 null */
+function resolveThemedSocialTheme(templateId: string): RedbookTheme | null {
+  if (!isThemedSocialTemplate(templateId)) return null
+  const template = getOutputTemplate(templateId)
+  if (!template?.previewTheme) return null
+  return previewThemeToRedbookTheme(templateId, template.previewTheme)
 }
 
 function stripHtml(value: string): string {
@@ -918,4 +983,39 @@ export function buildAutoRedbookHtmlFromSource(options: AutoRedbookSourceBuildOp
     generatedAt: options.generatedAt,
     sections,
   })
+}
+
+/**
+ * 主题化社交卡片的完整内容渲染器（供 7 个 social-* 模板走 local-style 管线）。
+ *
+ * 与 buildAutoRedbookSocialCards 共用封面卡 + 多张内容卡的组图骨架，区别在于主题来源：
+ * 这里从 template.previewTheme 转换得到 RedbookTheme，使每个模板按自身配色/字体渲染。
+ * 若 previewTheme 缺失则回退到 redbook-clean 主题，保证总有合理输出。
+ */
+export function buildThemedSocialCards(templateId: string, options: BuildHtmlOptions): string {
+  const theme = resolveThemedSocialTheme(templateId) ?? resolveTheme("social-redbook-clean")
+  const date = options.generatedAt || formatDate(new Date())
+  const sections = options.sections.length
+    ? options.sections
+    : [{ title: options.title || "核心概览", body: options.subtitle || options.title }]
+  const cards = buildCardModels(sections, options.title)
+  const totalPages = cards.length + 1
+  const bodyCards = cards.map((card, index) => renderBodyCard(card, options, theme, index, totalPages)).join("\n")
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(options.title || "社交传播组图")}</title>
+  <style>${renderCss(theme)}</style>
+</head>
+<body class="redbook-output redbook-theme-${theme.id}">
+  <main class="redbook-deck" data-redbook-theme="${theme.id}" data-generated-at="${escapeHtml(date)}">
+${renderCoverCard(options, theme, cards, totalPages)}
+${bodyCards}
+  </main>
+${renderAutoFitScript()}
+</body>
+</html>`
 }

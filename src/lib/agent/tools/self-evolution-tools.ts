@@ -205,14 +205,6 @@ function parseMetadata(raw: string | null | undefined): Record<string, unknown> 
   }
 }
 
-function safeParse(raw: string): unknown {
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return null
-  }
-}
-
 function safeParseArray(raw: string): string[] {
   try {
     const parsed = JSON.parse(raw)

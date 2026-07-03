@@ -39,7 +39,7 @@ export async function registerAgentRunAsKnowledgeObject(
       ? 'inbox'
       : 'active'
 
-  await objectRegistry.register({
+  const objectId = await objectRegistry.register({
     sourceType: 'agent_run',
     sourceId: snapshot.runId,
     title: deriveTitle(snapshot),
@@ -57,4 +57,12 @@ export async function registerAgentRunAsKnowledgeObject(
       durationMs: snapshot.metrics?.durationMs ?? null,
     },
   })
+
+  try {
+    const { syncKnowledgeObjectToGraph } = await import('@/lib/knowledge-graph/sync')
+    const object = await objectRegistry.getById(objectId)
+    if (object) await syncKnowledgeObjectToGraph(object)
+  } catch (error) {
+    console.warn('[KnowledgeGraph] agent run sync skipped:', error)
+  }
 }

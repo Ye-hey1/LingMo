@@ -25,13 +25,21 @@ import {
   AI_HOT_RSS_SOURCE_ID,
   buildHotspotDigestMarkdown,
   filterHotspotsByWindow,
+  loadMoreAiHotspotWechatUserFeed,
   parseOpmlFeeds,
   refreshAiHotspotDailyLatest,
   refreshAiHotspotFeatured,
+  refreshAiHotspotUserFeed,
   refreshAiHotspots,
   shouldAutoRefreshAiHotspots,
 } from '@/lib/ai-hotspots'
-import { seedBuiltinSources } from '@/lib/ai-hotspots/seed-builtin-sources'
+import {
+  forgetDeletedBuiltinSource,
+  getBuiltinSourceByFeedUrl,
+  getBuiltinSourceById,
+  rememberDeletedBuiltinSource,
+  seedBuiltinSources,
+} from '@/lib/ai-hotspots/seed-builtin-sources'
 import { generateAiHotspotInsight } from '@/lib/ai-hotspots/insights'
 import { runAiFilterPipeline, type AiTag } from '@/lib/ai-hotspots/ai-filter'
 import { writeHotspotDigestNote, writeHotspotItemNote } from '@/lib/ai-hotspots/notes'
@@ -96,8 +104,11 @@ interface AiHotspotsState {
   refresh: (options?: { force?: boolean }) => Promise<Awaited<ReturnType<typeof refreshAiHotspots>> | null>
   refreshFeatured: (options?: { force?: boolean }) => Promise<Awaited<ReturnType<typeof refreshAiHotspotFeatured>> | null>
   refreshDaily: (options?: { force?: boolean; autoRefreshDate?: string }) => Promise<Awaited<ReturnType<typeof refreshAiHotspotDailyLatest>> | null>
+  refreshUserFeed: (feedId: string, options?: { force?: boolean }) => Promise<Awaited<ReturnType<typeof refreshAiHotspotUserFeed>> | null>
+  loadMoreWechatUserFeed: (feedId: string, begin: number, count?: number) => Promise<Awaited<ReturnType<typeof loadMoreAiHotspotWechatUserFeed>> | null>
   setView: (view: AiHotspotView) => void
   setFilters: (partial: Partial<AiHotspotFilters>) => void
+  syncItemsFromDb: () => Promise<void>
   toggleFavorite: (id: string) => Promise<void>
   markRead: (id: string, read: boolean) => Promise<void>
   ignoreItem: (id: string, ignored: boolean) => Promise<void>
@@ -173,6 +184,18 @@ async function loadTauriStoreSettings() {
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+async function rememberDeletedSeededFeed(id: string, feed?: AiHotspotUserFeed) {
+  const builtinSource = getBuiltinSourceById(id) || (feed ? getBuiltinSourceByFeedUrl(feed.feedUrl) : undefined)
+  if (builtinSource) {
+    await rememberDeletedBuiltinSource(builtinSource.url)
+    return
+  }
+
+  if (feed && (feed.groupName || '').startsWith('builtin:')) {
+    await rememberDeletedBuiltinSource(feed.feedUrl)
+  }
 }
 
 /** 优先使用 lastSeenAt（抓取时间），让最新抓取的条目排在最前面 */
@@ -289,6 +312,35 @@ function getTrashCutoffIso() {
 
 /** 追踪 refresh 开始时间，用于检测卡死的 isRefreshing 状态 */
 let refreshStartedAt = 0
+let loadStartedAt = 0
+let loadPromise: Promise<void> | null = null
+const LOAD_TIMEOUT_MS = 12_000
+const REFRESH_TIMEOUT_MS = 90_000
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+  })
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
+
+async function withAbortableTimeout<T>(
+  timeoutMs: number,
+  message: string,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await withTimeout(run(controller.signal), timeoutMs + 1_000, message)
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
   view: 'featured',
@@ -355,56 +407,83 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
   },
 
   load: async (options = {}) => {
-    let shouldRefreshAfterLoad = false
-    set({
-      isLoading: true,
-      error: null,
-      refreshProgress: { stage: 'loading-cache', message: '正在读取本地 AI 热点缓存' },
-    })
+    if (loadPromise && loadStartedAt > 0 && Date.now() - loadStartedAt < LOAD_TIMEOUT_MS) {
+      return loadPromise
+    }
 
-    try {
-      await initAiHotspotsDb()
-      await seedBuiltinSources()
-      await cleanupAiHotspotTrash(getTrashCutoffIso())
-      const [{ settings, lastDailyAutoRefreshDate, lastDailyRefreshAt, lastRefreshAt }, items, sources, userFeeds] = await Promise.all([
-        loadTauriStoreSettings(),
-        getAiHotspotItems(),
-        getAiHotspotSourceStatuses(),
-        getAiHotspotUserFeeds(),
-      ])
-      const filters = {
-        ...get().filters,
-        timeRange: settings.defaultTimeRange,
-      }
-      // 注入用户兴趣配置（词组 DSL），供分类/评分使用
-      getInterestConfig(settings.interestText || DEFAULT_INTEREST_TEXT)
-
+    loadStartedAt = Date.now()
+    loadPromise = (async () => {
+      let shouldRefreshAfterLoad = false
       set({
-        items,
-        sources,
-        userFeeds,
-        settings,
-        lastRefreshAt,
-        lastDailyRefreshAt,
-        lastDailyAutoRefreshDate,
-        filters,
-        filteredItems: deriveFilteredItems(items, filters),
+        isLoading: true,
+        error: null,
+        refreshProgress: { stage: 'loading-cache', message: '正在读取本地 AI 热点缓存' },
       })
 
-      shouldRefreshAfterLoad = !options.skipAutoRefresh && shouldAutoRefreshAiHotspots({
-        autoRefreshOnOpen: settings.autoRefreshOnOpen,
-        lastRefreshAt,
-        cooldownMinutes: settings.refreshCooldownMinutes,
-      })
-    } catch (error) {
-      set({ error: getErrorMessage(error) })
-    } finally {
-      set({ isLoading: false, refreshProgress: null })
-    }
+      try {
+        await withTimeout(initAiHotspotsDb(), LOAD_TIMEOUT_MS, '本地数据库初始化超时，请稍后再次打开 AI 热点')
+        const [{ settings, lastDailyAutoRefreshDate, lastDailyRefreshAt, lastRefreshAt }, items, sources, userFeeds] = await withTimeout(
+          Promise.all([
+            loadTauriStoreSettings(),
+            getAiHotspotItems(),
+            getAiHotspotSourceStatuses(),
+            getAiHotspotUserFeeds(),
+          ]),
+          LOAD_TIMEOUT_MS,
+          '读取本地 AI 热点缓存超时，请稍后重试',
+        )
+        const filters = {
+          ...get().filters,
+          timeRange: settings.defaultTimeRange,
+        }
+        // 注入用户兴趣配置（词组 DSL），供分类/评分使用
+        getInterestConfig(settings.interestText || DEFAULT_INTEREST_TEXT)
 
-    if (shouldRefreshAfterLoad) {
-      void get().refresh({ force: false })
-    }
+        set({
+          items,
+          sources,
+          userFeeds,
+          settings,
+          lastRefreshAt,
+          lastDailyRefreshAt,
+          lastDailyAutoRefreshDate,
+          filters,
+          filteredItems: deriveFilteredItems(items, filters),
+        })
+
+        shouldRefreshAfterLoad = !options.skipAutoRefresh && shouldAutoRefreshAiHotspots({
+          autoRefreshOnOpen: settings.autoRefreshOnOpen,
+          lastRefreshAt,
+          cooldownMinutes: settings.refreshCooldownMinutes,
+        })
+
+        void (async () => {
+          try {
+            await seedBuiltinSources()
+            await cleanupAiHotspotTrash(getTrashCutoffIso())
+            const [nextSources, nextUserFeeds] = await Promise.all([
+              getAiHotspotSourceStatuses(),
+              getAiHotspotUserFeeds(),
+            ])
+            set({ sources: nextSources, userFeeds: nextUserFeeds })
+          } catch (error) {
+            console.warn('[ai-hotspots] background maintenance skipped:', error)
+          }
+        })()
+      } catch (error) {
+        set({ error: getErrorMessage(error) })
+      } finally {
+        loadStartedAt = 0
+        loadPromise = null
+        set({ isLoading: false, refreshProgress: null })
+      }
+
+      if (shouldRefreshAfterLoad) {
+        void get().refresh({ force: false })
+      }
+    })()
+
+    return loadPromise
   },
 
   refresh: async (options = {}) => {
@@ -430,7 +509,11 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
 
     try {
       console.log('[ai-hotspots] refresh start, force=', force)
-      const result = await refreshAiHotspots({ includeUserFeeds: true, force })
+      const result = await withAbortableTimeout(
+        REFRESH_TIMEOUT_MS,
+        '刷新 AI 热点超时，请稍后重试',
+        signal => refreshAiHotspots({ includeUserFeeds: true, force, signal }),
+      )
       console.log('[ai-hotspots] refresh done, items=', result.items.length, 'sources=', result.statuses.length)
 
       await cleanupAiHotspotTrash(getTrashCutoffIso())
@@ -485,7 +568,11 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
 
     try {
       console.log('[ai-hotspots] featured refresh start, force=', force)
-      const result = await refreshAiHotspotFeatured({ force })
+      const result = await withAbortableTimeout(
+        REFRESH_TIMEOUT_MS,
+        '刷新精选信号超时，请稍后重试',
+        signal => refreshAiHotspotFeatured({ force, signal }),
+      )
       console.log('[ai-hotspots] featured refresh done, items=', result.items.length, 'sources=', result.statuses.length)
 
       const userFeeds = await getAiHotspotUserFeeds()
@@ -538,7 +625,11 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
 
     try {
       console.log('[ai-hotspots] daily refresh start, force=', force)
-      const result = await refreshAiHotspotDailyLatest({ force })
+      const result = await withAbortableTimeout(
+        REFRESH_TIMEOUT_MS,
+        '刷新 AI 日报超时，请稍后重试',
+        signal => refreshAiHotspotDailyLatest({ force, signal }),
+      )
       console.log('[ai-hotspots] daily refresh done, items=', result.items.length, 'sources=', result.statuses.length)
 
       const userFeeds = await getAiHotspotUserFeeds()
@@ -581,6 +672,106 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
     }
   },
 
+  refreshUserFeed: async (feedId, options = {}) => {
+    if (get().isRefreshing) {
+      if (refreshStartedAt > 0 && Date.now() - refreshStartedAt > 60_000) {
+        console.warn('[ai-hotspots] user feed refresh stuck, force resetting')
+        set({ isRefreshing: false, refreshProgress: null, error: null })
+      } else {
+        return null
+      }
+    }
+
+    refreshStartedAt = Date.now()
+    const force = options.force ?? true
+    const targetFeed = get().userFeeds.find(feed => feed.id === feedId)
+
+    set({
+      isRefreshing: true,
+      error: null,
+      refreshProgress: {
+        stage: 'refreshing',
+        message: `正在刷新订阅源：${targetFeed?.title || '当前源'}`,
+      },
+    })
+
+    try {
+      const result = await withAbortableTimeout(
+        REFRESH_TIMEOUT_MS,
+        '刷新当前订阅源超时，请稍后重试',
+        signal => refreshAiHotspotUserFeed({ feedId, force, signal }),
+      )
+
+      await cleanupAiHotspotTrash(getTrashCutoffIso())
+      const userFeeds = await getAiHotspotUserFeeds()
+      const lastRefreshAt = result.snapshot.completedAt
+      const userFeedRefreshFailed = result.snapshot.failedCount > 0
+      const failedStatus = userFeedRefreshFailed
+        ? result.statuses.find(status => status.sourceId === 'user-rss' && !status.ok)
+        : null
+      const store = await Store.load('store.json')
+      await store.set(STORE_KEYS.lastRefreshAt, lastRefreshAt)
+      await store.save()
+
+      const newFilters = { ...get().filters }
+      const newFiltered = deriveFilteredItems(result.items, newFilters)
+
+      set({
+        items: result.items,
+        sources: result.statuses,
+        userFeeds,
+        lastRefreshAt,
+        filters: newFilters,
+        filteredItems: newFiltered,
+        error: failedStatus?.lastError || null,
+      })
+
+      return result
+    } catch (error) {
+      console.error('[ai-hotspots] user feed refresh error:', error)
+      set({ error: getErrorMessage(error) })
+      return null
+    } finally {
+      refreshStartedAt = 0
+      set({ isRefreshing: false, refreshProgress: null })
+    }
+  },
+
+  loadMoreWechatUserFeed: async (feedId, begin, count) => {
+    try {
+      const result = await withAbortableTimeout(
+        REFRESH_TIMEOUT_MS,
+        '加载公众号历史文章超时，请稍后重试',
+        signal => loadMoreAiHotspotWechatUserFeed({ feedId, begin, count, signal }),
+      )
+
+      const userFeeds = await getAiHotspotUserFeeds()
+      const lastRefreshAt = result.snapshot.completedAt
+      const store = await Store.load('store.json')
+      await store.set(STORE_KEYS.lastRefreshAt, lastRefreshAt)
+      await store.save()
+
+      const newFilters = { ...get().filters }
+      const newFiltered = deriveFilteredItems(result.items, newFilters)
+
+      set({
+        items: result.items,
+        sources: result.statuses,
+        userFeeds,
+        lastRefreshAt,
+        filters: newFilters,
+        filteredItems: newFiltered,
+        error: null,
+      })
+
+      return result
+    } catch (error) {
+      console.error('[ai-hotspots] wechat load more error:', error)
+      set({ error: getErrorMessage(error) })
+      return null
+    }
+  },
+
   setView: (view) => {
     set({ view })
   },
@@ -590,6 +781,14 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
     set({
       filters,
       filteredItems: deriveFilteredItems(get().items, filters),
+    })
+  },
+
+  syncItemsFromDb: async () => {
+    const items = await getAiHotspotItems()
+    set({
+      items,
+      filteredItems: deriveFilteredItems(items, get().filters),
     })
   },
 
@@ -728,16 +927,22 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
   },
 
   addUserFeed: async (input) => {
-    await addAiHotspotUserFeed(input)
+    const feed = await addAiHotspotUserFeed(input)
+    await forgetDeletedBuiltinSource(feed.feedUrl)
     set({ userFeeds: await getAiHotspotUserFeeds() })
   },
 
   updateUserFeed: async (id, patch) => {
-    await updateAiHotspotUserFeed(id, patch)
+    const feed = await updateAiHotspotUserFeed(id, patch)
+    if (feed?.feedUrl) {
+      await forgetDeletedBuiltinSource(feed.feedUrl)
+    }
     set({ userFeeds: await getAiHotspotUserFeeds() })
   },
 
   deleteUserFeed: async (id) => {
+    const feed = get().userFeeds.find(candidate => candidate.id === id)
+    await rememberDeletedSeededFeed(id, feed)
     await deleteAiHotspotUserFeed(id)
     set({ userFeeds: await getAiHotspotUserFeeds() })
   },
@@ -762,6 +967,7 @@ export const useAiHotspotsStore = create<AiHotspotsState>((set, get) => ({
         groupName: 'OPML',
         enabled: true,
       })
+      await forgetDeletedBuiltinSource(feedUrl)
       existingUrls.add(key)
       importedCount += 1
     }

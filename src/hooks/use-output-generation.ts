@@ -35,11 +35,17 @@ import {
 } from "@/lib/output-workshop/output-lint"
 import {
   buildAutoRedbookHtmlFromSource,
+  buildThemedSocialCards,
   isAutoRedbookTemplateId,
+  isThemedSocialTemplate,
 } from "@/lib/output-workshop/social-redbook-builder"
 import { buildWechatArticle } from "@/lib/output-workshop/wechat-builder"
 import { buildStyle } from "@/lib/output-workshop/styles"
-import { splitPlainTextIntoSections } from "@/lib/output-workshop/extraction"
+import {
+  buildOutputExtractionPrompt,
+  getExtractionStrategy,
+  parseOutputExtractionResult,
+} from "@/lib/output-workshop/extraction"
 
 interface UseOutputGenerationOptions {
   // 外部只读值（通过 ref 避免频繁闭包更新）
@@ -103,26 +109,12 @@ function hasMissingAutoRedbookCards(lintResult: OutputLintResult): boolean {
   return lintResult.severeFindings.some((finding) => finding.id === "missing-auto-redbook-cards")
 }
 
-function stripMarkdownTitle(value: string): string {
-  return value
-    .replace(/^#{1,6}\s+/, "")
-    .replace(/^\*\*(.*)\*\*$/, "$1")
-    .trim()
-}
-
-function getFirstMarkdownTitle(markdown: string): string {
-  const heading = markdown
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => /^#{1,6}\s+/.test(line))
-  return heading ? stripMarkdownTitle(heading) : ""
-}
-
 function fetchOutputWorkshopAiStream(
   text: string,
   onUpdate: (content: string) => void,
   abortSignal?: AbortSignal,
-  maxTokens?: number
+  maxTokens?: number,
+  onStreamFinish?: (metadata: { truncated: boolean }) => void
 ): Promise<string> {
   return fetchAiStream({
     text,
@@ -130,7 +122,21 @@ function fetchOutputWorkshopAiStream(
     abortSignal,
     maxTokens,
     modelStoreKey: OUTPUT_WORKSHOP_MODEL_STORE_KEY,
+    onStreamFinish,
   })
+}
+
+/**
+ * 把生成结果异步写入本地缓存（.lingmo-output 缓存）。
+ * 三个生成函数（local-wechat / structured-style / creative）原本各自重复这段
+ * try/catch + console.error，现统一收口；缓存失败不阻断主流程，仅记录日志。
+ */
+async function persistOutputCache(html: string): Promise<void> {
+  try {
+    await saveCachedOutput(html)
+  } catch (debugError) {
+    console.error("缓存写入失败:", debugError)
+  }
 }
 
 function buildRepairPrompt(refinePrompt: string, lintResult: OutputLintResult, html: string): string {
@@ -294,7 +300,7 @@ export function useOutputGeneration({
     let lintResult = qualityLint
 
     for (let attempt = 0; attempt < MAX_REPAIR_ATTEMPTS && shouldRepairOutputHtml(lintResult); attempt += 1) {
-      setProgressText(attempt === 0 ? "正在修复生成结果..." : "正在再次修复生成结果...")
+      setProgressText(attempt === 0 ? "正在修复生成结果…" : "正在再次修复…")
       setBuildStageId("template")
       updateTelemetry({
         phase: attempt === 0 ? "repairing" : "repairing",
@@ -356,7 +362,7 @@ export function useOutputGeneration({
       return { html, lintResult, rebuilt: false }
     }
 
-    setProgressText("正在按社交组图模板重建卡片...")
+    setProgressText("正在重建社交组图卡片…")
     setBuildStageId("template")
     updateTelemetry({
       phase: "local-build",
@@ -406,7 +412,7 @@ export function useOutputGeneration({
       setStreamingHtml("")
       setErrorMessage(null)
       setBuildStageId("template")
-      setProgressText("正在套用一键排版模板...")
+      setProgressText("正在套用排版模板…")
       updateTelemetry({
         phase: "local-build",
         phaseLabel: "正在套用一键排版模板",
@@ -427,7 +433,7 @@ export function useOutputGeneration({
       const normalizedSourceContent = typeof sourceContent === "string" ? sourceContent.trim() : ""
       const normalizedTitle = typeof title === "string" ? title.trim() : ""
       const normalizedCustomInstructions = typeof customInstructions === "string" ? customInstructions.trim() : ""
-      const html = prepareOutputHtml(buildWechatArticle({
+      const html = prepareOutputHtml(await buildWechatArticle({
         styleId: latestTemplateId,
         title: normalizedTitle || latestTemplate?.name || "一键排版",
         subtitle: normalizedCustomInstructions,
@@ -455,11 +461,7 @@ export function useOutputGeneration({
       })
       toast({ title: "一键排版完成" })
 
-      try {
-        await saveCachedOutput(html)
-      } catch (debugError) {
-        console.error("缓存写入失败:", debugError)
-      }
+      await persistOutputCache(html)
     } catch (error) {
       console.error("一键排版本地生成失败:", error)
       setStatus("error")
@@ -486,24 +488,25 @@ export function useOutputGeneration({
     updateTelemetry,
   ])
 
-  const generateLocalStyleOutput = React.useCallback(async () => {
+  const generateStructuredStyleOutput = React.useCallback(async () => {
     const latestTemplate = selectedTemplateRef.current
     const latestTemplateId = selectedTemplateIdRef.current
-    generationRunIdRef.current += 1
+    const runId = ++generationRunIdRef.current
+    const abortController = new AbortController()
     abortRef.current?.abort()
-    abortRef.current = null
+    abortRef.current = abortController
+    const isCurrentRun = () => generationRunIdRef.current === runId && !abortController.signal.aborted
 
     try {
-      const startedAt = Date.now()
       setStatus("generating")
       setStreamingHtml("")
       setErrorMessage(null)
-      setBuildStageId("template")
-      setProgressText("正在套用模板结构...")
+      setBuildStageId("parse")
+      setProgressText("正在解析内容结构…")
       updateTelemetry({
-        phase: "local-build",
-        phaseLabel: "正在套用模板结构",
-        startedAt,
+        phase: "preparing",
+        phaseLabel: "正在解析内容结构",
+        startedAt: Date.now(),
         requestStartedAt: null,
         firstByteAt: null,
         lastChunkAt: null,
@@ -520,26 +523,86 @@ export function useOutputGeneration({
       const normalizedSourceContent = typeof sourceContent === "string" ? sourceContent.trim() : ""
       const normalizedTitle = typeof title === "string" ? title.trim() : ""
       const normalizedCustomInstructions = typeof customInstructions === "string" ? customInstructions.trim() : ""
-      const reportTitle = normalizedTitle || getFirstMarkdownTitle(normalizedSourceContent) || latestTemplate?.name || "智能排版"
-      const sections = splitPlainTextIntoSections(normalizedSourceContent || reportTitle)
-      const html = prepareOutputHtml(buildStyle(latestTemplateId, {
-        title: reportTitle,
-        subtitle: normalizedCustomInstructions || latestTemplate?.description || "",
-        sections,
+      const extractionPrompt = buildOutputExtractionPrompt({
+        templateId: latestTemplateId,
+        templateName: latestTemplate?.name || "智能排版模板",
+        outputHint: latestTemplate?.outputHint || "生成结构化内容",
+        bestFor: latestTemplate?.bestFor || "知识整理与可视化表达",
+        title: normalizedTitle,
+        sourceContent: normalizedSourceContent,
+        sourceLabel: typeof sourceLabel === "string" ? sourceLabel : "",
+        customInstructions: normalizedCustomInstructions,
+        // strategy 由 getExtractionStrategy 按 templateId 自动推断（思维导图→树形、数据→指标等）
+        strategy: getExtractionStrategy(latestTemplateId),
+      })
+
+      markAiRequestStarted("正在等待 AI 解析内容结构", extractionPrompt.length)
+
+      let parsedJson = ""
+      // 结构解析不再硬性限制 max_tokens（此前 3000 token 会导致长文本 JSON 被截断、
+      // 解析失败回退）。改为由模型按需输出完整 JSON，与 creative 直绘管线对齐。
+      // truncated 信号用于在解析结果可能不完整时提示用户。
+      let extractionTruncated = false
+      const rawJson = await fetchOutputWorkshopAiStream(
+        extractionPrompt,
+        (content) => {
+          if (!isCurrentRun()) return
+          parsedJson = content
+          setProgressText("正在解析内容结构…")
+          setBuildStageId("parse")
+          if (content.trim().length > 0) {
+            markAiChunkThrottled(content.length, "AI 正在解析结构 JSON")
+          }
+        },
+        abortController.signal,
+        undefined,
+        (metadata) => {
+          if (metadata.truncated) extractionTruncated = true
+        }
+      )
+
+      if (!isCurrentRun()) {
+        setStatus("idle")
+        return
+      }
+
+      setProgressText("正在套用本地模板…")
+      setBuildStageId("template")
+      updateTelemetry({
+        phase: "local-build",
+        phaseLabel: "正在套用本地模板",
+      })
+
+      const fallbackTitle = normalizedTitle || latestTemplate?.name || "智能排版"
+      const extraction = parseOutputExtractionResult(parsedJson || rawJson, normalizedSourceContent || fallbackTitle, fallbackTitle)
+      // 主题化社交卡片模板（social-editorial 等）走组图管线，其余走标准 buildStyle
+      // 思维导图策略下 extraction.mindmap 是结构化树，传入让 learning-mindmap 直接渲染
+      const buildOptions = {
+        title: extraction.title || fallbackTitle,
+        subtitle: extraction.subtitle || normalizedCustomInstructions || latestTemplate?.description || "",
+        sections: extraction.sections,
+        mindmap: extraction.mindmap,
         sourceLabel: typeof sourceLabel === "string" ? sourceLabel : "",
         generatedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
-      }))
+      }
+      const rawHtml = isThemedSocialTemplate(latestTemplateId)
+        ? buildThemedSocialCards(latestTemplateId, buildOptions)
+        : buildStyle(latestTemplateId, buildOptions)
+      const html = prepareOutputHtml(rawHtml)
       const lintResult = lintOutputWorkshopHtml(html, { templateId: latestTemplateId })
 
-      console.info("【智能排版】本地模板生成完成:", latestTemplateId)
+      if (!isCurrentRun()) return
+
+      console.info("【智能排版】AI结构解析 + 本地模板生成完成:", latestTemplateId, extraction.usedFallback ? `fallback:${extraction.warning || ""}` : "structured")
       setGeneratedHtml(html)
-      saveSnapshot(html, reportTitle, latestTemplateId, normalizedCustomInstructions, normalizedSourceContent)
+      setStreamingHtml("")
+      saveSnapshot(html, extraction.title || fallbackTitle, latestTemplateId, normalizedCustomInstructions, normalizedSourceContent)
       setStatus("done")
       setBuildStageId("preview")
       setProgressText("生成完成")
       updateTelemetry({
         phase: "done",
-        phaseLabel: "生成完成",
+        phaseLabel: extraction.usedFallback ? "已用本地模板生成（结构解析已回退）" : "已用本地模板生成",
         completedAt: Date.now(),
         outputChars: html.length,
         qualityChecked: true,
@@ -547,15 +610,24 @@ export function useOutputGeneration({
         severeFindingCount: lintResult.severeFindings.length,
         qualitySummary: summarizeLintResult(lintResult),
       })
-      toast({ title: `${latestTemplate?.name || "模板"}生成完成` })
+      // 解析结果异常时明确告知用户，避免困惑"为什么排版变简单/内容不全"
+      const warningDescription = extraction.usedFallback
+        ? `AI 结构解析失败（${extraction.warning || "原因未知"}），已回退纯文本分段`
+        : extractionTruncated
+          ? "AI 解析结果疑似被截断，已自动修复部分内容，建议核对完整性"
+          : undefined
+      toast({
+        title: `${latestTemplate?.name || "模板"}生成完成`,
+        description: warningDescription,
+      })
 
-      try {
-        await saveCachedOutput(html)
-      } catch (debugError) {
-        console.error("缓存写入失败:", debugError)
-      }
+      await persistOutputCache(html)
     } catch (error) {
-      console.error("本地模板生成失败:", error)
+      if (abortController.signal.aborted) {
+        setStatus("idle")
+        return
+      }
+      console.error("结构化模板生成失败:", error)
       setStatus("error")
       setBuildStageId("preview")
       setErrorMessage(error instanceof Error ? error.message : "模板生成失败，请稍后重试")
@@ -569,9 +641,15 @@ export function useOutputGeneration({
         description: error instanceof Error ? error.message : "请稍后重试",
         variant: "destructive",
       })
+    } finally {
+      if (generationRunIdRef.current === runId) {
+        abortRef.current = null
+      }
     }
   }, [
     customInstructions,
+    markAiChunkThrottled,
+    markAiRequestStarted,
     saveSnapshot,
     setGeneratedHtml,
     sourceContent,
@@ -585,12 +663,16 @@ export function useOutputGeneration({
     const latestTemplateId = selectedTemplateIdRef.current
     if (isLocalWechatOutputTemplate(latestTemplate, latestTemplateId)) {
       console.warn("【智能排版】已拦截一键排版模板进入 AI 直绘，改用本地排版:", latestTemplateId)
-      void generateLocalWechatOutput()
+      generateLocalWechatOutput().catch((err) => {
+        console.error("【智能排版】一键排版生成异常:", err)
+      })
       return
     }
     if (isLocalStyleOutputTemplate(latestTemplate, latestTemplateId)) {
-      console.warn("【智能排版】已拦截本地样式模板进入 AI 直绘，改用模板构建器:", latestTemplateId)
-      void generateLocalStyleOutput()
+      console.warn("【智能排版】已拦截本地样式模板进入 AI 直绘，改用 AI 结构解析 + 本地模板:", latestTemplateId)
+      generateStructuredStyleOutput().catch((err) => {
+        console.error("【智能排版】结构化模板生成异常:", err)
+      })
       return
     }
 
@@ -602,10 +684,10 @@ export function useOutputGeneration({
     try {
       setStatus("generating")
       setBuildStageId("parse")
-      setProgressText("正在构建智能排版提示词...")
+      setProgressText("正在构建提示词…")
       updateTelemetry({
         phase: "preparing",
-        phaseLabel: "正在构建智能排版提示词",
+        phaseLabel: "正在构建提示词",
         startedAt: Date.now(),
       })
 
@@ -627,10 +709,10 @@ export function useOutputGeneration({
           if (!isCurrentRun()) return
           const cleaned = cleanStreamingHtml(content)
           finalHtml = cleaned
-          setProgressText("AI 正在生成预览...")
+          setProgressText("AI 正在生成页面…")
           setBuildStageId("preview")
           if (cleaned.length > 0) {
-            markAiChunkThrottled(cleaned.length, "AI 正在直绘页面")
+            markAiChunkThrottled(cleaned.length, "AI 正在生成页面")
           }
           const now = Date.now()
           if (now - lastStreamingUpdateRef.current > 150) {
@@ -674,7 +756,7 @@ export function useOutputGeneration({
       lintResult = autoRedbookFallback.lintResult
 
       if (!autoRedbookFallback.rebuilt && shouldRepairOutputHtml(lintResult)) {
-        setProgressText("正在修复生成结果...")
+        setProgressText("正在修复生成结果…")
         setBuildStageId("template")
         updateTelemetry({
           phase: "repairing",
@@ -693,7 +775,7 @@ export function useOutputGeneration({
 
       if (!isCurrentRun()) return
 
-      console.info("【智能排版】AI直绘生成完成。原始长度:", finalHtml.length, "修复后长度:", repairedHtml.length, "质量提示:", lintResult.findings.length)
+      console.info("【智能排版】AI自由创意生成完成。原始长度:", finalHtml.length, "修复后长度:", repairedHtml.length, "质量提示:", lintResult.findings.length)
       if (lintResult.findings.length > 0) {
         console.warn("【智能排版】生成质量提示:", lintResult.findings.map((finding) => `${finding.id}:${finding.severity}`).join(", "))
       }
@@ -719,11 +801,7 @@ export function useOutputGeneration({
       })
       toast({ title: "自由设计生成完成！" })
 
-      try {
-        await saveCachedOutput(repairedHtml)
-      } catch (debugError) {
-        console.error("缓存写入失败:", debugError)
-      }
+      await persistOutputCache(repairedHtml)
     } finally {
       if (generationRunIdRef.current === runId) {
         abortRef.current = null
@@ -731,8 +809,8 @@ export function useOutputGeneration({
     }
   }, [
     customInstructions,
-    generateLocalStyleOutput,
     generateLocalWechatOutput,
+    generateStructuredStyleOutput,
     markAiChunkThrottled,
     markAiRequestStarted,
     saveSnapshot,
@@ -750,15 +828,21 @@ export function useOutputGeneration({
 
   const handleGenerate = React.useCallback(() => {
     if (isLocalWechatOutputTemplate(selectedTemplateRef.current, selectedTemplateIdRef.current)) {
-      void generateLocalWechatOutput()
+      generateLocalWechatOutput().catch((err) => {
+        console.error("【智能排版】一键排版生成异常:", err)
+      })
       return
     }
     if (isLocalStyleOutputTemplate(selectedTemplateRef.current, selectedTemplateIdRef.current)) {
-      void generateLocalStyleOutput()
+      generateStructuredStyleOutput().catch((err) => {
+        console.error("【智能排版】结构化模板生成异常:", err)
+      })
       return
     }
-    void generateCreativeOutput()
-  }, [generateCreativeOutput, generateLocalStyleOutput, generateLocalWechatOutput])
+    generateCreativeOutput().catch((err) => {
+      console.error("【智能排版】创意生成异常:", err)
+    })
+  }, [generateCreativeOutput, generateLocalWechatOutput, generateStructuredStyleOutput])
 
   const handleRefine = React.useCallback(async () => {
     const query = typeof refineQuery === "string" ? refineQuery.trim() : ""
@@ -783,12 +867,12 @@ export function useOutputGeneration({
       setRefining(true)
       setStatus("streaming")
       setBuildStageId("template")
-      setProgressText("正在微调页面...")
+      setProgressText("正在微调页面…")
       setErrorMessage(null)
       setStreamingHtml(currentHtml)
       updateTelemetry({
         phase: "preparing",
-        phaseLabel: "正在构建微调提示词",
+        phaseLabel: "正在微调页面",
         startedAt: Date.now(),
         completedAt: null,
         outputChars: currentHtml.length,
@@ -829,7 +913,7 @@ export function useOutputGeneration({
           if (abortController.signal.aborted) return
           const cleaned = cleanStreamingHtml(content)
           refinedHtml = cleaned
-          setProgressText("AI 正在微调预览...")
+          setProgressText("AI 正在微调页面…")
           setBuildStageId("preview")
           if (cleaned.length > 0) {
             markAiChunkThrottled(cleaned.length, "AI 正在微调页面")
@@ -911,11 +995,7 @@ export function useOutputGeneration({
       })
       toast({ title: "微调完成" })
 
-      try {
-        await saveCachedOutput(finalHtml)
-      } catch (debugError) {
-        console.error("缓存写入失败:", debugError)
-      }
+      await persistOutputCache(finalHtml)
     } catch (error) {
       if (!abortController.signal.aborted) {
         console.error("智能排版微调失败:", error)
@@ -975,7 +1055,7 @@ export function useOutputGeneration({
     handleGenerate,
     handleRefine,
     generateLocalWechatOutput,
-    generateLocalStyleOutput,
+    generateStructuredStyleOutput,
     generateCreativeOutput,
   }
 }

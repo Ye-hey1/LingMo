@@ -1,7 +1,7 @@
-import { escapeHtml, renderMarkdown, type BuildHtmlOptions, type ExtractedSection } from "../shared/builder-utils"
+import { escapeHtml, renderMarkdown, type BuildHtmlOptions, type ExtractedSection, type MindmapBranch, type MindmapChild } from "../shared/builder-utils"
 
 export function buildMindmapStyle(options: BuildHtmlOptions): string {
-  const { title, sections } = options
+  const { title, sections, mindmap } = options
 
   // 左右分布算法：偶数放左边，奇数放右边
   const leftSections = sections.filter((_, idx) => idx % 2 === 0)
@@ -27,56 +27,25 @@ export function buildMindmapStyle(options: BuildHtmlOptions): string {
   // 智能树形解析辅助函数
   function parseToTree(bullets?: string[], body?: string, globalIdx: number = 0): MindmapNode[] {
     const lines: { text: string; depth: number }[] = []
-    
+
+    // 把原始行解析为 { text, depth }。depth 按缩进归一化：每 2 个前导空格算 1 级。
+    // 注意：此前版本会按冒号拆分额外加 depth（"时间：2026" → 两层），这会导致意外跳级，
+    // 现已移除——冒号是常见标点，不应改变层级。结构化层级改由 mindmap schema 承载。
+    const pushLine = (rawText: string) => {
+      const cleanLine = rawText.trim()
+      if (!cleanLine) return
+      const leadingSpaces = rawText.match(/^(\s*)/)?.[1] || ""
+      const depth = Math.floor(leadingSpaces.length / 2)
+      const textWithoutBullet = cleanLine.replace(/^([-\*\+]\s+)|(^\d+\.\s+)/, '')
+      if (textWithoutBullet) {
+        lines.push({ text: textWithoutBullet, depth })
+      }
+    }
+
     if (bullets && bullets.length > 0) {
-      bullets.forEach(b => {
-        const leadingSpaces = b.match(/^\s*/)?.[0] || ""
-        const baseIndent = leadingSpaces.length
-        const cleanLine = b.trim()
-        if (!cleanLine) return
-        
-        const textWithoutBullet = cleanLine.replace(/^([-\*\+]\s+)|(^\d+\.\s+)/, '')
-        const parts = textWithoutBullet.split(/[:：]/).map(p => p.trim()).filter(p => p.length > 0)
-        
-        if (parts.length > 1) {
-          parts.forEach((part, partIdx) => {
-            lines.push({
-              text: part,
-              depth: baseIndent + partIdx
-            })
-          })
-        } else {
-          lines.push({
-            text: textWithoutBullet,
-            depth: baseIndent
-          })
-        }
-      })
+      bullets.forEach(b => pushLine(b))
     } else if (body) {
-      const rawLines = body.split('\n')
-      rawLines.forEach(line => {
-        const leadingSpaces = line.match(/^\s*/)?.[0] || ""
-        const baseIndent = leadingSpaces.length
-        const cleanLine = line.trim()
-        if (!cleanLine) return
-        
-        const textWithoutBullet = cleanLine.replace(/^([-\*\+]\s+)|(^\d+\.\s+)/, '')
-        const parts = textWithoutBullet.split(/[:：]/).map(p => p.trim()).filter(p => p.length > 0)
-        
-        if (parts.length > 1) {
-          parts.forEach((part, partIdx) => {
-            lines.push({
-              text: part,
-              depth: baseIndent + partIdx
-            })
-          })
-        } else {
-          lines.push({
-            text: textWithoutBullet,
-            depth: baseIndent
-          })
-        }
-      })
+      body.split('\n').forEach(line => pushLine(line))
     }
     
     interface StackItem {
@@ -111,6 +80,30 @@ export function buildMindmapStyle(options: BuildHtmlOptions): string {
     })
     
     return rootNodes
+  }
+
+  /**
+   * 把 AI 输出的结构化 MindmapBranch 树转成渲染用的 MindmapNode 树。
+   * 与 parseToTree（从字符串猜测深度）互补：这里是零猜测的直接映射，
+   * 保证思维导图的层级完全忠于 AI 提炼的结构。
+   */
+  let mindmapNodeIdSeq = 0
+  function mindmapChildToNode(child: MindmapChild, branchIdx: number): MindmapNode {
+    const id = `mnode-${branchIdx}-${mindmapNodeIdSeq++}`
+    return {
+      id,
+      text: child.text,
+      children: (child.children || []).map((c) => mindmapChildToNode(c, branchIdx)),
+    }
+  }
+
+  function mindmapBranchToNode(branch: MindmapBranch, branchIdx: number): MindmapNode {
+    const id = `mnode-${branchIdx}`
+    return {
+      id,
+      text: branch.title,
+      children: (branch.children || []).map((c) => mindmapChildToNode(c, branchIdx)),
+    }
   }
 
   // 递归树渲染逻辑
@@ -163,7 +156,7 @@ export function buildMindmapStyle(options: BuildHtmlOptions): string {
 
   const renderSectionToGroup = (section: ExtractedSection, globalIdx: number, side: 'left' | 'right') => {
     const theme = branchThemes[globalIdx % branchThemes.length]
-    
+
     const branchTree: MindmapNode = {
       id: `node-${globalIdx}`,
       text: section.title,
@@ -173,15 +166,40 @@ export function buildMindmapStyle(options: BuildHtmlOptions): string {
     return renderNode(branchTree, 'node-root', 1, theme, side, globalIdx)
   }
 
-  const leftHtml = leftSections.map(s => {
-    const globalIdx = sections.indexOf(s)
-    return renderSectionToGroup(s, globalIdx, 'left')
-  }).join('\n')
+  // 渲染逻辑：优先使用 AI 输出的结构化 mindmap 树（零猜测）；
+  // 若 AI 没输出 mindmap 但有 sections，则把 sections 降级转成 mindmap 树
+  // （比 parseToTree 数空格更稳：section.title → 分支，bullets → 子节点）；
+  // 两者都空时回退到 sections + parseToTree（纯文本回退路径）。
+  const useStructuredMindmap = Array.isArray(mindmap) && mindmap.length > 0
+  let leftHtml: string
+  let rightHtml: string
 
-  const rightHtml = rightSections.map(s => {
-    const globalIdx = sections.indexOf(s)
-    return renderSectionToGroup(s, globalIdx, 'right')
-  }).join('\n')
+  if (useStructuredMindmap) {
+    const branchList = mindmap as MindmapBranch[]
+    const renderBranch = (branch: MindmapBranch, idx: number, side: 'left' | 'right') => {
+      const theme = branchThemes[idx % branchThemes.length]
+      const branchTree = mindmapBranchToNode(branch, idx)
+      return renderNode(branchTree, 'node-root', 1, theme, side, idx)
+    }
+    leftHtml = branchList.filter((_, idx) => idx % 2 === 0).map((b) => {
+      const idx = branchList.indexOf(b)
+      return renderBranch(b, idx, 'left')
+    }).join('\n')
+    rightHtml = branchList.filter((_, idx) => idx % 2 !== 0).map((b) => {
+      const idx = branchList.indexOf(b)
+      return renderBranch(b, idx, 'right')
+    }).join('\n')
+  } else {
+    leftHtml = leftSections.map(s => {
+      const globalIdx = sections.indexOf(s)
+      return renderSectionToGroup(s, globalIdx, 'left')
+    }).join('\n')
+
+    rightHtml = rightSections.map(s => {
+      const globalIdx = sections.indexOf(s)
+      return renderSectionToGroup(s, globalIdx, 'right')
+    }).join('\n')
+  }
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -336,11 +354,12 @@ export function buildMindmapStyle(options: BuildHtmlOptions): string {
     .level-1 {
       border-radius: 16px;
       box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.04), 0 8px 16px -6px rgba(15, 23, 42, 0.02);
-      min-width: 160px;
-      max-width: 240px;
+      min-width: 140px;
+      max-width: 280px;
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      overflow-wrap: anywhere;
     }
     .level-1:hover {
       transform: translateY(-4px) scale(1.03);
@@ -356,8 +375,8 @@ export function buildMindmapStyle(options: BuildHtmlOptions): string {
       background: rgba(255, 255, 255, 0.85);
       border: 1px solid rgba(15, 23, 42, 0.06);
       border-radius: 10px;
-      max-width: 220px;
-      word-break: break-all;
+      max-width: 260px;
+      overflow-wrap: anywhere;
       box-shadow: 0 4px 12px rgba(15, 23, 42, 0.02);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
@@ -377,8 +396,8 @@ export function buildMindmapStyle(options: BuildHtmlOptions): string {
       font-weight: 500;
       color: #475569;
       padding: 6px 12px;
-      max-width: 280px;
-      word-break: break-all;
+      max-width: 300px;
+      overflow-wrap: anywhere;
       text-align: left;
       transition: all 0.25s ease;
       background: transparent;
@@ -593,6 +612,8 @@ export function buildMindmapStyle(options: BuildHtmlOptions): string {
       };
     }
     
+    let connectionFrame = 0;
+
     function drawConnections() {
       const svg = document.getElementById('mindmap-svg');
       svg.innerHTML = '';
@@ -667,16 +688,25 @@ export function buildMindmapStyle(options: BuildHtmlOptions): string {
         svg.appendChild(path);
       });
     }
+
+    function scheduleDrawConnections() {
+      if (connectionFrame) return;
+      connectionFrame = window.requestAnimationFrame(() => {
+        connectionFrame = 0;
+        drawConnections();
+      });
+    }
     
     // 初始化与动态观察
     window.addEventListener('load', () => {
-      drawConnections();
-      // 在流式收到数据并触发 DOM 长度变动时自动刷新连线
-      const observer = new MutationObserver(drawConnections);
-      observer.observe(canvas, { childList: true, subtree: true, characterData: true });
+      scheduleDrawConnections();
+      // 只观察节点树本体，避免 drawConnections() 重建 SVG 连线时触发自身，造成主线程循环卡死。
+      const observedTree = document.querySelector('.mindmap-wrapper') || canvas;
+      const observer = new MutationObserver(scheduleDrawConnections);
+      observer.observe(observedTree, { childList: true, subtree: true, characterData: true });
     });
     
-    window.addEventListener('resize', drawConnections);
+    window.addEventListener('resize', scheduleDrawConnections);
   </script>
 </body>
 </html>`

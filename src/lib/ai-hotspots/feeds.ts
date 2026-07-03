@@ -9,7 +9,7 @@ export const AI_HOT_RSS_SOURCE_ID = 'ai-hot-rss'
 export const AI_HOT_RSS_SOURCE_NAME = 'AI HOT RSS'
 export const AI_HOT_FEATURED_FEED_NAME = 'AI HOT 精选'
 export const AI_HOT_FEATURED_FEED_URL = 'https://aihot.virxact.com/feed.xml'
-export const AI_HOT_ALL_FEED_NAME = 'AI HOT 全部 AI 动态'
+export const AI_HOT_ALL_FEED_NAME = 'AI HOT 全部动态'
 export const AI_HOT_ALL_FEED_URL = 'https://aihot.virxact.com/feed/all.xml'
 export const AI_HOT_DAILY_FEED_NAME = 'AI HOT 日报'
 export const AI_HOT_DAILY_FEED_URL = 'https://aihot.virxact.com/feed/daily.xml'
@@ -42,6 +42,11 @@ export function getDefaultRssFeedRole(feed: { title?: string; name?: string; fee
   if (title === AI_HOT_DAILY_FEED_NAME || url === AI_HOT_DAILY_FEED_URL) return 'daily'
   if (title === AI_HOT_ALL_FEED_NAME || url === AI_HOT_ALL_FEED_URL) return 'all'
   return 'featured'
+}
+
+export function isDefaultRssFeed(feed: { feedUrl?: string; url?: string }): boolean {
+  const url = (feed.feedUrl || feed.url || '').trim().toLowerCase()
+  return DEFAULT_RSS_FEEDS.some(defaultFeed => defaultFeed.url.toLowerCase() === url)
 }
 
 export function getDefaultRssFeedNote(role: DefaultRssFeed['role']) {

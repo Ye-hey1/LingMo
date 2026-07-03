@@ -87,6 +87,14 @@ export async function upsertNoteRelation(relation: RelationInput) {
       ],
     )
   })
+
+  try {
+    const { syncNoteRelationsToGraph } = await import('@/lib/knowledge-graph/sync')
+    const relations = await getRelationsBetween(relation.source_note, relation.target_note)
+    await syncNoteRelationsToGraph(relations)
+  } catch (error) {
+    console.warn('[KnowledgeGraph] note relation sync skipped:', error)
+  }
 }
 
 export async function upsertNoteRelationsBatch(relations: RelationInput[]) {

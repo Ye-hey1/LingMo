@@ -12,9 +12,25 @@ export class AICompletionUnavailableError extends Error {
   }
 }
 
+interface CompletionRequestOptions {
+  showErrorToast?: boolean
+  maxTokens?: number
+}
+
 function isAbortError(error: unknown) {
   return error instanceof Error &&
     (error.name === 'AbortError' || error.message === 'Request was aborted.')
+}
+
+async function hasConfiguredCompletionService(
+  baseURL: string | undefined,
+  showErrorToast: boolean
+) {
+  if (showErrorToast) {
+    return await validateAIService(baseURL) !== null
+  }
+
+  return Boolean(baseURL)
 }
 
 /**
@@ -99,42 +115,54 @@ ${context}
 Continuation:`
 }
 
+function buildCompletionMessages(context: string, richContext?: CompletionContext) {
+  return richContext
+    ? [
+        { role: 'system' as const, content: COMPLETION_SYSTEM_PROMPT },
+        { role: 'user' as const, content: buildPromptFromContext(richContext, context) },
+      ]
+    : [
+        { role: 'user' as const, content: buildLegacyPrompt(context) },
+      ]
+}
+
 /**
  * 快速生成代码/文本补全
  * 专门用于内联补全，使用更少的上下文和更快的响应
  */
-export async function fetchCompletion(context: string, abortSignal?: AbortSignal): Promise<string> {
+export async function fetchCompletion(
+  context: string,
+  abortSignal?: AbortSignal,
+  richContext?: CompletionContext,
+  options: CompletionRequestOptions = {}
+): Promise<string> {
   try {
     // 获取AI设置（使用快速补全模型），若未配置则自动降级到主力模型
     const aiConfig = await getAISettings('completionModel') || await getAISettings('primaryModel')
+    const showErrorToast = options.showErrorToast ?? true
 
     // 验证AI服务
-    if (await validateAIService(aiConfig?.baseURL) === null) return ''
+    if (!await hasConfiguredCompletionService(aiConfig?.baseURL, showErrorToast)) return ''
 
     const openai = await createOpenAIClient(aiConfig)
 
-    const prompt = buildLegacyPrompt(context)
+    const messages = buildCompletionMessages(context, richContext)
 
     const completion = await openai.chat.completions.create({
       model: aiConfig?.model || '',
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
-        }
-      ],
-      temperature: 0.7,
-      max_tokens: 80,
+      messages,
+      temperature: richContext ? 0.65 : 0.7,
+      max_tokens: options.maxTokens ?? (richContext ? 140 : 80),
       top_p: 0.95,
     }, {
       signal: abortSignal
     })
 
-    const result = completion.choices[0].message.content || ''
+    const result = completion.choices[0]?.message?.content || ''
     return cleanupCompletion(result)
   } catch (error) {
     if (!isAbortError(error)) {
-      handleAIError(error)
+      handleAIError(error, options.showErrorToast ?? true)
     }
     return ''
   }
@@ -153,34 +181,29 @@ export async function fetchCompletionStream(
   context: string,
   onChunk: (chunk: string, isFirst: boolean) => void,
   abortSignal?: AbortSignal,
-  richContext?: CompletionContext
+  richContext?: CompletionContext,
+  options: CompletionRequestOptions = {}
 ): Promise<void> {
   try {
     // 获取AI设置（使用快速补全模型），若未配置则自动降级到主力模型
     const aiConfig = await getAISettings('completionModel') || await getAISettings('primaryModel')
+    const showErrorToast = options.showErrorToast ?? true
 
     // 验证AI服务
-    if (await validateAIService(aiConfig?.baseURL) === null) {
+    if (!await hasConfiguredCompletionService(aiConfig?.baseURL, showErrorToast)) {
       throw new AICompletionUnavailableError()
     }
 
     const openai = await createOpenAIClient(aiConfig)
 
     // 根据是否传入 richContext 选择 prompt 构建策略
-    const messages = richContext
-      ? [
-          { role: 'system' as const, content: COMPLETION_SYSTEM_PROMPT },
-          { role: 'user' as const, content: buildPromptFromContext(richContext, context) },
-        ]
-      : [
-          { role: 'user' as const, content: buildLegacyPrompt(context) },
-        ]
+    const messages = buildCompletionMessages(context, richContext)
 
     const stream = await openai.chat.completions.create({
       model: aiConfig?.model || '',
       messages,
       temperature: 0.7,
-      max_tokens: richContext ? 60 : 80, // 灰字场景用更少的 token
+      max_tokens: options.maxTokens ?? (richContext ? 120 : 80),
       top_p: 0.95,
       stream: true,
     }, {

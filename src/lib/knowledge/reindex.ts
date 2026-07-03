@@ -67,7 +67,7 @@ export interface KnowledgeIndexHealth {
   warnings: string[]
 }
 
-namespace ReindexInternals {
+const ReindexInternals = (() => {
   /**
    * 在模块内维护一个"正在重索引"标记，防止并发触发。
    * sync 事件高频，必须串行化。
@@ -76,32 +76,34 @@ namespace ReindexInternals {
   let pendingTimer: ReturnType<typeof setTimeout> | null = null
   let pendingResolve: ((p: Promise<ReindexResult>) => void) | null = null
 
-  export function getRunningPromise() {
-    return runningPromise
-  }
+  return {
+    getRunningPromise() {
+      return runningPromise
+    },
 
-  export function setRunningPromise(p: Promise<ReindexResult> | null) {
-    runningPromise = p
-  }
+    setRunningPromise(p: Promise<ReindexResult> | null) {
+      runningPromise = p
+    },
 
-  export function getPendingTimer() {
-    return pendingTimer
-  }
+    getPendingTimer() {
+      return pendingTimer
+    },
 
-  export function setPendingTimer(t: ReturnType<typeof setTimeout> | null) {
-    pendingTimer = t
-  }
+    setPendingTimer(t: ReturnType<typeof setTimeout> | null) {
+      pendingTimer = t
+    },
 
-  export function consumePendingResolver() {
-    const r = pendingResolve
-    pendingResolve = null
-    return r
-  }
+    consumePendingResolver() {
+      const r = pendingResolve
+      pendingResolve = null
+      return r
+    },
 
-  export function setPendingResolver(r: ((p: Promise<ReindexResult>) => void) | null) {
-    pendingResolve = r
+    setPendingResolver(r: ((p: Promise<ReindexResult>) => void) | null) {
+      pendingResolve = r
+    },
   }
-}
+})()
 
 function koField<T>(ko: KnowledgeObject | Record<string, unknown>, camelKey: string, snakeKey: string): T | undefined {
   const row = ko as Record<string, unknown>
@@ -423,6 +425,15 @@ export async function pruneOrphanNoteIndexes(): Promise<number> {
       await deleteVectorDocumentsByFilename(ko.path)
       // KO 标记软删
       await objectRegistry.softDelete('note', ko.path)
+      try {
+        const { sourceNodeId } = await import('@/lib/knowledge-graph/sync')
+        const { softDeleteKnowledgeGraphNodesBySource, softDeleteKnowledgeGraphEdgesForNode } = await import('@/db/knowledge-graph')
+        const nodeId = sourceNodeId('note', ko.path)
+        await softDeleteKnowledgeGraphNodesBySource('note', ko.path)
+        await softDeleteKnowledgeGraphEdgesForNode(nodeId)
+      } catch (graphError) {
+        console.warn('[KnowledgeGraph] prune orphan graph cleanup skipped:', graphError)
+      }
       pruned += 1
     } catch (error) {
       console.error(`[reindex] prune orphan ${ko.path} failed:`, error)
@@ -479,6 +490,15 @@ export async function unindexFile(filePath: string): Promise<void> {
   } catch (error) {
     console.error(`[reindex] unindexFile ${filePath} (ko) failed:`, error)
   }
+  try {
+    const { sourceNodeId } = await import('@/lib/knowledge-graph/sync')
+    const { softDeleteKnowledgeGraphNodesBySource, softDeleteKnowledgeGraphEdgesForNode } = await import('@/db/knowledge-graph')
+    const nodeId = sourceNodeId('note', filePath)
+    await softDeleteKnowledgeGraphNodesBySource('note', filePath)
+    await softDeleteKnowledgeGraphEdgesForNode(nodeId)
+  } catch (error) {
+    console.error(`[reindex] unindexFile ${filePath} (graph) failed:`, error)
+  }
 }
 
 /**
@@ -522,6 +542,16 @@ export async function moveFileIndex(oldPath: string, newPath: string): Promise<v
     }
   } catch (error) {
     console.error(`[reindex] moveFileIndex vector migrate ${oldPath} -> ${newPath} failed:`, error)
+  }
+
+  try {
+    const { sourceNodeId } = await import('@/lib/knowledge-graph/sync')
+    const { softDeleteKnowledgeGraphNodesBySource, softDeleteKnowledgeGraphEdgesForNode } = await import('@/db/knowledge-graph')
+    const nodeId = sourceNodeId('note', oldPath)
+    await softDeleteKnowledgeGraphNodesBySource('note', oldPath)
+    await softDeleteKnowledgeGraphEdgesForNode(nodeId)
+  } catch (error) {
+    console.error(`[reindex] moveFileIndex graph cleanup ${oldPath} -> ${newPath} failed:`, error)
   }
 
   // KO: 软删旧的，注册新的（保留 hash/origin/runId）

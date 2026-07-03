@@ -83,6 +83,7 @@ import { InlineAIPanel } from './inline-ai-panel'
 import { DiffReviewUI, createDiffPlugin, diffPluginKey, type DiffSession } from './diff-review-ui'
 import { BookmarkExtension } from './bookmark-extension'
 import { FilePreviewExtension } from './file-preview-extension'
+import { useSidebarStore } from '@/stores/sidebar'
 import {
   normalizeCodeBlockLanguage,
   normalizeMarkdownCodeFenceLanguages,
@@ -797,7 +798,7 @@ export function TipTapEditor({
 
   const placeholderText = placeholder || t('placeholder')
   const isMobile = isMobileDevice()
-  const richInteractionsEnabled = true
+  const richInteractionsEnabled = !performanceMode
   const documentEnhancementsEnabled = !performanceMode
   const highFrequencyDecorationsEnabled = !performanceMode
   const editorInitialContent = useMemo(
@@ -810,7 +811,10 @@ export function TipTapEditor({
   autoScrollRef.current = autoScroll
 
   // 获取界面和正文设置
-  const { contentTextScale, typewriterMode, aiCompletionEnabled, centeredContent, codeTheme } = useSettingStore()
+  const { contentTextScale, typewriterMode, aiCompletionEnabled, centeredContent, codeTheme, zenMode } = useSettingStore()
+  const leftSidebarVisible = useSidebarStore((state) => state.leftSidebarVisible)
+  const rightSidebarVisible = useSidebarStore((state) => state.rightSidebarVisible)
+  const autoCenteredContent = centeredContent || zenMode || (!leftSidebarVisible && !rightSidebarVisible)
 
   // 编辑器容器 ref，用于应用字体缩放
   const editorContainerRef = useRef<HTMLDivElement>(null)
@@ -1019,8 +1023,11 @@ export function TipTapEditor({
           ]
           : []
       ),
-      QuoteMark,
-      AISuggestion,
+      ...(
+        richInteractionsEnabled
+          ? [QuoteMark, AISuggestion]
+          : []
+      ),
       ...(
         documentEnhancementsEnabled
           ? [
@@ -1174,13 +1181,19 @@ export function TipTapEditor({
         debounceTime: performanceMode ? 900 : 500,
         enabled: aiCompletionEnabled && !performanceMode,
       }),
-      Extension.create({
-        name: 'diffReview',
-        addProseMirrorPlugins() {
-          return [createDiffPlugin(null)]
-        }
-      }),
-      BookmarkExtension,
+      ...(
+        richInteractionsEnabled
+          ? [
+            Extension.create({
+              name: 'diffReview',
+              addProseMirrorPlugins() {
+                return [createDiffPlugin(null)]
+              }
+            }),
+            BookmarkExtension,
+          ]
+          : []
+      ),
       ...(
         documentEnhancementsEnabled
           ? [FilePreviewExtension]
@@ -1561,7 +1574,7 @@ export function TipTapEditor({
   }, [editor, mobileContext])
 
   const updateMobileContext = useCallback(() => {
-    if (!editor || !isMobile) {
+    if (!editor || !isMobile || !richInteractionsEnabled) {
       setMobileContext(null)
       return
     }
@@ -1605,7 +1618,7 @@ export function TipTapEditor({
 
     setMobileContext(null)
     setMobileSheetMode(null)
-  }, [editor, isMobile])
+  }, [editor, isMobile, richInteractionsEnabled])
 
   const getFlashcardSelectionContext = useCallback((): FlashcardSelectionContext | null => {
     if (!editor || !activeFilePath) {
@@ -1827,7 +1840,7 @@ export function TipTapEditor({
   }, [editor, imageAltDraft, mobileContext, restoreMobileContextSelection, updateMobileContext])
 
   useEffect(() => {
-    if (!editor || !isMobile) return
+    if (!editor || !isMobile || !richInteractionsEnabled) return
 
     updateMobileContext()
     editor.on('selectionUpdate', updateMobileContext)
@@ -1837,10 +1850,10 @@ export function TipTapEditor({
       editor.off('selectionUpdate', updateMobileContext)
       editor.off('transaction', updateMobileContext)
     }
-  }, [editor, isMobile, updateMobileContext])
+  }, [editor, isMobile, richInteractionsEnabled, updateMobileContext])
 
   useEffect(() => {
-    if (!editor) return
+    if (!editor || !richInteractionsEnabled) return
 
     const quoteMarkType = editor.state.schema.marks.quote
     if (!quoteMarkType) return
@@ -1866,10 +1879,10 @@ export function TipTapEditor({
     if (changed) {
       editor.view.dispatch(tr)
     }
-  }, [editor, pendingQuote, activeFilePath])
+  }, [editor, pendingQuote, activeFilePath, richInteractionsEnabled])
 
   useEffect(() => {
-    if (!editor || !isMobile) return
+    if (!editor || !isMobile || !richInteractionsEnabled) return
 
     const editorDom = editor.view.dom
     const handleMobileImageClick = (event: Event) => {
@@ -1885,10 +1898,10 @@ export function TipTapEditor({
     return () => {
       editorDom.removeEventListener('click', handleMobileImageClick)
     }
-  }, [editor, isMobile, updateMobileContext])
+  }, [editor, isMobile, richInteractionsEnabled, updateMobileContext])
 
   useEffect(() => {
-    if (!editor || isMobile) return
+    if (!editor || isMobile || !highFrequencyDecorationsEnabled) return
 
     const editorDom = editor.view.dom
     let resizeGuide: HTMLDivElement | null = null
@@ -2012,11 +2025,11 @@ export function TipTapEditor({
       window.removeEventListener('mouseup', handleMouseUp)
       clearColumnTarget()
     }
-  }, [editor, isMobile])
+  }, [editor, isMobile, highFrequencyDecorationsEnabled])
 
   // Auto scroll to bottom when content changes and autoScroll is enabled
   useEffect(() => {
-    if (!editor) return
+    if (!editor || !autoScroll) return
 
     // Use requestAnimationFrame to avoid infinite loop
     let isScrolling = false
@@ -2045,7 +2058,7 @@ export function TipTapEditor({
     return () => {
       editor.off('update', scrollToBottom)
     }
-  }, [editor])
+  }, [editor, autoScroll])
 
   // 应用正文文字大小缩放
   useEffect(() => {
@@ -2068,7 +2081,7 @@ export function TipTapEditor({
 
   // 打字机模式居中锁定滚动逻辑
   useEffect(() => {
-    if (!editor || !typewriterMode || !activeFilePath) return
+    if (!editor || !typewriterMode || !activeFilePath || performanceMode) return
 
     const handleSelectionUpdate = () => {
       // 只有当编辑器真正获得焦点时才进行居中滚动，防止由于外界内容加载造成闪烁或强行滚动
@@ -2105,7 +2118,7 @@ export function TipTapEditor({
     return () => {
       editor.off('selectionUpdate', handleSelectionUpdate)
     }
-  }, [editor, typewriterMode, activeFilePath])
+  }, [editor, typewriterMode, activeFilePath, performanceMode])
 
   // Track active file path for image uploads (ref to avoid re-initializing editor)
   const activeFilePathRef = useRef(activeFilePath)
@@ -2447,6 +2460,48 @@ export function TipTapEditor({
       }, 0)
     }
   }, [editor, initialContent, onReady, onEditorReady, activeFilePath, restoreEditorViewState])
+
+  useEffect(() => {
+    if (!editor || !activeFilePath || initialContent.trim().length === 0) return
+
+    const editorDoc = editor.state.doc
+    const firstChild = editorDoc.firstChild
+    const editorStartedEmpty =
+      editorDoc.childCount === 1 &&
+      firstChild?.type.name === 'paragraph' &&
+      firstChild.content.size === 0
+    if (!editorStartedEmpty) return
+
+    const currentPath = activeFilePath
+    isReadyRef.current = false
+    externalUpdateCounterRef.current++
+    let counterReleased = false
+    let releaseTimer: ReturnType<typeof setTimeout> | null = null
+    const releaseExternalUpdateCounter = () => {
+      if (counterReleased) return
+      counterReleased = true
+      externalUpdateCounterRef.current = Math.max(0, externalUpdateCounterRef.current - 1)
+    }
+
+    const timer = setTimeout(() => {
+      if (activeFilePath !== currentPath) {
+        releaseExternalUpdateCounter()
+        return
+      }
+
+      setEditorMarkdownContent(editor, initialContent, { normalize: !performanceModeRef.current })
+      isReadyRef.current = true
+      releaseTimer = setTimeout(releaseExternalUpdateCounter, 100)
+    }, 0)
+
+    return () => {
+      clearTimeout(timer)
+      if (releaseTimer) {
+        clearTimeout(releaseTimer)
+      }
+      releaseExternalUpdateCounter()
+    }
+  }, [editor, initialContent, activeFilePath])
 
   // 处理编辑器中图片的相对路径，转换为 asset:// URL
   useEffect(() => {
@@ -3513,7 +3568,7 @@ export function TipTapEditor({
       >
         <div
           className={getEditorContentContainerClass({
-            centeredContent: centeredContent && !isMobile,
+            centeredContent: autoCenteredContent && !isMobile,
             isMobile,
             outlineOpen: effectiveOutlineOpen,
             outlinePosition,

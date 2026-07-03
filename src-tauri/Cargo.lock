@@ -3287,6 +3287,7 @@ dependencies = [
 name = "lingmo"
 version = "1.0.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "core-graphics 0.23.2",
  "dirs 5.0.1",

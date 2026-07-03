@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useEffect, useState } from "react"
-import { ModelConfig, getBuiltinProviderTemplateMatch } from "../../setting/config"
+import { ModelConfig, getBuiltinProviderTemplateMatch, getModelDisplayName } from "../../setting/config"
 import { Store } from "@tauri-apps/plugin-store"
 import useSettingStore from "@/stores/setting"
 import { BotMessageSquare, BotOff, Check } from "lucide-react"
@@ -14,8 +14,10 @@ import { useTranslations } from "next-intl"
 import { TooltipButton } from "@/components/tooltip-button"
 import { getCachedProviderTemplates, getProviderTemplateMatch } from "@/lib/ai/provider-templates-runtime"
 import { getConfiguredProviderDisplayTitle } from "@/lib/ai/provider-display"
+import { createConfiguredModelSelectionId, matchesConfiguredModelSelection } from "@/lib/ai/model-selection"
 
 interface GroupedModel {
+  value: string
   configKey: string
   providerTitle: string
   model: ModelConfig
@@ -67,6 +69,7 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
           config.models.forEach(model => {
             if (model.modelType === 'chat' && model.model) {
               models.push({
+                value: createConfiguredModelSelectionId(config.key, model.id),
                 configKey: config.key,
                 providerTitle,
                 model: model
@@ -76,6 +79,7 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
         } else {
           if ((config.modelType === 'chat' || !config.modelType) && config.model) {
             models.push({
+              value: config.key,
               configKey: config.key,
               providerTitle,
               model: {
@@ -113,6 +117,12 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
     return acc
   }, {} as Record<string, GroupedModel[]>)
 
+  const modelMatchesSelection = (item: GroupedModel) => matchesConfiguredModelSelection({
+    configKey: item.configKey,
+    modelId: item.model.id,
+    selectionId: primaryModel,
+  })
+
   return (
     <Popover open={open} onOpenChange={handleSetOpen}>
       <PopoverTrigger asChild>
@@ -146,21 +156,21 @@ export function ModelSelect({ trigger, triggerClassName = "hidden md:block" }: M
                 )}
                 {models.map((item) => (
                   <button
-                    key={item.model.id}
+                    key={item.value}
                     type="button"
                     className={cn(
                       "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-left transition-colors",
-                      primaryModel === item.model.id
+                      modelMatchesSelection(item)
                         ? "text-primary bg-primary/10"
                         : "hover:bg-muted/60"
                     )}
                     onClick={() => {
-                      modelSelectChangeHandler(item.model.id)
+                      modelSelectChangeHandler(item.value)
                       setOpen(false)
                     }}
                   >
-                    <span className="min-w-0 flex-1 truncate">{item.model.model}</span>
-                    {primaryModel === item.model.id && (
+                    <span className="min-w-0 flex-1 truncate">{getModelDisplayName(item.model)}</span>
+                    {modelMatchesSelection(item) && (
                       <Check className="size-3.5 shrink-0" />
                     )}
                   </button>

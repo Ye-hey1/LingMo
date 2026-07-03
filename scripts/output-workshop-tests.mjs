@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -7,6 +7,7 @@ import ts from 'typescript'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const tempDir = await mkdtemp(join(tmpdir(), 'lingmo-output-workshop-tests-'))
+await symlink(join(repoRoot, 'node_modules'), join(tempDir, 'node_modules'), 'junction')
 
 async function readRepoFile(relativePath) {
   return readFile(join(repoRoot, relativePath), 'utf8')
@@ -96,6 +97,8 @@ async function importTsModule(relativePath) {
 
 try {
   const {
+    buildOutputExtractionPrompt,
+    getExtractionStrategy,
     parseOutputExtractionResult,
   } = await importTsModule('src/lib/output-workshop/extraction.ts')
   const {
@@ -126,6 +129,9 @@ try {
     normalizeOutputWorkshopHtml,
   } = await importTsModule('src/lib/output-workshop/html-normalizer.ts')
   const {
+    sanitizeWechatClipboardHtml,
+  } = await importTsModule('src/lib/output-workshop/export.ts')
+  const {
     DESIGN_PROFILES,
     renderDesignProfilePromptBlock,
   } = await importTsModule('src/lib/output-workshop/design-profiles.ts')
@@ -139,7 +145,9 @@ try {
   } = await importTsModule('src/lib/output-workshop/output-lint.ts')
   const {
     buildAutoRedbookHtmlFromSource,
+    buildThemedSocialCards,
     isAutoRedbookTemplateId,
+    isThemedSocialTemplate,
   } = await importTsModule('src/lib/output-workshop/social-redbook-builder.ts')
   const {
     buildStyle,
@@ -150,6 +158,9 @@ try {
     isLocalStyleOutputTemplate,
     isLocalWechatOutputTemplate,
   } = await importTsModule('src/lib/output-workshop/template-routing.ts')
+  const {
+    buildWechatArticleSync,
+  } = await importTsModule('src/lib/output-workshop/wechat-builder.ts')
   const {
     splitContentIntoSections,
   } = await importTsModule('src/components/output-workshop/utils-content.ts')
@@ -234,6 +245,72 @@ try {
   assert.equal(isLocalWechatOutputTemplate({ id: 'custom-wechat-preview', mode: 'creative', previewTone: 'wechat-article' }, 'custom-wechat-preview'), true)
   assert.equal(isLocalWechatOutputTemplate({ id: 'feature-wechat-copy', mode: 'creative', features: ['图文复制'] }, 'feature-wechat-copy'), true)
   assert.equal(isLocalWechatOutputTemplate({ id: 'creative-freeform', mode: 'creative' }, 'creative-freeform'), false)
+
+  const wechatComplexHtml = buildWechatArticleSync({
+    styleId: 'wechat-tech',
+    title: '复杂 Markdown',
+    subtitle: '语义化渲染测试',
+    markdown: [
+      '## 功能清单',
+      '',
+      '- 一级 **重点**',
+      '  - 二级 `代码`',
+      '    1. 有序子项 [链接](https://example.com?q=1)',
+      '- 图片 ![流程图](https://example.com/flow.png "流程图标题")',
+      '',
+      '| 模块 | 状态 |',
+      '| --- | --- |',
+      '| **表格** | `ready` |',
+      '',
+      '> 第一行引用',
+      '> 第二行引用',
+      '',
+      '```ts',
+      'const tag = "<script>alert(1)</script>"',
+      '```',
+      '',
+      '行内公式 $E=mc^2$ 与块级公式：',
+      '$$\\int_0^1 x^2 dx = \\frac{1}{3}$$',
+      '',
+      '<script>alert("xss")</script>',
+      '[坏链接](javascript:alert(1))',
+      '![坏图](javascript:alert(1))',
+    ].join('\n'),
+    sourceLabel: '测试素材',
+    generatedAt: '2026-07-01 09:00',
+  })
+  assert.match(wechatComplexHtml, /<h2\b[^>]*style=/)
+  assert.match(wechatComplexHtml, /<ul\b[^>]*style=/)
+  assert.ok((wechatComplexHtml.match(/<ul\b/g) || []).length >= 2, 'wechat renderer should preserve nested bullet lists')
+  assert.match(wechatComplexHtml, /<ol\b[^>]*style=/)
+  assert.match(wechatComplexHtml, /<li\b[^>]*>[\s\S]*<strong\b[^>]*style=/)
+  assert.match(wechatComplexHtml, /<table\b[^>]*style=/)
+  assert.match(wechatComplexHtml, /<th\b[^>]*style=/)
+  assert.match(wechatComplexHtml, /<td\b[^>]*style=/)
+  assert.match(wechatComplexHtml, /<code\b[^>]*style=/)
+  assert.match(wechatComplexHtml, /<blockquote\b[^>]*style=/)
+  assert.match(wechatComplexHtml, /<img src="https:\/\/example\.com\/flow\.png" alt="流程图" title="流程图标题" style=/)
+  // 代码块经 highlight.js 着色后，const/字符串等会被 <span style="color:..."> 包裹，
+  // 但危险内容（<script>）仍必须被转义为 &lt;script&gt;，不会被当成真标签执行。
+  assert.match(wechatComplexHtml, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/)
+  assert.match(wechatComplexHtml, /&lt;script&gt;alert\(&quot;xss&quot;\)&lt;\/script&gt;/)
+  // 验证代码高亮已生效：ts 代码块的 const 关键字应被着色为紫色 span
+  assert.match(wechatComplexHtml, /<span style="color:#c678dd">const<\/span>/)
+  // 验证数学公式已接入 KaTeX：行内和块级公式应渲染成 katex 容器，并带内联 font-family
+  assert.match(wechatComplexHtml, /<span class="katex"[^>]*style="font-family:/)
+  assert.match(wechatComplexHtml, /<span class="katex-display"[^>]*style="display:block/)
+  assert.doesNotMatch(wechatComplexHtml, /<script\b/i)
+  assert.doesNotMatch(wechatComplexHtml, /href="javascript:/i)
+  assert.doesNotMatch(wechatComplexHtml, /src="javascript:/i)
+
+  // 验证 mermaid 代码块在同步版本中被识别为占位标记（异步版本会替换为 SVG）
+  const wechatMermaidHtml = buildWechatArticleSync({
+    styleId: 'wechat-default',
+    title: '流程图示例',
+    markdown: ['```mermaid', 'graph TD', 'A-->B', '```'].join('\n'),
+  })
+  assert.match(wechatMermaidHtml, /data-lingmo-mermaid-slot="0"/)
+
   const localStyleTemplateIds = Object.keys(STYLE_BUILDERS)
   assert.ok(localStyleTemplateIds.includes('learning-mindmap'), 'mindmap template must have a local style builder')
   assert.equal(hasStyleBuilder('learning-mindmap'), true)
@@ -241,10 +318,33 @@ try {
     assert.equal(
       isLocalStyleOutputTemplate({ id, mode: id.startsWith('deck-') ? 'deck' : 'article' }, id),
       true,
-      `${id} must be routed to its local style builder`
+      `${id} must use AI structure parsing plus local style rendering`
     )
   }
   assert.equal(isLocalStyleOutputTemplate({ id: 'custom-ai-design', mode: 'creative' }, 'custom-ai-design'), false)
+
+  // 7 个主题化社交卡片模板此前被错误路由到 AI 自由直绘（无渲染器），现已纳入 local-style
+  const themedSocialIds = ['social-editorial', 'social-geek-report', 'social-consulting-report', 'social-clean-review', 'social-terminal', 'social-story-field', 'social-dot-matrix']
+  for (const id of themedSocialIds) {
+    assert.equal(isThemedSocialTemplate(id), true, `${id} 应识别为主题化社交模板`)
+    assert.equal(isLocalStyleOutputTemplate({ id, mode: 'social' }, id), true, `${id} 应走 local-style 管线`)
+  }
+  assert.equal(isThemedSocialTemplate('social-card'), false, 'social-card 有独立 STYLE_BUILDER，不属于 themed-social')
+  assert.equal(isThemedSocialTemplate('unknown'), false)
+  // buildThemedSocialCards：验证产出含封面卡 + 内容卡 + 主题配色
+  const themedHtml = buildThemedSocialCards('social-terminal', {
+    title: '终端风测试', subtitle: '暖纸终端',
+    sections: [
+      { title: '启动', body: '加载模块', bullets: ['kernel OK', 'net OK'] },
+      { title: '运行', body: '处理信号' },
+    ],
+    sourceLabel: '测试', generatedAt: '2026-07',
+  })
+  assert.match(themedHtml, /<!DOCTYPE html>/)
+  assert.match(themedHtml, /redbook-deck/, '应使用 redbook 组图骨架')
+  assert.match(themedHtml, /card-container/, '应渲染卡片容器')
+  // social-terminal 的 previewTheme accent 是 #8b4513（暖棕），应注入到样式
+  assert.match(themedHtml, /8b4513|social-terminal/, '应注入模板主题配色')
   const mindmapHtml = buildStyle('learning-mindmap', {
     title: 'AI产品经理发展史',
     subtitle: '结构化脑图',
@@ -259,6 +359,36 @@ try {
   assert.match(mindmapHtml, /node-group/)
   assert.match(mindmapHtml, /level-root/)
   assert.match(mindmapHtml, /children-container/)
+  // 结构化 mindmap 树渲染：传入嵌套树，应直接渲染 3 层节点（零猜测）
+  const structuredMindmapHtml = buildStyle('learning-mindmap', {
+    title: 'AI 工程核心脉络',
+    subtitle: '提炼版',
+    sourceLabel: '测试',
+    sections: [],
+    mindmap: [
+      {
+        title: '提示工程',
+        children: [
+          { text: '指令设计', children: [{ text: '角色设定' }, { text: '输出约束' }] },
+          { text: '上下文编排' },
+        ],
+      },
+      {
+        title: '评估体系',
+        children: [{ text: '基准测试' }, { text: '人工评审' }],
+      },
+    ],
+  })
+  assert.match(structuredMindmapHtml, /mindmap-container/)
+  // 一级分支标题（提示工程、评估体系）应渲染为 level-1 节点
+  assert.match(structuredMindmapHtml, /提示工程/)
+  assert.match(structuredMindmapHtml, /评估体系/)
+  // 二级子节点（指令设计、上下文编排）应渲染为 level-2
+  assert.match(structuredMindmapHtml, /指令设计/)
+  assert.match(structuredMindmapHtml, /上下文编排/)
+  // 三级孙节点（角色设定）应渲染为 level-deep（≥3 层）
+  assert.match(structuredMindmapHtml, /角色设定/)
+  assert.match(structuredMindmapHtml, /level-deep/)
   assert.match(templatesSource, /iPhone 15 Pro bezel/)
   assert.match(templatesSource, /Playwright/)
   assert.match(templatesSource, /scripts\/export_deck_pptx\.mjs/)
@@ -325,7 +455,11 @@ try {
   assert.match(utilsTemplatePreviewSource, /先选设计方向，再深挖方案/)
   assert.match(utilsTemplatePreviewSource, /5 维度设计评审/)
   assert.match(utilsTemplatePreviewSource, /Anti AI slop/)
-  assert.match(utilsPromptsSource, /prefers-reduced-motion: reduce/)
+  // CREATIVE_DESIGN_PROMPT 已下沉到 lib 层 prompt-blocks.ts，reduced-motion 断言改指向新位置；
+  // utils-prompts.ts 仅 re-export 保持旧导入路径。
+  const promptBlocksSource = await readRepoFile('src/lib/output-workshop/prompt-blocks.ts')
+  assert.match(promptBlocksSource, /prefers-reduced-motion: reduce/)
+  assert.match(utilsPromptsSource, /export \{ CREATIVE_DESIGN_PROMPT \} from "@\/lib\/output-workshop\/prompt-blocks"/)
 
   assert.ok(DESIGN_PROFILES.length >= 6)
   assert.match(renderDesignProfilePromptBlock('swiss-deck'), /瑞士网格演示/)
@@ -373,6 +507,8 @@ try {
   assert.match(creativePrompt, /测试质量规则/)
   assert.match(creativePrompt, /推荐工作流：brief -> deck/)
   assert.match(creativePrompt, /主标题：AI 产品方法论/)
+  // designConstraints 应注入 prompt，让无 skillPrompt 的 deck 模板也有风格约束
+  assert.match(creativePrompt, /视觉规范（必须严格遵守）：测试约束/)
 
   const autoRedbookPrompt = buildCreativeDirectPrompt({
     template: {
@@ -506,7 +642,9 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.match(generationSource, /import \{ buildWechatArticle \} from "@\/lib\/output-workshop\/wechat-builder"/)
   assert.match(generationSource, /isLocalStyleOutputTemplate/)
   assert.match(generationSource, /import \{ buildStyle \} from "@\/lib\/output-workshop\/styles"/)
-  assert.match(generationSource, /import \{ splitPlainTextIntoSections \} from "@\/lib\/output-workshop\/extraction"/)
+  assert.match(generationSource, /buildOutputExtractionPrompt/)
+  assert.match(generationSource, /parseOutputExtractionResult/)
+  assert.doesNotMatch(generationSource, /import \{ splitPlainTextIntoSections \} from "@\/lib\/output-workshop\/extraction"/)
   assert.match(generationSource, /isLocalWechatOutputTemplate/)
   assert.match(generationSource, /generationRunIdRef/)
   assert.match(generationSource, /selectedTemplateRef/)
@@ -516,22 +654,24 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.match(generationSource, /已拦截一键排版模板进入 AI 直绘/)
   assert.doesNotMatch(generationSource, /localWechatGeneratorRef/)
   assert.match(generationSource, /const generateLocalWechatOutput = React\.useCallback/)
-  assert.match(generationSource, /const generateLocalStyleOutput = React\.useCallback/)
+  assert.doesNotMatch(generationSource, /const generateLocalStyleOutput = React\.useCallback/)
+  assert.match(generationSource, /const generateStructuredStyleOutput = React\.useCallback/)
   assert.match(generationSource, /generationRunIdRef\.current \+= 1/)
   assert.match(generationSource, /abortRef\.current\?\.abort\(\)/)
   assert.match(generationSource, /buildWechatArticle\(\{/)
   assert.match(generationSource, /buildStyle\(latestTemplateId/)
-  assert.match(generationSource, /splitPlainTextIntoSections/)
   assert.match(generationSource, /styleId: latestTemplateId/)
   assert.match(generationSource, /phase: "local-build"/)
   assert.match(generationSource, /isLocalWechatOutputTemplate\(latestTemplate, latestTemplateId\)/)
   assert.match(generationSource, /isLocalStyleOutputTemplate\(latestTemplate, latestTemplateId\)/)
-  assert.match(generationSource, /已拦截本地样式模板进入 AI 直绘/)
+  assert.match(generationSource, /已拦截本地样式模板进入 AI 直绘，改用 AI 结构解析 \+ 本地模板/)
   assert.match(generationSource, /isLocalWechatOutputTemplate\(selectedTemplateRef\.current, selectedTemplateIdRef\.current\)/)
   assert.match(generationSource, /isLocalStyleOutputTemplate\(selectedTemplateRef\.current, selectedTemplateIdRef\.current\)/)
   assert.match(generationSource, /const isCurrentRun = \(\) => generationRunIdRef\.current === runId && !abortController\.signal\.aborted/)
-  assert.match(generationSource, /void generateLocalWechatOutput\(\)/)
-  assert.match(generationSource, /void generateLocalStyleOutput\(\)/)
+  // handleGenerate 分派到三个生成函数；调用形式可能是 `void fn()` 或 `fn().catch(...)`
+  //（后者更健壮，能捕获生成异常），这里用宽松匹配兼容两种写法。
+  assert.match(generationSource, /generateLocalWechatOutput\(\)/)
+  assert.match(generationSource, /generateStructuredStyleOutput\(\)/)
   assert.match(generationSource, /generateLocalWechatOutput,[\s\S]*?markAiChunkThrottled/)
   assert.match(generationSource, /toast\(\{ title: "一键排版完成" \}\)/)
   assert.match(generationSource, /function fetchOutputWorkshopAiStream/)
@@ -550,8 +690,8 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.doesNotMatch(generationSource, /快速预览/)
   assert.equal(
     (generationSource.match(/await\s+fetchOutputWorkshopAiStream\(/g) || []).length,
-    3,
-    'output workshop AI generation, repair, and refine calls should use the dedicated model selector'
+    4,
+    'output workshop AI generation, structured extraction, repair, and refine calls should use the dedicated model selector'
   )
   assert.doesNotMatch(generationSource, /解析 JSON schema/)
   assert.doesNotMatch(generationSource, /生成设计 schema/)
@@ -560,6 +700,16 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.match(outputExportSource, /result\.skipped\?\.length/)
   assert.match(outputExportSource, /智能卡片导出完成，部分页面已跳过/)
   assert.match(outputExportSource, /result\.exportedCount/)
+
+  const outputExportLibSource = await readRepoFile('src/lib/output-workshop/export.ts')
+  assert.equal(sanitizeWechatClipboardHtml('<p>Node fallback</p>'), '<p>Node fallback</p>')
+  assert.match(outputExportLibSource, /export function sanitizeWechatClipboardHtml/)
+  assert.match(outputExportLibSource, /sanitizeWechatClipboardRoot/)
+  assert.match(outputExportLibSource, /querySelectorAll\("script, iframe, object, embed, form, input, textarea, select, button"\)/)
+  assert.match(outputExportLibSource, /name\.startsWith\("on"\) \|\| name === "srcdoc"/)
+  assert.match(outputExportLibSource, /setAttribute\("data-src", src\)/)
+  assert.match(outputExportLibSource, /max-width: 100% !important; height: auto !important; display: block;/)
+  assert.match(outputExportLibSource, /return sanitizeWechatClipboardHtml\(/)
 
   const aiChatSource = await readRepoFile('src/lib/ai/chat.ts')
   assert.match(aiChatSource, /modelStoreKey\?: string/)
@@ -628,8 +778,15 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.match(smartCardExportSource, /CARD_RESOURCE_TIMEOUT_MS/)
   assert.match(smartCardExportSource, /CARD_SCREENSHOT_TIMEOUT_MS/)
   assert.match(smartCardExportSource, /CARD_THUMBNAIL_SCREENSHOT_TIMEOUT_MS/)
-  assert.match(smartCardExportSource, /function withTimeout<T>/)
-  assert.match(smartCardExportSource, /waitForIframeReadyInner/)
+  // withTimeout / waitForIframeReady 已下沉到共享底座 ./shared/offscreen-render.ts，
+  // 这里改为校验 smart-card-export.ts 正确 import 并复用它们。
+  assert.match(smartCardExportSource, /import \{[\s\S]*?withTimeout[\s\S]*?\} from "\.\/shared\/offscreen-render"/)
+  assert.match(smartCardExportSource, /function waitForIframeReady\(/)
+  assert.match(smartCardExportSource, /waitForDocumentResources/)
+  const offscreenRenderSource = await readRepoFile('src/lib/output-workshop/shared/offscreen-render.ts')
+  assert.match(offscreenRenderSource, /export function withTimeout<T>/)
+  assert.match(offscreenRenderSource, /export async function waitForDocumentResources/)
+  assert.match(offscreenRenderSource, /export function createOffscreenIframe/)
   assert.doesNotMatch(smartCardExportSource, legacyRegex)
   assert.doesNotMatch(smartCardExportSource, new RegExp(`function is${legacyBrand}Card`))
   assert.match(smartCardExportSource, /export type SmartCardPagingMode = "semantic" \| "separator" \| "auto-fit" \| "auto-split" \| "dynamic"/)
@@ -640,10 +797,14 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.match(smartCardExportSource, /function shouldTryCombinedCardSelectors\(selectors: string\[\]\)/)
   assert.match(smartCardExportSource, /function tryCombinedSelectors\(/)
   assert.match(smartCardExportSource, /selectors\.join\(","\)/)
-  assert.match(smartCardExportSource, /tryCombinedSelectors\(doc, blueprint\.cardSelectors, head, bodyClass, bodyStyle, blueprint\)/)
+  // parseSmartCards 已重构为「策略数组 + 首个命中即返回」的降级链，
+  // blueprint 策略内部仍调用 tryCombinedSelectors（参数通过策略上下文 c 传递）。
+  assert.match(smartCardExportSource, /const strategies: DetectionStrategy\[\]/)
+  assert.match(smartCardExportSource, /shouldTryCombinedCardSelectors\(selectors\)/)
+  assert.match(smartCardExportSource, /tryCombinedSelectors\(c\.doc, selectors, c\.head, c\.bodyClass, c\.bodyStyle, c\.blueprint\)/)
   assert.match(smartCardExportSource, /const isRedbookCard = Boolean\(/)
   assert.match(smartCardExportSource, /el\.hasAttribute\("data-redbook-card"\)/)
-  assert.match(smartCardExportSource, /body\.redbook-output \.lingmo-smart-card-export-root > \.card-container/)
+  assert.match(smartCardExportSource, /body\.redbook-output \$\{rootSelector\} > \.card-container/)
   assert.match(smartCardExportSource, /width: 1080px !important/)
   assert.match(smartCardExportSource, /height: 1440px !important/)
   assert.match(smartCardExportSource, /redbookAutoFitScript/)
@@ -778,7 +939,11 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.equal(cleanedOutline[2].level, 3)
 
   const outputTypesSource = await readRepoFile('src/components/output-workshop/types.ts')
-  assert.match(outputTypesSource, /level\?: number/)
+  // ExtractedSection 已下沉到 lib 层 shared/types.ts（消除 lib→components 反向依赖），
+  // components/types.ts 改为 re-export；这里分别校验两处。
+  assert.match(outputTypesSource, /export type \{ ExtractedSection \} from "@\/lib\/output-workshop\/shared\/types"/)
+  const sharedTypesSource = await readRepoFile('src/lib/output-workshop/shared/types.ts')
+  assert.match(sharedTypesSource, /level\?: number/)
   assert.match(outputTypesSource, /GenerationTelemetryPhase/)
   assert.match(outputTypesSource, /interface GenerationTelemetry/)
   assert.match(outputTypesSource, /firstByteAt: number \| null/)
@@ -804,6 +969,80 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   assert.equal(fallback.usedFallback, true)
   assert.equal(fallback.sections.length, 2)
   assert.equal(fallback.sections[0].title, '第一节')
+
+  const extractionPrompt = buildOutputExtractionPrompt({
+    templateId: 'learning-mindmap',
+    templateName: '思维导图',
+    outputHint: '生成思维导图风格的知识结构页面',
+    bestFor: '知识梳理',
+    title: 'FDE',
+    sourceContent: '## 起源\nPalantir\n## 发展\nOpenAI',
+    sourceLabel: '测试素材',
+    customInstructions: '突出时间线',
+  })
+  assert.match(extractionPrompt, /不是设计网页，也不是输出 HTML\/CSS/)
+  assert.match(extractionPrompt, /只输出一个 JSON 对象/)
+  // 新版 prompt 强调「提炼核心」+ 按 strategy 注入差异化规则块
+  assert.match(extractionPrompt, /提炼核心规则/)
+  // mindmap 策略用专用嵌套树 schema，不再走通用 sections 规则
+  assert.match(extractionPrompt, /必须输出 `mindmap` 嵌套树数组/)
+  assert.match(extractionPrompt, /结构：一级分支（title）→ 二级子节点（children\[\]\.text）/)
+  assert.match(extractionPrompt, /先通读全文，提炼出 4-7 条核心脉络/)
+  assert.match(extractionPrompt, /ID: learning-mindmap/)
+
+  // 验证解析策略按 templateId 正确归类
+  assert.equal(getExtractionStrategy('learning-mindmap'), 'mindmap')
+  assert.equal(getExtractionStrategy('learning-flashcard'), 'flashcard')
+  assert.equal(getExtractionStrategy('read-accordion'), 'flashcard')
+  assert.equal(getExtractionStrategy('data-dashboard'), 'data')
+  assert.equal(getExtractionStrategy('data-infographic'), 'data')
+  assert.equal(getExtractionStrategy('report-business'), 'data')
+  assert.equal(getExtractionStrategy('social-card'), 'social')
+  assert.equal(getExtractionStrategy('poster-hero'), 'social')
+  assert.equal(getExtractionStrategy('visual-bento'), 'social')
+  // 未配置的模板回退到 article
+  assert.equal(getExtractionStrategy('article-editorial'), 'article')
+  assert.equal(getExtractionStrategy('deck-minimal'), 'article')
+  assert.equal(getExtractionStrategy('unknown-template'), 'article')
+
+  // 验证不同 strategy 产出含对应规则关键词的 prompt
+  const dataPrompt = buildOutputExtractionPrompt({
+    templateId: 'data-dashboard', templateName: '仪表盘', outputHint: 'x', bestFor: 'y',
+    title: 't', sourceContent: 's',
+  })
+  assert.match(dataPrompt, /第一个 section 必须是关键指标/)
+  const socialPrompt = buildOutputExtractionPrompt({
+    templateId: 'social-card', templateName: '社媒卡', outputHint: 'x', bestFor: 'y',
+    title: 't', sourceContent: 's',
+  })
+  assert.match(socialPrompt, /短句金句式要点/)
+
+  // 验证截断 JSON 修复能力（max_tokens 用尽场景）
+  const truncatedInput = '{"title":"测试","subtitle":"","sections":[{"title":"章节一","body":"内容一"},{"title":"章节二","body":"内容二'
+  const repairedResult = parseOutputExtractionResult(truncatedInput, '回退素材', '回退标题')
+  assert.equal(repairedResult.usedFallback, false, '截断 JSON 应被修复而非回退')
+  assert.ok(repairedResult.warning, '修复后应带 warning 提示截断')
+  assert.ok(repairedResult.sections.length >= 1, '修复后至少保留 1 个 section')
+
+  // 验证思维导图结构化树解析：AI 输出 mindmap 数组，应解析成嵌套树
+  const mindmapResult = parseOutputExtractionResult(
+    JSON.stringify({
+      title: '核心主题',
+      subtitle: '脉络',
+      mindmap: [
+        { title: '分支A', children: [{ text: '子A1', children: [{ text: '孙A1a' }] }, { text: '子A2' }] },
+        { title: '分支B', children: [{ text: '子B1' }] },
+      ],
+    }),
+    '回退素材',
+    '回退标题'
+  )
+  assert.equal(mindmapResult.usedFallback, false)
+  assert.ok(mindmapResult.mindmap, 'mindmap 策略应解析出 mindmap 数组')
+  assert.equal(mindmapResult.mindmap.length, 2)
+  assert.equal(mindmapResult.mindmap[0].title, '分支A')
+  assert.equal(mindmapResult.mindmap[0].children.length, 2)
+  assert.equal(mindmapResult.mindmap[0].children[0].children[0].text, '孙A1a')
 
   assert.equal(getOutputTitleFromPath('notes/research.md'), 'research')
   assert.equal(getOutputTitleFromPath('C:\\Users\\colin\\demo.report.html'), 'demo.report')
@@ -918,6 +1157,50 @@ Result（结果）：呈现可量化的成果，包括技术指标和业务指�
   )
   assert.doesNotMatch(upgradedGuardHtml, />old<\/style>/)
   assert.equal((upgradedGuardHtml.match(/lingmo-output-workshop-layout-guard/g) || []).length, 1)
+
+  // ---------------------------------------------------------------------------
+  // 共享底座单测（shared/html-parse、shared/file-save、template-routing 声明式）
+  // ---------------------------------------------------------------------------
+
+  // shared/html-parse：pick / extractAttr / decodeEntities / stripTags
+  const {
+    pick,
+    extractAttr,
+    decodeEntities,
+    stripTags,
+    normalizeExternalUrl,
+  } = await importTsModule('src/lib/output-workshop/shared/html-parse.ts')
+  assert.equal(pick(/<title>([\s\S]*?)<\/title>/, '<title>Hi</title>'), 'Hi')
+  assert.equal(pick(/<title>([\s\S]*?)<\/title>/, 'nope'), '')
+  assert.equal(extractAttr('<body class="a b" style="x">', 'class'), 'a b')
+  assert.equal(extractAttr('<body class="a b">', 'style'), '')
+  assert.equal(decodeEntities('&lt;a&gt; &amp; &quot;q&quot; &#39;s'), '<a> & "q" \'s')
+  assert.equal(stripTags('<p>Hello&nbsp;<b>World</b></p>'), 'Hello&nbsp; World') // 标签被剥除，&nbsp; 非基本实体故保留
+  // normalizeExternalUrl：拦截危险协议，data: 默认拒绝但图片 base64 可放行
+  assert.equal(normalizeExternalUrl('javascript:alert(1)'), '')
+  assert.equal(normalizeExternalUrl('vbscript:msgbox'), '')
+  assert.equal(normalizeExternalUrl('  https://example.com/a  '), 'https://example.com/a')
+  assert.equal(normalizeExternalUrl('data:text/html,<script>'), '')
+  assert.equal(normalizeExternalUrl('data:image/png;base64,AAAA', true), 'data:image/png;base64,AAAA')
+  assert.equal(normalizeExternalUrl('data:image/png;base64,AAAA', false), '')
+
+  // shared/file-save：getExtension / getMimeFilter（纯函数，可在 Node 直接测）
+  const { getExtension, getMimeFilter } = await importTsModule('src/lib/output-workshop/shared/file-save.ts')
+  assert.equal(getExtension('card.png'), 'png')
+  assert.equal(getExtension('deck.PPTX'), 'pptx')
+  assert.equal(getExtension('noext'), '')
+  assert.equal(getMimeFilter('png'), 'PNG Image')
+  assert.equal(getMimeFilter('zip'), 'ZIP Archive')
+  assert.equal(getMimeFilter('unknown'), 'File')
+
+  // template-routing：pipeline 字段优先于启发式规则（复用文件前面已解构的函数）
+  // 显式 pipeline 声明直接命中，无需依赖 mode/features
+  assert.equal(isLocalWechatOutputTemplate({ id: 'x', pipeline: 'wechat' } , 'x'), true)
+  assert.equal(isLocalStyleOutputTemplate({ id: 'x', pipeline: 'local-style' }, 'x'), true)
+  assert.equal(isLocalStyleOutputTemplate({ id: 'x', pipeline: 'creative' }, 'x'), false)
+  // 未声明 pipeline 时回退到启发式（hasStyleBuilder 判定）
+  assert.equal(isLocalStyleOutputTemplate({ id: 'social-redbook-sketch', mode: 'creative' }, 'social-redbook-sketch'), false)
+  assert.equal(isLocalStyleOutputTemplate({ id: 'article-editorial', mode: 'standard' }, 'article-editorial'), true)
 
   console.info('output workshop tests passed')
 } finally {

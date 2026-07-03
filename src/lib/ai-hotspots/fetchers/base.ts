@@ -3,6 +3,8 @@ import type { AiHotspotRawItem, AiHotspotSourceKind, AiHotspotSourceStatus } fro
 export interface AiHotspotFetcherOptions {
   /** 上次成功拉取的时间戳，用于增量过滤 */
   lastFetchAt?: string | null
+  /** feed 级上次内容更新时间，避免多个订阅源共用同一个 sourceId 时间戳 */
+  feedLastFetchAt?: ReadonlyMap<string, string | null>
   /** 手动刷新时跳过条件请求与增量过滤 */
   force?: boolean
   /** 中断信号 */
@@ -58,6 +60,51 @@ export abstract class BaseAiHotspotFetcher implements AiHotspotFetcher {
       return item.publishedAt.getTime() >= cutoff
     })
   }
+
+  protected resolveFeedLastFetchAt(
+    options: AiHotspotFetcherOptions | undefined,
+    keys: Array<string | null | undefined>,
+    fallback: string | null = null,
+  ) {
+    const map = options?.feedLastFetchAt
+    if (!map) return fallback
+
+    for (const key of keys) {
+      const normalized = normalizeFeedFreshnessKey(key)
+      if (normalized && map.has(normalized)) {
+        return map.get(normalized) || null
+      }
+    }
+
+    return fallback
+  }
+}
+
+export function normalizeFeedFreshnessKey(value: string | null | undefined) {
+  return (value || '').trim().toLowerCase()
+}
+
+export async function mapWithConcurrency<T, R>(
+  values: T[],
+  limit: number,
+  mapper: (value: T) => Promise<R>,
+) {
+  const results: R[] = new Array(values.length)
+  let nextIndex = 0
+
+  async function worker() {
+    while (nextIndex < values.length) {
+      const currentIndex = nextIndex
+      nextIndex += 1
+      results[currentIndex] = await mapper(values[currentIndex])
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(limit, 1), values.length) }, () => worker()),
+  )
+
+  return results
 }
 
 function nowIso() {

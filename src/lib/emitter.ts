@@ -210,6 +210,7 @@ interface Events {
       articlePath: string;
     };
   };
+  'ai-hotspots-items-updated': { ids: string[] };
   'chat-attach-image': {
     id?: string;
     url: string;

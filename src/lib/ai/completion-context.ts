@@ -147,22 +147,22 @@ export function buildPromptFromContext(
   const suffixSection = richContext.textAfter.trim()
     ? `\n后文（光标之后，不能重复）：\n${richContext.textAfter}\n`
     : ''
+  const headingContext = richContext.headingPath.length > 0
+    ? `\n标题层级（用于判断当前主题）：\n${richContext.headingPath.join('\n')}\n`
+    : ''
+  const contextBlock = `${headingContext}
+光标前正文：
+${rawContext}
+${suffixSection}`
 
   const insertionRule = `你正在为编辑器光标处生成 Fill-in-the-Middle 补全。只输出应该插入到光标处的文本；不要解释，不要复述前文，不要重复后文。`
 
   // 空行：基于标题上下文建议下一段内容
   if (richContext.cursorPosition === 'empty-line') {
-    const headingContext = richContext.headingPath.length > 0
-      ? `\n上方的标题层级：\n${richContext.headingPath.join('\n')}\n`
-      : ''
-
     return `${insertionRule}
-基于上下文，建议接下来应该写什么内容。用${langInstruction}输出。
+基于当前文章主题、标题层级和前后文，建议接下来应该写什么内容。用${langInstruction}输出。
 
-${headingContext}
-前文：
-${rawContext.slice(-200)}
-${suffixSection}
+${contextBlock}
 
 光标处应插入（1-2 句话）：`
   }
@@ -170,22 +170,18 @@ ${suffixSection}
   // 句中：自然补全当前句子
   if (richContext.cursorPosition === 'mid-sentence') {
     return `${insertionRule}
-自然地补全当前句子。用${langInstruction}输出。
+自然地补全当前句子，并贴合当前文章主题。用${langInstruction}输出。
 
-前文：
-${rawContext}
-${suffixSection}
+${contextBlock}
 
 光标处应插入：`
   }
 
   // 行尾（默认）：自然续写下文
   return `${insertionRule}
-自然地续写下文。用${langInstruction}输出。
+自然地续写下文，并保持当前文章的论述方向。用${langInstruction}输出。
 
-前文：
-${rawContext}
-${suffixSection}
+${contextBlock}
 
 光标处应插入：`
 }

@@ -14,6 +14,9 @@ export const AI_HOTSPOT_CONFIG = {
   },
   rss: {
     maxConcurrency: 8,
+    maxItemsPerFeed: 500,
+    dailyIssueLimit: 2,
+    dailyDetailIssueLimit: 2,
   },
   filter: {
     aiKeywords: [

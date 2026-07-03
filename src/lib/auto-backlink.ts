@@ -15,6 +15,81 @@ export interface BacklinkSuggestion {
   score: number
 }
 
+interface MentionRange {
+  start: number
+  end: number
+}
+
+const WIKILINK_RE = /\[\[[^\]]*\]\]/g
+const CODE_FENCE_RE = /^\s*(```|~~~)/
+const ASCII_WORD_CHAR_RE = /[A-Za-z0-9_-]/
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function isAsciiWordChar(value: string | undefined) {
+  return Boolean(value && ASCII_WORD_CHAR_RE.test(value))
+}
+
+function getWikiLinkRanges(line: string): MentionRange[] {
+  const ranges: MentionRange[] = []
+  WIKILINK_RE.lastIndex = 0
+
+  let match: RegExpExecArray | null
+  while ((match = WIKILINK_RE.exec(line)) !== null) {
+    ranges.push({
+      start: match.index,
+      end: match.index + match[0].length,
+    })
+  }
+
+  return ranges
+}
+
+function rangesOverlap(start: number, end: number, ranges: MentionRange[]) {
+  return ranges.some(range => start < range.end && end > range.start)
+}
+
+function isMentionBoundary(line: string, start: number, end: number, mention: string) {
+  const previous = start > 0 ? line[start - 1] : undefined
+  const next = end < line.length ? line[end] : undefined
+  const first = mention[0]
+  const last = mention[mention.length - 1]
+
+  if (isAsciiWordChar(previous) && isAsciiWordChar(first)) return false
+  if (isAsciiWordChar(next) && isAsciiWordChar(last)) return false
+
+  return true
+}
+
+function findPlainTextMentions(line: string, name: string): MentionRange[] {
+  if (!line || !name) return []
+
+  const ranges = getWikiLinkRanges(line)
+  const mentionRe = new RegExp(escapeRegExp(name), 'giu')
+  const mentions: MentionRange[] = []
+
+  let match: RegExpExecArray | null
+  while ((match = mentionRe.exec(line)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+
+    if (!rangesOverlap(start, end, ranges) && isMentionBoundary(line, start, end, match[0])) {
+      mentions.push({ start, end })
+    }
+  }
+
+  return mentions
+}
+
+function replaceFirstPlainTextMention(line: string, name: string, target: string) {
+  const mention = findPlainTextMentions(line, name)[0]
+  if (!mention) return null
+
+  return `${line.slice(0, mention.start)}[[${target}]]${line.slice(mention.end)}`
+}
+
 /**
  * Scan the current note and find opportunities to create [[wiki-links]]
  * to other existing notes whose names appear in the content but are not yet linked.
@@ -34,7 +109,7 @@ export async function findBacklinkSuggestions(
 
   // Build regex-safe set of note names (exclude very short names to avoid false positives)
   const candidates = otherNotes
-    .map(f => ({ path: f.relativePath, name: f.name.replace(/\.md$/, '') }))
+    .map(f => ({ name: f.name.replace(/\.md$/, '') }))
     .filter(c => c.name.length >= 2)
 
   // Also include backlink sources (notes that already link TO this file)
@@ -52,26 +127,21 @@ export async function findBacklinkSuggestions(
     const nameLower = candidate.name.toLowerCase()
     if (existingLinks.has(nameLower)) continue
 
-    // Check for exact name match in content (not already inside [[...]])
-    const escapedName = candidate.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    // Match name with word boundaries
-    const mentionRegex = new RegExp(
-      `(?<![\\[|])\\b${escapedName}\\b(?![\\] |]\\w)`,
-      'gi',
-    )
-
     let matchCount = 0
     let firstLine = -1
+    let insideCodeFence = false
 
     for (let i = 0; i < lines.length; i++) {
-      // Skip lines that are inside code blocks
-      if (lines[i].startsWith('```')) continue
+      if (CODE_FENCE_RE.test(lines[i])) {
+        insideCodeFence = !insideCodeFence
+        continue
+      }
+
+      if (insideCodeFence) continue
 
       const line = lines[i]
-      // Remove existing [[...]] links from line to avoid matching inside them
-      const cleanLine = line.replace(/\[\[[^\]]*\]\]/g, '')
-      const lineMatches = cleanLine.match(mentionRegex)
-      if (lineMatches && lineMatches.length > 0) {
+      const lineMatches = findPlainTextMentions(line, candidate.name)
+      if (lineMatches.length > 0) {
         matchCount += lineMatches.length
         if (firstLine === -1) firstLine = i
       }
@@ -110,24 +180,22 @@ export function applyBacklinks(
 ): string {
   const result = content
   const lines = result.split('\n')
+  const orderedSuggestions = [...suggestions].sort((a, b) => b.text.length - a.text.length)
 
-  for (const suggestion of suggestions) {
-    const escapedName = suggestion.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    // Only replace first occurrence per suggestion, not inside [[...]] or code blocks
-    const regex = new RegExp(
-      `(?<![\\[|])\\b${escapedName}\\b(?![\\] |]\\w)`,
-      'i',
-    )
+  for (const suggestion of orderedSuggestions) {
+    let insideCodeFence = false
 
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].startsWith('```')) continue
-      const cleanLine = lines[i].replace(/\[\[[^\]]*\]\]/g, '')
-      if (regex.test(cleanLine)) {
-        // Replace in the original line (not the cleaned version)
-        lines[i] = lines[i].replace(
-          new RegExp(`(?<![\\[|])\\b${escapedName}\\b(?![\\] |]\\w)`, 'i'),
-          `[[${suggestion.target}]]`,
-        )
+      if (CODE_FENCE_RE.test(lines[i])) {
+        insideCodeFence = !insideCodeFence
+        continue
+      }
+
+      if (insideCodeFence) continue
+
+      const updatedLine = replaceFirstPlainTextMention(lines[i], suggestion.text, suggestion.target)
+      if (updatedLine !== null) {
+        lines[i] = updatedLine
         break
       }
     }

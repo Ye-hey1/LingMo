@@ -57,7 +57,7 @@ export interface WechatStyleConfig {
   styles: Record<WechatElementStyle, string>
 }
 
-const BASE_READABLE_STYLES: Record<WechatElementStyle, string> = {
+export const BASE_READABLE_STYLES: Record<WechatElementStyle, string> = {
   container: 'max-width: 700px; margin: 0 auto; padding: 16px 16px 40px 16px; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Helvetica Neue", Arial, sans-serif; font-size: 16px; line-height: 1.75 !important; color: #1f2933 !important; background-color: #fff !important; word-wrap: break-word;',
   h1: "font-size: 30px; font-weight: 700; color: #111827 !important; line-height: 1.25 !important; margin: 36px 0 18px; letter-spacing: 0;",
   h2: "font-size: 24px; font-weight: 700; color: #111827 !important; line-height: 1.32 !important; margin: 32px 0 16px; letter-spacing: 0;",
@@ -458,4 +458,102 @@ export function isWechatStyleId(value: unknown): value is WechatStyleId {
 
 export function getWechatStyle(id: string): WechatStyleConfig {
   return isWechatStyleId(id) ? WECHAT_STYLE_MAP[id] : WECHAT_STYLE_MAP["wechat-default"]
+}
+
+// ---------------------------------------------------------------------------
+// 自定义微信主题（用户可在界面上编辑 CSS 并保存）
+// ---------------------------------------------------------------------------
+
+/** 自定义主题 id 前缀，避免与内置 WechatStyleId 冲突 */
+export const CUSTOM_WECHAT_THEME_PREFIX = "custom-wechat-"
+const CUSTOM_WECHAT_THEME_STORAGE_KEY = "lingmo-custom-wechat-themes"
+
+export interface CustomWechatTheme {
+  id: string
+  name: string
+  /** 基于 WechatStyleConfig 的可配置字段；styles 为各元素的 CSS */
+  styles: Record<WechatElementStyle, string>
+}
+
+/** 内存缓存，避免每次渲染都读 localStorage */
+let customThemesCache: CustomWechatTheme[] | null = null
+
+/** 读取 localStorage 中的自定义主题（带内存缓存） */
+export function loadCustomWechatThemes(): CustomWechatTheme[] {
+  if (customThemesCache) return customThemesCache
+  if (typeof window === "undefined") return []
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_WECHAT_THEME_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) as CustomWechatTheme[] : []
+    customThemesCache = Array.isArray(parsed) ? parsed : []
+  } catch {
+    customThemesCache = []
+  }
+  return customThemesCache
+}
+
+/** 持久化自定义主题列表到 localStorage，并刷新内存缓存 */
+function persistCustomWechatThemes(themes: CustomWechatTheme[]): void {
+  customThemesCache = themes
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(CUSTOM_WECHAT_THEME_STORAGE_KEY, JSON.stringify(themes))
+  } catch (error) {
+    console.warn("[wechat-styles] 自定义主题保存失败:", error)
+  }
+}
+
+/** 新增或更新一个自定义主题（按 id 去重）。返回最终 id。 */
+export function saveCustomWechatTheme(theme: CustomWechatTheme): string {
+  const themes = loadCustomWechatThemes()
+  const id = theme.id.startsWith(CUSTOM_WECHAT_THEME_PREFIX)
+    ? theme.id
+    : `${CUSTOM_WECHAT_THEME_PREFIX}${Date.now().toString(36)}`
+  const normalized: CustomWechatTheme = { ...theme, id }
+  const idx = themes.findIndex((t) => t.id === id)
+  if (idx >= 0) {
+    themes[idx] = normalized
+  } else {
+    themes.push(normalized)
+  }
+  persistCustomWechatThemes(themes)
+  return id
+}
+
+/** 删除一个自定义主题 */
+export function deleteCustomWechatTheme(id: string): void {
+  const themes = loadCustomWechatThemes().filter((t) => t.id !== id)
+  persistCustomWechatThemes(themes)
+}
+
+/** 判断 id 是否为自定义主题 */
+export function isCustomWechatThemeId(id: string): boolean {
+  return id.startsWith(CUSTOM_WECHAT_THEME_PREFIX)
+}
+
+/**
+ * 判断 id 是否为内置或自定义微信主题。
+ * 与 isWechatStyleId 的区别：不 narrowing 到 WechatStyleId 字面量（自定义 id 是动态的）。
+ */
+export function isWechatStyleIdOrCustom(id: string): boolean {
+  return isWechatStyleId(id) || isCustomWechatThemeId(id)
+}
+
+/**
+ * 获取微信主题配置（内置或自定义）。自定义主题转成 WechatStyleConfig 形态。
+ */
+export function getWechatStyleOrCustom(id: string): WechatStyleConfig {
+  if (isWechatStyleId(id)) return WECHAT_STYLE_MAP[id]
+  const custom = loadCustomWechatThemes().find((t) => t.id === id)
+  if (custom) {
+    return {
+      id: "wechat-default", // WechatStyleConfig.id 是字面量联合，自定义主题用 default 占位
+      name: custom.name,
+      nameEn: custom.name,
+      description: "自定义主题",
+      bestFor: "自定义样式",
+      styles: custom.styles,
+    }
+  }
+  return WECHAT_STYLE_MAP["wechat-default"]
 }

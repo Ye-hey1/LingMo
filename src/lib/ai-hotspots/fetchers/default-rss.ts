@@ -7,15 +7,17 @@ import {
   AI_HOT_RSS_SOURCE_NAME,
   getDefaultRssFeedNote,
   getDefaultRssFeedRole,
+  isDefaultRssFeed,
 } from '../feeds'
+import { AI_HOTSPOT_CONFIG } from '../config'
 import { fetchHotspotConditional, fetchHotspotText } from '../http'
 import { parseAiHotDailyPage } from '../daily-page'
 import { parseRssItems } from '../rss'
-import { AiHotspotFetcherOptions, BaseAiHotspotFetcher } from './base'
+import { AiHotspotFetcherOptions, BaseAiHotspotFetcher, mapWithConcurrency } from './base'
 import type { DefaultRssFeed } from '../feeds'
 import type { AiHotspotRawItem, AiHotspotUserFeed } from '../types'
 
-export type DefaultRssFetcherMode = 'all' | 'featured' | 'latest-daily'
+export type DefaultRssFetcherMode = 'all' | 'featured' | 'all-feed' | 'latest-daily'
 
 const FALLBACK_FEATURED_FEED: AiHotspotUserFeed = {
   id: 'builtin-ai-hot-featured',
@@ -131,14 +133,13 @@ export class DefaultRssFetcher extends BaseAiHotspotFetcher {
   }
 
   async fetch(_now: Date, options?: AiHotspotFetcherOptions) {
-    const lastFetchAt = options?.lastFetchAt
     const force = options?.force ?? false
 
     // 从 user_feeds 表读取核心 RSS 源
     const { getAiHotspotUserFeeds } = await import('@/db/ai-hotspots')
     const allFeeds = await getAiHotspotUserFeeds()
     let rssFeeds = allFeeds.filter(
-      f => f.enabled && f.groupName === 'builtin:rss'
+      f => f.enabled && isDefaultRssFeed(f)
     )
 
     if (this.mode === 'featured') {
@@ -146,6 +147,8 @@ export class DefaultRssFetcher extends BaseAiHotspotFetcher {
       if (rssFeeds.length === 0) {
         rssFeeds = [FALLBACK_FEATURED_FEED]
       }
+    } else if (this.mode === 'all-feed') {
+      rssFeeds = rssFeeds.filter(feed => getDefaultRssFeedRole(feed) === 'all')
     } else if (this.mode === 'latest-daily') {
       rssFeeds = rssFeeds.filter(feed => getDefaultRssFeedRole(feed) === 'daily')
       if (rssFeeds.length === 0) {
@@ -157,13 +160,20 @@ export class DefaultRssFetcher extends BaseAiHotspotFetcher {
       return [] as AiHotspotRawItem[]
     }
 
-    const results = await Promise.all(
-      rssFeeds.map(async (feed) => {
+    const results = await mapWithConcurrency(
+      rssFeeds,
+      AI_HOTSPOT_CONFIG.rss.maxConcurrency,
+      async (feed) => {
+        const feedLastFetchAt = force
+          ? null
+          : this.resolveFeedLastFetchAt(options, [feed.id, feed.feedUrl, feed.title], null)
+
         try {
           const feedRole = getDefaultRssFeedRole(feed)
           const { response, notModified } = await fetchHotspotConditional(feed.feedUrl, {
             timeoutMs: 20000,
-            ifModifiedSince: force ? null : lastFetchAt,
+            ifModifiedSince: feedLastFetchAt,
+            signal: options?.signal,
           })
 
           if (notModified) {
@@ -173,6 +183,7 @@ export class DefaultRssFetcher extends BaseAiHotspotFetcher {
               notModified: true,
               error: null as string | null,
               role: feedRole,
+              lastFetchAt: feedLastFetchAt,
             }
           }
 
@@ -184,13 +195,18 @@ export class DefaultRssFetcher extends BaseAiHotspotFetcher {
             feedUrl: feed.feedUrl,
             feedRole,
           }).map(item => refineAiHotRssItemSource(item, feedRole))
+          const roleItems = feedRole === 'daily'
+            ? parsedItems.slice(0, AI_HOTSPOT_CONFIG.rss.dailyIssueLimit)
+            : parsedItems.slice(0, AI_HOTSPOT_CONFIG.rss.maxItemsPerFeed)
+          const items = force ? roleItems : this.filterByLastFetchAt(roleItems, feedLastFetchAt)
 
           return {
             feed,
-            items: feedRole === 'daily' ? parsedItems.slice(0, 1) : parsedItems,
+            items,
             notModified: false,
             error: null as string | null,
             role: feedRole,
+            lastFetchAt: feedLastFetchAt,
           }
         } catch (error) {
           return {
@@ -199,9 +215,10 @@ export class DefaultRssFetcher extends BaseAiHotspotFetcher {
             notModified: false,
             error: getErrorMessage(error),
             role: getDefaultRssFeedRole(feed),
+            lastFetchAt: feedLastFetchAt,
           }
         }
-      })
+      },
     )
 
     const failedFeeds = results.filter((result) => result.error)
@@ -233,11 +250,13 @@ export class DefaultRssFetcher extends BaseAiHotspotFetcher {
       }))
     })
 
-    const filteredItems = force ? items : this.filterByLastFetchAt(items, lastFetchAt)
+    const filteredItems = items
 
     const dailyIssues = filteredItems.filter(item => item.meta.feedRole === 'daily')
-    const dailyArticleResults = await Promise.all(
-      dailyIssues.slice(0, 1).map(async (issue) => {
+    const dailyArticleResults = await mapWithConcurrency(
+      dailyIssues.slice(0, AI_HOTSPOT_CONFIG.rss.dailyDetailIssueLimit),
+      2,
+      async (issue) => {
         try {
           return {
             articles: await fetchDailyIssueArticles(issue),
@@ -251,7 +270,7 @@ export class DefaultRssFetcher extends BaseAiHotspotFetcher {
             issue,
           }
         }
-      }),
+      },
     )
     const dailyDetailFetchedAt = new Date().toISOString()
     const dailyDetailStatusByUrl = new Map(

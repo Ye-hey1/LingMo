@@ -18,11 +18,11 @@ export interface BuiltinSource {
   category: string
   /** 是否默认启用 */
   defaultEnabled: boolean
-  /** 是否为核心源（不可删除） */
+  /** 是否为核心官方源 */
   core: boolean
 }
 
-/** 核心源 - 不可删除，始终启用 */
+/** 核心官方源 - 默认启用，也可在信源库中自由管理 */
 export const CORE_SOURCES: BuiltinSource[] = [
   {
     id: 'ai-hot-rss-featured',

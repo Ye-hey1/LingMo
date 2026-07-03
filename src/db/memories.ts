@@ -92,7 +92,9 @@ export async function upsertMemory(
   if (memory.embedding) {
     try {
       embedding = JSON.parse(memory.embedding) as number[]
-    } catch {}
+    } catch {
+      // Ignore malformed stored embeddings and regenerate below.
+    }
   }
 
   if (!embedding) {

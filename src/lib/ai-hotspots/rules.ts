@@ -14,6 +14,9 @@ type AiHotspotRelatedRecord = {
   source?: string | null
   siteName?: string | null
   url?: string | null
+  summary?: string | null
+  categories?: unknown
+  keywords?: unknown
 }
 
 /**
@@ -37,6 +40,32 @@ export function invalidateInterestConfig() {
   cachedSourceText = null
 }
 
+function normalizeMetaText(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string')
+      .join(' ')
+  }
+  if (typeof value === 'string') return value
+  return ''
+}
+
+function normalizeMetaList(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string')
+      .map(item => item.trim())
+      .filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/[,，、;；|/#\n]+/)
+      .map(item => item.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
 export function isAiHotspotRelated(record: AiHotspotRelatedRecord): boolean {
   const siteId = (record.siteId ?? '').trim().toLowerCase()
   const url = (record.url ?? '').toLowerCase()
@@ -54,6 +83,9 @@ export function isAiHotspotRelated(record: AiHotspotRelatedRecord): boolean {
     record.source,
     record.siteName,
     record.url,
+    record.summary,
+    normalizeMetaText(record.categories),
+    normalizeMetaText(record.keywords),
   ].filter(Boolean).join(' ').toLowerCase()
 
   if (!text) return false
@@ -129,12 +161,19 @@ export function classifyHotspotTags(text: string, sourceText?: string): string[]
  */
 export function scoreHotspotItem(item: AiHotspotItem, sourceText?: string): number {
   const config = getInterestConfig(sourceText)
+  const categories = normalizeMetaList(item.meta?.categories)
+  const keywords = normalizeMetaList(item.meta?.keywords)
+  const contentText = typeof item.meta?.contentText === 'string' ? item.meta.contentText : ''
   const text = [
     item.title,
     item.summary,
     item.sourceName,
     item.feedName,
     item.tags.join(' '),
+    categories.join(' '),
+    keywords.join(' '),
+    typeof item.meta?.author === 'string' ? item.meta.author : '',
+    contentText.slice(0, 1200),
   ].filter(Boolean).join(' ')
 
   const result = classifyByInterest(text, config)
@@ -153,6 +192,13 @@ export function scoreHotspotItem(item: AiHotspotItem, sourceText?: string): numb
   }
 
   if (AI_HOTSPOT_CONFIG.filter.trustedAiSourceIds.includes(item.sourceId.toLowerCase())) score += scoring.trustedSourceBonus
+  if ((item.summary || '').trim().length >= 80) score += 2
+  if (categories.length > 0) score += 3
+  if (keywords.length > 0) score += 2
+  if (typeof item.meta?.thumbnail === 'string' && item.meta.thumbnail.trim()) score += 1
+  if (contentText.trim().length >= 800) score += 4
+  else if (contentText.trim().length >= 240) score += 2
+  if (item.title.trim().length < 8) score -= 3
   if (item.isFavorite) score += scoring.favoriteBonus
   if (item.savedNotePath) score += scoring.savedBonus
   if (item.isRead) score -= scoring.readPenalty

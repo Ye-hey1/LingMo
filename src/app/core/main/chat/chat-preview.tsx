@@ -239,6 +239,7 @@ type MermaidRenderResult = {
 }
 
 const MERMAID_RENDER_CACHE_PREFIX = 'lingmo:chat:mermaid:';
+const MERMAID_RENDER_STYLE_VERSION = 'clean-v4';
 const MAX_STORED_MERMAID_SVG_LENGTH = 500_000;
 const MERMAID_RENDER_TIMEOUT_MS = 15_000;
 const MERMAID_STATEMENT_START = /([)\]}"])\s+([A-Za-z_][\w-]*\s*(?:-->|---|-.->|==>|--o|--x|o--|x--))/g;
@@ -273,7 +274,7 @@ type MermaidViewerState = {
 }
 
 function getMermaidCacheKey(source: string, theme: 'light' | 'dark'): string {
-  return `${theme}:${source}`;
+  return `${MERMAID_RENDER_STYLE_VERSION}:${theme}:${source}`;
 }
 
 function hashMermaidCacheKey(value: string): string {
@@ -1157,17 +1158,6 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     const el = previewRef.current
     if (!el) return
 
-    const handleWheel = (event: WheelEvent) => {
-      const container = getMermaidContainer(event.target)
-      if (!container) return
-
-      event.preventDefault()
-      const state = getMermaidViewState(container)
-      const delta = event.deltaY > 0 ? -0.1 : 0.1
-      state.scale = Math.min(4, Math.max(0.25, state.scale + delta))
-      applyMermaidTransform(container)
-    }
-
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target
       if (target instanceof Element && target.closest('.mermaid-canvas-controls')) return
@@ -1213,14 +1203,12 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       renderArea?.releasePointerCapture?.(event.pointerId)
     }
 
-    el.addEventListener('wheel', handleWheel, { passive: false })
     el.addEventListener('pointerdown', handlePointerDown)
     el.addEventListener('pointermove', handlePointerMove)
     el.addEventListener('pointerup', endPointerDrag)
     el.addEventListener('pointercancel', endPointerDrag)
 
     return () => {
-      el.removeEventListener('wheel', handleWheel)
       el.removeEventListener('pointerdown', handlePointerDown)
       el.removeEventListener('pointermove', handlePointerMove)
       el.removeEventListener('pointerup', endPointerDrag)

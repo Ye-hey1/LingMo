@@ -1,3 +1,5 @@
+import { estimateTokens } from './token-counter'
+
 type ChatLike = {
   role: string
   type: string
@@ -23,6 +25,79 @@ function getChatContentForPrompt(chat: ChatLike) {
   return chat.role === 'user'
     ? chat.content || ''
     : chat.condensedContent || chat.content || ''
+}
+
+function isFinitePositiveNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function trimContentToTokenBudget(content: string, maxTokens: number) {
+  const tokenCount = estimateTokens(content)
+  if (!isFinitePositiveNumber(maxTokens) || tokenCount <= maxTokens) {
+    return content
+  }
+
+  const ratio = Math.max(0.05, Math.min(1, maxTokens / Math.max(tokenCount, 1)))
+  const approxChars = Math.max(80, Math.floor(content.length * ratio))
+  return `${content.slice(0, approxChars).trimEnd()}\n\n[历史内容已按预算截断]`
+}
+
+function estimateMessagesTokens(messages: MessageLike[]) {
+  return messages.reduce((sum, message) => sum + estimateTokens(message.content), 0)
+}
+
+function buildTurnMessages(
+  turn: ChatTurn,
+  includeAssistantMessages: boolean,
+  maxSingleMessageTokens?: number
+) {
+  const messages: MessageLike[] = []
+  const normalizeContent = (content: string) => (
+    isFinitePositiveNumber(maxSingleMessageTokens)
+      ? trimContentToTokenBudget(content, maxSingleMessageTokens)
+      : content
+  )
+
+  const userContent = normalizeContent(getChatContentForPrompt(turn.user))
+  if (userContent) {
+    messages.push({ role: 'user', content: userContent })
+  }
+
+  if (!includeAssistantMessages) {
+    return messages
+  }
+
+  for (const assistant of turn.assistants) {
+    const content = normalizeContent(getChatContentForPrompt(assistant))
+    if (content) {
+      messages.push({ role: 'assistant', content })
+    }
+  }
+
+  return messages
+}
+
+function trimTurnMessagesToBudget(messages: MessageLike[], maxTokens: number) {
+  const result: MessageLike[] = []
+  let remaining = Math.max(0, Math.floor(maxTokens))
+
+  for (const message of messages) {
+    if (remaining <= 0) break
+    const tokenCount = estimateTokens(message.content)
+    if (tokenCount <= remaining) {
+      result.push(message)
+      remaining -= tokenCount
+      continue
+    }
+
+    const content = trimContentToTokenBudget(message.content, remaining)
+    if (content.trim()) {
+      result.push({ ...message, content })
+    }
+    break
+  }
+
+  return result
 }
 
 function buildChatTurns(chats: ChatLike[]): ChatTurn[] {
@@ -108,12 +183,16 @@ export function buildMessagesWithHistory(
     includeAssistantMessages?: boolean
     includeLatestUserMessage?: boolean
     maxUserMessages?: number
+    maxHistoryTokens?: number
+    maxSingleMessageTokens?: number
   }
 ): MessageLike[] {
   const messages: MessageLike[] = []
   const includeAssistantMessages = options?.includeAssistantMessages ?? true
   const includeLatestUserMessage = options?.includeLatestUserMessage ?? true
   const maxUserMessages = options?.maxUserMessages
+  const maxHistoryTokens = options?.maxHistoryTokens
+  const maxSingleMessageTokens = options?.maxSingleMessageTokens
 
   if (systemPrompt) {
     messages.push({
@@ -133,23 +212,38 @@ export function buildMessagesWithHistory(
     turns = limit === 0 ? [] : turns.slice(-limit)
   }
 
-  for (const turn of turns) {
-    const userContent = getChatContentForPrompt(turn.user)
-    if (userContent) {
-      messages.push({ role: 'user', content: userContent })
-    }
+  let historyMessages: MessageLike[] = []
 
-    if (!includeAssistantMessages) {
-      continue
-    }
+  if (isFinitePositiveNumber(maxHistoryTokens)) {
+    const selectedTurns: MessageLike[][] = []
+    let remaining = Math.floor(maxHistoryTokens)
 
-    for (const assistant of turn.assistants) {
-      const content = getChatContentForPrompt(assistant)
-      if (content) {
-        messages.push({ role: 'assistant', content })
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const turnMessages = buildTurnMessages(turns[index], includeAssistantMessages, maxSingleMessageTokens)
+      if (turnMessages.length === 0) continue
+
+      const turnTokens = estimateMessagesTokens(turnMessages)
+      if (turnTokens <= remaining) {
+        selectedTurns.unshift(turnMessages)
+        remaining -= turnTokens
+        continue
       }
+
+      if (selectedTurns.length === 0 && remaining > 0) {
+        const trimmedTurn = trimTurnMessagesToBudget(turnMessages, remaining)
+        if (trimmedTurn.length > 0) {
+          selectedTurns.unshift(trimmedTurn)
+        }
+      }
+      break
     }
+
+    historyMessages = selectedTurns.flat()
+  } else {
+    historyMessages = turns.flatMap(turn => buildTurnMessages(turn, includeAssistantMessages, maxSingleMessageTokens))
   }
+
+  messages.push(...historyMessages)
 
   if (additionalContext) {
     messages.push({

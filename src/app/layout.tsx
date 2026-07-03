@@ -1,5 +1,6 @@
 import "./globals.css";
 import "./core/main/editor/markdown/style.css";
+import "./core/main/editor/mermaid/mermaid-editor.css";
 import 'react-photo-view/dist/react-photo-view.css';
 import Script from "next/script";
 import { AppProviders } from "@/components/providers/AppProviders";

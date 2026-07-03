@@ -3,7 +3,7 @@
 import { Extension, type Editor } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
-import { fetchCompletionStream } from '@/lib/ai/completion'
+import { fetchCompletion, fetchCompletionStream } from '@/lib/ai/completion'
 import { getCompletionCache } from '@/lib/ai/completion-cache'
 import { buildCompletionContext, type CompletionContext } from '@/lib/ai/completion-context'
 import { isSubsetOfSuffix, removeSuffixOverlap } from '@/lib/ai/completion-dedup'
@@ -36,8 +36,13 @@ interface PredictionInput {
 export const ghostTextPluginKey = new PluginKey('ghostTextPlugin')
 
 const STREAM_FLUSH_INTERVAL = 50
-const CONTEXT_CHARS = 700
+const CONTEXT_CHARS = 2200
+const AFTER_CONTEXT_CHARS = 600
 const MIN_CONTEXT_LENGTH = 15
+const FIRST_TOKEN_TIMEOUT_MS = 2800
+const REQUEST_TIMEOUT_MS = 9000
+const STREAM_COMPLETION_TOKENS = 120
+const FALLBACK_COMPLETION_TOKENS = 160
 const PREDICTABLE_NODE_TYPES = new Set(['paragraph', 'heading', 'listItem', 'blockquote'])
 
 export function getGhostTextStorage(editor: { storage: unknown }) {
@@ -59,8 +64,11 @@ function getPredictionInput(view: EditorView): PredictionInput | null {
     return null
   }
 
-  const contextStart = Math.max(0, pos - CONTEXT_CHARS)
-  const context = doc.textBetween(contextStart, pos, '\n')
+  const richContext = buildCompletionContext(doc, pos, {
+    beforeChars: CONTEXT_CHARS,
+    afterChars: AFTER_CONTEXT_CHARS,
+  })
+  const context = richContext.textBefore
 
   if (context.trim().length < MIN_CONTEXT_LENGTH) {
     return null
@@ -69,7 +77,7 @@ function getPredictionInput(view: EditorView): PredictionInput | null {
   return {
     context,
     pos,
-    richContext: buildCompletionContext(doc, pos),
+    richContext,
   }
 }
 
@@ -104,6 +112,33 @@ function postProcessPrediction(prediction: string, suffix: string) {
   }
 
   return withoutOverlap
+}
+
+function isAbortLikeError(error: unknown) {
+  return error instanceof Error &&
+    (error.name === 'AbortError' || error.message === 'Request was aborted.')
+}
+
+function isExpectedGhostTextError(error: unknown) {
+  return isAbortLikeError(error) ||
+    (error instanceof Error && error.name === 'AICompletionUnavailableError')
+}
+
+function createLinkedAbortController(parentSignal: AbortSignal) {
+  const controller = new AbortController()
+
+  if (parentSignal.aborted) {
+    controller.abort()
+    return { controller, dispose: () => {} }
+  }
+
+  const abort = () => controller.abort()
+  parentSignal.addEventListener('abort', abort, { once: true })
+
+  return {
+    controller,
+    dispose: () => parentSignal.removeEventListener('abort', abort),
+  }
 }
 
 export const GhostTextExtension = Extension.create<GhostTextOptions>({
@@ -202,11 +237,23 @@ export const GhostTextExtension = Extension.create<GhostTextOptions>({
 
       let chunkBuffer = ''
       let bufferTimer: ReturnType<typeof setTimeout> | null = null
+      let firstTokenTimer: ReturnType<typeof setTimeout> | null = null
+      let requestTimer: ReturnType<typeof setTimeout> | null = null
       let hasReceivedFirstChunk = false
       let accumulatedPrediction = ''
 
+      requestTimer = setTimeout(() => {
+        controller.abort()
+      }, REQUEST_TIMEOUT_MS)
+
+      const isActiveRequest = () => (
+        getGhostTextStorage(editor).enabled &&
+        !controller.signal.aborted &&
+        abortController === controller
+      )
+
       const flushBuffer = () => {
-        if (!getGhostTextStorage(editor).enabled || controller.signal.aborted || abortController !== controller) {
+        if (!isActiveRequest()) {
           chunkBuffer = ''
           bufferTimer = null
           return
@@ -226,6 +273,13 @@ export const GhostTextExtension = Extension.create<GhostTextOptions>({
         bufferTimer = null
       }
 
+      const clearFirstTokenTimer = () => {
+        if (firstTokenTimer) {
+          clearTimeout(firstTokenTimer)
+          firstTokenTimer = null
+        }
+      }
+
       const cleanupBuffer = () => {
         if (bufferTimer) {
           clearTimeout(bufferTimer)
@@ -234,35 +288,107 @@ export const GhostTextExtension = Extension.create<GhostTextOptions>({
         flushBuffer()
       }
 
-      try {
-        await fetchCompletionStream(
+      const applyFallbackCompletion = async () => {
+        if (!isActiveRequest()) {
+          return false
+        }
+
+        const fallback = await fetchCompletion(
           input.context,
-          (chunk, isFirst) => {
-            if (!getGhostTextStorage(editor).enabled || controller.signal.aborted || abortController !== controller) return
-
-            if (isFirst && !hasReceivedFirstChunk) {
-              hasReceivedFirstChunk = true
-              accumulatedPrediction = chunk
-              view.dispatch(
-                view.state.tr.setMeta(ghostTextPluginKey, {
-                  type: 'SET_PREDICTION',
-                  prediction: chunk,
-                  pos: input.pos,
-                })
-              )
-              return
-            }
-
-            chunkBuffer += chunk
-            if (!bufferTimer) {
-              bufferTimer = setTimeout(flushBuffer, STREAM_FLUSH_INTERVAL)
-            }
-          },
           controller.signal,
-          input.richContext
+          input.richContext,
+          {
+            showErrorToast: false,
+            maxTokens: FALLBACK_COMPLETION_TOKENS,
+          }
         )
 
+        if (!fallback || !isActiveRequest()) {
+          return false
+        }
+
+        hasReceivedFirstChunk = true
+        accumulatedPrediction = fallback
+        chunkBuffer = ''
+        view.dispatch(
+          view.state.tr.setMeta(ghostTextPluginKey, {
+            type: 'SET_PREDICTION',
+            prediction: fallback,
+            pos: input.pos,
+          })
+        )
+        return true
+      }
+
+      const runStreamCompletion = async () => {
+        const {
+          controller: streamController,
+          dispose: disposeStreamController,
+        } = createLinkedAbortController(controller.signal)
+
+        firstTokenTimer = setTimeout(() => {
+          if (!hasReceivedFirstChunk && isActiveRequest()) {
+            streamController.abort()
+          }
+        }, FIRST_TOKEN_TIMEOUT_MS)
+
+        try {
+          await fetchCompletionStream(
+            input.context,
+            (chunk, isFirst) => {
+              if (!isActiveRequest()) return
+
+              if (isFirst && !hasReceivedFirstChunk) {
+                clearFirstTokenTimer()
+                hasReceivedFirstChunk = true
+                accumulatedPrediction = chunk
+                view.dispatch(
+                  view.state.tr.setMeta(ghostTextPluginKey, {
+                    type: 'SET_PREDICTION',
+                    prediction: chunk,
+                    pos: input.pos,
+                  })
+                )
+                return
+              }
+
+              chunkBuffer += chunk
+              if (!bufferTimer) {
+                bufferTimer = setTimeout(flushBuffer, STREAM_FLUSH_INTERVAL)
+              }
+            },
+            streamController.signal,
+            input.richContext,
+            {
+              showErrorToast: false,
+              maxTokens: STREAM_COMPLETION_TOKENS,
+            }
+          )
+        } finally {
+          clearFirstTokenTimer()
+          disposeStreamController()
+        }
+      }
+
+      try {
+        try {
+          await runStreamCompletion()
+        } catch (error: unknown) {
+          cleanupBuffer()
+
+          if (!hasReceivedFirstChunk && await applyFallbackCompletion()) {
+            // A provider or proxy can accept the request but never emit stream
+            // deltas. The fallback turns that stuck loading state into text.
+          } else {
+            throw error
+          }
+        }
+
         cleanupBuffer()
+
+        if (!hasReceivedFirstChunk) {
+          await applyFallbackCompletion()
+        }
 
         const isCurrentRequest = abortController === controller
         if (!getGhostTextStorage(editor).enabled || controller.signal.aborted || !isCurrentRequest) {
@@ -296,13 +422,19 @@ export const GhostTextExtension = Extension.create<GhostTextOptions>({
       } catch (error: unknown) {
         const isCurrentRequest = abortController === controller
         cleanupBuffer()
-        if (!(error instanceof Error && error.name === 'AbortError')) {
+        clearFirstTokenTimer()
+        if (!isExpectedGhostTextError(error)) {
           console.error('[GhostText] Stream error:', error)
         }
         if (isCurrentRequest) {
           view.dispatch(view.state.tr.setMeta(ghostTextPluginKey, { type: 'CLEAR' }))
         }
       } finally {
+        clearFirstTokenTimer()
+        if (requestTimer) {
+          clearTimeout(requestTimer)
+          requestTimer = null
+        }
         if (abortController === controller) {
           abortController = null
         }

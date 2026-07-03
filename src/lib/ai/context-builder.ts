@@ -8,6 +8,7 @@ import { readTextFile } from '@tauri-apps/plugin-fs'
 import { getContextForQuery, getContextForQueryInFolder } from '@/lib/rag'
 import { getWorkspacePath, getFilePathOptions } from '@/lib/workspace'
 import { searchWeb } from '@/lib/tavily'
+import { decideDocumentGrounding } from '@/lib/ai/document-grounding'
 import type { LinkedResource } from '@/lib/files'
 import { isLinkedFolder } from '@/lib/files'
 import type { RagSource } from '@/lib/rag'
@@ -474,7 +475,8 @@ export function buildCurrentNoteContext(
   activeFilePath: string | undefined,
   currentArticle: string | undefined,
   linkedFiles: LinkedResource[],
-  contextBudget: { remaining: number }
+  contextBudget: { remaining: number },
+  contentLimit = 3000
 ): { context: string; source?: ChatCitationSource } {
   if (!activeFilePath || !currentArticle) return { context: '' }
 
@@ -485,7 +487,7 @@ export function buildCurrentNoteContext(
 
   const currentArticleContext = takeContent(
     currentArticle,
-    3000,
+    contentLimit,
     contextBudget,
     `current note ${activeFilePath}`
   )
@@ -707,6 +709,10 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
   const linkedFolders = linkedResources.filter(isLinkedFolder)
   const linkedFiles = linkedResources.filter(r => !isLinkedFolder(r))
   const hasPrimaryDocument = !!currentArticle || linkedFiles.length > 0 || !!quoteData
+  const documentGrounding = decideDocumentGrounding({
+    userInput: userQuery,
+    hasDocumentContext: hasPrimaryDocument,
+  })
   const strategyResult = detectRagStrategy({
     userQuery,
     hasPrimaryDocument,
@@ -760,7 +766,13 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
   }
 
   // 2. 当前笔记/已附加文件。优先把用户明确引用的内容送进模型。
-  const currentNoteResult = buildCurrentNoteContext(activeFilePath, currentArticle, linkedFiles, budget)
+  const currentNoteResult = buildCurrentNoteContext(
+    activeFilePath,
+    currentArticle,
+    linkedFiles,
+    budget,
+    documentGrounding.grounded ? 12000 : 3000
+  )
   if (currentNoteResult.context) {
     context += currentNoteResult.context
     if (currentNoteResult.context.trim()) {

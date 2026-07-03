@@ -10,6 +10,7 @@ interface HtmlCodeEditorProps {
   content: string
   onChange: (value: string) => void
   onEditorMount?: (view: EditorView | null) => void
+  language?: 'html' | 'plain'
 }
 
 // 语法高亮颜色通过 CSS 变量注入，确保跟随用户主题切换
@@ -67,7 +68,7 @@ const editorTheme = EditorView.theme({
   },
 })
 
-export function HtmlCodeEditor({ content, onChange, onEditorMount }: HtmlCodeEditorProps) {
+export function HtmlCodeEditor({ content, onChange, onEditorMount, language = 'html' }: HtmlCodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
@@ -91,7 +92,7 @@ export function HtmlCodeEditor({ content, onChange, onEditorMount }: HtmlCodeEdi
       doc: content,
       extensions: [
         basicSetup,
-        html(),
+        ...(language === 'html' ? [html()] : []),
         EditorView.lineWrapping,
         themeCompartment.current.of(editorTheme),
         EditorView.updateListener.of((update) => {

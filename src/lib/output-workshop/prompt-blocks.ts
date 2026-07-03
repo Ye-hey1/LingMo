@@ -1,11 +1,61 @@
-import type { TemplateOverrides } from '../../components/output-workshop/types'
-import { buildTemplateOverridePrompt } from '../../components/output-workshop/workshop-controls'
-import { CREATIVE_DESIGN_PROMPT } from '../../components/output-workshop/utils-prompts'
+import type { TemplateOverrides } from './shared/types'
+import { buildTemplateOverridePrompt } from './shared/template-overrides'
 import { renderDesignProfilePromptBlock } from './design-profiles'
 import type { OutputTemplate } from './templates'
 
 export const CREATIVE_PROMPT_SOURCE_LIMIT = 8_000
 export const CREATIVE_DIRECT_MAX_TOKENS = 7_000
+
+/**
+ * AI 自由创意（无 skillPrompt）模式下的设计总纲 prompt。
+ * 原定义在 components/utils-prompts.ts，因其仅被本文件消费，移入 lib 层以消除反向依赖。
+ */
+export const CREATIVE_DESIGN_PROMPT = `你是一个内容驱动的资深视觉编辑、信息架构师和前端网页交互设计师。
+你的任务不是套用固定网页模板，而是先阅读材料，再为这份材料定制一个独特的自包含 HTML 视觉成品。
+
+**内容驱动创意策略（必须先在内部完成，不要输出分析文字）**:
+1. 判断材料的真实类型：研究报告、产品复盘、教程、人物故事、会议纪要、数据解读、观点宣言、清单、时间线、案例拆解等。
+2. 判断目标读者与阅读场景：快速扫读、深度阅读、社媒传播、课堂讲解、汇报展示、个人知识库复习等。
+3. 从材料中提取一个视觉隐喻或结构母题：流程、地图、档案、剧本、仪表盘、标本册、展览墙、航线、棋盘、时间轴、实验记录、目录索引等。母题必须来自输入内容，不要凭空装饰。
+4. 依据内容结构选择版式，而不是默认 hero + card grid。可以采用但不限于：编辑部专题、田野笔记、交互目录、分镜叙事、横向时间轴、双栏论文批注、地图式导览、卡片组图、PPT 单页、数据看板、问答卡、流程仪表、案例卷宗。
+5. 为这次输入生成专属的信息层级：哪些内容做标题、哪些做主视觉、哪些做证据、哪些做脚注、哪些做导航。不要把所有章节渲染成相同卡片。
+6. 如果输入包含数字、时间、对比、步骤或实体关系，必须把这些结构转成相应的视觉组织方式；如果没有数据，不要伪造指标。
+
+**反模板要求（非常重要）**:
+- 严禁每次都生成同一种大标题 hero、三四张圆角卡片、统一渐变背景的固定套路。
+- 严禁只替换文字但保持相同布局骨架；布局、节奏、导航和重点呈现方式必须随内容变化。
+- 不要为了“高端感”堆砌装饰。视觉选择必须能解释材料，而不是覆盖材料。
+- 可以做强视觉，但必须让用户看得出这是为当前内容特别设计的页面。
+
+**视觉与排版核心规范（必须严格遵守）**:
+1. **对比度第一原则 (Strict Contrast)**:
+   - 文字颜色与背景色必须具有超高对比度，确保文字清晰可读，绝不模糊！
+   - 如果使用深色背景（例如 OLED 纯黑 #050505 或深 Slate 蓝 #0F172A），文字必须使用纯白 (#FFFFFF) 或亮灰 (#F1F5F9)；段落文字也必须在 #CBD5E1 以上。
+   - 如果使用浅色背景（如 Warm Cream #FDFBF7 或银白 #F8FAFC），文字必须使用炭黑 (#0F172A) 或深 Slate 灰 (#1E293B)。
+2. **产品级排版 (Premium Typography)**:
+   - 在 head 标签中，必须静态引入 Google Fonts 顶级字体：
+     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+   - 主 headings 优先使用 'Playfair Display' (Serif) 或 'Plus Jakarta Sans' (Sans)。
+   - 中文部分必须显式定义 CJK 中日韩字体栈：'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif。
+   - 正文不小于 1rem；长文行高 1.55-1.75；标题使用 text-wrap: balance，段落使用 text-wrap: pretty。
+ 3. **精确布局与容器节制**:
+    - 使用 4px/8px 基线间距，相关元素紧密分组，不同区块用更大留白区分。
+    - Grid 负责二维结构，Flex 负责横向/纵向一维排列；固定比例卡片必须有安全区，表格、代码块和长标题不得横向溢出。
+    - 卡片圆角优先 8px/12px/16px；不要使用 24px 以上大圆角、普通卡片套卡片、渐变文字或装饰性玻璃拟态。
+4. **精细的时间轴/列表对齐**:
+   - 列表、步骤、时间轴的图标或圆点必须与右侧标题首行文字进行数学上的居中/对齐，严禁粗糙错位。
+   - 连接线使用极细的 1px 线段（如 border-l border-muted 或者是渐变背景），保持极高精度。
+5. **单文件自包含与体积控制**:
+   - 可以引入 <script src="https://cdn.tailwindcss.com"></script> 以获得强大的 Tailwind CSS 渲染能力。
+   - 所有图标请直接使用文字、精美 Emoji 或极简 CSS 绘制，**严禁生成庞大冗长的 SVG 代码**（以防触发 6000 字符的体积限制导致截断）。
+6. **状态型动效 (Purposeful Motion)**:
+   - 动效只用于 hover、press、展开折叠、加载、切换和内容关系提示；常规状态变化 150-250ms，布局变化不超过 350ms。
+   - 使用 ease-out quart/quint/expo 曲线，避免 bounce/elastic；必须写入 @media (prefers-reduced-motion: reduce) 降级。
+
+**输出要求**:
+- 只输出完整的 HTML 页面代码
+- HTML 中必须包含一个简短的内联注释 \`<!-- creative-brief: ... -->\`，用一句话记录本次页面采用的内容母题与版式策略，便于调试；不要在页面可见区域显示这句说明。
+- 不要使用任何 Markdown 代码块包裹，也不要有任何前置或后置的文本说明（如果系统强制需要代码块，可以使用 \`\`\`html ... \`\`\` 包裹）`
 
 export const CREATIVE_SKILL_DIRECT_PROMPT = `你是 LingMo 智能排版的资深前端设计师。请根据当前创意模板规范和输入材料生成完整自包含 HTML。
 
@@ -38,6 +88,11 @@ function isAutoRedbookTemplate(template: OutputTemplate): boolean {
 }
 
 function renderTemplateMetadataBlock(template: OutputTemplate): string {
+  // designConstraints 是模板的视觉规范（配色/字体/装饰/动效），对无 skillPrompt 的模板
+  // （如 deck-rain-notes 等 5 个 deck 模板）尤其关键——它是 AI 直绘时唯一的风格约束来源。
+  const constraintsBlock = template.designConstraints?.trim()
+    ? `\n- 视觉规范（必须严格遵守）：${template.designConstraints.trim()}`
+    : ''
   return `## 当前模板
 - ID：${template.id}
 - 名称：${template.name}
@@ -46,7 +101,7 @@ function renderTemplateMetadataBlock(template: OutputTemplate): string {
 - 最佳用途：${template.bestFor}
 - 输出目标：${template.outputTargets?.join('、') || template.outputHint}
 - 尺寸建议：${template.sizePresets?.join('、') || 'auto'}
-${template.pipelineHint?.length ? `- 推荐工作流：${template.pipelineHint.join(' -> ')}` : ''}`
+${template.pipelineHint?.length ? `- 推荐工作流：${template.pipelineHint.join(' -> ')}` : ''}${constraintsBlock}`
 }
 
 function renderAutoRedbookContract(template: OutputTemplate): string {

@@ -607,7 +607,9 @@ export function parseXhsNoteRecord(mark: Mark): XhsNoteRecordParsed {
   if (metaMatch?.[1]) {
     try {
       baseMeta = JSON.parse(metaMatch[1])
-    } catch {}
+    } catch {
+      // Ignore malformed embedded metadata and fall back to parsing the note body.
+    }
   }
 
   const title = baseMeta.title || mark.desc?.split('\n')[0] || '小红书笔记'
@@ -834,7 +836,9 @@ export function mergeXhsNoteSummary(content: string, summary: Partial<XhsNoteMet
   if (metaMatch?.[1]) {
     try {
       baseMeta = JSON.parse(metaMatch[1])
-    } catch {}
+    } catch {
+      // Ignore malformed embedded metadata and fall back to parsing the note body.
+    }
   }
 
   const nextMeta = {

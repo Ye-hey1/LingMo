@@ -67,7 +67,7 @@ export async function registerNoteFromSave(
 
   const contentHash = await computeContentHash(content)
 
-  await objectRegistry.register({
+  const objectId = await objectRegistry.register({
     sourceType: 'note',
     sourceId: savePath,
     path: savePath,
@@ -88,4 +88,13 @@ export async function registerNoteFromSave(
       review_after: frontmatter.review_after,
     },
   })
+
+  try {
+    const { syncKnowledgeObjectToGraph, syncNoteLinksToGraph } = await import('@/lib/knowledge-graph/sync')
+    const object = await objectRegistry.getById(objectId)
+    if (object) await syncKnowledgeObjectToGraph(object)
+    await syncNoteLinksToGraph([{ filePath: savePath, content }])
+  } catch (error) {
+    console.warn('[KnowledgeGraph] note sync skipped:', error)
+  }
 }

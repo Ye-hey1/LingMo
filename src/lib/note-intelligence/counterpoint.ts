@@ -12,6 +12,15 @@ function trimForPrompt(content: string) {
   return normalized.length > 9000 ? `${normalized.slice(0, 9000)}\n\n[内容已截断]` : normalized
 }
 
+function buildCounterpointRationale(content: string) {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+  const sourceScope = normalized.length > 9000
+    ? '基于当前笔记前 9000 字左右的主要内容生成。'
+    : '基于当前笔记全文生成。'
+
+  return `${sourceScope}分析路径：先提取核心主张，再从反方成立前提、可能忽略证据、最小验证动作三个维度构造反观点。`
+}
+
 export async function generateCounterpointForNote(
   notePath: string,
   content?: string,
@@ -57,8 +66,8 @@ export async function generateCounterpointForNote(
     source_note: notePath,
     target_note: null,
     title,
-    summary: markdown.split('\n').find(line => line.trim() && !line.startsWith('#'))?.slice(0, 160) || '已生成反观点。',
-    rationale: '由当前笔记内容生成，用于暴露论证盲区。',
+    summary: markdown,
+    rationale: buildCounterpointRationale(noteContent),
     confidence: 0.75,
   })
 

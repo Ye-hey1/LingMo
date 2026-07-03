@@ -7,6 +7,15 @@ import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
 import type { MessageCitationDetail } from "@/lib/ai/citations"
 import { cleanAssistantGeneratedContent } from "@/lib/ai/assistant-content"
+import {
+  ASSISTANT_STATUS_DONE_DWELL_MS,
+  ASSISTANT_STATUS_PHASE_MIN_DWELL_MS,
+  getAssistantStatusLabel,
+  isAssistantStatusActive,
+  isAssistantStatusStreaming,
+  resolveChatAssistantStatusPhase,
+  type AssistantStatusPhase,
+} from "@/lib/ai/assistant-status-projection"
 
 interface ChatThinkingProps {
   chat: Chat
@@ -57,6 +66,56 @@ function formatElapsedTime(seconds: number) {
   return `${hours}时${String(remainingMinutes).padStart(2, '0')}分`
 }
 
+function useSmoothedThinkingPhase(chatId: number, desiredPhase: AssistantStatusPhase) {
+  const [phase, setPhase] = useState(desiredPhase)
+  const phaseRef = useRef(desiredPhase)
+  const changedAtRef = useRef(Date.now())
+  const timeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current)
+      timeoutRef.current = null
+    }
+
+    phaseRef.current = desiredPhase
+    changedAtRef.current = Date.now()
+    setPhase(desiredPhase)
+  }, [chatId])
+
+  useEffect(() => {
+    if (desiredPhase === phaseRef.current) return
+
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current)
+      timeoutRef.current = null
+    }
+
+    const now = Date.now()
+    const elapsed = now - changedAtRef.current
+    const minimumDwell = desiredPhase === 'done'
+      ? ASSISTANT_STATUS_DONE_DWELL_MS
+      : ASSISTANT_STATUS_PHASE_MIN_DWELL_MS
+    const delay = Math.max(0, minimumDwell - elapsed)
+
+    timeoutRef.current = window.setTimeout(() => {
+      phaseRef.current = desiredPhase
+      changedAtRef.current = Date.now()
+      setPhase(desiredPhase)
+      timeoutRef.current = null
+    }, delay)
+
+    return () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current)
+        timeoutRef.current = null
+      }
+    }
+  }, [desiredPhase])
+
+  return phase
+}
+
 export default function ChatThinking({
   chat,
   isStreaming = false,
@@ -103,10 +162,17 @@ export default function ChatThinking({
     return items
   }, [citationDetails, ragSources])
   const hasCitations = sourceLinks.length > 0
-  // 仅在流式传输且正式内容尚未开始输出时视为"思考中"
-  // 一旦 chat.content 出现，说明模型已完成思考进入输出阶段
-  const isThinking = isStreaming && !chat.content?.trim()
-  const showCitationLinks = !isThinking && hasCitations
+  const hasAnswerContent = !!chat.content?.trim()
+  const desiredPhase = resolveChatAssistantStatusPhase({
+    isStreaming,
+    hasThinkingContent,
+    hasAnswerContent,
+    hasCitations,
+  })
+  const phase = useSmoothedThinkingPhase(chat.id, desiredPhase)
+  const isThinkingActive = isAssistantStatusActive(phase)
+  const isStreamingStatus = isAssistantStatusStreaming(phase)
+  const showCitationLinks = phase === 'sources' && hasCitations
   const canExpand = hasThinkingContent || showCitationLinks
 
   const [isExpanded, setIsExpanded] = useState(false)
@@ -115,7 +181,7 @@ export default function ChatThinking({
   const thinkingStartedAtRef = useRef(chat.createdAt || Date.now())
 
   useEffect(() => {
-    if (!isThinking) return
+    if (!isStreamingStatus) return
 
     const updateElapsed = () => {
       const seconds = Math.floor((Date.now() - thinkingStartedAtRef.current) / 1000)
@@ -125,28 +191,22 @@ export default function ChatThinking({
     updateElapsed()
     const interval = window.setInterval(updateElapsed, 1000)
     return () => window.clearInterval(interval)
-  }, [isThinking])
+  }, [isStreamingStatus])
 
   useEffect(() => {
-    if (isThinking && isExpanded && contentRef.current) {
+    if (isThinkingActive && isExpanded && contentRef.current) {
       requestAnimationFrame(() => {
         if (contentRef.current) {
           contentRef.current.scrollTop = contentRef.current.scrollHeight
         }
       })
     }
-  }, [thinkingContent, isThinking, isExpanded])
+  }, [thinkingContent, isThinkingActive, isExpanded])
 
-  if (!isThinking && !hasThinkingContent && !hasCitations) return null
+  if (!isStreaming && !hasThinkingContent && !hasCitations) return null
 
-  const statusText = isThinking
-    ? hasThinkingContent
-      ? '思考中...'
-      : '正在思考...'
-    : hasThinkingContent
-      ? `已思考`
-      : '引用来源'
-  const showThinkingElapsed = isThinking && hasThinkingContent
+  const statusText = getAssistantStatusLabel(phase)
+  const showThinkingElapsed = phase === 'pending' || phase === 'thinking' || (phase === 'done' && hasThinkingContent)
 
   return (
     <div className="mb-0.5 w-full select-none">
@@ -157,22 +217,31 @@ export default function ChatThinking({
           "inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5",
           "text-left transition-all duration-150",
           "text-muted-foreground/60",
-          canExpand && "hover:bg-muted/20 hover:text-muted-foreground/80 active:bg-muted/30",
+          canExpand && "hover:text-muted-foreground/80",
           !canExpand && "cursor-default",
-          isThinking && "bg-blue-50/40 dark:bg-blue-950/20"
         )}
         onClick={() => {
           if (canExpand) setIsExpanded(!isExpanded)
         }}
       >
-        {isThinking ? (
-          <Loader2 className="size-3 text-blue-500 animate-spin" />
+        {isStreamingStatus ? (
+          <Loader2 className="size-3 text-primary/55 animate-spin" />
         ) : (
           <Brain className="size-3 text-muted-foreground/50" />
         )}
 
-        <span className="text-[11px] font-medium">
-          {statusText}
+        <span className="relative inline-flex min-w-fit items-center text-[11px] font-medium">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={statusText}
+              initial={{ opacity: 0, y: 2 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -2 }}
+              transition={{ duration: 0.12, ease: "easeOut" }}
+            >
+              {statusText}
+            </motion.span>
+          </AnimatePresence>
         </span>
 
         {showThinkingElapsed && (

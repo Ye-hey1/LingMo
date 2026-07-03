@@ -194,8 +194,10 @@
 }
 
 .tiptap-editor .ProseMirror {
+  box-sizing: border-box;
   outline: none;
   min-height: 100%;
+  width: 100%;
   padding: 20px 24px 64px;
   font-size: 16px;
   line-height: 1.7;
@@ -203,18 +205,8 @@
   color: hsl(var(--foreground));
 }
 
-.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > * {
-  content-visibility: auto;
-  contain-intrinsic-size: 1px 32px;
-}
-
-.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > h1,
-.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > h2,
-.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > h3,
-.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > pre,
-.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > blockquote,
-.tiptap-editor[data-performance-mode='large-markdown'] .ProseMirror > .tableWrapper {
-  contain-intrinsic-size: 1px 96px;
+.tiptap-editor .editor-content-frame-centered .ProseMirror {
+  margin-inline: auto;
 }
 
 .tiptap-editor .ProseMirror p.is-empty::before {
@@ -1479,10 +1471,79 @@
 .mermaid-fullscreen-viewer {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: 10040;
   display: flex;
   flex-direction: column;
   background: hsl(var(--background));
+}
+
+.mermaid-fullscreen-header {
+  display: flex;
+  min-height: 44px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--background) / 0.96);
+  padding: 6px 12px;
+  user-select: none;
+  backdrop-filter: blur(10px);
+}
+
+.mermaid-fullscreen-title {
+  min-width: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mermaid-fullscreen-toolbar {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.mermaid-fullscreen-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.mermaid-fullscreen-btn:hover,
+.mermaid-fullscreen-btn:focus-visible {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  outline: none;
+}
+
+.mermaid-fullscreen-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.mermaid-fullscreen-scale {
+  min-width: 44px;
+  padding: 0 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  text-align: center;
+}
+
+.mermaid-fullscreen-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: hsl(var(--border));
 }
 
 .mermaid-fullscreen-stage {
@@ -1508,10 +1569,11 @@
   left: 50%;
   width: max-content;
   max-width: none;
-  padding: 40px;
+  padding: 24px;
   transform-origin: center center;
   border-radius: 8px;
   background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
   box-shadow: 0 16px 48px hsl(var(--foreground) / 0.12);
   user-select: none;
   pointer-events: none;
@@ -1528,6 +1590,13 @@
 .mermaid-fullscreen-content svg * {
   pointer-events: none !important;
   user-select: none !important;
+}
+
+.mermaid-fullscreen-viewer svg,
+[class*="z-[10060]"] svg {
+  display: block;
+  max-width: none !important;
+  height: auto !important;
 }
 
 .mermaid-diagram-wrapper textarea {

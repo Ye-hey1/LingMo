@@ -183,6 +183,7 @@ export function WritingHeader({ editor }: WritingHeaderProps) {
             size: fileStat.size,
           }
         } catch {
+          // Ignore metadata refresh failures for files that may have moved or been deleted.
         }
       }
 

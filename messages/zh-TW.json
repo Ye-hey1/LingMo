@@ -659,6 +659,10 @@
         "condense": {
           "title": "摘要模型",
           "desc": "用于压缩历史对话内容，节省 token 使用量"
+        },
+        "structuredExtraction": {
+          "title": "擷取模型",
+          "desc": "語義擷取使用的可選對話模型。未設定時會回退到主要模型。"
         }
       }
     },
@@ -1274,6 +1278,8 @@
       "addModel": "添加模型",
       "newModel": "新模型",
       "checkConnection": "檢測連接",
+      "modelDisplayName": "顯示名稱",
+      "modelDisplayNamePlaceholder": "未填寫時顯示模型 ID",
       "model": "模型"
     },
     "imageMethod": {
@@ -1441,6 +1447,59 @@
     "webSearch": {
       "title": "聯網搜尋",
       "desc": "配置聯網搜尋渠道、輸入框預設狀態和專案識別憑證。"
+    },
+    "structured-knowledge": {
+      "title": "結構化知識",
+      "desc": "設定 Markdown 知識圖譜的背景 LLM 自動擷取。"
+    },
+    "structuredKnowledge": {
+      "title": "結構化知識",
+      "desc": "設定背景 LLM 自動擷取。預設不會自動執行，必須接受費用與隱私提示後才會呼叫。",
+      "autoExtraction": {
+        "title": "自動 LLM 擷取"
+      },
+      "mode": {
+        "title": "擷取模式",
+        "desc": "選擇 LingMo 何時可將 Markdown 區塊傳送到已設定的 LLM 服務。",
+        "options": {
+          "off": "關閉",
+          "manual": "僅手動",
+          "onSave": "儲存後",
+          "onIdle": "閒置時"
+        }
+      },
+      "maxBlocks": {
+        "title": "最大區塊數",
+        "desc": "每次擷取最多傳送的 Markdown 證據區塊數。"
+      },
+      "idleSeconds": {
+        "title": "閒置等待秒數",
+        "desc": "停止操作多久後開始閒置擷取。"
+      },
+      "cooldownMinutes": {
+        "title": "冷卻分鐘數",
+        "desc": "同一篇未變更筆記再次擷取前的最短間隔。"
+      },
+      "maxNotesPerRun": {
+        "title": "每輪筆記數",
+        "desc": "背景每批最多處理的筆記數。"
+      },
+      "dailyLimit": {
+        "title": "每日上限",
+        "desc": "每天最多自動擷取次數。設為 0 可阻止自動呼叫。"
+      },
+      "costWarningAccepted": {
+        "title": "接受費用提示",
+        "desc": "自動擷取可能消耗付費 LLM token。"
+      },
+      "privacyWarningAccepted": {
+        "title": "接受隱私提示",
+        "desc": "自動擷取會將選定 Markdown 內容區塊傳送給設定的 LLM 服務商。"
+      },
+      "model": {
+        "title": "擷取模型",
+        "desc": "語義擷取使用的可選對話模型。未設定時會回退到主要模型。"
+      }
     }
   },
   "record": {

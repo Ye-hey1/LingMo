@@ -2,6 +2,10 @@
  * 智能排版模块共享类型定义
  */
 
+// ExtractedSection 已统一下沉到 lib 层 shared/types.ts，这里 re-export 保持
+// 组件层旧导入路径 `@/components/output-workshop/types` 不变，同时消除 lib→components 反向依赖。
+export type { ExtractedSection } from "@/lib/output-workshop/shared/types"
+
 export type GenerationStatus = "idle" | "generating" | "streaming" | "done" | "error"
 export type GenerationTelemetryPhase =
   | "idle"
@@ -18,28 +22,9 @@ export type ViewMode = "desktop" | "mobile" | "locked"
 export type PreviewWorkspaceTab = "preview" | "code" | "log" | "outline"
 export type SourceWorkspaceTab = "edit" | "history" | "outline"
 export type ExportTarget = "png" | "pdf" | "long-png" | "split-png" | "smart-card" | "markdown" | "html" | "pptx"
-export type MermaidRenderMode = "card" | "image"
-
-export interface PreviewSizePreset {
-  id: "3:4" | "4:5" | "1:1" | "9:16" | "16:9" | "auto"
-  label: string
-  width: number
-  height: number
-  description: string
-}
-
-export interface TemplateOverrides {
-  fontFamily: string
-  fontSize: number
-  lineHeight: number
-  themeColor: string
-  cardGap: number
-  backgroundStyle: string
-  stickersEnabled: boolean
-  safeAreaEnabled: boolean
-  sizePresetId: PreviewSizePreset["id"]
-  mermaidRenderMode: MermaidRenderMode
-}
+// MermaidRenderMode / PreviewSizePreset / TemplateOverrides 已统一下沉到 lib 层
+// shared/types.ts（被 lib 的 prompt 生成复用），这里 re-export 保持组件层旧导入路径不变。
+export type { MermaidRenderMode, PreviewSizePreset, TemplateOverrides } from "@/lib/output-workshop/shared/types"
 
 export type BuildStageId = "parse" | "template" | "mermaid" | "preview"
 
@@ -76,18 +61,6 @@ export interface ExportRecord {
 export interface HtmlOutlineItem {
   level: string
   text: string
-}
-
-export interface ExtractedSection {
-  title: string
-  level?: number
-  body?: string
-  bullets?: string[]
-  importance?: "low" | "medium" | "high"
-  startOffset?: number
-  endOffset?: number
-  startLine?: number
-  endLine?: number
 }
 
 export interface HistorySnapshot {

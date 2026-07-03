@@ -42,6 +42,7 @@ const MODEL_SELECTION_KEYS = [
   'condenseModel',
   'inspirationModel',
   'promptEnhancerModel',
+  'structuredExtractionModel',
 ]
 
 type ModelSelectionPredicate = (
@@ -65,6 +66,7 @@ const DEFAULT_MODEL_SLOTS: Array<{
   { storeKey: 'commitModel', predicate: isChatModel },
   { storeKey: 'condenseModel', predicate: isChatModel },
   { storeKey: 'inspirationModel', predicate: isChatModel },
+  { storeKey: 'structuredExtractionModel', predicate: isChatModel },
   { storeKey: 'embeddingModel', predicate: isEmbeddingModel },
   { storeKey: 'rerankingModel', predicate: isRerankModel },
   { storeKey: 'imageMethodModel', predicate: isVisionChatModel },
@@ -342,6 +344,9 @@ interface SettingState {
 
   promptEnhancerModel: string
   setPromptEnhancerModel: (promptEnhancerModel: string) => Promise<void>
+
+  structuredExtractionModel: string
+  setStructuredExtractionModel: (structuredExtractionModel: string) => Promise<void>
 
   tavilyApiKey: string
   setTavilyApiKey: (apiKey: string) => Promise<void>
@@ -865,6 +870,15 @@ const useSettingStore = create<SettingState>((set, get) => ({
     const store = await Store.load('store.json');
     await store.set('promptEnhancerModel', promptEnhancerModel)
     set({ promptEnhancerModel })
+  },
+
+  structuredExtractionModel: '',
+  setStructuredExtractionModel: async (structuredExtractionModel) => {
+    if (get().structuredExtractionModel === structuredExtractionModel) return
+    const store = await Store.load('store.json')
+    await store.set('structuredExtractionModel', structuredExtractionModel)
+    await store.save()
+    set({ structuredExtractionModel })
   },
 
   tavilyApiKey: '',

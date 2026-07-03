@@ -15,6 +15,7 @@ mod screenshot;
 mod skills;
 mod skills_v2;
 mod tray;
+mod wechat_mp;
 mod window;
 
 use ai::{
@@ -52,6 +53,7 @@ fn main() {
         .manage(McpServerManager::new())
         .manage(RuntimeInstallManager::new())
         .manage(AiRequestManager::new())
+        .manage(wechat_mp::WechatMpState::default())
         // 系统级插件
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -119,6 +121,12 @@ fn main() {
             skills_v2::commands::skill_v2_fetch_leaderboard,
             skills_v2::commands::skill_v2_search_skillssh,
             skills_v2::commands::skill_v2_install_from_skillssh,
+            wechat_mp::wechat_mp_start_login,
+            wechat_mp::wechat_mp_poll_login,
+            wechat_mp::wechat_mp_status,
+            wechat_mp::wechat_mp_search_accounts,
+            wechat_mp::wechat_mp_list_articles,
+            wechat_mp::wechat_mp_fetch_article_html,
         ])
         // 应用设置 - 在所有插件和命令注册后
         .setup(|app| {

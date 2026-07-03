@@ -120,6 +120,48 @@ function stringifyJson(value: unknown) {
   return JSON.stringify(value)
 }
 
+const AI_HOTSPOT_CONTENT_META_KEYS = [
+  'wechatContentStatus',
+  'contentStatus',
+  'wechatContentMarkdown',
+  'wechatContentHtml',
+  'wechatContentHasContent',
+  'contentMarkdown',
+  'contentHtml',
+  'hasContent',
+  'contentFetchedAt',
+  'contentFailReason',
+  'failCount',
+  'wechatContentFetchedAt',
+  'wechatContentAttemptedAt',
+  'wechatContentFailReason',
+  'wechatContentFailCount',
+  'wechatContentSource',
+] as const
+
+function mergeItemMetaForUpsert(existingMeta: Record<string, unknown>, incomingMeta: Record<string, unknown>) {
+  const merged: Record<string, unknown> = { ...existingMeta, ...incomingMeta }
+  const existingReady = existingMeta.wechatContentStatus === 'ready' || existingMeta.contentStatus === 'ready'
+  const incomingReady = incomingMeta.wechatContentStatus === 'ready' || incomingMeta.contentStatus === 'ready'
+  const incomingHasContent = Boolean(
+    incomingReady
+    || incomingMeta.wechatContentMarkdown
+    || incomingMeta.contentMarkdown
+    || incomingMeta.wechatContentHasContent
+    || incomingMeta.hasContent
+  )
+
+  if (existingReady && !incomingHasContent) {
+    for (const key of AI_HOTSPOT_CONTENT_META_KEYS) {
+      if (existingMeta[key] !== undefined) {
+        merged[key] = existingMeta[key]
+      }
+    }
+  }
+
+  return merged
+}
+
 async function ensureColumn(tableName: string, columnName: string, definition: string) {
   const db = await getDb()
   const columns = await db.select<Array<{ name: string }>>(`pragma table_info(${tableName})`)
@@ -299,6 +341,16 @@ export async function upsertAiHotspotItems(items: AiHotspotItem[]) {
     const db = await getDb()
 
     for (const item of items) {
+      const existingRows = await db.select<Array<{ meta_json: string | null }>>(
+        'select meta_json from ai_hotspot_items where id = $1',
+        [item.id],
+      )
+      const existingMeta = parseJsonObject(existingRows[0]?.meta_json)
+      const itemForWrite = {
+        ...item,
+        meta: mergeItemMetaForUpsert(existingMeta, item.meta || {}),
+      }
+
       await db.execute(
         `insert into ai_hotspot_items
           (id, source_id, source_name, feed_name, title, title_original, title_en, title_zh,
@@ -336,34 +388,34 @@ export async function upsertAiHotspotItems(items: AiHotspotItem[]) {
            snapshot_id = ai_hotspot_items.snapshot_id,
            meta_json = excluded.meta_json`,
         [
-          item.id,
-          item.sourceId,
-          item.sourceName,
-          item.feedName,
-          item.title,
-          item.titleOriginal,
-          item.titleEn,
-          item.titleZh,
-          item.url,
-          item.publishedAt,
-          item.firstSeenAt,
-          item.lastSeenAt,
-          item.summary,
-          stringifyArray(item.tags),
-          item.score,
-          Number(item.isFavorite),
-          Number(item.isRead),
-          item.savedNotePath,
-          item.signalSummary,
-          item.signalEssence,
-          stringifyArray(item.impactAudience),
-          item.suggestedAction,
-          stringifyArray(item.relatedSignalIds),
-          Number(item.isIgnored),
-          item.deletedAt,
-          item.digestStatus,
-          item.snapshotId,
-          stringifyJson(item.meta || {}),
+          itemForWrite.id,
+          itemForWrite.sourceId,
+          itemForWrite.sourceName,
+          itemForWrite.feedName,
+          itemForWrite.title,
+          itemForWrite.titleOriginal,
+          itemForWrite.titleEn,
+          itemForWrite.titleZh,
+          itemForWrite.url,
+          itemForWrite.publishedAt,
+          itemForWrite.firstSeenAt,
+          itemForWrite.lastSeenAt,
+          itemForWrite.summary,
+          stringifyArray(itemForWrite.tags),
+          itemForWrite.score,
+          Number(itemForWrite.isFavorite),
+          Number(itemForWrite.isRead),
+          itemForWrite.savedNotePath,
+          itemForWrite.signalSummary,
+          itemForWrite.signalEssence,
+          stringifyArray(itemForWrite.impactAudience),
+          itemForWrite.suggestedAction,
+          stringifyArray(itemForWrite.relatedSignalIds),
+          Number(itemForWrite.isIgnored),
+          itemForWrite.deletedAt,
+          itemForWrite.digestStatus,
+          itemForWrite.snapshotId,
+          stringifyJson(itemForWrite.meta || {}),
         ],
       )
     }

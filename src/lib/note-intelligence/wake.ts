@@ -65,7 +65,7 @@ export async function syncWakeDirectivesForNote(notePath: string, content: strin
   const created = []
 
   for (const directive of directives) {
-    const duplicate = existing.find(reminder =>
+    const duplicateScheduled = existing.find(reminder =>
       reminder.status === 'scheduled'
       && reminder.source?.type === 'note'
       && reminder.source.notePath === notePath
@@ -73,7 +73,15 @@ export async function syncWakeDirectivesForNote(notePath: string, content: strin
       && reminder.title === directive.title
     )
 
-    if (duplicate) continue
+    const handledHistoricalDirective = existing.find(reminder =>
+      reminder.status !== 'scheduled'
+      && reminder.source?.type === 'note'
+      && reminder.source.notePath === notePath
+      && reminder.title === directive.title
+      && (reminder.message || '') === directive.reason
+    )
+
+    if (duplicateScheduled || handledHistoricalDirective) continue
 
     const reminder = await reminderScheduler.create({
       title: directive.title,

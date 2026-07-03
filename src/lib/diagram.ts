@@ -1,15 +1,19 @@
 import { MERMAID_FILE_SUFFIXES, createDefaultMermaidContent, isMermaidPath } from '@/lib/mermaid'
 
-export const DIAGRAM_FILE_SUFFIXES = [
+export const CREATABLE_DIAGRAM_FILE_SUFFIXES = [
   '.drawio',
   '.drawio.xml',
   '.excalidraw',
   '.excalidraw.json',
   '.diagram.json',
+] as const
+
+export const DIAGRAM_FILE_SUFFIXES = [
+  ...CREATABLE_DIAGRAM_FILE_SUFFIXES,
   ...MERMAID_FILE_SUFFIXES,
 ] as const
 
-export type DiagramKind = 'drawio' | 'mindmap' | 'excalidraw' | 'mermaid'
+export type DiagramKind = 'drawio' | 'mindmap' | 'excalidraw'
 export type DiagramOutlineLayout = 'mindmap' | 'flowchart'
 
 interface DiagramOutlineNode {
@@ -53,6 +57,11 @@ export function isDiagramPath(path: string): boolean {
   return DIAGRAM_FILE_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
 }
 
+export function isCreatableDiagramPath(path: string): boolean {
+  const normalized = path.toLowerCase()
+  return CREATABLE_DIAGRAM_FILE_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
+}
+
 export function isDrawioPath(path: string): boolean {
   const normalized = path.toLowerCase()
   return normalized.endsWith('.drawio') || normalized.endsWith('.drawio.xml')
@@ -66,11 +75,19 @@ export function isExcalidrawPath(path: string): boolean {
 export { isMermaidPath }
 
 export function normalizeDiagramKind(kind: unknown): DiagramKind {
-  if (kind === 'mindmap' || kind === 'excalidraw' || kind === 'drawio' || kind === 'mermaid') {
+  if (kind === 'mindmap' || kind === 'excalidraw' || kind === 'drawio') {
     return kind
   }
 
   return 'drawio'
+}
+
+function stripKnownDiagramSuffix(name: string): string {
+  const suffix = [...DIAGRAM_FILE_SUFFIXES]
+    .sort((a, b) => b.length - a.length)
+    .find((candidate) => name.toLowerCase().endsWith(candidate))
+
+  return suffix ? name.slice(0, -suffix.length) : name
 }
 
 export function createEmptyExcalidrawContent(): string {
@@ -134,10 +151,6 @@ export function createMindMapDrawioContent(): string {
 }
 
 export function createDiagramContent(kind: DiagramKind): string {
-  if (kind === 'mermaid') {
-    return createDefaultMermaidContent()
-  }
-
   if (kind === 'excalidraw') {
     return createEmptyExcalidrawContent()
   }
@@ -777,67 +790,6 @@ function createExcalidrawContentFromTree(root: DiagramOutlineNode, layout: Diagr
   )
 }
 
-// ---------------------------------------------------------------------------
-// Mermaid 生成器：把 outline tree 转成 mermaid 文本
-// 两种布局：
-//   - mindmap:   用 mermaid mindmap 语法（缩进表示层级）
-//   - flowchart: 用 flowchart TD + 父子边
-// ---------------------------------------------------------------------------
-
-/** 转义 mermaid 节点 label 里的特殊字符 */
-function sanitizeMermaidLabel(label: string): string {
-  const trimmed = label.replace(/\s+/g, ' ').trim()
-  if (/[|\[\]{}()]/.test(trimmed)) {
-    return `"${trimmed.replace(/"/g, '#quot;')}"`
-  }
-  return trimmed
-}
-
-/** 把树转成 mermaid mindmap 文本（用缩进表示层级） */
-function createMermaidMindmap(root: DiagramOutlineNode): string {
-  const lines: string[] = ['mindmap', `  root((${sanitizeMermaidLabel(root.label)}))`]
-
-  const walk = (node: DiagramOutlineNode, depth: number) => {
-    if (node.children.length === 0) return
-    for (const child of node.children) {
-      const indent = '    '.repeat(depth)
-      const safeLabel = sanitizeMermaidLabel(child.label)
-      const special = /[|\[\]{}()]/.test(child.label.replace(/\s+/g, ' ').trim())
-      lines.push(`${indent}${special ? `[${safeLabel}]` : safeLabel}`)
-      walk(child, depth + 1)
-    }
-  }
-  walk(root, 2)
-
-  return lines.join('\n')
-}
-
-/** 把树转成 mermaid flowchart 文本（每条父子关系一条边） */
-function createMermaidFlowchart(root: DiagramOutlineNode): string {
-  const lines: string[] = ['flowchart TD']
-  const usedIds = new Set<string>([root.id])
-  lines.push(`  ${root.id}[${sanitizeMermaidLabel(root.label)}]`)
-
-  const walk = (node: DiagramOutlineNode) => {
-    for (const child of node.children) {
-      if (!usedIds.has(child.id)) {
-        usedIds.add(child.id)
-        lines.push(`  ${child.id}[${sanitizeMermaidLabel(child.label)}]`)
-      }
-      lines.push(`  ${node.id} --> ${child.id}`)
-      walk(child)
-    }
-  }
-  walk(root)
-
-  return lines.join('\n')
-}
-
-/** 入口：根据 layout 选择 mindmap 或 flowchart */
-function createMermaidContentFromTree(root: DiagramOutlineNode, layout: DiagramOutlineLayout): string {
-  return layout === 'flowchart' ? createMermaidFlowchart(root) : createMermaidMindmap(root)
-}
-
 export function createDiagramContentFromOutline(
   kind: DiagramKind,
   outline: string,
@@ -846,10 +798,6 @@ export function createDiagramContentFromOutline(
   const normalizedKind = normalizeDiagramKind(kind)
   const layout = options.layout === 'flowchart' ? 'flowchart' : 'mindmap'
   const tree = createOutlineTree(outline, options.title)
-
-  if (normalizedKind === 'mermaid') {
-    return createMermaidContentFromTree(tree, layout)
-  }
 
   if (normalizedKind === 'excalidraw') {
     return createExcalidrawContentFromTree(tree, layout)
@@ -869,19 +817,21 @@ export function ensureDiagramFileName(name: string, kind: DiagramKind = 'drawio'
     return getDefaultDiagramBaseName(kind)
   }
 
-  if (isDiagramPath(normalized)) {
+  if (kind === 'excalidraw' && isExcalidrawPath(normalized)) {
     return normalized
   }
 
+  if (kind !== 'excalidraw' && isDrawioPath(normalized)) {
+    return normalized
+  }
+
+  const stem = stripKnownDiagramSuffix(normalized) || stripKnownDiagramSuffix(getDefaultDiagramBaseName(kind))
+
   if (kind === 'excalidraw') {
-    return `${normalized}.excalidraw.json`
+    return `${stem}.excalidraw.json`
   }
 
-  if (kind === 'mermaid') {
-    return `${normalized}.mmd`
-  }
-
-  return `${normalized}.drawio`
+  return `${stem}.drawio`
 }
 
 export function getDefaultDiagramBaseName(kind: DiagramKind): string {
@@ -891,10 +841,6 @@ export function getDefaultDiagramBaseName(kind: DiagramKind): string {
 
   if (kind === 'excalidraw') {
     return 'Untitled_Whiteboard.excalidraw.json'
-  }
-
-  if (kind === 'mermaid') {
-    return 'Untitled_Mermaid_Diagram.mmd'
   }
 
   return 'Untitled_Diagram.drawio'

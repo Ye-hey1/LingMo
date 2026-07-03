@@ -405,7 +405,7 @@
 .mermaid-editor-fullscreen {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: 10040;
   display: flex;
   flex-direction: column;
   background: hsl(var(--background));
@@ -447,7 +447,7 @@
   left: 50%;
   width: max-content;
   max-width: none;
-  padding: 40px;
+  padding: 24px;
   transform-origin: center center;
   border-radius: 8px;
   border: 1px solid hsl(var(--border));
@@ -457,7 +457,7 @@
 }
 
 .mermaid-editor-fullscreen-content svg {
-  max-width: none;
+  max-width: none !important;
   height: auto;
   display: block;
   pointer-events: none;
@@ -625,6 +625,11 @@
   border-bottom: 1px solid hsl(var(--border));
   background: hsl(var(--muted) / 0.14);
   padding: 0.25rem 0.5rem;
+}
+
+.mermaid-editor-code-toolbar-spacer {
+  min-width: 0.5rem;
+  flex: 1;
 }
 
 .mermaid-editor-toolbar-button {

@@ -20,6 +20,8 @@ import 'dayjs/locale/zh-cn'
 import 'dayjs/locale/en'
 import useSettingStore from '@/stores/setting'
 import { ModelSelect } from './model-select'
+import { getModelDisplayName } from '@/app/core/setting/config'
+import { matchesConfiguredModelSelection } from '@/lib/ai/model-selection'
 
 dayjs.extend(relativeTime)
 
@@ -147,12 +149,16 @@ export function ChatHeader() {
             )
             for (const config of aiModelList) {
               if (config.models && config.models.length > 0) {
-                const targetModel = config.models.find(model => model.id === primaryModel)
+                const targetModel = config.models.find(model => matchesConfiguredModelSelection({
+                  configKey: config.key,
+                  modelId: model.id,
+                  selectionId: primaryModel,
+                }))
                 if (targetModel) {
                   return (
                     <>
                       <BotMessageSquare className="size-3 shrink-0" />
-                      <span className="truncate max-w-48">{targetModel.model}</span>
+                      <span className="truncate max-w-48">{getModelDisplayName(targetModel)}</span>
                     </>
                   )
                 }
@@ -161,7 +167,7 @@ export function ChatHeader() {
                   return (
                     <>
                       <BotMessageSquare className="size-3 shrink-0" />
-                      <span className="truncate max-w-48">{config.model}</span>
+                      <span className="truncate max-w-48">{getModelDisplayName({ model: config.model || config.key })}</span>
                     </>
                   )
                 }

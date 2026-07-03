@@ -714,6 +714,7 @@ async function performSync(path: string, enableConflictResolution: boolean): Pro
           (error.message.includes('no such file') || 
            error.message.includes('not found') ||
            error.message.includes('系统找不到指定的路径'))) {
+        // Expected when the local file has not been created or was removed before sync.
       } else {
         // 静默处理读取本地文件时的意外错误
       }

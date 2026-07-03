@@ -81,11 +81,6 @@ type AgentRunMetricsView = {
 
 type AgentPanelId = 'overview' | 'live' | 'failures' | 'knowledge' | 'review' | 'run' | 'context' | 'tree' | 'runtime'
 
-type GlobalPanelId = 'overview' | 'live' | 'failures' | 'knowledge'
-type DetailPanelId = 'review' | 'run' | 'context' | 'tree' | 'runtime'
-
-const GLOBAL_PANELS: GlobalPanelId[] = ['overview', 'live', 'failures', 'knowledge']
-
 type ContextSegment = {
   index: number
   role: 'user' | 'assistant' | 'toolResult' | 'event' | 'artifact'

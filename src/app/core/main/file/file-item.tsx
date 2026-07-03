@@ -24,7 +24,7 @@ import { S3Config, WebDAVConfig } from "@/types/sync";
 import { cloneDeep } from "lodash-es";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { computedParentPath, getCurrentFolder } from "@/lib/path";
-import { createEmptyDiagramContent, ensureDiagramFileName, isDiagramPath } from "@/lib/diagram";
+import { createEmptyDiagramContent, ensureDiagramFileName, isCreatableDiagramPath, isDiagramPath } from "@/lib/diagram";
 import { useSidebarStore } from "@/stores/sidebar";
 import { toast } from "@/hooks/use-toast";
 import { useTranslations } from "next-intl";
@@ -371,7 +371,7 @@ function buildFileRenamePlan({
   enteredName: string
 }) {
   const sanitizedName = sanitizeFileName(enteredName.replace(/\s+/g, '_'))
-  const isCreatingDiagram = originalName === '' && isDiagramPath(sanitizedName)
+  const isCreatingDiagram = originalName === '' && isCreatableDiagramPath(sanitizedName)
   const needsMarkdownSuffix = originalName === '' && !isCreatingDiagram && !sanitizedName.endsWith('.md')
   const displayName = isCreatingDiagram ? ensureDiagramFileName(sanitizedName) : needsMarkdownSuffix ? `${sanitizedName}.md` : sanitizedName
   const parentPath = currentPath.split('/').slice(0, -1).join('/')

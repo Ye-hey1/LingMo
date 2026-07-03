@@ -1,5 +1,5 @@
 import { fetchAi } from './chat'
-import { Chat } from '@/db/chats'
+import type { Chat } from '@/db/chats'
 import { estimateTokens } from './token-counter'
 import useSettingStore from '@/stores/setting'
 export { getChatsAfterLastClear, buildChatHistoryForAI, buildMessagesWithHistory } from './history-messages'

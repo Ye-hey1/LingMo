@@ -23,7 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import Image from "next/image"
 
 import { FormItem } from "../components/setting-base"
-import { AiConfig, ModelConfig, ModelType, builtinProviderTemplates, cleanupConfiguredModels, inferModelTypeFromId, mergeProviderTemplateModels } from "../config"
+import { AiConfig, ModelConfig, ModelType, builtinProviderTemplates, cleanupConfiguredModels, getModelDisplayName, inferModelTypeFromId, mergeProviderTemplateModels } from "../config"
 import useSettingStore from "@/stores/setting"
 
 import { BotMessageSquare, Eye, EyeOff, LoaderCircle, Minus, Plus, Search, Trash2, X } from "lucide-react"
@@ -1481,6 +1481,7 @@ export default function AiPage() {
                 const value = item.model?.trim()
                 if (!value) return null
                 const selected = testModelCandidate.toLowerCase() === value.toLowerCase()
+                const displayName = getModelDisplayName(item)
                 return (
                   <button
                     key={item.id}
@@ -1491,7 +1492,7 @@ export default function AiPage() {
                       selected ? 'bg-primary/10 text-primary' : 'hover:bg-muted/60'
                     )}
                   >
-                    <span className="line-clamp-1">{value}</span>
+                    <span className="line-clamp-1">{displayName}</span>
                     <span className="text-xs text-muted-foreground">{getModelTypeLabel(item.modelType)}</span>
                   </button>
                 )

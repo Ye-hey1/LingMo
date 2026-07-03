@@ -39,6 +39,7 @@ try {
   assert.match(source, /\.topic-post:first-of-type \.cooked/)
   assert.match(source, /formatExtractedWebMarkdown/)
   assert.match(source, /buildReadableWebMarkdown/)
+  assert.match(source, /turndown\.addRule\("articleImage"/)
 
   const {
     buildReadableWebMarkdown,
@@ -120,6 +121,17 @@ try {
     'structured record should not duplicate the source H1',
   )
   assert.doesNotMatch(readable, /post by ChatAI/i)
+
+  const imageMarkdown = formatExtractedWebMarkdown([
+    '这是一段带图正文。',
+    '',
+    '![封面截图](https://example.com/images/cover.png)',
+    '',
+    '`## 初始化`',
+  ].join('\n'))
+  assert.match(imageMarkdown, /!\[封面截图]\(https:\/\/example\.com\/images\/cover\.png\)/)
+  assert.match(imageMarkdown, /^## 初始化$/m)
+  assert.doesNotMatch(imageMarkdown, /\[图片：/)
 
   process.stdout.write('web-content-extractor tests passed\n')
 } finally {

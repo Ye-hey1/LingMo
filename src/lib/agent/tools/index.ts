@@ -1,7 +1,9 @@
 import { Tool } from '../types'
 import { getToolRiskLevel, isDestructiveTool, isExecuteTool, getBaseToolName } from '../tool-policy'
 import { noteTools } from './note-tools'
+import { knowledgeQueryTools } from './knowledge-query-tools'
 import { knowledgeObjectTools } from './knowledge-object-tools'
+import { structuredKnowledgeTools } from './structured-knowledge-tools'
 import { knowledgeWorkflowTools } from './knowledge-workflow-tools'
 import { selfEvolutionTools } from './self-evolution-tools'
 import { chatTools } from './chat-tools'
@@ -29,7 +31,9 @@ import { formatMcpToolError, formatMcpToolErrorMessage, mcpErrorKindToToolErrorK
 
 export const allTools: Tool[] = [
   ...noteTools,
+  ...knowledgeQueryTools,
   ...knowledgeObjectTools,
+  ...structuredKnowledgeTools,
   ...knowledgeWorkflowTools,
   ...selfEvolutionTools,
   ...chatTools,
@@ -341,7 +345,9 @@ ${params || '  None'}
 }
 
 export * from './note-tools'
+export * from './knowledge-query-tools'
 export * from './knowledge-object-tools'
+export * from './structured-knowledge-tools'
 export * from './knowledge-workflow-tools'
 export * from './self-evolution-tools'
 export * from './chat-tools'

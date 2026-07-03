@@ -36,7 +36,7 @@ import type { DiagramKind } from "@/lib/diagram"
 import { getWorkspacePath } from "@/lib/workspace"
 import useArticleStore from "@/stores/article"
 
-import { DIAGRAM_TYPE_OPTIONS } from "./diagram-type-menu"
+import { DIAGRAM_TYPE_OPTIONS, DiagramTypeItemLabel } from "./diagram-type-menu"
 
 interface FileActionsProps {
   compact?: boolean
@@ -193,17 +193,10 @@ export function FileActions({
                 <DraftingCompass className={compactIconClassName} />
               </Button>
             </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-[196px] p-1">
+          <DropdownMenuContent align="start" className="w-[168px] p-1">
             {DIAGRAM_TYPE_OPTIONS.map((option) => (
-              <DropdownMenuItem key={option.kind} className="gap-2 rounded-md px-2 py-2" onSelect={() => handleNewDiagram(option.kind)}>
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground">
-                  {option.icon}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{option.title}</span>
-                  <span className="block truncate text-[11px] text-muted-foreground">{option.description}</span>
-                </span>
-                <span className="ml-2 text-[10px] text-muted-foreground">{option.meta}</span>
+              <DropdownMenuItem key={option.kind} className="gap-2 rounded-md px-2 py-1.5" onSelect={() => handleNewDiagram(option.kind)}>
+                <DiagramTypeItemLabel option={option} />
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -265,17 +258,10 @@ export function FileActions({
               <DraftingCompass className="h-4 w-4" />
               {t("newDiagram")}
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-[196px] p-1">
+            <DropdownMenuSubContent className="w-[168px] p-1">
               {DIAGRAM_TYPE_OPTIONS.map((option) => (
-                <DropdownMenuItem key={option.kind} className="gap-2 rounded-md px-2 py-2" onSelect={() => handleNewDiagram(option.kind)}>
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground">
-                    {option.icon}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{option.title}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">{option.description}</span>
-                  </span>
-                  <span className="ml-2 text-[10px] text-muted-foreground">{option.meta}</span>
+                <DropdownMenuItem key={option.kind} className="gap-2 rounded-md px-2 py-1.5" onSelect={() => handleNewDiagram(option.kind)}>
+                  <DiagramTypeItemLabel option={option} />
                 </DropdownMenuItem>
               ))}
             </DropdownMenuSubContent>
