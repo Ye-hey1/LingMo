@@ -20,6 +20,7 @@ import {
   Globe2,
   Brain,
   AlarmClock,
+  BrainCircuit,
 } from "lucide-react"
 import { inferModelTypeFromId } from "@/lib/ai/model-type"
 
@@ -80,6 +81,11 @@ const baseConfig = [
     group: 'aiKnowledge',
   },
   {
+    icon: <BrainCircuit className="size-4 md:size-6" />,
+    anchor: 'structured-knowledge',
+    group: 'aiKnowledge',
+  },
+  {
     icon: <Puzzle className="size-4 md:size-6" />,
     anchor: 'mcp',
     group: 'aiKnowledge',
@@ -137,6 +143,7 @@ export type ModelType = 'chat' | 'image' | 'video' | 'tts' | 'stt' | 'embedding'
 
 export interface ModelConfig {
   id: string
+  name?: string
   model: string
   modelType: ModelType
   supportsImageInput?: boolean
@@ -178,6 +185,12 @@ export interface Model {
   object: string
   created: number
   owned_by: string
+}
+
+export function getModelDisplayName(model?: Pick<ModelConfig, 'name' | 'model'> | null) {
+  const name = model?.name?.trim()
+  if (name) return name
+  return model?.model?.trim() || ''
 }
 
 export { inferModelTypeFromId }

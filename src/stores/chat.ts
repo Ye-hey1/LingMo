@@ -15,9 +15,20 @@ import type { ResearchProgressView } from '@/lib/research/progress-status'
 import type { LinkedResource } from '@/lib/files'
 import type { Conversation } from '@/db/conversations'
 import { S3Config, WebDAVConfig } from '@/types/sync'
+import { matchesConfiguredModelSelection } from '@/lib/ai/model-selection'
 
 const SYNC_PATH = '.data'
 const SYNC_FILENAME = 'chats.json'
+
+function isChunkLoadFailure(error: unknown) {
+  const message = error instanceof Error
+    ? `${error.name} ${error.message}`
+    : typeof error === 'string'
+      ? error
+      : String(error ?? '')
+
+  return /ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module|importing a module script failed/i.test(message)
+}
 
 async function getSyncMethod(store: Store): Promise<string> {
   return (await store.get<string>('primaryBackupMethod')) || 'github'
@@ -476,7 +487,11 @@ const useChatStore = create<ChatState>((set, get) => ({
       const newModel = modeModels[chatMode]
       if (newModel) {
         const modelExists = settingStore.aiModelList.some(config =>
-          config.models?.some(model => model.id === newModel) || config.key === newModel
+          config.models?.some(model => matchesConfiguredModelSelection({
+            configKey: config.key,
+            modelId: model.id,
+            selectionId: newModel,
+          })) || config.key === newModel
         )
         if (modelExists) {
           await settingStore.setPrimaryModel(newModel)
@@ -514,27 +529,26 @@ const useChatStore = create<ChatState>((set, get) => ({
 
     // 使用 IIFE 立即执行异步函数，不等待结果
     ;(async () => {
-      // 动态导入 condense 模块（避免循环依赖）
-      const { shouldCondense, condenseChats } = await import('@/lib/ai/condense')
-
-      // 版本号检查：防止被新版本覆盖
-      if (currentVersion !== versionRef.current) {
-        return
-      }
-
-      if (!(await shouldCondense(chatsAfterClear))) {
-        return
-      }
-
-      // 再次检查版本号
-      if (currentVersion !== versionRef.current) {
-        return
-      }
-
-      // 设置锁和压缩状态
-      set({ _condenseLock: true, isCondensing: true })
-
       try {
+        const { shouldCondense, condenseChats } = await import('@/lib/ai/condense')
+
+        // 版本号检查：防止被新版本覆盖
+        if (currentVersion !== versionRef.current) {
+          return
+        }
+
+        if (!(await shouldCondense(chatsAfterClear))) {
+          return
+        }
+
+        // 再次检查版本号
+        if (currentVersion !== versionRef.current) {
+          return
+        }
+
+        // 设置锁和压缩状态
+        set({ _condenseLock: true, isCondensing: true })
+
         // 为每条消息生成摘要并存储
         const condensedResults = await condenseChats(chatsAfterClear)
 
@@ -560,7 +574,11 @@ const useChatStore = create<ChatState>((set, get) => ({
         }
       } catch (error) {
         // 静默失败，不影响用户体验
-        console.error('[ChatStore] 压缩失败:', error)
+        if (isChunkLoadFailure(error)) {
+          console.warn('[ChatStore] 跳过自动压缩：压缩模块分包暂时不可用，刷新开发窗口或重启 dev server 后会恢复。')
+        } else {
+          console.error('[ChatStore] 压缩失败:', error)
+        }
       } finally {
         set({ _condenseLock: false, isCondensing: false })
       }

@@ -8,6 +8,16 @@ import { createAiStreamContentProcessor } from './sanitize'
 import { getAiRateLimitUserMessage, isAiRateLimitError } from './rate-limit'
 import { formatMcpToolErrorMessage } from '../mcp/error-message'
 
+function isChunkLoadFailure(error: unknown) {
+  const message = error instanceof Error
+    ? `${error.name} ${error.message}`
+    : typeof error === 'string'
+      ? error
+      : String(error ?? '')
+
+  return /ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module|importing a module script failed/i.test(message)
+}
+
 export interface AiStreamFinishMetadata {
   finishReason?: string | null
   finishReasons: Array<string | null>
@@ -124,7 +134,11 @@ async function recordAiUsage(params: {
       latencyMs: Math.max(0, Math.round(params.latencyMs)),
     })
   } catch (error) {
-    console.error('Failed to record AI usage:', error)
+    if (isChunkLoadFailure(error)) {
+      console.warn('Skipped AI usage recording because its chunk is not available. Refreshing the dev window or restarting the dev server will restore it.')
+    } else {
+      console.error('Failed to record AI usage:', error)
+    }
   }
 }
 

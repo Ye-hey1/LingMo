@@ -11,7 +11,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Trash2 } from "lucide-react"
-import { ModelConfig, ModelType, AiConfig } from "../config"
+import { ModelConfig, ModelType, AiConfig, getModelDisplayName } from "../config"
 import { useTranslations } from 'next-intl'
 import ModelSelect from "./modelSelect"
 import { inferModelContextWindow } from "@/lib/ai/context-window"
@@ -36,6 +36,7 @@ const MODEL_TYPE_SHORT: Record<ModelType, string> = {
 export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }: ModelCardProps) {
   const t = useTranslations('settings.ai')
   const inferredContextWindow = inferModelContextWindow(modelConfig.model)
+  const displayName = getModelDisplayName(modelConfig)
 
   const handleModelChange = (model: string) => {
     onUpdate(modelConfig.id, 'model', model)
@@ -58,7 +59,7 @@ export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }:
       <AccordionTrigger className="w-full px-2 py-2.5 hover:no-underline">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <span className="truncate text-[13px] font-medium">
-            {modelConfig.model || t('newModel')}
+            {displayName || t('newModel')}
           </span>
           <span className="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
             {MODEL_TYPE_SHORT[modelConfig.modelType] || modelConfig.modelType}
@@ -67,6 +68,17 @@ export default function ModelCard({ modelConfig, aiConfig, onUpdate, onDelete }:
       </AccordionTrigger>
 
       <AccordionContent className="space-y-3 px-2 pb-3 pt-1">
+        <div className="space-y-1.5">
+          <Label htmlFor={`name-${modelConfig.id}`} className="text-xs">{t('modelDisplayName')}</Label>
+          <Input
+            id={`name-${modelConfig.id}`}
+            value={modelConfig.name || ''}
+            onChange={(e) => onUpdate(modelConfig.id, 'name', e.target.value)}
+            placeholder={modelConfig.model || t('modelDisplayNamePlaceholder')}
+            className="h-8 text-xs"
+          />
+        </div>
+
         <div className="space-y-1.5">
           <Label className="text-xs">{t('model')}</Label>
           <ModelSelect

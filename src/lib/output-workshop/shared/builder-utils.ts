@@ -3,15 +3,13 @@
  * 类型 + 各风格构建器共用的辅助函数，从 html-builders.ts 提取。
  */
 import { escapeHtml } from "./escape"
+import type { ExtractedSection } from "./types"
+import type { MindmapBranch, MindmapChild } from "../extraction"
 // 本地绑定供下方 helper(renderMarkdown 等)使用，同时 re-export 给各 styles
 export { escapeHtml }
-
-export interface ExtractedSection {
-  title: string
-  body?: string
-  bullets?: string[]
-  importance?: "low" | "medium" | "high"
-}
+// ExtractedSection 已统一下沉到 ./types.ts，这里 re-export 供各 styles 构建器沿用旧路径
+export type { ExtractedSection }
+export type { MindmapBranch, MindmapChild }
 
 export interface BuildHtmlOptions {
   title: string
@@ -19,12 +17,23 @@ export interface BuildHtmlOptions {
   sections: ExtractedSection[]
   sourceLabel?: string
   generatedAt?: string
+  /** 思维导图策略专用的结构化树（learning-mindmap 优先使用，无则回退 sections） */
+  mindmap?: MindmapBranch[]
 }
 
 // ---------------------------------------------------------------------------
 // 辅助函数
 // ---------------------------------------------------------------------------
 
+/**
+ * 极简 Markdown → HTML 渲染（供本地样式模板的 styles/* 构建器使用）。
+ *
+ * 设计取舍：这里是「自包含、零依赖、输出即最终 HTML 片段」的轻量渲染，刻意不引入
+ * markdown-it，因为 styles 构建器需要精确控制 section.body/bullets 的内联结构
+ * （如直接嵌入 <li> 而非包裹额外容器）。微信图文那条管线
+ * （wechat-markdown-renderer.ts）走的是 markdown-it 全 token 渲染 + 内联样式注入，
+ * 两者服务不同场景，不应强行合并——合并会破坏 styles 构建器的输出契约。
+ */
 export function renderMarkdown(text: string): string {
   if (!text) return ''
 

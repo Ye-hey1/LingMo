@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useEffect, useState } from "react"
-import { ModelConfig, getBuiltinProviderTemplateMatch } from "@/app/core/setting/config"
+import { ModelConfig, getBuiltinProviderTemplateMatch, getModelDisplayName } from "@/app/core/setting/config"
 import { Store } from "@tauri-apps/plugin-store"
 import useSettingStore from "@/stores/setting"
 import { BotMessageSquare, BotOff, Check, ChevronRight } from "lucide-react"
@@ -17,8 +17,10 @@ import {
 import { cn } from "@/lib/utils"
 import { getCachedProviderTemplates, getProviderTemplateMatch } from "@/lib/ai/provider-templates-runtime"
 import { getConfiguredProviderDisplayTitle } from "@/lib/ai/provider-display"
+import { createConfiguredModelSelectionId, matchesConfiguredModelSelection } from "@/lib/ai/model-selection"
 
 interface GroupedModel {
+  value: string
   configKey: string
   providerTitle: string
   model: ModelConfig
@@ -33,6 +35,12 @@ function ModelListContent({
   primaryModel?: string
   onSelect: (modelId: string) => void
 }) {
+  const modelMatchesSelection = (item: GroupedModel) => matchesConfiguredModelSelection({
+    configKey: item.configKey,
+    modelId: item.model.id,
+    selectionId: primaryModel,
+  })
+
   return (
     <div className="space-y-4">
       {Object.entries(groupedByConfig).map(([providerTitle, models]) => (
@@ -43,19 +51,19 @@ function ModelListContent({
             </div>
           )}
           {models.map((item) => {
-            const isSelected = primaryModel === item.model.id
+            const isSelected = modelMatchesSelection(item)
 
             return (
               <button
-                key={item.model.id}
-                onClick={() => onSelect(item.model.id)}
+                key={item.value}
+                onClick={() => onSelect(item.value)}
                 className={cn(
                   "w-full flex items-center justify-between gap-3 px-3 py-3 rounded-lg text-left transition-colors",
                   isSelected ? "bg-accent" : "hover:bg-muted/50"
                 )}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium text-sm truncate">{item.model.model}</div>
+                  <div className="font-medium text-sm truncate">{getModelDisplayName(item.model)}</div>
                 </div>
                 <div
                   className={cn(
@@ -117,6 +125,7 @@ export function ModelSelector() {
           config.models.forEach(model => {
             if (model.modelType === 'chat' && model.model) {
               models.push({
+                value: createConfiguredModelSelectionId(config.key, model.id),
                 configKey: config.key,
                 providerTitle,
                 model: model
@@ -126,6 +135,7 @@ export function ModelSelector() {
         } else {
           if ((config.modelType === 'chat' || !config.modelType) && config.model) {
             models.push({
+              value: config.key,
               configKey: config.key,
               providerTitle,
               model: {
@@ -163,7 +173,11 @@ export function ModelSelector() {
     return acc
   }, {} as Record<string, GroupedModel[]>)
 
-  const selectedModel = groupedModels.find((item) => item.model.id === primaryModel)
+  const selectedModel = groupedModels.find((item) => matchesConfiguredModelSelection({
+    configKey: item.configKey,
+    modelId: item.model.id,
+    selectionId: primaryModel,
+  }))
 
   return (
     <>
@@ -181,7 +195,7 @@ export function ModelSelector() {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground truncate max-w-40">
-            {selectedModel?.model.model || t('placeholder')}
+            {selectedModel ? getModelDisplayName(selectedModel.model) : t('placeholder')}
           </span>
           <ChevronRight className="size-4 text-muted-foreground shrink-0" />
         </div>

@@ -795,6 +795,10 @@
         "condense": {
           "title": "摘要模型",
           "desc": "用于压缩历史对话内容，节省 token 使用量"
+        },
+        "structuredExtraction": {
+          "title": "抽取模型",
+          "desc": "语义抽取使用的可选对话模型。未设置时回退到主模型。"
         }
       },
       "main": "主模型"
@@ -1452,6 +1456,8 @@
       "addModel": "添加模型",
       "newModel": "新模型",
       "checkConnection": "检测连接",
+      "modelDisplayName": "显示名称",
+      "modelDisplayNamePlaceholder": "未填写时显示模型 ID",
       "model": "模型"
     },
     "imageMethod": {
@@ -1539,6 +1545,59 @@
       "languagePacks": "语言包",
       "checkModels": "在此查看所有模型",
       "modelInstruction": "用逗号分隔，例如：eng,chi_sim"
+    },
+    "structured-knowledge": {
+      "title": "结构化知识",
+      "desc": "配置 Markdown 知识图谱的后台 LLM 自动抽取。"
+    },
+    "structuredKnowledge": {
+      "title": "结构化知识",
+      "desc": "配置后台 LLM 自动抽取。默认不会自动运行，必须接受费用和隐私提示后才会调用。",
+      "autoExtraction": {
+        "title": "自动 LLM 抽取"
+      },
+      "mode": {
+        "title": "抽取模式",
+        "desc": "选择灵墨何时可以把 Markdown 块发送给已配置的 LLM 服务。",
+        "options": {
+          "off": "关闭",
+          "manual": "仅手动",
+          "onSave": "保存后",
+          "onIdle": "空闲时"
+        }
+      },
+      "maxBlocks": {
+        "title": "最大块数",
+        "desc": "每次抽取最多发送的 Markdown 证据块数量。"
+      },
+      "idleSeconds": {
+        "title": "空闲等待秒数",
+        "desc": "用户停止操作多久后开始空闲抽取。"
+      },
+      "cooldownMinutes": {
+        "title": "冷却分钟数",
+        "desc": "同一篇未变化笔记再次抽取前的最短间隔。"
+      },
+      "maxNotesPerRun": {
+        "title": "每轮笔记数",
+        "desc": "后台每批最多处理的笔记数量。"
+      },
+      "dailyLimit": {
+        "title": "每日上限",
+        "desc": "每天最多自动抽取次数。设为 0 可阻止自动调用。"
+      },
+      "costWarningAccepted": {
+        "title": "接受费用提示",
+        "desc": "自动抽取可能消耗付费 LLM token。"
+      },
+      "privacyWarningAccepted": {
+        "title": "接受隐私提示",
+        "desc": "自动抽取会把选定 Markdown 内容块发送给配置的 LLM 服务商。"
+      },
+      "model": {
+        "title": "抽取模型",
+        "desc": "语义抽取使用的可选对话模型。未设置时回退到主模型。"
+      }
     }
   },
   "record": {
@@ -3215,6 +3274,7 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "more": "更多",
       "blockType": "块类型",
       "paragraph": "正文",
       "heading1": "一级标题",
@@ -3246,6 +3306,15 @@
       "highlight": "高亮",
       "clearHighlight": "清除高亮",
       "restoreDefault": "恢复默认",
+      "cellFillColor": "单元格填充色",
+      "white": "白色",
+      "clearCellFill": "清除填充",
+      "mergeCells": "合并单元格",
+      "splitCell": "拆分单元格",
+      "deleteCurrentRow": "删除当前行",
+      "deleteCurrentColumn": "删除当前列",
+      "deleteRowsOrColumns": "删除行/列",
+      "align": "对齐",
       "alignLeft": "左对齐",
       "alignCenter": "居中对齐",
       "alignRight": "右对齐",
@@ -3256,6 +3325,7 @@
       "taskList": "任务列表",
       "codeBlock": "代码块",
       "languages": {
+        "Chinese": "中文",
         "English": "英语",
         "Japanese": "日语",
         "Korean": "韩语",
@@ -3267,6 +3337,13 @@
         "Arabic": "阿拉伯语"
       },
       "customLanguagePlaceholder": "自定义语言..."
+    },
+    "chatCopy": {
+      "copyCode": "复制代码",
+      "copyTable": "复制表格",
+      "copiedCode": "已复制代码",
+      "copiedTable": "已复制表格",
+      "copyFailed": "复制失败"
     },
     "inlineAI": {
       "generateTitle": "AI 灵感生成",
@@ -3318,10 +3395,13 @@
       "abort": "终止",
       "explainTitle": "AI 解释",
       "explaining": "正在解释...",
+      "translateTitle": "AI 翻译",
+      "translating": "正在翻译...",
       "selectedText": "选中文本",
       "explainHint": "仅用于理解，不会写入原文",
       "copy": "复制",
       "copied": "已复制",
+      "replaceOriginal": "替换原文",
       "close": "关闭"
     },
     "image": {

@@ -1,7 +1,12 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import TurndownService from 'turndown'
+import { fetchWechatMpArticleHtml } from '@/lib/wechat-mp-native'
 
 export const WECHAT_ARTICLE_TAG_NAME = '公众号文章'
+const WECHAT_HOST_RE = /(^|\.)mp\.weixin\.qq\.com$/i
+const NON_WECHAT_READER_HOSTS = new Set([
+  'aihot.virxact.com',
+])
 
 export interface WechatArticleResult {
   title: string
@@ -10,6 +15,7 @@ export interface WechatArticleResult {
   publishedAt: string
   summary: string
   cover: string
+  html: string
   markdown: string
   desc: string
   content: string
@@ -107,10 +113,6 @@ function getWechatArticleBody(doc: Document) {
   return doc.querySelector<HTMLElement>('#js_content')
     || doc.querySelector<HTMLElement>('[id="js_content"]')
     || doc.querySelector<HTMLElement>('.rich_media_content')
-    || doc.querySelector<HTMLElement>('.rich_media_area_primary_inner')
-    || doc.querySelector<HTMLElement>('.rich_media_area_primary')
-    || doc.querySelector<HTMLElement>('#page-content')
-    || doc.querySelector<HTMLElement>('article')
 }
 
 function getWechatPageHint(html: string, doc: Document) {
@@ -130,6 +132,55 @@ function getWechatPageHint(html: string, doc: Document) {
   return text ? `页面未包含标准正文节点。页面提示：${text}` : '页面未包含标准正文节点。'
 }
 
+const SAFE_STYLE_PROPS = new Set([
+  'text-align',
+  'font-weight',
+  'font-style',
+  'font-size',
+  'line-height',
+  'color',
+  'background-color',
+  'margin',
+  'margin-top',
+  'margin-right',
+  'margin-bottom',
+  'margin-left',
+  'padding',
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'border',
+  'border-top',
+  'border-right',
+  'border-bottom',
+  'border-left',
+  'border-radius',
+])
+
+const TRANSPARENT_PIXEL_RE = /^data:image\/(?:gif|png|webp);base64,(?:r0lgodlh|iVBORw0KGgo|uKlGR)/i
+
+function sanitizeStyle(value: string | null) {
+  if (!value) return ''
+  if (/expression\s*\(|javascript:|url\s*\(/i.test(value)) return ''
+  return value
+    .split(';')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const index = part.indexOf(':')
+      if (index <= 0) return ''
+      const prop = part.slice(0, index).trim().toLowerCase()
+      const propValue = part.slice(index + 1).trim()
+      if (!SAFE_STYLE_PROPS.has(prop)) return ''
+      if (/position\s*:|display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0/i.test(part)) return ''
+      if (/^(?:min-height|max-height|height|width|min-width|max-width)$/i.test(prop)) return ''
+      return `${prop}: ${propValue}`
+    })
+    .filter(Boolean)
+    .join('; ')
+}
+
 function cleanupWechatContent(root: HTMLElement) {
   root.querySelectorAll('script, style, iframe, wx-open-launch-app, wx-open-launch-weapp').forEach(node => node.remove())
 
@@ -137,14 +188,30 @@ function cleanupWechatContent(root: HTMLElement) {
     const src = normalizeImageUrl(
       image.getAttribute('data-src')
       || image.getAttribute('data-backsrc')
+      || image.getAttribute('data-original')
+      || image.getAttribute('data-origin-src')
+      || image.getAttribute('data-croporisrc')
+      || image.getAttribute('data-lazy-src')
       || image.getAttribute('src')
     )
-    if (src) {
+    if (src && !TRANSPARENT_PIXEL_RE.test(src)) {
       image.setAttribute('src', src)
+      image.setAttribute('data-src', src)
+    } else if (!src || TRANSPARENT_PIXEL_RE.test(src)) {
+      image.remove()
+      return
     }
+    image.removeAttribute('srcset')
+    image.removeAttribute('data-srcset')
+    image.removeAttribute('data-ratio')
+    image.removeAttribute('data-w')
+    image.removeAttribute('width')
+    image.removeAttribute('height')
+    image.removeAttribute('style')
     if (!image.getAttribute('alt')) {
       image.setAttribute('alt', cleanText(image.getAttribute('data-type')) || 'image')
     }
+    image.setAttribute('loading', 'lazy')
   })
 
   root.querySelectorAll('a').forEach((link) => {
@@ -155,9 +222,28 @@ function cleanupWechatContent(root: HTMLElement) {
   })
 
   root.querySelectorAll<HTMLElement>('*').forEach((node) => {
-    node.removeAttribute('style')
+    const style = sanitizeStyle(node.getAttribute('style'))
+    if (style) {
+      node.setAttribute('style', style)
+    } else {
+      node.removeAttribute('style')
+    }
     node.removeAttribute('class')
     node.removeAttribute('id')
+    node.removeAttribute('data-tools')
+    node.removeAttribute('data-id')
+    node.removeAttribute('contenteditable')
+    node.removeAttribute('onclick')
+    node.removeAttribute('onerror')
+    node.removeAttribute('onload')
+  })
+
+  Array.from(root.querySelectorAll<HTMLElement>('p, section, span, div')).reverse().forEach((node) => {
+    const hasMedia = Boolean(node.querySelector('img, video, table, svg'))
+    const text = cleanText(node.textContent)
+    if (!hasMedia && !text && node.children.length === 0) {
+      node.remove()
+    }
   })
 }
 
@@ -191,14 +277,52 @@ function htmlFragmentToMarkdown(html: string) {
     .trim()
 }
 
+function normalizeWechatCandidateUrl(value: string) {
+  const trimmed = value.trim().replace(/&amp;/g, '&')
+  if (!trimmed) return null
+
+  try {
+    const direct = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`)
+    if (WECHAT_HOST_RE.test(direct.hostname)) return direct
+    if (NON_WECHAT_READER_HOSTS.has(direct.hostname.toLowerCase())) return null
+
+    for (const key of ['url', 'target', 'redirect', 'redirect_url', 'link']) {
+      const nested = direct.searchParams.get(key)
+      if (!nested) continue
+      try {
+        const nestedUrl = new URL(decodeURIComponent(nested))
+        if (WECHAT_HOST_RE.test(nestedUrl.hostname)) return nestedUrl
+      } catch {
+        // keep checking other common wrapper params
+      }
+    }
+  } catch {
+    const match = trimmed.match(/https?:\/\/mp\.weixin\.qq\.com\/[^\s"'<>]+/i)
+    if (match) {
+      try {
+        return new URL(match[0].replace(/&amp;/g, '&'))
+      } catch {
+        return null
+      }
+    }
+  }
+
+  return null
+}
+
 export function isWechatArticleUrl(value: string) {
   try {
-    const url = new URL(value.trim().startsWith('http') ? value.trim() : `https://${value.trim()}`)
-    return url.hostname === 'mp.weixin.qq.com'
-      && (url.pathname.startsWith('/s') || url.searchParams.has('__biz'))
+    const url = normalizeWechatCandidateUrl(value)
+    return Boolean(url)
+      && (url!.pathname.startsWith('/s') || url!.searchParams.has('__biz') || url!.pathname.includes('/s/'))
   } catch {
     return false
   }
+}
+
+export function getWechatArticleUrl(value: string) {
+  const url = normalizeWechatCandidateUrl(value)
+  return url ? url.toString() : value
 }
 
 export function parseWechatArticleHtml(html: string, url: string): WechatArticleResult {
@@ -237,8 +361,16 @@ export function parseWechatArticleHtml(html: string, url: string): WechatArticle
 
   const clonedRoot = contentRoot.cloneNode(true) as HTMLElement
   cleanupWechatContent(clonedRoot)
-  const bodyMarkdown = htmlFragmentToMarkdown(clonedRoot.innerHTML)
-  if (!bodyMarkdown || bodyMarkdown.replace(/\s+/g, '').length < 20) {
+  const bodyHtml = clonedRoot.innerHTML.trim()
+  const bodyMarkdown = htmlFragmentToMarkdown(bodyHtml)
+  const compactBody = bodyMarkdown.replace(/\s+/g, '')
+  const compactTitle = title.replace(/\s+/g, '')
+  const hasImage = clonedRoot.querySelector('img[src]') !== null
+  if (
+    !bodyMarkdown
+    || compactBody.length < 80
+    || (!hasImage && compactTitle && compactBody === compactTitle)
+  ) {
     throw new Error('微信公众号正文解析结果为空')
   }
 
@@ -284,6 +416,7 @@ export function parseWechatArticleHtml(html: string, url: string): WechatArticle
     publishedAt,
     summary,
     cover,
+    html: bodyHtml,
     markdown: bodyMarkdown,
     desc,
     content,
@@ -291,6 +424,16 @@ export function parseWechatArticleHtml(html: string, url: string): WechatArticle
 }
 
 export async function fetchWechatArticleAsMarkdown(url: string): Promise<WechatArticleResult> {
+  const articleUrl = getWechatArticleUrl(url)
+  try {
+    const nativeHtml = await fetchWechatMpArticleHtml(articleUrl)
+    if (nativeHtml.trim()) {
+      return parseWechatArticleHtml(nativeHtml, articleUrl)
+    }
+  } catch (error) {
+    console.warn('[wechat-article] native mp session fetch skipped:', error)
+  }
+
   const requestHeaders = [
     {
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.1',
@@ -312,7 +455,7 @@ export async function fetchWechatArticleAsMarkdown(url: string): Promise<WechatA
 
   for (const headers of requestHeaders) {
     try {
-      const response = await tauriFetch(url, {
+      const response = await tauriFetch(articleUrl, {
         method: 'GET',
         connectTimeout: 12000,
         maxRedirections: 5,
@@ -324,7 +467,7 @@ export async function fetchWechatArticleAsMarkdown(url: string): Promise<WechatA
       }
 
       const html = decodeBytes(new Uint8Array(await response.arrayBuffer()), response.headers.get('content-type'))
-      return parseWechatArticleHtml(html, url)
+      return parseWechatArticleHtml(html, articleUrl)
     } catch (error) {
       lastError = error
     }

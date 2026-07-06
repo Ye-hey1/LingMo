@@ -19,6 +19,16 @@ export interface AiHotspotFetchResult {
 const TRANSIENT_STATUS_CODES = new Set([429, 500, 502, 503, 504])
 const NOT_MODIFIED_STATUS = 304
 
+class FetchAttemptError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+  ) {
+    super(message)
+    this.name = 'FetchAttemptError'
+  }
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -48,6 +58,14 @@ function getErrorMessage(error: unknown) {
 
 function isTransientStatus(status: number) {
   return TRANSIENT_STATUS_CODES.has(status)
+}
+
+function toError(error: unknown) {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function isRetryableError(error: Error) {
+  return !(error instanceof FetchAttemptError) || error.retryable
 }
 
 async function fetchOnce(url: string, options: AiHotspotFetchOptions, timeoutMs: number) {
@@ -109,13 +127,19 @@ export async function fetchHotspotWithRetry(url: string, options: AiHotspotFetch
       }
 
       const message = `HTTP ${response.status} ${response.statusText}`.trim()
-      const error = new Error(message)
+      const error = new FetchAttemptError(message, isTransientStatus(response.status))
       if (!isTransientStatus(response.status) || attempt >= retries) {
         throw error
       }
       lastError = error
     } catch (error) {
-      throw error instanceof Error ? error : new Error(String(error))
+      const currentError = toError(error)
+
+      if (options.signal?.aborted || !isRetryableError(currentError) || attempt >= retries) {
+        throw currentError
+      }
+
+      lastError = currentError
     }
 
     await sleep(AI_HOTSPOT_CONFIG.http.retryDelayMs * (attempt + 1))

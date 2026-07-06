@@ -2,6 +2,7 @@ import type { AgentActivityPhase, AgentEvent, AgentTurnTelemetry, ToolCall } fro
 import type { AgentRuntimeSnapshot } from './runtime-snapshot'
 import { extractVisibleFinalAnswer, isInternalAgentInstruction, sanitizeVisibleAssistantContent } from './parse-action-input'
 import { getAgentEventEnvelope } from './event-envelope'
+import { getAssistantStatusLabel, isAssistantAnsweringLabel } from '../ai/assistant-status-projection'
 
 export type AgentPartStatus =
   | 'pending'
@@ -257,7 +258,7 @@ function isPreparingVisibleStatus(status?: AgentVisibleStatus) {
 }
 
 function isAnsweringVisibleStatus(status?: AgentVisibleStatus) {
-  return status?.tone === 'running' && status.label === '正在写答案'
+  return status?.tone === 'running' && isAssistantAnsweringLabel(status.label)
 }
 
 function canOverrideAnsweringStatus(status: AgentVisibleStatus) {
@@ -373,7 +374,7 @@ function reduceAgentPartSnapshotCore(
         ...snapshot,
         runId: event.runId || snapshot.runId,
         status: 'running',
-        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '正在写答案' }),
+        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: getAssistantStatusLabel('answering', 'running') }),
       }
 
     case 'agent.stream.started':
@@ -390,7 +391,7 @@ function reduceAgentPartSnapshotCore(
         ...snapshot,
         runId: event.runId || snapshot.runId,
         status: 'running',
-        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '思考中' }),
+        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: getAssistantStatusLabel('thinking', 'running') }),
       }
 
     case 'thought':
@@ -414,7 +415,7 @@ function reduceAgentPartSnapshotCore(
         runId: event.runId || snapshot.runId,
         status: 'running',
         parts: upsertPart(snapshot.parts, part),
-        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '思考中' }),
+        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: getAssistantStatusLabel('thinking', 'running') }),
       }
     }
 
@@ -505,7 +506,7 @@ function reduceAgentPartSnapshotCore(
         status: 'running',
         parts: snapshot.parts.filter(part => part.id !== getFinalAnswerPartId(event)),
         finalAnswerContent: undefined,
-        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '思考中', detail: payload.reason }),
+        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: getAssistantStatusLabel('thinking', 'running'), detail: payload.reason }),
       }
 
     case 'final':
@@ -515,7 +516,7 @@ function reduceAgentPartSnapshotCore(
         return {
           ...snapshot,
           status: snapshot.status === 'completed' ? 'completed' : 'running',
-          visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '正在写答案' }),
+          visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: getAssistantStatusLabel('answering', 'running') }),
         }
       }
       const now = event.timestamp
@@ -536,7 +537,7 @@ function reduceAgentPartSnapshotCore(
         runId: event.runId || snapshot.runId,
         parts: upsertPart(snapshot.parts, part),
         finalAnswerContent: content,
-        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: '正在写答案' }),
+        visibleStatus: resolveVisibleStatus(snapshot, { tone: 'running', label: getAssistantStatusLabel('answering', 'running') }),
       }
     }
 

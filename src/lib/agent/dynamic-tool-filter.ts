@@ -115,8 +115,8 @@ const QUERY_TOOL_AFFINITY: QueryToolAffinityRule[] = [
     boost: 50,
   },
   {
-    keywords: /知识库|知识对象|知识管理|当前笔记|相关笔记|关联笔记|我的笔记|记忆|重建索引|刷新索引|重新索引|同步索引|索引不同步|memory|knowledge\s*base|current\s*note|related\s*notes|reindex/i,
-    tools: ['search_knowledge_objects', 'get_knowledge_object_overview', 'get_current_note_context', 'reindex_knowledge_objects', 'get_connected_notes', 'get_note_backlinks'],
+    keywords: /知识库|知识对象|知识管理|当前笔记|相关笔记|关联笔记|我的笔记|记忆|图谱|关系|证据|重建索引|刷新索引|重新索引|同步索引|索引不同步|memory|knowledge\s*base|current\s*note|related\s*notes|evidence|graph|graphrag|reindex/i,
+    tools: ['query_knowledge', 'search_knowledge_objects', 'get_knowledge_object_overview', 'get_current_note_context', 'reindex_knowledge_objects', 'get_connected_notes', 'get_note_backlinks'],
     boost: 55,
   },
   {

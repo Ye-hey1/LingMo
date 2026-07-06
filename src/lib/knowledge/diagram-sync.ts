@@ -12,7 +12,7 @@
  */
 
 import { objectRegistry, type RegisterObjectInput } from './object-registry'
-import { isDrawioPath, isExcalidrawPath, isMermaidPath } from '@/lib/diagram'
+import { isExcalidrawPath, isMermaidPath } from '@/lib/diagram'
 
 async function computeContentHash(content: string): Promise<string> {
   if (typeof crypto !== 'undefined' && crypto.subtle) {
@@ -72,7 +72,7 @@ export async function registerDiagramFromSave(
   tags.add(`kind:${kind}`)
   if (options.layout) tags.add(`layout:${options.layout}`)
 
-  await objectRegistry.register({
+  const objectId = await objectRegistry.register({
     sourceType: 'diagram',
     sourceId: filePath,
     path: filePath,
@@ -89,4 +89,12 @@ export async function registerDiagramFromSave(
       length: content.length,
     },
   })
+
+  try {
+    const { syncKnowledgeObjectToGraph } = await import('@/lib/knowledge-graph/sync')
+    const object = await objectRegistry.getById(objectId)
+    if (object) await syncKnowledgeObjectToGraph(object)
+  } catch (error) {
+    console.warn('[KnowledgeGraph] diagram sync skipped:', error)
+  }
 }

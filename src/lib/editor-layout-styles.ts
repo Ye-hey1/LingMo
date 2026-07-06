@@ -15,8 +15,8 @@ export function getEditorContentContainerClass(options: {
     : ''
 
   if (options.centeredContent) {
-    return `max-w-3xl mx-auto px-4 ${outlinePaddingClass}`.trim()
+    return `editor-content-frame editor-content-frame-centered w-full px-4 ${outlinePaddingClass}`.trim()
   }
 
-  return `px-10 ${outlinePaddingClass}`.trim()
+  return `editor-content-frame w-full px-10 ${outlinePaddingClass}`.trim()
 }

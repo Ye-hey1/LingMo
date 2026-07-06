@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, Bot, Brain, Files, Github, Highlighter, LayoutTemplate, Network, Newspaper, Settings, Star, WalletCards, Workflow } from 'lucide-react'
+import { ArrowLeft, Brain, Files, Github, Highlighter, LayoutTemplate, Network, Newspaper, Settings, Star, WalletCards, Workflow } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'

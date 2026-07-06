@@ -4,11 +4,12 @@ import useSettingStore from "@/stores/setting"
 import useChatStore from "@/stores/chat"
 import useTagStore from "@/stores/tag"
 import { TooltipButton } from "@/components/tooltip-button"
-import { useImperativeHandle, forwardRef, useRef, useEffect } from "react"
+import { useImperativeHandle, forwardRef, useRef, useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import useVectorStore from "@/stores/vector"
 import { fetchAiStream, type AiStreamFinishMetadata } from "@/lib/ai/chat"
 import { decideAutoWebSearch, type AutoWebSearchDecision } from "@/lib/ai/auto-web-search"
+import { decideDocumentGrounding } from "@/lib/ai/document-grounding"
 import { type LinkedResource } from "@/lib/files"
 import { getWorkspacePath, getFilePathOptions } from "@/lib/workspace"
 import {
@@ -60,6 +61,7 @@ import {
   type QuoteData,
   type ChatCitationSource,
 } from "@/lib/ai/context-builder"
+import { buildMessagesWithHistory } from "@/lib/ai/history-messages"
 
 interface ChatSendProps {
   inputValue: string;
@@ -92,9 +94,15 @@ export interface ChatSendOptions {
 
 const MIN_AUTO_EXTRACT_CHAR_COUNT = 500
 const AGENT_CONTEXT_TOTAL_LIMIT = 70000
+const CHAT_DEFAULT_HISTORY_TURNS = 8
+const CHAT_FOLLOW_UP_HISTORY_TURNS = 12
+const CHAT_DEFAULT_HISTORY_TOKEN_BUDGET = 6000
+const CHAT_FOLLOW_UP_HISTORY_TOKEN_BUDGET = 9000
+const CHAT_MAX_SINGLE_HISTORY_MESSAGE_TOKENS = 1800
 const AGENT_DEFAULT_HISTORY_TURNS = 6
 const AGENT_FOLLOW_UP_HISTORY_TURNS = 10
 const AGENT_LIVE_ANSWER_UPDATE_INTERVAL_MS = 120
+const CHAT_LIVE_MESSAGE_UPDATE_INTERVAL_MS = 120
 const AI_DOC_COMMAND_PREFIX = '你正在执行一个应用内命令：'
 const KNOWLEDGE_CAPTURE_INTENT_PATTERN = /总结|教程|方案|沉淀|笔记|整理|归纳|提炼|复盘|要点|大纲|知识库|保存|存成|存为|save|note|notes|summary|summarize|tutorial|guide|plan|organize|capture|extract|outline/i
 
@@ -548,6 +556,7 @@ export const ChatSend = forwardRef<{
   const abortControllerRef = useRef<AbortController | null>(null)
   const agentHandlerRef = useRef<AgentHandler | null>(null)
   const lastAutoSuggestMessageIdRef = useRef<number | null>(null)
+  const [liveInputValue, setLiveInputValue] = useState(inputValue)
   // 冷却：同一对话只提示一次可沉淀，记录已提示的 conversationId
   const suggestedConversationIds = useRef<Set<number | undefined>>(new Set())
   const t = useTranslations()
@@ -558,14 +567,42 @@ export const ChatSend = forwardRef<{
       : []
   const isAgentMode = chatMode === 'agent'
   const isRunning = researchRunning || (isAgentMode ? agentState.isRunning : loading)
+  const effectiveInputValue = liveInputValue || inputValue
+  const syncLiveInputValue = () => {
+    const nextInputValue = getLiveInputValue?.() || inputValue
+    setLiveInputValue(nextInputValue)
+    return nextInputValue
+  }
   const resolveAutoWebSearchDecision = (userInput: string) => decideAutoWebSearch({
     userInput,
     manualDefaultEnabled: webSearchEnabled,
     hasSearchProvider: true,
   })
 
+  const resolveGroundedWebSearchDecision = (userInput: string, hasDocumentContext: boolean) => {
+    const webDecision = resolveAutoWebSearchDecision(userInput)
+    const documentDecision = decideDocumentGrounding({ userInput, hasDocumentContext })
+    if (!documentDecision.suppressWebSearch || !webDecision.enabled) {
+      return { webDecision, documentDecision, effectiveWebSearchEnabled: webDecision.enabled }
+    }
+
+    return {
+      webDecision: {
+        ...webDecision,
+        enabled: false,
+        detail: `${webDecision.detail} 当前问题指向已打开/已关联文档，本轮优先使用文档上下文。`,
+      },
+      documentDecision,
+      effectiveWebSearchEnabled: false,
+    }
+  }
+
   // 跟踪上一次的 loading 状态
   const wasLoadingRef = useRef(false)
+
+  useEffect(() => {
+    setLiveInputValue(inputValue)
+  }, [inputValue])
 
   // 持久化 ref：让 resume-research 事件监听器始终能拿到最新闭包
   const resumeContextRef = useRef<{
@@ -643,6 +680,18 @@ export const ChatSend = forwardRef<{
     shouldCarryUserHistoryForAgent(input)
       ? AGENT_FOLLOW_UP_HISTORY_TURNS
       : AGENT_DEFAULT_HISTORY_TURNS
+  )
+
+  const getChatHistoryTurnLimit = (input: string) => (
+    shouldCarryUserHistoryForAgent(input)
+      ? CHAT_FOLLOW_UP_HISTORY_TURNS
+      : CHAT_DEFAULT_HISTORY_TURNS
+  )
+
+  const getChatHistoryTokenBudget = (input: string) => (
+    shouldCarryUserHistoryForAgent(input)
+      ? CHAT_FOLLOW_UP_HISTORY_TOKEN_BUDGET
+      : CHAT_DEFAULT_HISTORY_TOKEN_BUDGET
   )
 
   const buildPartialSuccessContent = (result: string, toolCalls: { result?: { success?: boolean; data?: any; error?: string } }[]) => {
@@ -896,6 +945,91 @@ export const ChatSend = forwardRef<{
     return { onAnswerDelta, flush, cancel, clear }
   }
 
+  const createLiveChatStreamUpdater = (
+    placeholderMessage: Chat,
+    options?: {
+      visibleRagSources?: unknown[]
+      visibleRagSourceDetails?: unknown[]
+      sanitizeContent?: (content: string) => string
+    },
+  ) => {
+    const ragSources = JSON.stringify(options?.visibleRagSources || [])
+    const ragSourceDetails = JSON.stringify(options?.visibleRagSourceDetails || [])
+    const sanitizeContent = options?.sanitizeContent || ((content: string) => content)
+
+    let pendingContent = ''
+    let pendingThinking = ''
+    let lastContent = ''
+    let lastThinking = ''
+    let lastAppliedAt = 0
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
+
+    const applySnapshot = () => {
+      if (cancelled) {
+        return
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+
+      const nextContent = sanitizeContent(pendingContent)
+      const nextThinking = pendingThinking
+      if (nextContent === lastContent && nextThinking === lastThinking) {
+        return
+      }
+
+      lastContent = nextContent
+      lastThinking = nextThinking
+      lastAppliedAt = Date.now()
+      void saveChat({
+        ...placeholderMessage,
+        content: nextContent,
+        thinking: nextThinking || undefined,
+        ragSources,
+        ragSourceDetails,
+      }, false)
+    }
+
+    const scheduleApply = () => {
+      const elapsed = Date.now() - lastAppliedAt
+      if (elapsed >= CHAT_LIVE_MESSAGE_UPDATE_INTERVAL_MS) {
+        applySnapshot()
+        return
+      }
+      if (!timeoutId) {
+        timeoutId = setTimeout(applySnapshot, CHAT_LIVE_MESSAGE_UPDATE_INTERVAL_MS - elapsed)
+      }
+    }
+
+    const updateContent = (content: string) => {
+      pendingContent = content
+      scheduleApply()
+    }
+
+    const updateThinking = (thinking: string) => {
+      pendingThinking = thinking
+      scheduleApply()
+    }
+
+    const flush = () => {
+      applySnapshot()
+    }
+
+    const cancel = () => {
+      cancelled = true
+      pendingContent = ''
+      pendingThinking = ''
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+    }
+
+    return { updateContent, updateThinking, flush, cancel }
+  }
+
   const isLikelyVisualCreationRequest = (text: string) => (
     /绘画|画一|画个|画张|生成图|生成一张|图片生成|出图|插画|海报|封面|视觉设计|draw|image|poster|illustration/i.test(text)
   )
@@ -1055,8 +1189,6 @@ export const ChatSend = forwardRef<{
 
   async function handleChatMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions) {
     const effectiveInstruction = instructionOverride ?? inputValue
-    const webDecision = resolveAutoWebSearchDecision(effectiveInstruction)
-    const effectiveWebSearchEnabled = webDecision.enabled
     const placeholderMessage = await insert({
       tagId: currentTagId,
       role: 'system',
@@ -1069,11 +1201,19 @@ export const ChatSend = forwardRef<{
 
     const abortController = new AbortController()
     abortControllerRef.current = abortController
+    let streamUpdater: ReturnType<typeof createLiveChatStreamUpdater> | null = null
 
     try {
       // 使用统一的上下文构建器
       const useArticleStore = (await import('@/stores/article')).default
       const articleStore = useArticleStore.getState()
+      const hasDocumentContext = Boolean(
+        (allowAutoCurrentFileContext && articleStore.currentArticle && articleStore.activeFilePath) ||
+        effectiveLinkedResources.length > 0 ||
+        quoteData
+      )
+      const { webDecision, documentDecision, effectiveWebSearchEnabled } =
+        resolveGroundedWebSearchDecision(effectiveInstruction, hasDocumentContext)
 
       const contextResult = await buildChatContext({
         linkedResources: effectiveLinkedResources,
@@ -1092,33 +1232,27 @@ export const ChatSend = forwardRef<{
       const { context, ragSources, ragSourceDetails } = contextResult
       const visibleRagSourceDetails = ragSourceDetails
       const visibleRagSources = ragSources
-      const systemContext = effectiveWebSearchEnabled
-        ? `${buildWebSearchInstruction(webDecision)}${context}`
+      const systemContextBase = documentDecision.instruction
+        ? `${documentDecision.instruction}\n\n${context}`
         : context
+      const systemContext = effectiveWebSearchEnabled
+        ? `${buildWebSearchInstruction(webDecision)}${systemContextBase}`
+        : systemContextBase
 
       const { chats: currentChats } = useChatStore.getState()
-      const latestUserChatId = currentChats
-        .filter(chat => chat.role === 'user')
-        .at(-1)?.id
-      const messages = [
-        ...currentChats
-          .filter(chat => chat.id !== latestUserChatId)
-          .filter(chat => chat.type === 'chat' && (chat.role === 'user' || chat.role === 'system') && chat.content)
-          .map(chat => ({
-            role: chat.role === 'user' ? 'user' as const : 'assistant' as const,
-            content: chat.condensedContent || chat.content || '',
-          })),
-        ...(systemContext
-          ? [{
-              role: 'system' as const,
-              content: systemContext,
-            }]
-          : []),
+      const messages = buildMessagesWithHistory(
+        currentChats,
+        undefined,
+        systemContext,
+        effectiveInstruction,
         {
-          role: 'user' as const,
-          content: effectiveInstruction,
-        },
-      ]
+          includeAssistantMessages: true,
+          includeLatestUserMessage: false,
+          maxUserMessages: getChatHistoryTurnLimit(effectiveInstruction),
+          maxHistoryTokens: getChatHistoryTokenBudget(effectiveInstruction),
+          maxSingleMessageTokens: CHAT_MAX_SINGLE_HISTORY_MESSAGE_TOKENS,
+        }
+      )
 
       if (ragSources.length > 0 || ragSourceDetails.length > 0) {
         await saveChat({
@@ -1131,17 +1265,15 @@ export const ChatSend = forwardRef<{
       let finalContent = ''
       let thinkingContent = ''
       let streamMeta: AiStreamFinishMetadata | null = null
+      streamUpdater = createLiveChatStreamUpdater(placeholderMessage, {
+        visibleRagSources,
+        visibleRagSourceDetails,
+      })
       const result = await fetchAiStream(
         effectiveInstruction,
-        async (content) => {
+        (content) => {
           finalContent = content
-          await saveChat({
-            ...placeholderMessage,
-            content,
-            thinking: thinkingContent || undefined,
-            ragSources: JSON.stringify(visibleRagSources),
-            ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
-          }, false)
+          streamUpdater?.updateContent(content)
         },
         abortController.signal,
         undefined,
@@ -1149,14 +1281,9 @@ export const ChatSend = forwardRef<{
         placeholderMessage.id,
         imageUrls,
         // 思考内容更新回调
-        async (thinking: string) => {
+        (thinking: string) => {
           thinkingContent = thinking
-          await saveChat({
-            ...placeholderMessage,
-            thinking,
-            ragSources: JSON.stringify(visibleRagSources),
-            ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
-          }, false)
+          streamUpdater?.updateThinking(thinking)
         },
         messages,
         options?.maxTokens,
@@ -1172,13 +1299,17 @@ export const ChatSend = forwardRef<{
         finalContent = formatEmptyAiResponseMessage(streamMeta, thinkingContent)
       }
 
+      streamUpdater.flush()
       await saveChat({
         ...placeholderMessage,
         content: abortController.signal.aborted ? (finalContent || t('record.chat.input.stopped')) : finalContent,
+        thinking: thinkingContent || undefined,
         ragSources: JSON.stringify(visibleRagSources),
         ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
       }, true)
+      streamUpdater.cancel()
     } catch (error) {
+      streamUpdater?.cancel()
       await saveChat({
         ...placeholderMessage,
         content: formatUserVisibleError(error),
@@ -1190,8 +1321,6 @@ export const ChatSend = forwardRef<{
 
   async function handleWriterMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions): Promise<string> {
     const effectiveInstruction = instructionOverride ?? inputValue
-    const webDecision = resolveAutoWebSearchDecision(effectiveInstruction)
-    const effectiveWebSearchEnabled = webDecision.enabled
     const placeholderMessage = await insert({
       tagId: currentTagId,
       role: 'system',
@@ -1204,10 +1333,18 @@ export const ChatSend = forwardRef<{
 
     const abortController = new AbortController()
     abortControllerRef.current = abortController
+    let streamUpdater: ReturnType<typeof createLiveChatStreamUpdater> | null = null
 
     try {
       const useArticleStore = (await import('@/stores/article')).default
       const articleStore = useArticleStore.getState()
+      const hasDocumentContext = Boolean(
+        (allowAutoCurrentFileContext && articleStore.currentArticle && articleStore.activeFilePath) ||
+        effectiveLinkedResources.length > 0 ||
+        quoteData
+      )
+      const { webDecision, documentDecision, effectiveWebSearchEnabled } =
+        resolveGroundedWebSearchDecision(effectiveInstruction, hasDocumentContext)
 
       const contextResult = await buildChatContext({
         linkedResources: effectiveLinkedResources,
@@ -1226,9 +1363,12 @@ export const ChatSend = forwardRef<{
       const { context, ragSources, ragSourceDetails } = contextResult
       const visibleRagSourceDetails = ragSourceDetails
       const visibleRagSources = ragSources
-      const systemContext = effectiveWebSearchEnabled
-        ? `${buildWebSearchInstruction(webDecision)}${context}`
+      const systemContextBase = documentDecision.instruction
+        ? `${documentDecision.instruction}\n\n${context}`
         : context
+      const systemContext = effectiveWebSearchEnabled
+        ? `${buildWebSearchInstruction(webDecision)}${systemContextBase}`
+        : systemContextBase
 
       if (ragSources.length > 0 || ragSourceDetails.length > 0) {
         await saveChat({
@@ -1254,60 +1394,48 @@ export const ChatSend = forwardRef<{
       }
 
       const { chats: currentChats } = useChatStore.getState()
-      const latestUserChatId = currentChats
-        .filter(chat => chat.role === 'user')
-        .at(-1)?.id
-      const messages = [
-        ...currentChats
-          .filter(chat => chat.id !== latestUserChatId)
-          .filter(chat => chat.type === 'chat' && (chat.role === 'user' || chat.role === 'system') && chat.content)
-          .map(chat => ({
-            role: chat.role === 'user' ? 'user' as const : 'assistant' as const,
-            content: chat.condensedContent || chat.content || '',
-          })),
+      const writerSystemContext = [
+        '你正在执行一个写作型 Skill。请直接输出用户可用的正文，保持自然连贯。',
+        '不要输出工具调用、执行日志、JSON 包装、Action/Observation、Final Answer 标签或对 Skill 包装提示的解释。',
+        '中文内容必须保持 UTF-8 正常字符，避免 mojibake、替换字符和乱码。',
+        systemContext ? `\n## 可用上下文\n\n${systemContext}` : '',
+      ].filter(Boolean).join('\n')
+      const messages = buildMessagesWithHistory(
+        currentChats,
+        undefined,
+        writerSystemContext,
+        writerInstruction,
         {
-          role: 'system' as const,
-          content: [
-            '你正在执行一个写作型 Skill。请直接输出用户可用的正文，保持自然连贯。',
-            '不要输出工具调用、执行日志、JSON 包装、Action/Observation、Final Answer 标签或对 Skill 包装提示的解释。',
-            '中文内容必须保持 UTF-8 正常字符，避免 mojibake、替换字符和乱码。',
-            systemContext ? `\n## 可用上下文\n\n${systemContext}` : '',
-          ].filter(Boolean).join('\n'),
-        },
-        {
-          role: 'user' as const,
-          content: writerInstruction,
-        },
-      ]
+          includeAssistantMessages: true,
+          includeLatestUserMessage: false,
+          maxUserMessages: getChatHistoryTurnLimit(effectiveInstruction),
+          maxHistoryTokens: getChatHistoryTokenBudget(effectiveInstruction),
+          maxSingleMessageTokens: CHAT_MAX_SINGLE_HISTORY_MESSAGE_TOKENS,
+        }
+      )
 
       let finalContent = ''
       let thinkingContent = ''
       let streamMeta: AiStreamFinishMetadata | null = null
+      streamUpdater = createLiveChatStreamUpdater(placeholderMessage, {
+        visibleRagSources,
+        visibleRagSourceDetails,
+        sanitizeContent: cleanAssistantGeneratedContent,
+      })
       const result = await fetchAiStream(
         writerInstruction,
-        async (content) => {
+        (content) => {
           finalContent = cleanAssistantGeneratedContent(content)
-          await saveChat({
-            ...placeholderMessage,
-            content: finalContent,
-            thinking: thinkingContent || undefined,
-            ragSources: JSON.stringify(visibleRagSources),
-            ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
-          }, false)
+          streamUpdater?.updateContent(content)
         },
         abortController.signal,
         undefined,
         t,
         placeholderMessage.id,
         imageUrls,
-        async (thinking: string) => {
+        (thinking: string) => {
           thinkingContent = thinking
-          await saveChat({
-            ...placeholderMessage,
-            thinking,
-            ragSources: JSON.stringify(visibleRagSources),
-            ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
-          }, false)
+          streamUpdater?.updateThinking(thinking)
         },
         messages,
         options?.maxTokens,
@@ -1327,15 +1455,19 @@ export const ChatSend = forwardRef<{
       const savedContent = abortController.signal.aborted
         ? (finalContent || t('record.chat.input.stopped'))
         : finalContent
+      streamUpdater.flush()
       await saveChat({
         ...placeholderMessage,
         content: savedContent,
+        thinking: thinkingContent || undefined,
         ragSources: JSON.stringify(visibleRagSources),
         ragSourceDetails: JSON.stringify(visibleRagSourceDetails),
       }, true)
+      streamUpdater.cancel()
 
       return savedContent
     } catch (error) {
+      streamUpdater?.cancel()
       const errorContent = formatUserVisibleError(error)
       await saveChat({
         ...placeholderMessage,
@@ -1490,7 +1622,6 @@ export const ChatSend = forwardRef<{
             date: now,
             researchDir,
           })
-          const quality = result.quality
           const qualityNote = formatResearchQualityNote(result)
           const reportFileContent = [
             qualityNote,
@@ -1992,7 +2123,6 @@ export const ChatSend = forwardRef<{
 
       if (shouldBypassAgentRuntime(routeDecision)) {
         const { chats } = useChatStore.getState()
-        const { buildMessagesWithHistory } = await import('@/lib/ai/condense')
         const messages = buildMessagesWithHistory(
           chats,
           undefined,
@@ -2252,6 +2382,12 @@ export const ChatSend = forwardRef<{
           // 使用统一的上下文构建器
           const useArticleStore = (await import('@/stores/article')).default
           const articleStore = useArticleStore.getState()
+          const hasDocumentContext = Boolean(
+            (allowAutoCurrentFileContext && articleStore.currentArticle && articleStore.activeFilePath) ||
+            effectiveLinkedResources.length > 0 ||
+            quoteData
+          )
+          const groundedWeb = resolveGroundedWebSearchDecision(effectiveInstruction, hasDocumentContext)
 
           const contextResult = await buildChatContext({
             linkedResources: effectiveLinkedResources,
@@ -2259,9 +2395,9 @@ export const ChatSend = forwardRef<{
             linkedResourcePreview,
             quoteData,
             isRagEnabled,
-            webSearchEnabled: effectiveWebSearchEnabled,
+            webSearchEnabled: groundedWeb.effectiveWebSearchEnabled,
             userQuery: effectiveInstruction,
-            webSearchQuery: effectiveWebSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
+            webSearchQuery: groundedWeb.effectiveWebSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
             contextBudget: AGENT_CONTEXT_TOTAL_LIMIT,
             currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
             activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
@@ -2283,9 +2419,11 @@ export const ChatSend = forwardRef<{
           }
 
           // 如果启用了 Web 搜索，添加提示
-          let agentContext = context
-          if (effectiveWebSearchEnabled) {
-            agentContext = `${buildWebSearchInstruction(webDecision)}请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或正文提取不可用时再使用 web_fetch。\n\n${context}`
+          let agentContext = groundedWeb.documentDecision.instruction
+            ? `${groundedWeb.documentDecision.instruction}\n\n${context}`
+            : context
+          if (groundedWeb.effectiveWebSearchEnabled) {
+            agentContext = `${buildWebSearchInstruction(groundedWeb.webDecision)}请优先使用 web_search 获取实时网页资料；需要读取具体网页正文时优先使用 web_extract，只有在需要原始响应或正文提取不可用时再使用 web_fetch。\n\n${agentContext}`
           }
 
           await runControl.setContextPack({
@@ -2329,7 +2467,6 @@ export const ChatSend = forwardRef<{
 
           // 构建消息数组
           const { chats } = useChatStore.getState()
-          const { buildMessagesWithHistory } = await import('@/lib/ai/condense')
 
           const messages = buildMessagesWithHistory(
             chats,
@@ -2489,7 +2626,7 @@ export const ChatSend = forwardRef<{
         variant={isRunning ? "destructive" : "ghost"}
         size="icon"
         icon={isRunning ? <Square className="size-4" /> : <Send className="size-4" />} 
-        disabled={!isRunning && (!primaryModel || (!inputValue.trim() && !canSubmitOverride))} 
+        disabled={!isRunning && (!primaryModel || (!effectiveInputValue.trim() && !canSubmitOverride))}
         tooltipText={isRunning ? t('record.chat.input.stop') : t('record.chat.input.send')} 
         buttonClassName={isRunning
           ? "h-8 w-8 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -2501,12 +2638,12 @@ export const ChatSend = forwardRef<{
             return
           }
 
-          const liveInputValue = getLiveInputValue?.() || inputValue
-          if (onSubmitOverride?.(liveInputValue) === true) {
+          const currentInputValue = syncLiveInputValue() || effectiveInputValue
+          if (onSubmitOverride?.(currentInputValue) === true) {
             return
           }
 
-          void handleSubmit()
+          void handleSubmit(currentInputValue)
         }} 
       />
     </>

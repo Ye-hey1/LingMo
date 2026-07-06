@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ActivityPanel } from '@/components/activity/activity-panel'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -16,57 +16,111 @@ export function ActivityDrawer({ open, onOpenChange }: ActivityDrawerProps) {
   const [data, setData] = useState<ActivityCalendarData | null>(null)
   const [selectedDay, setSelectedDay] = useState<ActivityDaySummary | undefined>(undefined)
   const [loading, setLoading] = useState(false)
+  const [aiDetailsLoading, setAiDetailsLoading] = useState(false)
   const refreshRequestIdRef = useRef(0)
+  const aiDetailsRequestIdRef = useRef(0)
+  const aiDetailsLoadingRef = useRef(false)
+  const hasAiDetailsRef = useRef(false)
 
-  async function refreshData(resetSelection = false, force = false) {
+  const updateHasAiDetails = useCallback((next: boolean) => {
+    hasAiDetailsRef.current = next
+  }, [])
+
+  const syncSelection = useCallback((nextData: ActivityCalendarData, resetSelection = false) => {
+    setSelectedDay((currentSelectedDay) => {
+      if (!resetSelection && currentSelectedDay) {
+        return nextData.days.find((day) => day.day === currentSelectedDay.day) || currentSelectedDay
+      }
+
+      return undefined
+    })
+  }, [])
+
+  const refreshData = useCallback(async (resetSelection = false, force = false) => {
     const requestId = refreshRequestIdRef.current + 1
     refreshRequestIdRef.current = requestId
+    aiDetailsRequestIdRef.current += 1
+    aiDetailsLoadingRef.current = false
     setLoading(true)
-
-    const syncSelection = (nextData: ActivityCalendarData) => {
-      setSelectedDay((currentSelectedDay) => {
-        if (!resetSelection && currentSelectedDay) {
-          return nextData.days.find((day) => day.day === currentSelectedDay.day) || currentSelectedDay
-        }
-
-        return undefined
-      })
-    }
+    setAiDetailsLoading(false)
 
     try {
       const fastData = await loadActivityCalendarData({ includeExternalAiDetails: false, force })
       if (refreshRequestIdRef.current !== requestId) return
 
       setData(fastData)
-      syncSelection(fastData)
-      setLoading(false)
-
-      const fullData = await loadActivityCalendarData({ includeExternalAiDetails: true, force })
-      if (refreshRequestIdRef.current !== requestId) return
-
-      setData(fullData)
-      syncSelection(fullData)
+      updateHasAiDetails(false)
+      syncSelection(fastData, resetSelection)
     } catch (error) {
       if (refreshRequestIdRef.current === requestId) {
         console.error('Failed to refresh activity data:', error)
+      }
+    } finally {
+      if (refreshRequestIdRef.current === requestId) {
         setLoading(false)
       }
     }
-  }
+  }, [syncSelection, updateHasAiDetails])
+
+  const loadAiDetails = useCallback(async (force = false) => {
+    if (aiDetailsLoadingRef.current || (!force && hasAiDetailsRef.current)) {
+      return
+    }
+
+    const requestId = aiDetailsRequestIdRef.current + 1
+    const refreshRequestId = refreshRequestIdRef.current
+    aiDetailsRequestIdRef.current = requestId
+    aiDetailsLoadingRef.current = true
+    setAiDetailsLoading(true)
+
+    try {
+      const fullData = await loadActivityCalendarData({ includeExternalAiDetails: true, force })
+      if (aiDetailsRequestIdRef.current !== requestId || refreshRequestIdRef.current !== refreshRequestId) return
+
+      setData(fullData)
+      updateHasAiDetails(true)
+      syncSelection(fullData)
+    } catch (error) {
+      if (aiDetailsRequestIdRef.current === requestId) {
+        console.error('Failed to load activity AI details:', error)
+      }
+    } finally {
+      if (aiDetailsRequestIdRef.current === requestId) {
+        aiDetailsLoadingRef.current = false
+        setAiDetailsLoading(false)
+      }
+    }
+  }, [syncSelection, updateHasAiDetails])
 
   useEffect(() => {
     if (open) {
-      void (async () => {
-        const cachedData = await loadCachedActivityCalendarData({ includeExternalAiDetails: true })
-          || await loadCachedActivityCalendarData({ includeExternalAiDetails: false })
+      let cancelled = false
 
-        if (cachedData) {
-          setData(cachedData)
+      void (async () => {
+        const cachedFullData = await loadCachedActivityCalendarData({ includeExternalAiDetails: true })
+        if (cancelled) return
+
+        if (cachedFullData) {
+          setData(cachedFullData)
+          updateHasAiDetails(true)
+          return
+        }
+
+        const cachedFastData = await loadCachedActivityCalendarData({ includeExternalAiDetails: false })
+        if (cancelled) return
+
+        if (cachedFastData) {
+          setData(cachedFastData)
+          updateHasAiDetails(false)
         }
       })()
       void refreshData(true)
+
+      return () => {
+        cancelled = true
+      }
     }
-  }, [open])
+  }, [open, refreshData, updateHasAiDetails])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -80,8 +134,10 @@ export function ActivityDrawer({ open, onOpenChange }: ActivityDrawerProps) {
             data={data}
             selectedDay={selectedDay}
             loading={loading}
+            aiDetailsLoading={aiDetailsLoading}
             onSelectDay={setSelectedDay}
-            onRefresh={() => void refreshData(false, true)}
+            onRefresh={() => refreshData(false, true)}
+            onRequestAiDetails={loadAiDetails}
             onEntryPathOpen={() => onOpenChange(false)}
             mode="drawer"
           />

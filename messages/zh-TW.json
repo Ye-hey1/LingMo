@@ -659,6 +659,10 @@
         "condense": {
           "title": "摘要模型",
           "desc": "用于压缩历史对话内容，节省 token 使用量"
+        },
+        "structuredExtraction": {
+          "title": "擷取模型",
+          "desc": "語義擷取使用的可選對話模型。未設定時會回退到主要模型。"
         }
       }
     },
@@ -1274,6 +1278,8 @@
       "addModel": "添加模型",
       "newModel": "新模型",
       "checkConnection": "檢測連接",
+      "modelDisplayName": "顯示名稱",
+      "modelDisplayNamePlaceholder": "未填寫時顯示模型 ID",
       "model": "模型"
     },
     "imageMethod": {
@@ -1441,6 +1447,59 @@
     "webSearch": {
       "title": "聯網搜尋",
       "desc": "配置聯網搜尋渠道、輸入框預設狀態和專案識別憑證。"
+    },
+    "structured-knowledge": {
+      "title": "結構化知識",
+      "desc": "設定 Markdown 知識圖譜的背景 LLM 自動擷取。"
+    },
+    "structuredKnowledge": {
+      "title": "結構化知識",
+      "desc": "設定背景 LLM 自動擷取。預設不會自動執行，必須接受費用與隱私提示後才會呼叫。",
+      "autoExtraction": {
+        "title": "自動 LLM 擷取"
+      },
+      "mode": {
+        "title": "擷取模式",
+        "desc": "選擇 LingMo 何時可將 Markdown 區塊傳送到已設定的 LLM 服務。",
+        "options": {
+          "off": "關閉",
+          "manual": "僅手動",
+          "onSave": "儲存後",
+          "onIdle": "閒置時"
+        }
+      },
+      "maxBlocks": {
+        "title": "最大區塊數",
+        "desc": "每次擷取最多傳送的 Markdown 證據區塊數。"
+      },
+      "idleSeconds": {
+        "title": "閒置等待秒數",
+        "desc": "停止操作多久後開始閒置擷取。"
+      },
+      "cooldownMinutes": {
+        "title": "冷卻分鐘數",
+        "desc": "同一篇未變更筆記再次擷取前的最短間隔。"
+      },
+      "maxNotesPerRun": {
+        "title": "每輪筆記數",
+        "desc": "背景每批最多處理的筆記數。"
+      },
+      "dailyLimit": {
+        "title": "每日上限",
+        "desc": "每天最多自動擷取次數。設為 0 可阻止自動呼叫。"
+      },
+      "costWarningAccepted": {
+        "title": "接受費用提示",
+        "desc": "自動擷取可能消耗付費 LLM token。"
+      },
+      "privacyWarningAccepted": {
+        "title": "接受隱私提示",
+        "desc": "自動擷取會將選定 Markdown 內容區塊傳送給設定的 LLM 服務商。"
+      },
+      "model": {
+        "title": "擷取模型",
+        "desc": "語義擷取使用的可選對話模型。未設定時會回退到主要模型。"
+      }
     }
   },
   "record": {
@@ -2943,6 +3002,7 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "more": "更多",
       "blockType": "區塊類型",
       "paragraph": "正文",
       "heading1": "一級標題",
@@ -2974,6 +3034,15 @@
       "highlight": "高亮",
       "clearHighlight": "清除高亮",
       "restoreDefault": "恢復預設",
+      "cellFillColor": "單元格填充色",
+      "white": "白色",
+      "clearCellFill": "清除填充",
+      "mergeCells": "合併單元格",
+      "splitCell": "拆分單元格",
+      "deleteCurrentRow": "刪除目前行",
+      "deleteCurrentColumn": "刪除目前列",
+      "deleteRowsOrColumns": "刪除行/列",
+      "align": "對齊",
       "alignLeft": "靠左對齊",
       "alignCenter": "置中對齊",
       "alignRight": "靠右對齊",
@@ -2984,6 +3053,7 @@
       "taskList": "任務列表",
       "codeBlock": "代碼塊",
       "languages": {
+        "Chinese": "中文",
         "English": "英語",
         "Japanese": "日語",
         "Korean": "韓語",
@@ -2995,6 +3065,13 @@
         "Arabic": "阿拉伯語"
       },
       "customLanguagePlaceholder": "自定義語言..."
+    },
+    "chatCopy": {
+      "copyCode": "複製代碼",
+      "copyTable": "複製表格",
+      "copiedCode": "已複製代碼",
+      "copiedTable": "已複製表格",
+      "copyFailed": "複製失敗"
     },
     "inlineAI": {
       "generateTitle": "AI 靈感生成",
@@ -3046,10 +3123,13 @@
       "abort": "終止",
       "explainTitle": "AI 解釋",
       "explaining": "正在解釋...",
+      "translateTitle": "AI 翻譯",
+      "translating": "正在翻譯...",
       "selectedText": "選中文本",
       "explainHint": "僅用於理解，不會寫入原文",
       "copy": "複製",
       "copied": "已複製",
+      "replaceOriginal": "替換原文",
       "close": "關閉"
     },
     "image": {

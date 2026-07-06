@@ -19,6 +19,7 @@ import {
   Maximize2,
   RefreshCw,
   RotateCcw,
+  Trash2,
   Type,
   X,
   ZoomIn,
@@ -27,6 +28,12 @@ import {
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { useTheme } from 'next-themes'
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { HtmlCodeEditor } from '../html/html-code-editor'
 import { FileCreatedAt } from '../markdown/footer-bar/file-created-at'
 import { HistorySheet } from '../markdown/sync/history-sheet'
@@ -43,6 +50,7 @@ import './mermaid-editor.css'
 
 type MermaidEditorMode = 'preview' | 'split' | 'code'
 const modeMapRef: Record<string, MermaidEditorMode> = {}
+const DEFAULT_MERMAID_EDITOR_MODE: MermaidEditorMode = 'preview'
 
 interface MermaidEditorProps {
   filePath: string
@@ -106,8 +114,11 @@ const MIN_SCALE = 0.35
 const MAX_SCALE = 3
 const SCALE_STEP = 0.12
 const VIEWER_MIN_SCALE = 0.2
-const VIEWER_MAX_SCALE = 6
-const VIEWER_SCALE_STEP = 0.2
+const VIEWER_MAX_SCALE = 10
+const VIEWER_SCALE_STEP = 0.25
+const VIEWER_HEADER_HEIGHT = 42
+const VIEWER_CONTENT_PADDING = 48
+const VIEWER_SVG_CROP_PADDING = 28
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -123,6 +134,192 @@ function formatMermaidCode(code: string) {
 
 function clampScale(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, Number(value.toFixed(2))))
+}
+
+function parseSvgLength(value: string | null) {
+  if (!value) return null
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function getSvgIntrinsicSize(svgMarkup: string) {
+  if (typeof DOMParser === 'undefined') {
+    return null
+  }
+
+  try {
+    const doc = new DOMParser().parseFromString(svgMarkup, 'image/svg+xml')
+    const svgElement = doc.querySelector('svg')
+    if (!svgElement) return null
+
+    const width = parseSvgLength(svgElement.getAttribute('width'))
+    const height = parseSvgLength(svgElement.getAttribute('height'))
+    if (width && height) {
+      return { width, height }
+    }
+
+    const viewBox = svgElement.getAttribute('viewBox')
+    const values = viewBox
+      ?.trim()
+      .split(/[\s,]+/)
+      .map((value) => Number.parseFloat(value))
+
+    if (values && values.length === 4 && values.every(Number.isFinite) && values[2] > 0 && values[3] > 0) {
+      return { width: values[2], height: values[3] }
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
+function getInitialViewerScale(svgMarkup: string) {
+  if (typeof window === 'undefined') return 1
+
+  const size = getSvgIntrinsicSize(svgMarkup)
+  if (!size) return 1.8
+
+  const availableWidth = Math.max(320, window.innerWidth * 0.92)
+  const availableHeight = Math.max(240, (window.innerHeight - VIEWER_HEADER_HEIGHT) * 0.9)
+  const contentWidth = size.width + VIEWER_CONTENT_PADDING
+  const contentHeight = size.height + VIEWER_CONTENT_PADDING
+  const fitScale = Math.min(availableWidth / contentWidth, availableHeight / contentHeight)
+
+  return clampScale(Math.max(1, fitScale), VIEWER_MIN_SCALE, VIEWER_MAX_SCALE)
+}
+
+function getScaleForVisibleSize(width: number, height: number) {
+  if (typeof window === 'undefined' || width <= 0 || height <= 0) {
+    return null
+  }
+
+  const availableWidth = Math.max(320, window.innerWidth * 0.94)
+  const availableHeight = Math.max(240, (window.innerHeight - VIEWER_HEADER_HEIGHT) * 0.9)
+  const fitScale = Math.min(
+    availableWidth / (width + VIEWER_CONTENT_PADDING),
+    availableHeight / (height + VIEWER_CONTENT_PADDING),
+  )
+
+  return clampScale(Math.max(1, fitScale), VIEWER_MIN_SCALE, VIEWER_MAX_SCALE)
+}
+
+type SvgBounds = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function isValidSvgBounds(bounds: SvgBounds | DOMRect) {
+  return (
+    Number.isFinite(bounds.x) &&
+    Number.isFinite(bounds.y) &&
+    Number.isFinite(bounds.width) &&
+    Number.isFinite(bounds.height) &&
+    bounds.width > 0 &&
+    bounds.height > 0
+  )
+}
+
+function mergeSvgBounds(current: SvgBounds | null, next: SvgBounds | DOMRect) {
+  if (!isValidSvgBounds(next)) {
+    return current
+  }
+
+  if (!current) {
+    return {
+      x: next.x,
+      y: next.y,
+      width: next.width,
+      height: next.height,
+    }
+  }
+
+  const x1 = Math.min(current.x, next.x)
+  const y1 = Math.min(current.y, next.y)
+  const x2 = Math.max(current.x + current.width, next.x + next.width)
+  const y2 = Math.max(current.y + current.height, next.y + next.height)
+
+  return {
+    x: x1,
+    y: y1,
+    width: x2 - x1,
+    height: y2 - y1,
+  }
+}
+
+function readSvgGraphicsBounds(element: Element) {
+  if (!(element instanceof SVGGraphicsElement)) {
+    return null
+  }
+
+  try {
+    const box = element.getBBox()
+    return isValidSvgBounds(box) ? box : null
+  } catch {
+    return null
+  }
+}
+
+function getVisibleSvgBounds(svgElement: SVGSVGElement) {
+  const ignoredTags = new Set(['style', 'defs', 'title', 'desc', 'metadata'])
+  const directGraphics = Array.from(svgElement.children).filter((child) => (
+    child instanceof SVGGraphicsElement &&
+    !ignoredTags.has(child.tagName.toLowerCase())
+  ))
+
+  let bounds = directGraphics.reduce<SvgBounds | null>(
+    (current, child) => {
+      const next = readSvgGraphicsBounds(child)
+      return next ? mergeSvgBounds(current, next) : current
+    },
+    null,
+  )
+
+  if (bounds) {
+    return bounds
+  }
+
+  const graphics = svgElement.querySelectorAll('g,path,rect,circle,ellipse,line,polyline,polygon,text,foreignObject,use')
+  bounds = Array.from(graphics).reduce<SvgBounds | null>(
+    (current, child) => {
+      const next = readSvgGraphicsBounds(child)
+      return next ? mergeSvgBounds(current, next) : current
+    },
+    null,
+  )
+
+  return bounds
+}
+
+function fitSvgToVisibleContent(container: HTMLElement | null) {
+  const svgElement = container?.querySelector('svg')
+  if (!svgElement) {
+    return null
+  }
+
+  try {
+    const bbox = getVisibleSvgBounds(svgElement)
+    if (!bbox) {
+      return null
+    }
+
+    const x = bbox.x - VIEWER_SVG_CROP_PADDING
+    const y = bbox.y - VIEWER_SVG_CROP_PADDING
+    const width = bbox.width + VIEWER_SVG_CROP_PADDING * 2
+    const height = bbox.height + VIEWER_SVG_CROP_PADDING * 2
+
+    svgElement.setAttribute('viewBox', `${x} ${y} ${width} ${height}`)
+    svgElement.setAttribute('width', String(width))
+    svgElement.setAttribute('height', String(height))
+    svgElement.style.maxWidth = 'none'
+    svgElement.style.height = 'auto'
+
+    return getScaleForVisibleSize(width, height)
+  } catch {
+    return null
+  }
 }
 
 // ─── Drag tracking type ────────────────────────────────────────────────────
@@ -361,7 +558,7 @@ function MermaidPreview({
 
 export function MermaidEditor({ filePath, tabContentsRef }: MermaidEditorProps) {
   const { currentArticle, saveCurrentArticle, isPulling } = useArticleStore()
-  const [mode, setMode] = useState<MermaidEditorMode>(() => modeMapRef[filePath] || 'split')
+  const [mode, setMode] = useState<MermaidEditorMode>(() => modeMapRef[filePath] || DEFAULT_MERMAID_EDITOR_MODE)
   const [content, setContent] = useState('')
   const [editorView, setEditorView] = useState<EditorView | null>(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
@@ -374,14 +571,16 @@ export function MermaidEditor({ filePath, tabContentsRef }: MermaidEditorProps) 
 
   // Fullscreen viewer state
   const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewerReady, setViewerReady] = useState(false)
   const [viewerScale, setViewerScale] = useState(1)
   const [viewerOffset, setViewerOffset] = useState({ x: 0, y: 0 })
   const viewerDragRef = useRef<DragState | null>(null)
+  const viewerContentRef = useRef<HTMLDivElement>(null)
 
   // ── Mode sync ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    setMode(modeMapRef[filePath] || 'split')
+    setMode(modeMapRef[filePath] || DEFAULT_MERMAID_EDITOR_MODE)
   }, [filePath])
 
   // ── Content sync ───────────────────────────────────────────────────────
@@ -413,6 +612,17 @@ export function MermaidEditor({ filePath, tabContentsRef }: MermaidEditorProps) 
     modeMapRef[filePath] = nextMode
   }, [filePath])
 
+  const focusEditor = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      editorView?.focus()
+    })
+  }, [editorView])
+
+  useEffect(() => {
+    if (mode === 'preview') return
+    focusEditor()
+  }, [focusEditor, mode])
+
   const handleContentChange = useCallback((newContent: string) => {
     setContent(newContent)
     if (tabContentsRef.current) {
@@ -432,7 +642,29 @@ export function MermaidEditor({ filePath, tabContentsRef }: MermaidEditorProps) 
 
   const handleTemplateSelect = useCallback((templateCode: string) => {
     handleContentChange(templateCode)
-  }, [handleContentChange])
+    if (mode === 'preview') {
+      handleModeChange('split')
+    }
+  }, [handleContentChange, handleModeChange, mode])
+
+  const handleCopyCode = useCallback(async () => {
+    try {
+      await copyTextToClipboard(content)
+      toast({ title: '复制成功', description: '已复制 Mermaid 代码' })
+    } catch {
+      toast({ title: '复制失败', description: '无法复制到剪贴板', variant: 'destructive' })
+    }
+  }, [content])
+
+  const handleClearCode = useCallback(() => {
+    if (content.trim() && !window.confirm('确定要清空当前 Mermaid 代码吗？')) {
+      return
+    }
+
+    handleContentChange('')
+    setRefreshTrigger((t) => t + 1)
+    focusEditor()
+  }, [content, focusEditor, handleContentChange])
 
   const handleSvgChange = useCallback((svg: string) => {
     svgRef.current = svg
@@ -499,8 +731,24 @@ export function MermaidEditor({ filePath, tabContentsRef }: MermaidEditorProps) 
   const handleOpenFullscreen = useCallback(() => {
     setViewerScale(1)
     setViewerOffset({ x: 0, y: 0 })
+    setViewerReady(false)
     setViewerOpen(true)
   }, [])
+
+  useEffect(() => {
+    if (!viewerOpen || !svgRef.current) {
+      return
+    }
+
+    setViewerReady(false)
+    const frame = requestAnimationFrame(() => {
+      setViewerScale(fitSvgToVisibleContent(viewerContentRef.current) ?? getInitialViewerScale(svgRef.current))
+      setViewerOffset({ x: 0, y: 0 })
+      setViewerReady(true)
+    })
+
+    return () => cancelAnimationFrame(frame)
+  }, [viewerOpen])
 
   const handleViewerWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -554,6 +802,30 @@ export function MermaidEditor({ filePath, tabContentsRef }: MermaidEditorProps) 
   const editorPanel = (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="mermaid-editor-code-toolbar">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="mermaid-editor-toolbar-button"
+              title="插入 Mermaid 模板"
+            >
+              <FileChartColumn className="size-3.5" />
+              <span>模板</span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-44 p-1">
+            {MERMAID_TEMPLATES.map((template) => (
+              <DropdownMenuItem
+                key={template.type}
+                className="gap-2 rounded-md px-2 py-1.5"
+                onSelect={() => handleTemplateSelect(template.code)}
+              >
+                <template.icon className="size-3.5 text-muted-foreground" />
+                <span className="truncate text-xs">{template.label}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <button
           type="button"
           onClick={handleFormat}
@@ -563,12 +835,41 @@ export function MermaidEditor({ filePath, tabContentsRef }: MermaidEditorProps) 
           <AlignLeft className="size-3.5" />
           <span>格式化</span>
         </button>
+        <button
+          type="button"
+          onClick={handleCopyCode}
+          className="mermaid-editor-toolbar-button"
+          title="复制 Mermaid 代码"
+        >
+          <Copy className="size-3.5" />
+          <span>复制</span>
+        </button>
+        <button
+          type="button"
+          onClick={handleClearCode}
+          className="mermaid-editor-toolbar-button"
+          title="清空代码"
+        >
+          <Trash2 className="size-3.5" />
+          <span>清空</span>
+        </button>
+        <span className="mermaid-editor-code-toolbar-spacer" />
+        <button
+          type="button"
+          onClick={() => handleModeChange('preview')}
+          className="mermaid-editor-toolbar-button"
+          title="返回预览"
+        >
+          <Eye className="size-3.5" />
+          <span>预览</span>
+        </button>
       </div>
       <div className="min-h-0 flex-1">
         <HtmlCodeEditor
           content={content}
           onChange={handleContentChange}
           onEditorMount={setEditorView}
+          language="plain"
         />
       </div>
     </div>
@@ -733,7 +1034,7 @@ export function MermaidEditor({ filePath, tabContentsRef }: MermaidEditorProps) 
                 type="button"
                 title="重置"
                 className="mermaid-editor-toolbar-btn"
-                onClick={() => { setViewerScale(1); setViewerOffset({ x: 0, y: 0 }) }}
+                onClick={() => { setViewerScale(fitSvgToVisibleContent(viewerContentRef.current) ?? getInitialViewerScale(svgRef.current)); setViewerOffset({ x: 0, y: 0 }) }}
               >
                 <RotateCcw />
               </button>
@@ -758,8 +1059,10 @@ export function MermaidEditor({ filePath, tabContentsRef }: MermaidEditorProps) 
             onDoubleClick={() => setViewerOpen(false)}
           >
             <div
+              ref={viewerContentRef}
               className="mermaid-editor-fullscreen-content"
               style={{
+                opacity: viewerReady ? 1 : 0,
                 transform: `translate(calc(-50% + ${viewerOffset.x}px), calc(-50% + ${viewerOffset.y}px)) scale(${viewerScale})`,
               }}
               dangerouslySetInnerHTML={{ __html: svgRef.current }}

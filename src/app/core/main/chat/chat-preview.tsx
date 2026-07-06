@@ -2,6 +2,7 @@
 import useSettingStore from "@/stores/setting";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useTheme } from 'next-themes'
+import { useTranslations } from 'next-intl';
 import { cn } from "@/lib/utils"
 import MarkdownIt from 'markdown-it';
 import katex from '@traptitech/markdown-it-katex';
@@ -239,6 +240,7 @@ type MermaidRenderResult = {
 }
 
 const MERMAID_RENDER_CACHE_PREFIX = 'lingmo:chat:mermaid:';
+const MERMAID_RENDER_STYLE_VERSION = 'clean-v4';
 const MAX_STORED_MERMAID_SVG_LENGTH = 500_000;
 const MERMAID_RENDER_TIMEOUT_MS = 15_000;
 const MERMAID_STATEMENT_START = /([)\]}"])\s+([A-Za-z_][\w-]*\s*(?:-->|---|-.->|==>|--o|--x|o--|x--))/g;
@@ -273,7 +275,7 @@ type MermaidViewerState = {
 }
 
 function getMermaidCacheKey(source: string, theme: 'light' | 'dark'): string {
-  return `${theme}:${source}`;
+  return `${MERMAID_RENDER_STYLE_VERSION}:${theme}:${source}`;
 }
 
 function hashMermaidCacheKey(value: string): string {
@@ -533,6 +535,17 @@ const STREAMING_LARGE_BACKLOG_CHARS = 1200;
 const STREAMING_HUGE_BACKLOG_CHARS = 3600;
 const MIN_CONTENT_TEXT_SCALE = 75;
 const MAX_CONTENT_TEXT_SCALE = 150;
+const CHAT_COPY_ICON_HTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>';
+const CHAT_COPY_DONE_ICON_HTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>';
+
+type ChatCopyKind = 'code' | 'table';
+type ChatCopyLabels = {
+  copyCode: string;
+  copyTable: string;
+  copiedCode: string;
+  copiedTable: string;
+  copyFailed: string;
+};
 
 function hasOpenMarkdownFence(text: string): boolean {
   return (text.match(/```/g) || []).length % 2 !== 0;
@@ -556,8 +569,89 @@ function getContentTextScaleRatio(scale: number): number {
   return Math.min(MAX_CONTENT_TEXT_SCALE, Math.max(MIN_CONTENT_TEXT_SCALE, scale)) / 100;
 }
 
+async function copyChatText(text: string): Promise<void> {
+  if (!text.trim()) return;
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back to the legacy selection path below.
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  textarea.style.left = '-9999px';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+
+  try {
+    const copied = document.execCommand('copy');
+    if (!copied) {
+      throw new Error('复制命令未成功执行');
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
+function getCodeBlockCopyText(pre: HTMLPreElement): string {
+  return pre.querySelector('code')?.textContent ?? pre.textContent ?? '';
+}
+
+function getTableCopyText(table: HTMLTableElement): string {
+  return Array.from(table.rows)
+    .map((row) => Array.from(row.cells)
+      .map((cell) => cell.innerText.replace(/\s+/g, ' ').trim())
+      .join('\t'))
+    .join('\n');
+}
+
+function resetChatCopyButton(button: HTMLButtonElement, kind: ChatCopyKind, labels: ChatCopyLabels): void {
+  const label = kind === 'code' ? labels.copyCode : labels.copyTable;
+  button.classList.remove('copied', 'copy-error');
+  button.dataset.copyState = 'idle';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.innerHTML = CHAT_COPY_ICON_HTML;
+}
+
+function setChatCopyButtonCopied(button: HTMLButtonElement, kind: ChatCopyKind, labels: ChatCopyLabels): void {
+  const label = kind === 'code' ? labels.copiedCode : labels.copiedTable;
+  button.classList.remove('copy-error');
+  button.classList.add('copied');
+  button.dataset.copyState = 'copied';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.innerHTML = CHAT_COPY_DONE_ICON_HTML;
+
+  window.setTimeout(() => {
+    resetChatCopyButton(button, kind, labels);
+  }, 1400);
+}
+
+function setChatCopyButtonError(button: HTMLButtonElement, kind: ChatCopyKind, labels: ChatCopyLabels): void {
+  button.classList.remove('copied');
+  button.classList.add('copy-error');
+  button.dataset.copyState = 'error';
+  button.title = labels.copyFailed;
+  button.setAttribute('aria-label', labels.copyFailed);
+
+  window.setTimeout(() => {
+    resetChatCopyButton(button, kind, labels);
+  }, 1400);
+}
+
 export default function ChatPreview({text, streaming = false, highlightQuery, className, clawFormat = false}: ChatPreviewProps) {
   const previewRef = useRef<HTMLDivElement>(null);
+  const t = useTranslations('editor');
   const { theme } = useTheme()
   const [mdTheme, setMdTheme] = useState<ThemeType>('light')
   const { codeTheme, contentTextScale } = useSettingStore()
@@ -587,6 +681,13 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     () => `calc(0.875rem * ${contentTextScaleRatio})`,
     [contentTextScaleRatio],
   );
+  const chatCopyLabels = useMemo<ChatCopyLabels>(() => ({
+    copyCode: t('chatCopy.copyCode'),
+    copyTable: t('chatCopy.copyTable'),
+    copiedCode: t('chatCopy.copiedCode'),
+    copiedTable: t('chatCopy.copiedTable'),
+    copyFailed: t('chatCopy.copyFailed'),
+  }), [t]);
   const previewStyle = useMemo<React.CSSProperties & Record<'--chat-content-font-size', string>>(
     () => ({
       fontSize: chatContentFontSize,
@@ -1027,6 +1128,79 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     }
   }, [htmlContent, highlightQuery])
 
+  useEffect(() => {
+    const el = previewRef.current
+    if (!el) return
+
+    const cleanups: Array<() => void> = []
+
+    const enhanceCopyTarget = (target: HTMLPreElement | HTMLTableElement, kind: ChatCopyKind) => {
+      if (target.closest('.mermaid-canvas-container')) return
+
+      const parent = target.parentElement
+      let shell: HTMLDivElement | null = parent?.classList.contains('chat-copy-shell')
+        ? parent as HTMLDivElement
+        : null
+
+      if (!shell) {
+        shell = document.createElement('div')
+        shell.className = `chat-copy-shell chat-copy-${kind}-shell`
+        target.parentNode?.insertBefore(shell, target)
+        shell.appendChild(target)
+      } else {
+        shell.classList.add(`chat-copy-${kind}-shell`)
+      }
+
+      shell.dataset.copyKind = kind
+
+      let button = Array.from(shell.children).find(
+        (child): child is HTMLButtonElement =>
+          child instanceof HTMLButtonElement && child.classList.contains('chat-copy-button'),
+      )
+
+      if (!button) {
+        button = document.createElement('button')
+        button.type = 'button'
+        button.className = 'chat-copy-button'
+        shell.appendChild(button)
+      }
+
+      resetChatCopyButton(button, kind, chatCopyLabels)
+
+      const handleCopyClick = async (event: MouseEvent) => {
+        event.preventDefault()
+        event.stopPropagation()
+
+        const text = kind === 'code'
+          ? getCodeBlockCopyText(target as HTMLPreElement)
+          : getTableCopyText(target as HTMLTableElement)
+
+        try {
+          await copyChatText(text.trimEnd())
+          setChatCopyButtonCopied(button, kind, chatCopyLabels)
+        } catch (err) {
+          console.error('复制失败:', err)
+          setChatCopyButtonError(button, kind, chatCopyLabels)
+        }
+      }
+
+      button.addEventListener('click', handleCopyClick)
+      cleanups.push(() => button.removeEventListener('click', handleCopyClick))
+    }
+
+    el.querySelectorAll<HTMLPreElement>('pre').forEach((pre) => {
+      enhanceCopyTarget(pre, 'code')
+    })
+
+    el.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
+      enhanceCopyTarget(table, 'table')
+    })
+
+    return () => {
+      cleanups.forEach((cleanup) => cleanup())
+    }
+  }, [htmlContent, chatCopyLabels])
+
   const getMermaidContainer = useCallback((target: EventTarget | null) => {
     if (!(target instanceof Element)) return null
     return target.closest<HTMLDivElement>('.mermaid-canvas-container')
@@ -1157,17 +1331,6 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     const el = previewRef.current
     if (!el) return
 
-    const handleWheel = (event: WheelEvent) => {
-      const container = getMermaidContainer(event.target)
-      if (!container) return
-
-      event.preventDefault()
-      const state = getMermaidViewState(container)
-      const delta = event.deltaY > 0 ? -0.1 : 0.1
-      state.scale = Math.min(4, Math.max(0.25, state.scale + delta))
-      applyMermaidTransform(container)
-    }
-
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target
       if (target instanceof Element && target.closest('.mermaid-canvas-controls')) return
@@ -1213,14 +1376,12 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       renderArea?.releasePointerCapture?.(event.pointerId)
     }
 
-    el.addEventListener('wheel', handleWheel, { passive: false })
     el.addEventListener('pointerdown', handlePointerDown)
     el.addEventListener('pointermove', handlePointerMove)
     el.addEventListener('pointerup', endPointerDrag)
     el.addEventListener('pointercancel', endPointerDrag)
 
     return () => {
-      el.removeEventListener('wheel', handleWheel)
       el.removeEventListener('pointerdown', handlePointerDown)
       el.removeEventListener('pointermove', handlePointerMove)
       el.removeEventListener('pointerup', endPointerDrag)

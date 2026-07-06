@@ -143,6 +143,7 @@ export const READ_ONLY_TOOLS = new Set([
   'github_list_star_releases',
   'github_list_my_forks',
   'github_mark_release_read',
+  'query_knowledge',
 ])
 
 const directEditPatterns = [

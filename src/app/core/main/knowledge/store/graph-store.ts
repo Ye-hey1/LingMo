@@ -119,15 +119,6 @@ interface GraphCacheEntry {
   createdAt: number;
 }
 
-interface ExplicitNoteRelation {
-  source: string;
-  target: string;
-  type: string;
-  confidence: number;
-  evidence: string;
-  sourceMethod: string;
-}
-
 interface TopicAccumulator {
   id: string;
   keyword: string;
@@ -1338,6 +1329,125 @@ function buildGraphStatePayload(
   };
 }
 
+function getStructuredNodeVisuals(type?: string): Pick<GraphNode, 'nodeType' | 'nodeColor' | 'nodeShape' | 'nodeSize'> {
+  if (type === 'note') {
+    return { nodeType: 'note', nodeColor: NODE_TYPE_COLORS.note, nodeShape: 'circle', nodeSize: 16 };
+  }
+  if (type === 'heading') {
+    return { nodeType: 'tag', nodeColor: NODE_TYPE_COLORS.tag, nodeShape: 'roundRect', nodeSize: 12 };
+  }
+  if (type === 'claim') {
+    return { nodeType: 'concept', nodeColor: '#f59e0b', nodeShape: 'diamond', nodeSize: 15 };
+  }
+  return { nodeType: 'concept', nodeColor: NODE_TYPE_COLORS.concept, nodeShape: 'circle', nodeSize: 14 };
+}
+
+async function getStructuredGraphDataForPaths(
+  notePaths: string[],
+  options: { includeHeadings: boolean; includeEvidenceBlocks: boolean; minConfidence: number },
+): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+  const { getStructuredGraphForFile } = await import('@/lib/structured-knowledge/graph-adapter');
+  const now = new Date().toISOString();
+  const nodesById = new Map<string, GraphNode>();
+  const edgesById = new Map<string, GraphEdge>();
+
+  await Promise.all(notePaths.map(async (path) => {
+    try {
+      const structured = await getStructuredGraphForFile(path, options);
+      for (const structuredNode of structured.nodes) {
+        if (nodesById.has(structuredNode.id)) continue;
+        const visuals = getStructuredNodeVisuals(structuredNode.type);
+        nodesById.set(structuredNode.id, {
+          id: structuredNode.id,
+          nodeType: visuals.nodeType,
+          nodeLabel: structuredNode.label,
+          nodeColor: visuals.nodeColor,
+          nodeShape: visuals.nodeShape,
+          nodeSize: visuals.nodeSize,
+          nodeProperties: {
+            mode: 'note',
+            structured: true,
+            structuredType: structuredNode.type,
+            category: structuredNode.type,
+            filePath: normalizeGraphNotePath(structuredNode.filePath ?? path),
+            sourceDocumentId: structuredNode.sourceDocumentId,
+            sourceObjectId: structuredNode.sourceObjectId,
+            confidence: structuredNode.confidence,
+            ...(structuredNode.metadata ?? {}),
+          },
+          nodeMetadata: {
+            createdAt: now,
+            updatedAt: now,
+            source: 'structured-knowledge',
+          },
+          connections: 0,
+          kind: 'note',
+        });
+      }
+
+      for (const structuredEdge of structured.edges) {
+        if (edgesById.has(structuredEdge.id)) continue;
+        edgesById.set(structuredEdge.id, {
+          id: structuredEdge.id,
+          source: structuredEdge.source,
+          target: structuredEdge.target,
+          label: structuredEdge.label || structuredEdge.type,
+          weight: structuredEdge.confidence || 1,
+          confidence: structuredEdge.confidence,
+          metadata: {
+            createdAt: now,
+            source: '结构化知识',
+            sourceMethod: 'structured-knowledge',
+            sourceMethods: ['structured-knowledge'],
+            relationType: structuredEdge.type,
+            evidence: structuredEdge.evidenceBlockIds?.length ? `Evidence blocks: ${structuredEdge.evidenceBlockIds.join(', ')}` : undefined,
+          },
+        });
+      }
+    } catch (error) {
+      console.warn('[KnowledgeGraph] Failed to load structured graph for note:', path, error);
+    }
+  }));
+
+  return { nodes: Array.from(nodesById.values()), edges: Array.from(edgesById.values()) };
+}
+
+function mergeStructuredGraphData(
+  baseGraph: { nodes: GraphNode[]; edges: GraphEdge[] },
+  structuredGraph: { nodes: GraphNode[]; edges: GraphEdge[] },
+) {
+  if (structuredGraph.nodes.length === 0 && structuredGraph.edges.length === 0) return baseGraph;
+
+  const nodesById = new Map(baseGraph.nodes.map(node => [node.id, node]));
+  for (const node of structuredGraph.nodes) {
+    if (!nodesById.has(node.id)) nodesById.set(node.id, node);
+  }
+
+  const edgesById = new Map(baseGraph.edges.map(edge => [edge.id, edge]));
+  for (const edge of structuredGraph.edges) {
+    if (nodesById.has(edge.source) && nodesById.has(edge.target) && !edgesById.has(edge.id)) {
+      edgesById.set(edge.id, edge);
+    }
+  }
+
+  const connectionCounts = new Map<string, number>();
+  for (const edge of edgesById.values()) {
+    connectionCounts.set(edge.source, (connectionCounts.get(edge.source) || 0) + 1);
+    connectionCounts.set(edge.target, (connectionCounts.get(edge.target) || 0) + 1);
+  }
+
+  const nodes = Array.from(nodesById.values()).map(node => {
+    const connections = connectionCounts.get(node.id) ?? node.connections ?? 0;
+    return {
+      ...node,
+      connections,
+      kind: connections >= 6 ? 'hub' as NodeKind : connections > 0 ? 'linked' as NodeKind : node.kind ?? 'note' as NodeKind,
+    };
+  });
+
+  return { nodes, edges: Array.from(edgesById.values()) };
+}
+
 function buildFrontmatterRelationEdges(
   noteMetas: NoteMeta[],
   noteByPath: Map<string, NoteMeta>,
@@ -1672,9 +1782,21 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         }
         : undefined);
       const noteGraph = buildNoteGraph(noteMetas, vectorDocs, noteRelations);
+      const structuredGraph = await getStructuredGraphDataForPaths(notePaths, graphMode === 'local'
+        ? {
+          includeHeadings: true,
+          includeEvidenceBlocks: false,
+          minConfidence: 0.7,
+        }
+        : {
+          includeHeadings: false,
+          includeEvidenceBlocks: false,
+          minConfidence: 0.78,
+        });
+      const structuredNoteGraph = mergeStructuredGraphData(noteGraph, structuredGraph);
       const graphByView = {
         topic: topicGraph,
-        note: noteGraph,
+        note: structuredNoteGraph,
       };
       const activeGraph = graphByView[graphView];
       const nextCacheKey = generateCacheKey(graphMode, graphView, notePaths);

@@ -32,6 +32,7 @@ import {
   TableCellsSplit,
   Trash2,
   WalletCards,
+  MoreHorizontal,
 } from 'lucide-react'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
@@ -40,6 +41,7 @@ import { useTranslations } from 'next-intl'
 import { toast } from '@/hooks/use-toast'
 
 const POPULAR_LANGUAGES = [
+  { name: '中文', code: 'Chinese', i18nKey: 'languages.Chinese' },
   { name: 'English', code: 'English', i18nKey: 'languages.English' },
   { name: '日本語', code: 'Japanese', i18nKey: 'languages.Japanese' },
   { name: '한국어', code: 'Korean', i18nKey: 'languages.Korean' },
@@ -89,10 +91,19 @@ const CELL_FILL_COLOR_SWATCHES = [
   ...HIGHLIGHT_COLOR_SWATCHES,
 ] as const
 
-const COLOR_MENU_WIDTH = 292
-const COLOR_MENU_HEIGHT = 282
+const COLOR_MENU_WIDTH = 118
+const COLOR_MENU_HEIGHT = 210
 const VIEWPORT_MARGIN = 8
 const BUBBLE_MENU_FALLBACK_WIDTH = 720
+const menuButtonClass = 'flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-foreground transition-colors hover:bg-muted'
+const iconButtonClass = 'flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-foreground transition-colors hover:bg-muted'
+const menuItemClass = 'flex h-8 w-full items-center gap-2 px-2.5 text-left text-sm transition-colors hover:bg-muted/70'
+const menuPanelClass = 'absolute rounded-lg border border-border bg-background py-1 shadow-lg z-50'
+
+type ToolMenuPlacement = {
+  side: 'top' | 'bottom'
+  maxHeight: number
+}
 
 function shouldPreserveNativePointerTarget(target: EventTarget | null): boolean {
   const element = target instanceof HTMLElement ? target : null
@@ -199,13 +210,17 @@ export function BubbleMenu({
   const [show, setShow] = useState(false)
   const [position, setPosition] = useState({ top: 0, left: 0 })
   const [showAISubmenu, setShowAISubmenu] = useState(false)
+  const [showHeadingMenu, setShowHeadingMenu] = useState(false)
   const [showBlockMenu, setShowBlockMenu] = useState(false)
-  const [showAlignMenu, setShowAlignMenu] = useState(false)
+  const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showColorMenu, setShowColorMenu] = useState(false)
   const [colorMenuMode, setColorMenuMode] = useState<'text' | 'cell'>('text')
   const [colorMenuPosition, setColorMenuPosition] = useState<FloatingMenuPosition | null>(null)
+  const [toolMenuPlacement, setToolMenuPlacement] = useState<ToolMenuPlacement>({
+    side: 'bottom',
+    maxHeight: 320,
+  })
   const [showTranslateSubmenu, setShowTranslateSubmenu] = useState(false)
-  const [customTranslateLang, setCustomTranslateLang] = useState('')
   const [linkUrl, setLinkUrl] = useState('')
   const [showLinkInput, setShowLinkInput] = useState(false)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -217,11 +232,31 @@ export function BubbleMenu({
   const cellFillButtonRef = useRef<HTMLButtonElement>(null)
   const colorMenuRef = useRef<HTMLDivElement>(null)
   const latestTextSelectionRef = useRef<TextSelectionRange | null>(null)
+  const editorDom = editor.view.dom
+  const editorScrollContainer = editorDom?.parentElement
+
+  const updateToolMenuPlacement = useCallback(() => {
+    const toolbar = menuRef.current
+    if (!toolbar) return
+
+    const rect = toolbar.getBoundingClientRect()
+    const viewportHeight = window.innerHeight
+    const spaceAbove = rect.top - VIEWPORT_MARGIN
+    const spaceBelow = viewportHeight - rect.bottom - VIEWPORT_MARGIN
+    const nextSide = spaceBelow >= 260 || spaceBelow >= spaceAbove ? 'bottom' : 'top'
+    const availableSpace = nextSide === 'bottom' ? spaceBelow : spaceAbove
+
+    setToolMenuPlacement({
+      side: nextSide,
+      maxHeight: Math.max(160, Math.min(320, availableSpace - 6)),
+    })
+  }, [])
 
   const closeToolSubmenus = useCallback(() => {
     setShowAISubmenu(false)
+    setShowHeadingMenu(false)
     setShowBlockMenu(false)
-    setShowAlignMenu(false)
+    setShowMoreMenu(false)
     setShowColorMenu(false)
     setColorMenuPosition(null)
     setShowTranslateSubmenu(false)
@@ -265,16 +300,6 @@ export function BubbleMenu({
     }
     onAITranslate?.(targetLanguage)
   }, [editor, onAITranslate, t])
-
-  const handleCustomTranslate = useCallback(async () => {
-    const targetLanguage = customTranslateLang.trim()
-    if (!targetLanguage) {
-      toast({ title: t('translation.customLanguageEmpty'), description: t('translation.customLanguageExample'), variant: 'destructive' })
-      return
-    }
-    await handleTranslate(targetLanguage)
-    setCustomTranslateLang('')
-  }, [customTranslateLang, handleTranslate, t])
 
   // 更新定位
   const updatePosition = useCallback(() => {
@@ -381,7 +406,7 @@ export function BubbleMenu({
       const rect = aiSubmenuRef.current!.getBoundingClientRect()
 
       // 直接获取最新编辑器边界
-      const editorElement = editor.view.dom
+      const editorElement = editorDom
       if (!editorElement) return
 
       const editorBounds = editorElement.getBoundingClientRect()
@@ -404,7 +429,7 @@ export function BubbleMenu({
 
     const raf = requestAnimationFrame(checkSubmenuBounds)
     return () => cancelAnimationFrame(raf)
-  }, [showAISubmenu, show])
+  }, [editorDom, showAISubmenu, show])
 
   // 翻译子菜单边界检测
   useEffect(() => {
@@ -412,16 +437,10 @@ export function BubbleMenu({
 
     const checkTranslateBounds = () => {
       const rect = translateSubmenuRef.current!.getBoundingClientRect()
-
-      // 直接获取最新编辑器边界
-      const editorElement = editor.view.dom
-      if (!editorElement) return
-
-      const editorBounds = editorElement.getBoundingClientRect()
       const padding = 8
 
-      // 检测右边界 - 基于编辑器边缘
-      if (rect.right > editorBounds.right - padding) {
+      // 翻译语言菜单默认从“翻译”右侧展开；只有真正超出视口时才回退到左侧。
+      if (rect.right > window.innerWidth - padding) {
         translateSubmenuRef.current!.setAttribute('data-translate-submenu-right', 'true')
       } else {
         translateSubmenuRef.current!.removeAttribute('data-translate-submenu-right')
@@ -493,7 +512,7 @@ export function BubbleMenu({
 
   // Update position on scroll
   useEffect(() => {
-    const scrollContainer = editor.view.dom?.parentElement
+    const scrollContainer = editorScrollContainer
     if (!scrollContainer) return
 
     const handleScroll = () => {
@@ -504,7 +523,7 @@ export function BubbleMenu({
 
     scrollContainer.addEventListener('scroll', handleScroll, { passive: true })
     return () => scrollContainer.removeEventListener('scroll', handleScroll)
-  }, [show, updatePosition])
+  }, [editorScrollContainer, show, updatePosition])
 
   useEffect(() => {
     if (!show) return
@@ -512,6 +531,19 @@ export function BubbleMenu({
     const raf = requestAnimationFrame(updatePosition)
     return () => cancelAnimationFrame(raf)
   }, [show, updatePosition])
+
+  useEffect(() => {
+    if (!show || (!showHeadingMenu && !showBlockMenu && !showMoreMenu)) return
+
+    updateToolMenuPlacement()
+    window.addEventListener('resize', updateToolMenuPlacement)
+    window.addEventListener('scroll', updateToolMenuPlacement, true)
+
+    return () => {
+      window.removeEventListener('resize', updateToolMenuPlacement)
+      window.removeEventListener('scroll', updateToolMenuPlacement, true)
+    }
+  }, [show, showHeadingMenu, showBlockMenu, showMoreMenu, updateToolMenuPlacement])
 
   const setLink = useCallback(() => {
     if (showLinkInput) {
@@ -641,7 +673,7 @@ export function BubbleMenu({
   }
   const setTextAlign = (alignment: 'left' | 'center' | 'right') => {
     createTextSelectionScopedChain().setTextAlign(alignment).run()
-    setShowAlignMenu(false)
+    setShowMoreMenu(false)
   }
   const clearFormatting = () => {
     createTextSelectionScopedChain().unsetAllMarks().clearNodes().run()
@@ -669,7 +701,7 @@ export function BubbleMenu({
   }
   const setTableCellAlign = (alignment: 'left' | 'center' | 'right') => {
     editor.chain().focus().setCellAttribute('align', alignment).run()
-    setShowAlignMenu(false)
+    setShowMoreMenu(false)
   }
   const deleteSelectedTableRegion = () => {
     const selectionType = getCellSelectionType(editor)
@@ -711,19 +743,14 @@ export function BubbleMenu({
     currentTextAlign
   ) as 'left' | 'center' | 'right'
   const effectiveTextAlign = isTableSelectionActive ? currentCellAlign : currentTextAlign
-  const CurrentAlignIcon = effectiveTextAlign === 'center'
-    ? AlignCenter
-    : effectiveTextAlign === 'right'
-      ? AlignRight
-      : AlignLeft
-
+  const activeHeadingLevel = HEADING_LEVELS.find((level) => isActive('heading', { level }))
   if (!show) return null
 
   const colorMenu = showColorMenu && colorMenuPosition && typeof document !== 'undefined'
     ? createPortal(
       <div
         ref={colorMenuRef}
-        className="fixed z-50 rounded-lg border border-border bg-background p-3 shadow-xl"
+        className="fixed z-50 rounded-md border border-border bg-background p-2 shadow-xl"
         style={{
           top: colorMenuPosition.top,
           left: colorMenuPosition.left,
@@ -733,42 +760,40 @@ export function BubbleMenu({
       >
         {colorMenuMode === 'cell' ? (
           <>
-            <div className="mb-2 whitespace-nowrap text-xs font-medium text-muted-foreground">单元格填充色</div>
+            <div className="mb-1.5 whitespace-nowrap text-[10px] font-medium text-foreground/80">{t('bubbleMenu.cellFillColor')}</div>
             <div
-              className="grid gap-1.5"
-              style={{ gridTemplateColumns: 'repeat(8, 28px)' }}
+              className="grid grid-cols-4 gap-1.5"
             >
               {CELL_FILL_COLOR_SWATCHES.map((color) => (
                 <button
                   key={color}
                   className={cn(
-                    'h-7 w-7 rounded border border-border transition-colors hover:brightness-95',
-                    currentCellBackground === color && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
+                    'h-[18px] w-[18px] rounded border border-border transition-colors hover:brightness-95',
+                    currentCellBackground === color && 'ring-1 ring-primary ring-offset-1 ring-offset-background'
                   )}
                   style={{ backgroundColor: color }}
                   onClick={() => setCellFillColor(color)}
-                  title={color === '#ffffff' ? '白色' : color}
+                  title={color === '#ffffff' ? t('bubbleMenu.white') : color}
                 />
               ))}
             </div>
-            <button className="mt-3 h-8 w-full rounded-md border border-border px-2 text-sm hover:bg-muted" onClick={() => setCellFillColor(null)}>
-              清除填充
+            <button className="mt-2 h-6 w-full rounded border border-border px-1.5 text-xs text-foreground hover:bg-muted" onClick={() => setCellFillColor(null)}>
+              {t('bubbleMenu.clearCellFill')}
             </button>
           </>
         ) : (
           <>
             <div>
-              <div className="mb-2 whitespace-nowrap text-xs font-medium text-muted-foreground">{t('bubbleMenu.textColor')}</div>
+              <div className="mb-1.5 whitespace-nowrap text-[10px] font-medium text-foreground/80">{t('bubbleMenu.textColor')}</div>
               <div
-                className="grid gap-1.5"
-                style={{ gridTemplateColumns: 'repeat(8, 28px)' }}
+                className="grid grid-cols-4 gap-1.5"
               >
                 {TEXT_COLOR_SWATCHES.map((color) => (
                   <button
                     key={color}
                     className={cn(
-                      'flex h-7 w-7 items-center justify-center rounded border border-border bg-background text-base font-medium transition-colors hover:bg-muted',
-                      currentTextColor === color && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
+                      'flex h-[18px] w-[18px] items-center justify-center rounded border border-border bg-background text-xs font-medium transition-colors hover:bg-muted',
+                      currentTextColor === color && 'ring-1 ring-primary ring-offset-1 ring-offset-background'
                     )}
                     style={{ color }}
                     onClick={() => setTextColor(color)}
@@ -780,18 +805,17 @@ export function BubbleMenu({
               </div>
             </div>
 
-            <div className="mt-3">
-              <div className="mb-2 whitespace-nowrap text-xs font-medium text-muted-foreground">{t('bubbleMenu.backgroundColor')}</div>
+            <div className="mt-2">
+              <div className="mb-1.5 whitespace-nowrap text-[10px] font-medium text-foreground/80">{t('bubbleMenu.backgroundColor')}</div>
               <div
-                className="grid gap-1.5"
-                style={{ gridTemplateColumns: 'repeat(8, 28px)' }}
+                className="grid grid-cols-4 gap-1.5"
               >
                 {HIGHLIGHT_COLOR_SWATCHES.map((color) => (
                   <button
                     key={color}
                     className={cn(
-                      'h-7 w-7 rounded border border-border transition-colors hover:brightness-95',
-                      currentHighlightColor === color && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
+                      'h-[18px] w-[18px] rounded border border-border transition-colors hover:brightness-95',
+                      currentHighlightColor === color && 'ring-1 ring-primary ring-offset-1 ring-offset-background'
                     )}
                     style={{ backgroundColor: color }}
                     onClick={() => setHighlightColor(color)}
@@ -801,7 +825,7 @@ export function BubbleMenu({
               </div>
             </div>
 
-            <button className="mt-3 h-8 w-full rounded-md border border-border px-2 text-sm hover:bg-muted" onClick={resetColorStyles}>
+            <button className="mt-2 h-6 w-full rounded border border-border px-1.5 text-xs text-foreground hover:bg-muted" onClick={resetColorStyles}>
               {t('bubbleMenu.restoreDefault')}
             </button>
           </>
@@ -812,46 +836,36 @@ export function BubbleMenu({
     : null
 
   const deleteLabel = tableSelectionType === 'row'
-    ? '删除当前行'
+    ? t('bubbleMenu.deleteCurrentRow')
     : tableSelectionType === 'column'
-      ? '删除当前列'
-      : '删除行/列'
+      ? t('bubbleMenu.deleteCurrentColumn')
+      : t('bubbleMenu.deleteRowsOrColumns')
   const canDeleteSelection = tableSelectionType === 'row' || tableSelectionType === 'column'
   const aiControls = (
     <div className="relative">
       <button
-        className={cn('p-1.5 rounded hover:bg-muted transition-colors text-primary', showAISubmenu && 'bg-muted')}
+        className={cn(
+          'flex h-8 items-center gap-1.5 rounded-md px-2 text-primary transition-colors hover:bg-primary/10',
+          showAISubmenu && 'bg-primary/10'
+        )}
         onClick={() => {
+          setShowHeadingMenu(false)
           setShowBlockMenu(false)
-          setShowAlignMenu(false)
+          setShowMoreMenu(false)
           setShowColorMenu(false)
           setShowAISubmenu(!showAISubmenu)
         }}
         title={t('bubbleMenu.ai')}
       >
         <Sparkles className="w-4 h-4" />
+        <span className="text-xs font-medium">{t('bubbleMenu.ai')}</span>
       </button>
 
       {showAISubmenu && (
         <div
           ref={aiSubmenuRef}
-          className="absolute top-full left-0 mt-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-32 z-50 data-right-edge:left-auto data-right-edge:right-0 data-right-edge:translate-x-0 data-bottom-edge:top-full data-bottom-edge:mt-1 data-bottom-edge:translate-y-0"
+          className="absolute top-full right-0 mt-1 py-1 bg-background border border-border rounded-lg shadow-lg min-w-36 z-50 data-right-edge:left-auto data-right-edge:right-0 data-right-edge:translate-x-0 data-bottom-edge:top-full data-bottom-edge:mt-1 data-bottom-edge:translate-y-0"
         >
-          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIPolish?.() }}>
-            <Sparkles className="w-3.5 h-3.5" /><span>{t('bubbleMenu.polish')}</span>
-          </button>
-          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIConcise?.() }}>
-            <Minimize2 className="w-3.5 h-3.5" /><span>{t('bubbleMenu.concise')}</span>
-          </button>
-          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIExpand?.() }}>
-            <Maximize2 className="w-3.5 h-3.5" /><span>{t('bubbleMenu.expand')}</span>
-          </button>
-          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIExplain?.() }}>
-            <CircleHelp className="w-3.5 h-3.5" /><span>{t('bubbleMenu.explain')}</span>
-          </button>
-
-          <div className="border-t border-border my-1" />
-
           <div
             className="relative"
             onMouseEnter={() => setShowTranslateSubmenu(true)}
@@ -875,13 +889,26 @@ export function BubbleMenu({
                     <span>{t(`bubbleMenu.${lang.i18nKey}`)}</span>
                   </button>
                 ))}
-                <div className="border-t border-border my-1" />
-                <div className="px-3 py-1 flex items-center gap-1">
-                  <input type="text" placeholder={t('bubbleMenu.customLanguagePlaceholder')} value={customTranslateLang} onChange={(e) => setCustomTranslateLang(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { handleCustomTranslate() } else if (e.key === 'Escape') { setShowTranslateSubmenu(false); setCustomTranslateLang('') } }} className="w-full px-2 py-1 text-sm bg-muted rounded border border-border focus:outline-none focus:ring-1 focus:ring-primary" />
-                </div>
               </div>
             )}
           </div>
+
+          <div className="border-t border-border my-1" />
+
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIPolish?.() }}>
+            <Sparkles className="w-3.5 h-3.5" /><span>{t('bubbleMenu.polish')}</span>
+          </button>
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIConcise?.() }}>
+            <Minimize2 className="w-3.5 h-3.5" /><span>{t('bubbleMenu.concise')}</span>
+          </button>
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIExpand?.() }}>
+            <Maximize2 className="w-3.5 h-3.5" /><span>{t('bubbleMenu.expand')}</span>
+          </button>
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onAIExplain?.() }}>
+            <CircleHelp className="w-3.5 h-3.5" /><span>{t('bubbleMenu.explain')}</span>
+          </button>
+
+          <div className="border-t border-border my-1" />
 
           <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); handleQuoteToChat() }}>
             <MessageCircle className="w-3.5 h-3.5" /><span>{t('bubbleMenu.quoteToChat')}</span>
@@ -911,41 +938,42 @@ export function BubbleMenu({
       >
         {/* 工具栏 */}
       <div
-        className="flex w-max max-w-[calc(100vw-24px)] flex-nowrap items-center gap-0.5 whitespace-nowrap px-1 py-1 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 border border-border rounded-lg shadow-lg"
+        className="flex w-max max-w-[calc(100vw-24px)] flex-nowrap items-center gap-1 whitespace-nowrap rounded-lg border border-border bg-background px-1 py-1 shadow-lg"
       >
-        {aiControls}
-
-        <div className="w-px h-5 bg-border mx-1" />
-
-        {/* 块类型 */}
         <div className="relative">
           <button
-            className={cn(
-              'flex h-8 items-center gap-1 rounded-md px-2 hover:bg-muted transition-colors',
-              showBlockMenu && 'bg-muted text-primary'
-            )}
+            className={cn(menuButtonClass, showHeadingMenu && 'bg-muted text-primary')}
             onClick={() => {
               setShowAISubmenu(false)
-              setShowAlignMenu(false)
+              setShowBlockMenu(false)
+              setShowMoreMenu(false)
               setShowColorMenu(false)
-              setShowBlockMenu(!showBlockMenu)
+              const nextOpen = !showHeadingMenu
+              setShowHeadingMenu(nextOpen)
+              if (nextOpen) requestAnimationFrame(updateToolMenuPlacement)
             }}
             title={t('bubbleMenu.blockType')}
           >
-            <List className="h-4 w-4" />
-            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showBlockMenu && 'rotate-180')} />
+            <span className="min-w-5 text-sm font-semibold leading-none">
+              {activeHeadingLevel ? `H${activeHeadingLevel}` : 'T'}
+            </span>
+            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showHeadingMenu && 'rotate-180')} />
           </button>
 
-          {showBlockMenu && (
-            <div className="absolute top-full left-0 mt-1 max-h-96 w-52 overflow-y-auto rounded-lg border border-border bg-background py-1 shadow-lg z-50">
+          {showHeadingMenu && (
+            <div
+              className={cn(
+                menuPanelClass,
+                'left-0 w-40 overflow-y-auto',
+                toolMenuPlacement.side === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
+              )}
+              style={{ maxHeight: toolMenuPlacement.maxHeight }}
+            >
               <button
-                className={cn(
-                  'flex h-9 w-full items-center gap-2 px-2.5 text-left text-sm transition-colors hover:bg-muted/70',
-                  isActive('paragraph') && 'bg-muted text-primary'
-                )}
+                className={cn(menuItemClass, isActive('paragraph') && 'bg-muted text-primary')}
                 onClick={setParagraph}
               >
-                <span className="flex w-7 shrink-0 items-center justify-center text-lg font-medium leading-none">T</span>
+                <span className="flex w-7 shrink-0 items-center justify-center text-base font-semibold leading-none">T</span>
                 <span className="flex-1 truncate">{t('bubbleMenu.paragraph')}</span>
                 {isActive('paragraph') && <Check className="h-4 w-4 shrink-0 text-primary" />}
               </button>
@@ -955,41 +983,69 @@ export function BubbleMenu({
               {HEADING_LEVELS.map((level) => (
                 <button
                   key={level}
-                  className={cn(
-                    'flex h-9 w-full items-center gap-2 px-2.5 text-left text-sm transition-colors hover:bg-muted/70',
-                    isActive('heading', { level }) && 'bg-muted text-primary'
-                  )}
+                  className={cn(menuItemClass, isActive('heading', { level }) && 'bg-muted text-primary')}
                   onClick={() => setHeading(level)}
                 >
-                  <span className="flex w-7 shrink-0 items-center justify-center text-lg font-medium leading-none">H{level}</span>
+                  <span className="flex w-7 shrink-0 items-center justify-center text-base font-semibold leading-none">H{level}</span>
                   <span className="flex-1 truncate">{t(`bubbleMenu.heading${level}`)}</span>
                   {isActive('heading', { level }) && <Check className="h-4 w-4 shrink-0 text-primary" />}
                 </button>
               ))}
+            </div>
+          )}
+        </div>
 
-              <div className="border-t border-border my-1" />
+        <div className="relative">
+          <button
+            className={cn(
+              menuButtonClass,
+              showBlockMenu && 'bg-muted text-primary'
+            )}
+            onClick={() => {
+              setShowAISubmenu(false)
+              setShowHeadingMenu(false)
+              setShowMoreMenu(false)
+              setShowColorMenu(false)
+              const nextOpen = !showBlockMenu
+              setShowBlockMenu(nextOpen)
+              if (nextOpen) requestAnimationFrame(updateToolMenuPlacement)
+            }}
+            title={t('bubbleMenu.blockType')}
+          >
+            <List className="h-4 w-4" />
+            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showBlockMenu && 'rotate-180')} />
+          </button>
 
-              <button className={cn('flex h-9 w-full items-center gap-2 px-2.5 text-left text-sm transition-colors hover:bg-muted/70', isActive('blockquote') && 'bg-muted text-primary')} onClick={() => { toggleBlockquote(); closeToolSubmenus() }}>
+          {showBlockMenu && (
+            <div
+              className={cn(
+                menuPanelClass,
+                'left-0 w-44 overflow-y-auto',
+                toolMenuPlacement.side === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
+              )}
+              style={{ maxHeight: toolMenuPlacement.maxHeight }}
+            >
+              <button className={cn(menuItemClass, isActive('blockquote') && 'bg-muted text-primary')} onClick={() => { toggleBlockquote(); closeToolSubmenus() }}>
                 <span className="flex w-7 shrink-0 items-center justify-center"><Quote className="h-4 w-4" /></span>
                 <span className="flex-1 truncate">{t('bubbleMenu.blockquote')}</span>
                 {isActive('blockquote') && <Check className="h-4 w-4 shrink-0 text-primary" />}
               </button>
-              <button className={cn('flex h-9 w-full items-center gap-2 px-2.5 text-left text-sm transition-colors hover:bg-muted/70', isActive('bulletList') && 'bg-muted text-primary')} onClick={() => { toggleBulletList(); closeToolSubmenus() }}>
+              <button className={cn(menuItemClass, isActive('bulletList') && 'bg-muted text-primary')} onClick={() => { toggleBulletList(); closeToolSubmenus() }}>
                 <span className="flex w-7 shrink-0 items-center justify-center"><List className="h-4 w-4" /></span>
                 <span className="flex-1 truncate">{t('bubbleMenu.bulletList')}</span>
                 {isActive('bulletList') && <Check className="h-4 w-4 shrink-0 text-primary" />}
               </button>
-              <button className={cn('flex h-9 w-full items-center gap-2 px-2.5 text-left text-sm transition-colors hover:bg-muted/70', isActive('orderedList') && 'bg-muted text-primary')} onClick={() => { toggleOrderedList(); closeToolSubmenus() }}>
+              <button className={cn(menuItemClass, isActive('orderedList') && 'bg-muted text-primary')} onClick={() => { toggleOrderedList(); closeToolSubmenus() }}>
                 <span className="flex w-7 shrink-0 items-center justify-center"><ListOrdered className="h-4 w-4" /></span>
                 <span className="flex-1 truncate">{t('bubbleMenu.orderedList')}</span>
                 {isActive('orderedList') && <Check className="h-4 w-4 shrink-0 text-primary" />}
               </button>
-              <button className={cn('flex h-9 w-full items-center gap-2 px-2.5 text-left text-sm transition-colors hover:bg-muted/70', isActive('taskList') && 'bg-muted text-primary')} onClick={() => { toggleTaskList(); closeToolSubmenus() }}>
+              <button className={cn(menuItemClass, isActive('taskList') && 'bg-muted text-primary')} onClick={() => { toggleTaskList(); closeToolSubmenus() }}>
                 <span className="flex w-7 shrink-0 items-center justify-center"><CheckSquare className="h-4 w-4" /></span>
                 <span className="flex-1 truncate">{t('bubbleMenu.taskList')}</span>
                 {isActive('taskList') && <Check className="h-4 w-4 shrink-0 text-primary" />}
               </button>
-              <button className={cn('flex h-9 w-full items-center gap-2 px-2.5 text-left text-sm transition-colors hover:bg-muted/70', isActive('codeBlock') && 'bg-muted text-primary')} onClick={() => { toggleCodeBlock(); closeToolSubmenus() }}>
+              <button className={cn(menuItemClass, isActive('codeBlock') && 'bg-muted text-primary')} onClick={() => { toggleCodeBlock(); closeToolSubmenus() }}>
                 <span className="flex w-7 shrink-0 items-center justify-center"><Code className="h-4 w-4" /></span>
                 <span className="flex-1 truncate">{t('bubbleMenu.codeBlock')}</span>
                 {isActive('codeBlock') && <Check className="h-4 w-4 shrink-0 text-primary" />}
@@ -998,53 +1054,9 @@ export function BubbleMenu({
           )}
         </div>
 
-        <div className="w-px h-5 bg-border mx-1" />
-
-        {/* 对齐 */}
-        <div className="relative">
-          <button
-            className={cn(
-              'flex h-8 items-center gap-1 rounded-md px-2 hover:bg-muted transition-colors',
-              showAlignMenu && 'bg-muted text-primary'
-            )}
-            onClick={() => {
-              setShowAISubmenu(false)
-              setShowBlockMenu(false)
-              setShowColorMenu(false)
-              setShowAlignMenu(!showAlignMenu)
-            }}
-            title={t(`bubbleMenu.align${effectiveTextAlign === 'left' ? 'Left' : effectiveTextAlign === 'center' ? 'Center' : 'Right'}`)}
-          >
-            <CurrentAlignIcon className="h-4 w-4" />
-            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showAlignMenu && 'rotate-180')} />
-          </button>
-
-          {showAlignMenu && (
-            <div className="absolute top-full left-0 mt-1 w-36 rounded-lg border border-border bg-background py-1 shadow-lg z-50">
-              <button className={cn('w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2', effectiveTextAlign === 'left' && 'bg-muted text-primary')} onClick={() => isTableSelectionActive ? setTableCellAlign('left') : setTextAlign('left')}>
-                <AlignLeft className="h-4 w-4" />
-                <span>{t('bubbleMenu.alignLeft')}</span>
-              </button>
-              <button className={cn('w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2', effectiveTextAlign === 'center' && 'bg-muted text-primary')} onClick={() => isTableSelectionActive ? setTableCellAlign('center') : setTextAlign('center')}>
-                <AlignCenter className="h-4 w-4" />
-                <span>{t('bubbleMenu.alignCenter')}</span>
-              </button>
-              <button className={cn('w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2', effectiveTextAlign === 'right' && 'bg-muted text-primary')} onClick={() => isTableSelectionActive ? setTableCellAlign('right') : setTextAlign('right')}>
-                <AlignRight className="h-4 w-4" />
-                <span>{t('bubbleMenu.alignRight')}</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div className="w-px h-5 bg-border mx-1" />
-
-        {/* 文本格式化 */}
         <div className="flex gap-0.5">
-          <button className={cn('p-1.5 rounded hover:bg-muted transition-colors', isActive('bold') && 'bg-muted text-primary')} onClick={toggleBold} title={t('bubbleMenu.bold')}><Bold className="w-4 h-4" /></button>
-          <button className={cn('p-1.5 rounded hover:bg-muted transition-colors', isActive('italic') && 'bg-muted text-primary')} onClick={toggleItalic} title={t('bubbleMenu.italic')}><Italic className="w-4 h-4" /></button>
-          <button className={cn('p-1.5 rounded hover:bg-muted transition-colors', isActive('strike') && 'bg-muted text-primary')} onClick={toggleStrike} title={t('bubbleMenu.strike')}><Strikethrough className="w-4 h-4" /></button>
-          <button className={cn('p-1.5 rounded hover:bg-muted transition-colors', isActive('underline') && 'bg-muted text-primary')} onClick={toggleUnderline} title={t('bubbleMenu.underline')}><Underline className="w-4 h-4" /></button>
+          <button className={cn(iconButtonClass, isActive('bold') && 'bg-muted text-primary')} onClick={toggleBold} title={t('bubbleMenu.bold')}><Bold className="w-4 h-4" /></button>
+          <button className={cn(iconButtonClass, isActive('italic') && 'bg-muted text-primary')} onClick={toggleItalic} title={t('bubbleMenu.italic')}><Italic className="w-4 h-4" /></button>
 
           <div className="relative">
             {showLinkInput ? (
@@ -1054,23 +1066,22 @@ export function BubbleMenu({
                 <button className="p-1 rounded hover:bg-muted text-xs" onClick={() => { setShowLinkInput(false); setLinkUrl('') }}>{t('bubbleMenu.cancel')}</button>
               </div>
             ) : (
-              <button className={cn('p-1.5 rounded hover:bg-muted transition-colors', isActive('link') && 'bg-muted text-primary')} onClick={setLink} title={t('bubbleMenu.link')}><Link className="w-4 h-4" /></button>
+              <button className={cn(iconButtonClass, isActive('link') && 'bg-muted text-primary')} onClick={setLink} title={t('bubbleMenu.link')}><Link className="w-4 h-4" /></button>
             )}
           </div>
-
-          <button className={cn('p-1.5 rounded hover:bg-muted transition-colors', isActive('code') && 'bg-muted text-primary')} onClick={toggleCode} title={t('bubbleMenu.inlineCode')}><Code className="w-4 h-4" /></button>
 
           <div className="relative">
             <button
               ref={colorButtonRef}
               className={cn(
-                'flex h-8 items-center gap-1 rounded-md px-2 hover:bg-muted transition-colors',
+                menuButtonClass,
                 ((showColorMenu && colorMenuMode === 'text') || currentTextColor || currentHighlightColor) && 'bg-muted text-primary'
               )}
               onClick={() => {
                 setShowAISubmenu(false)
+                setShowHeadingMenu(false)
                 setShowBlockMenu(false)
-                setShowAlignMenu(false)
+                setShowMoreMenu(false)
                 const nextOpen = !(showColorMenu && colorMenuMode === 'text')
                 setColorMenuMode('text')
                 setShowColorMenu(nextOpen)
@@ -1096,68 +1107,115 @@ export function BubbleMenu({
             </button>
 
           </div>
-          {isTableSelectionActive && (
-            <button
-              ref={cellFillButtonRef}
-              className={cn(
-                'flex h-8 items-center gap-1 rounded-md px-2 hover:bg-muted transition-colors',
-                ((showColorMenu && colorMenuMode === 'cell') || currentCellBackground) && 'bg-muted text-primary'
-              )}
-              onClick={() => {
-                setShowAISubmenu(false)
-                setShowBlockMenu(false)
-                setShowAlignMenu(false)
-                const nextOpen = !(showColorMenu && colorMenuMode === 'cell')
-                setColorMenuMode('cell')
-                setShowColorMenu(nextOpen)
-                if (nextOpen) {
-                  setColorMenuPosition(getColorMenuPosition('cell'))
-                  requestAnimationFrame(updateColorMenuPosition)
-                } else {
-                  setColorMenuPosition(null)
-                }
-              }}
-              title="单元格填充色"
-            >
-              <PaintBucket className="h-4 w-4" />
-              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showColorMenu && colorMenuMode === 'cell' && 'rotate-180')} />
-            </button>
-          )}
         </div>
 
-        {isTableSelectionActive && (
-          <>
-            <div className="w-px h-5 bg-border mx-1" />
-            <div className="flex gap-0.5">
-              <button
-                className="p-1.5 rounded hover:bg-muted transition-colors"
-                onClick={() => editor.chain().focus().mergeCells().run()}
-                title="合并单元格"
-              >
-                <TableCellsMerge className="w-4 h-4" />
+        {aiControls}
+
+        <div className="relative">
+          <button
+            className={cn(menuButtonClass, showMoreMenu && 'bg-muted text-primary')}
+            onClick={() => {
+              setShowAISubmenu(false)
+              setShowHeadingMenu(false)
+              setShowBlockMenu(false)
+              setShowColorMenu(false)
+              const nextOpen = !showMoreMenu
+              setShowMoreMenu(nextOpen)
+              if (nextOpen) requestAnimationFrame(updateToolMenuPlacement)
+            }}
+            title={t('bubbleMenu.more')}
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+
+          {showMoreMenu && (
+            <div
+              className={cn(
+                menuPanelClass,
+                'right-0 w-48 overflow-y-auto',
+                toolMenuPlacement.side === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
+              )}
+              style={{ maxHeight: toolMenuPlacement.maxHeight }}
+            >
+              <button className={cn(menuItemClass, isActive('underline') && 'bg-muted text-primary')} onClick={() => { toggleUnderline(); setShowMoreMenu(false) }}>
+                <span className="flex w-7 shrink-0 items-center justify-center"><Underline className="h-4 w-4" /></span>
+                <span>{t('bubbleMenu.underline')}</span>
               </button>
-              <button
-                className="p-1.5 rounded hover:bg-muted transition-colors"
-                onClick={() => editor.chain().focus().splitCell().run()}
-                title="拆分单元格"
-              >
-                <TableCellsSplit className="w-4 h-4" />
+              <button className={cn(menuItemClass, isActive('strike') && 'bg-muted text-primary')} onClick={() => { toggleStrike(); setShowMoreMenu(false) }}>
+                <span className="flex w-7 shrink-0 items-center justify-center"><Strikethrough className="h-4 w-4" /></span>
+                <span>{t('bubbleMenu.strike')}</span>
               </button>
-              <button
-                className="p-1.5 rounded hover:bg-red-50 text-red-500 transition-colors disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-500/10"
-                onClick={deleteSelectedTableRegion}
-                disabled={!canDeleteSelection}
-                title={deleteLabel}
-              >
-                <Trash2 className="w-4 h-4" />
+              <button className={cn(menuItemClass, isActive('code') && 'bg-muted text-primary')} onClick={() => { toggleCode(); setShowMoreMenu(false) }}>
+                <span className="flex w-7 shrink-0 items-center justify-center"><Code className="h-4 w-4" /></span>
+                <span>{t('bubbleMenu.inlineCode')}</span>
+              </button>
+
+              <div className="border-t border-border my-1" />
+
+              <div className="px-2 pb-1 pt-1 text-[11px] font-medium text-muted-foreground">{t('bubbleMenu.align')}</div>
+              <button className={cn(menuItemClass, effectiveTextAlign === 'left' && 'bg-muted text-primary')} onClick={() => isTableSelectionActive ? setTableCellAlign('left') : setTextAlign('left')}>
+                <span className="flex w-7 shrink-0 items-center justify-center"><AlignLeft className="h-4 w-4" /></span>
+                <span>{t('bubbleMenu.alignLeft')}</span>
+              </button>
+              <button className={cn(menuItemClass, effectiveTextAlign === 'center' && 'bg-muted text-primary')} onClick={() => isTableSelectionActive ? setTableCellAlign('center') : setTextAlign('center')}>
+                <span className="flex w-7 shrink-0 items-center justify-center"><AlignCenter className="h-4 w-4" /></span>
+                <span>{t('bubbleMenu.alignCenter')}</span>
+              </button>
+              <button className={cn(menuItemClass, effectiveTextAlign === 'right' && 'bg-muted text-primary')} onClick={() => isTableSelectionActive ? setTableCellAlign('right') : setTextAlign('right')}>
+                <span className="flex w-7 shrink-0 items-center justify-center"><AlignRight className="h-4 w-4" /></span>
+                <span>{t('bubbleMenu.alignRight')}</span>
+              </button>
+
+              {isTableSelectionActive && (
+                <>
+                  <div className="border-t border-border my-1" />
+                  <button
+                    ref={cellFillButtonRef}
+                    className={cn(menuItemClass, ((showColorMenu && colorMenuMode === 'cell') || currentCellBackground) && 'bg-muted text-primary')}
+                    onClick={() => {
+                      setShowAISubmenu(false)
+                      setShowBlockMenu(false)
+                      const nextOpen = !(showColorMenu && colorMenuMode === 'cell')
+                      setColorMenuMode('cell')
+                      setShowColorMenu(nextOpen)
+                      if (nextOpen) {
+                        setColorMenuPosition(getColorMenuPosition('cell'))
+                        requestAnimationFrame(updateColorMenuPosition)
+                      } else {
+                        setColorMenuPosition(null)
+                      }
+                    }}
+                  >
+                    <span className="flex w-7 shrink-0 items-center justify-center"><PaintBucket className="h-4 w-4" /></span>
+                    <span>{t('bubbleMenu.cellFillColor')}</span>
+                  </button>
+                  <button className={menuItemClass} onClick={() => { editor.chain().focus().mergeCells().run(); setShowMoreMenu(false) }}>
+                    <span className="flex w-7 shrink-0 items-center justify-center"><TableCellsMerge className="h-4 w-4" /></span>
+                    <span>{t('bubbleMenu.mergeCells')}</span>
+                  </button>
+                  <button className={menuItemClass} onClick={() => { editor.chain().focus().splitCell().run(); setShowMoreMenu(false) }}>
+                    <span className="flex w-7 shrink-0 items-center justify-center"><TableCellsSplit className="h-4 w-4" /></span>
+                    <span>{t('bubbleMenu.splitCell')}</span>
+                  </button>
+                  <button
+                    className={cn(menuItemClass, 'text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40')}
+                    onClick={() => { deleteSelectedTableRegion(); setShowMoreMenu(false) }}
+                    disabled={!canDeleteSelection}
+                  >
+                    <span className="flex w-7 shrink-0 items-center justify-center"><Trash2 className="h-4 w-4" /></span>
+                    <span>{deleteLabel}</span>
+                  </button>
+                </>
+              )}
+
+              <div className="border-t border-border my-1" />
+              <button className={menuItemClass} onClick={() => { clearFormatting(); setShowMoreMenu(false) }}>
+                <span className="flex w-7 shrink-0 items-center justify-center"><Eraser className="h-4 w-4" /></span>
+                <span>{t('bubbleMenu.clearFormatting')}</span>
               </button>
             </div>
-          </>
-        )}
-
-        <div className="w-px h-5 bg-border mx-1" />
-
-        <button className="p-1.5 rounded hover:bg-muted transition-colors" onClick={clearFormatting} title={t('bubbleMenu.clearFormatting')}><Eraser className="w-4 h-4" /></button>
+          )}
+        </div>
 
       </div>
       </div>

@@ -217,6 +217,8 @@ export async function initAllDatabases() {
   const { initNoteHistoryDb } = await import('./history')
   const { initAgentDb } = await import('./agent')
   const { initKnowledgeObjectsDb } = await import('./knowledge-objects')
+  const { initStructuredKnowledgeDb } = await import('./structured-knowledge')
+  const { initKnowledgeGraphDb } = await import('./knowledge-graph')
 
   // 先确保基础表存在，再做依赖这些表的初始化。
   await initChatsDb()
@@ -238,4 +240,6 @@ export async function initAllDatabases() {
   await initAgentDb()
   // KnowledgeObject 是统一索引层，依赖各原表已存在，放最后
   await initKnowledgeObjectsDb()
+  await initStructuredKnowledgeDb()
+  await initKnowledgeGraphDb()
 }

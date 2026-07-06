@@ -47,51 +47,75 @@ export async function initChatsDb() {
 
   try {
     await db.execute(`alter table chats add column ragSources text default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column agentHistory text default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column images text default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column thinking text default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column quoteData text default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column ragSourceDetails text default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column condensedFrom text default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column originalTokenCount integer default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column originalMessageCount integer default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column condensedAt integer default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column condensedContent text default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   try {
     await db.execute(`alter table chats add column conversationId integer default null`)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 }
 
 export async function insertChat(chat: Omit<Chat, 'id' | 'createdAt'>) {

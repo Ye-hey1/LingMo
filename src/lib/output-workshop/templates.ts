@@ -6,7 +6,7 @@
 import { listInstalledTemplates } from './market'
 import type { DesignProfileId } from './design-profiles'
 import type { ExportBlueprint } from './smart-card-export'
-import { WECHAT_STYLES, type WechatStyleId } from './wechat-styles'
+import { WECHAT_STYLES, type WechatStyleId, loadCustomWechatThemes } from './wechat-styles'
 export { isLocalWechatOutputTemplate } from './template-routing'
 
 // ---------------------------------------------------------------------------
@@ -34,6 +34,14 @@ export interface OutputTemplate {
   nameEn: string
   mode: OutputMode
   scenario: OutputScenario
+  /**
+   * 显式声明的生成管线，供 template-routing 直接判定，避免依赖 mode/features/previewTone
+   * 等隐式字符串规则。未标注时 routing 回退到既有启发式规则（兼容旧模板）。
+   * - "wechat": 本地一键排版（buildWechatArticle）
+   * - "local-style": AI 结构解析 + 本地样式模板（buildStyle）
+   * - "creative": AI 自由直绘
+   */
+  pipeline?: "wechat" | "local-style" | "creative"
   description: string
   icon: string
   /** 设计约束提示 */
@@ -2038,7 +2046,23 @@ export const OUTPUT_SCENARIOS: Array<{ id: OutputScenario; name: string; icon: s
 export async function listAllTemplates(): Promise<OutputTemplate[]> {
   try {
     const installed = await listInstalledTemplates()
-    return [...OUTPUT_TEMPLATES, ...installed]
+    // 合并用户自定义的微信主题（从 localStorage 同步读取，转成 OutputTemplate 形态）
+    const customWechat = loadCustomWechatThemes().map((theme) => ({
+      id: theme.id,
+      name: theme.name,
+      nameEn: theme.name,
+      mode: 'wechat' as OutputMode,
+      scenario: 'sharing' as OutputScenario,
+      description: '自定义微信主题',
+      icon: '✨',
+      designConstraints: WECHAT_DESIGN_CONSTRAINTS,
+      outputHint: '自定义样式的微信图文排版',
+      bestFor: '自定义主题',
+      outputTargets: ['图文'],
+      previewTone: 'wechat-article',
+      sizePresets: ['auto'],
+    }))
+    return [...OUTPUT_TEMPLATES, ...installed, ...customWechat]
   } catch (e) {
     console.error("加载动态/本地自定义模板失败，降级使用静态模板列表:", e)
     return OUTPUT_TEMPLATES

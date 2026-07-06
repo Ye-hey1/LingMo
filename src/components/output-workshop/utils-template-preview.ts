@@ -2,8 +2,8 @@ import { type OutputTemplate } from "@/lib/output-workshop/templates"
 import { type ExtractedSection } from "./types"
 import { buildEditorialArticle, buildKamiParchment, buildBrutalistStyle, buildGuizangDeck, buildTechSharing, buildMagazinePoster, buildHeroPoster, buildDataDashboard, buildInfographic, buildGuizangSocialCard, buildXiaohongshuStyle, buildLearningCards, buildMindmapStyle, buildWaterfallStyle, buildBentoStyle, buildBusinessReportStyle, buildLiquidGlassStyle, buildAccordionManualStyle, buildDarkTechStyle } from "@/lib/output-workshop/html-builders"
 import { normalizeOutputWorkshopHtml } from "@/lib/output-workshop/html-normalizer"
-import { buildWechatArticle, buildWechatPreviewMarkdown } from "@/lib/output-workshop/wechat-builder"
-import { isWechatStyleId } from "@/lib/output-workshop/wechat-styles"
+import { buildWechatArticleSync, buildWechatPreviewMarkdown } from "@/lib/output-workshop/wechat-builder"
+import { isWechatStyleIdOrCustom } from "@/lib/output-workshop/wechat-styles"
 import { buildSocialSeriesTemplatePreview } from "./social-preview"
 
 const WORKSHOP_SAMPLE_SECTIONS: ExtractedSection[] = [
@@ -36,8 +36,9 @@ export function buildTemplatePreviewHtml(template: OutputTemplate): string {
     generatedAt: "Preview",
   }
 
-  if (isWechatStyleId(template.id)) {
-    const html = buildWechatArticle({
+  if (isWechatStyleIdOrCustom(template.id)) {
+    // 预览走同步版本（不渲染 mermaid，预览示例不含 mermaid 代码块）
+    const html = buildWechatArticleSync({
       styleId: template.id,
       title: template.name,
       subtitle: template.description,

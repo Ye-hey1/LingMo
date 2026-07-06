@@ -8,7 +8,8 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const workspace = path.resolve(__dirname, '..')
 const logDir = path.join(workspace, '.codex-temp')
-const devUrl = 'http://127.0.0.1:3456'
+const devPort = process.env.NEXT_DEV_PORT || '3457'
+const devUrl = process.env.NEXT_DEV_URL || `http://127.0.0.1:${devPort}`
 const debugExe = path.join(workspace, 'src-tauri', 'target', 'debug', 'lingmo.exe')
 const tauriCwd = path.join(workspace, 'src-tauri')
 const reuseConfig = path.join(workspace, 'src-tauri', 'tauri.reuse-dev.conf.json')
@@ -146,7 +147,7 @@ function listPortOwners() {
     execFile('powershell.exe', [
       '-NoProfile',
       '-Command',
-      "Get-NetTCPConnection -LocalPort 3456 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess",
+      `Get-NetTCPConnection -LocalPort ${devPort} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess`,
     ], { windowsHide: true }, (error, stdout) => {
       if (error) {
         resolve([])

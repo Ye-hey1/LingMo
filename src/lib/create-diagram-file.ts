@@ -1,27 +1,11 @@
-import { writeTextFile } from '@tauri-apps/plugin-fs'
-import { cloneDeep } from 'lodash-es'
+import { exists, writeTextFile } from '@tauri-apps/plugin-fs'
 
-import { createDiagramContent, DIAGRAM_FILE_SUFFIXES, ensureDiagramFileName, getDefaultDiagramBaseName, type DiagramKind } from '@/lib/diagram'
-import { getCurrentFolder } from '@/lib/path'
+import { CREATABLE_DIAGRAM_FILE_SUFFIXES, createDiagramContent, ensureDiagramFileName, getDefaultDiagramBaseName, type DiagramKind } from '@/lib/diagram'
 import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
-import useArticleStore, { DirTree } from '@/stores/article'
-
-function createDiagramNode(name: string, parent?: DirTree): DirTree {
-  return {
-    name,
-    isFile: true,
-    isSymlink: false,
-    parent,
-    isEditing: false,
-    isDirectory: false,
-    isLocale: true,
-    sha: '',
-    children: [],
-  }
-}
+import useArticleStore from '@/stores/article'
 
 function splitDiagramFileName(fileName: string): { stem: string; extension: string } {
-  const extension = [...DIAGRAM_FILE_SUFFIXES]
+  const extension = [...CREATABLE_DIAGRAM_FILE_SUFFIXES]
     .sort((a, b) => b.length - a.length)
     .find((suffix) => fileName.toLowerCase().endsWith(suffix)) || ''
 
@@ -31,23 +15,35 @@ function splitDiagramFileName(fileName: string): { stem: string; extension: stri
   }
 }
 
+async function diagramFileExists(relativePath: string, workspace: Awaited<ReturnType<typeof getWorkspacePath>>) {
+  const pathOptions = await getFilePathOptions(relativePath)
+
+  try {
+    if (workspace.isCustom) {
+      return await exists(pathOptions.path)
+    }
+
+    return await exists(pathOptions.path, { baseDir: pathOptions.baseDir })
+  } catch {
+    return false
+  }
+}
+
 export async function createDiagramFile(parentPath = '', kind: DiagramKind = 'drawio'): Promise<string> {
   const state = useArticleStore.getState()
-  const cacheTree = cloneDeep(state.fileTree)
-  const currentFolder = parentPath ? getCurrentFolder(parentPath, cacheTree) : undefined
   const baseName = ensureDiagramFileName(getDefaultDiagramBaseName(kind), kind)
   const { stem, extension } = splitDiagramFileName(baseName)
-  const siblingNames = new Set((currentFolder?.children ?? cacheTree).map((item) => item.name))
+  const workspace = await getWorkspacePath()
 
   let fileName = baseName
   let index = 1
-  while (siblingNames.has(fileName)) {
+  let relativePath = parentPath ? `${parentPath}/${fileName}` : fileName
+  while (await diagramFileExists(relativePath, workspace)) {
     fileName = `${stem}_${index}${extension}`
+    relativePath = parentPath ? `${parentPath}/${fileName}` : fileName
     index += 1
   }
 
-  const relativePath = parentPath ? `${parentPath}/${fileName}` : fileName
-  const workspace = await getWorkspacePath()
   const pathOptions = await getFilePathOptions(relativePath)
   const content = createDiagramContent(kind)
 
@@ -57,15 +53,20 @@ export async function createDiagramFile(parentPath = '', kind: DiagramKind = 'dr
     await writeTextFile(pathOptions.path, content, { baseDir: pathOptions.baseDir })
   }
 
-  if (currentFolder) {
-    currentFolder.children?.unshift(createDiagramNode(fileName, currentFolder))
-  } else {
-    cacheTree.unshift(createDiagramNode(fileName))
+  if (parentPath) {
+    await state.ensurePathExpanded(parentPath)
   }
 
-  state.setFileTree(cacheTree)
-  state.setActiveFilePath(relativePath)
-  await state.readArticle(relativePath, '', false)
+  const inserted = state.insertLocalEntry(relativePath, false)
+  if (!inserted) {
+    await state.loadFileTree({ skipRemoteSync: true })
+    if (parentPath) {
+      await useArticleStore.getState().ensurePathExpanded(parentPath)
+    }
+  }
+
+  await useArticleStore.getState().setActiveFilePath(relativePath)
+  await useArticleStore.getState().readArticle(relativePath, '', false)
 
   return relativePath
 }

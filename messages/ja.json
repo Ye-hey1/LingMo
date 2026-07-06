@@ -659,6 +659,10 @@
         "condense": {
           "title": "摘要模型",
           "desc": "用于压缩历史对话内容，节省 token 使用量"
+        },
+        "structuredExtraction": {
+          "title": "抽出モデル",
+          "desc": "セマンティック抽出に使う任意のチャットモデル。未設定の場合は主要モデルにフォールバックします。"
         }
       },
       "mainModel": "メインモデル"
@@ -1304,6 +1308,8 @@
       "addModel": "モデルを追加",
       "newModel": "新しいモデル",
       "checkConnection": "接続をテスト",
+      "modelDisplayName": "表示名",
+      "modelDisplayNamePlaceholder": "空の場合はモデル ID を表示",
       "model": "モデル"
     },
     "ocr": {
@@ -1457,6 +1463,59 @@
     "webSearch": {
       "title": "Web Search",
       "desc": "Web 検索チャンネル、入力欄の既定状態、プロジェクト識別用の認証情報を設定します。"
+    },
+    "structured-knowledge": {
+      "title": "構造化ナレッジ",
+      "desc": "Markdown ナレッジグラフ向けのバックグラウンド LLM 自動抽出を設定します。"
+    },
+    "structuredKnowledge": {
+      "title": "構造化ナレッジ",
+      "desc": "バックグラウンド LLM 自動抽出を設定します。既定では自動実行されず、費用とプライバシーの警告を承認した場合のみ呼び出します。",
+      "autoExtraction": {
+        "title": "LLM 自動抽出"
+      },
+      "mode": {
+        "title": "抽出モード",
+        "desc": "LingMo が Markdown ブロックを設定済み LLM サービスへ送信できるタイミングを選択します。",
+        "options": {
+          "off": "オフ",
+          "manual": "手動のみ",
+          "onSave": "保存後",
+          "onIdle": "アイドル時"
+        }
+      },
+      "maxBlocks": {
+        "title": "最大ブロック数",
+        "desc": "1 回の抽出で送信する Markdown 証拠ブロックの上限。"
+      },
+      "idleSeconds": {
+        "title": "アイドル待機秒数",
+        "desc": "操作停止後、抽出を開始するまで待機する秒数。"
+      },
+      "cooldownMinutes": {
+        "title": "クールダウン分",
+        "desc": "同じ未変更ノートを再抽出するまでの最短間隔。"
+      },
+      "maxNotesPerRun": {
+        "title": "実行ごとのノート数",
+        "desc": "バックグラウンド 1 バッチで処理する最大ノート数。"
+      },
+      "dailyLimit": {
+        "title": "日次上限",
+        "desc": "1 日あたりの自動抽出呼び出し上限。0 にすると自動呼び出しをブロックします。"
+      },
+      "costWarningAccepted": {
+        "title": "API 費用警告を承認",
+        "desc": "自動抽出は有料 LLM token を消費する可能性があります。"
+      },
+      "privacyWarningAccepted": {
+        "title": "プライバシー警告を承認",
+        "desc": "自動抽出は選択された Markdown 内容ブロックを設定済み LLM プロバイダーへ送信します。"
+      },
+      "model": {
+        "title": "抽出モデル",
+        "desc": "セマンティック抽出に使う任意のチャットモデル。未設定の場合は主要モデルにフォールバックします。"
+      }
     }
   },
   "record": {
@@ -3080,6 +3139,7 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "more": "その他",
       "blockType": "ブロック種類",
       "paragraph": "本文",
       "heading1": "見出し 1",
@@ -3111,6 +3171,15 @@
       "highlight": "ハイライト",
       "clearHighlight": "ハイライトをクリア",
       "restoreDefault": "デフォルトに戻す",
+      "cellFillColor": "セルの塗りつぶし色",
+      "white": "白",
+      "clearCellFill": "塗りつぶしをクリア",
+      "mergeCells": "セルを結合",
+      "splitCell": "セルを分割",
+      "deleteCurrentRow": "現在の行を削除",
+      "deleteCurrentColumn": "現在の列を削除",
+      "deleteRowsOrColumns": "行/列を削除",
+      "align": "配置",
       "alignLeft": "左揃え",
       "alignCenter": "中央揃え",
       "alignRight": "右揃え",
@@ -3121,6 +3190,7 @@
       "taskList": "タスクリスト",
       "codeBlock": "コードブロック",
       "languages": {
+        "Chinese": "中国語",
         "English": "英語",
         "Japanese": "日本語",
         "Korean": "韓国語",
@@ -3132,6 +3202,13 @@
         "Arabic": "アラビア語"
       },
       "customLanguagePlaceholder": "カスタム言語..."
+    },
+    "chatCopy": {
+      "copyCode": "コードをコピー",
+      "copyTable": "表をコピー",
+      "copiedCode": "コードをコピーしました",
+      "copiedTable": "表をコピーしました",
+      "copyFailed": "コピーに失敗しました"
     },
     "inlineAI": {
       "generateTitle": "AI インスピレーション",
@@ -3183,10 +3260,13 @@
       "abort": "中止",
       "explainTitle": "AI 説明",
       "explaining": "説明中...",
+      "translateTitle": "AI 翻訳",
+      "translating": "翻訳中...",
       "selectedText": "選択したテキスト",
       "explainHint": "理解のための表示のみで、本文には挿入されません",
       "copy": "コピー",
       "copied": "コピー済み",
+      "replaceOriginal": "元の文を置換",
       "close": "閉じる"
     },
     "image": {

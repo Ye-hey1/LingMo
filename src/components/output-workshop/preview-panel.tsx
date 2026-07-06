@@ -444,9 +444,9 @@ function getGenerationWaitText(telemetry: ReturnType<typeof useWorkshopContext>[
     return telemetry.phaseLabel || "正在准备"
   }
   if (!telemetry.firstByteAt) {
-    return `请求已发出，正在等待首个响应 · ${formatTelemetryDuration(Date.now() - telemetry.requestStartedAt)}`
+    return `等待响应 · ${formatTelemetryDuration(Date.now() - telemetry.requestStartedAt)}`
   }
-  return `已收到响应 · ${telemetry.outputChars.toLocaleString()} chars`
+  return `接收中 · ${telemetry.outputChars.toLocaleString()} chars`
 }
 
 function RedbookPreviewCard({
@@ -796,15 +796,19 @@ export function PreviewPanel() {
               {/* 阶段一：等待 AI 首字节时的 spinner */}
               {showSpinner && (
                 <div className="absolute inset-0 z-20 grid place-items-center p-4">
-                  <div className="flex w-[320px] max-w-[calc(100vw-48px)] flex-col items-center justify-center rounded-lg border bg-background p-6 text-center animate-in fade-in duration-150">
-                    <Loader2 className="mb-3 size-6 animate-spin text-primary" />
-                    <p className="text-sm font-semibold text-foreground">{progressText || "AI 正在分析..."}</p>
-                    <p className="mt-1 max-w-[260px] text-[11px] leading-relaxed text-muted-foreground">
+                  <div className="flex w-[340px] max-w-[calc(100vw-48px)] flex-col items-center justify-center rounded-xl border border-border/70 bg-background/95 p-7 text-center shadow-lg backdrop-blur-sm animate-in fade-in zoom-in-95 duration-200">
+                    <div className="relative mb-4 flex size-12 items-center justify-center">
+                      <span className="absolute inset-0 rounded-full bg-primary/10 animate-ping [animation-duration:1.6s]" />
+                      <Loader2 className="size-7 animate-spin text-primary" />
+                    </div>
+                    <p className="text-sm font-semibold tracking-tight text-foreground">{progressText || "正在准备…"}</p>
+                    <p className="mt-1.5 max-w-[260px] text-[11px] leading-relaxed text-muted-foreground">
                       {getGenerationWaitText(generationTelemetry)}
                     </p>
-                    <p className="mt-1.5 font-mono text-[10px] text-muted-foreground">
+                    <div className="mt-3 flex items-center gap-2 font-mono text-[10px] tabular-nums text-muted-foreground">
+                      <span className="inline-block size-1.5 rounded-full bg-primary/70" />
                       {(elapsed / 1000).toFixed(1)}s
-                    </p>
+                    </div>
                   </div>
                 </div>
               )}
@@ -880,10 +884,13 @@ export function PreviewPanel() {
 
                   {/* 流式右下角状态气泡 */}
                   {isStreamingActive && (
-                    <div className="absolute bottom-3 right-3 z-50 flex items-center gap-1.5 rounded-md border border-primary/20 bg-background px-2.5 py-1 animate-in fade-in duration-150">
-                      <Loader2 className="size-3 animate-spin text-primary" />
-                      <span className="max-w-[220px] truncate text-[10px] font-medium text-primary">{generationTelemetry.phaseLabel || progressText}</span>
-                      <span className="text-[9px] text-muted-foreground">{(elapsed / 1000).toFixed(0)}s</span>
+                    <div className="absolute bottom-3 right-3 z-50 flex items-center gap-2 rounded-lg border border-primary/20 bg-background/95 px-3 py-1.5 shadow-md backdrop-blur-sm animate-in fade-in slide-in-from-bottom-1 duration-200">
+                      <span className="relative flex size-2">
+                        <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60 [animation-duration:1.4s]" />
+                        <span className="relative inline-flex size-2 rounded-full bg-primary" />
+                      </span>
+                      <span className="max-w-[200px] truncate text-[10px] font-medium text-foreground">{generationTelemetry.phaseLabel || progressText}</span>
+                      <span className="font-mono text-[9px] tabular-nums text-muted-foreground">{(elapsed / 1000).toFixed(0)}s</span>
                     </div>
                   )}
 
@@ -1021,7 +1028,6 @@ export function PreviewPanel() {
                   <pre className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground">{errorMessage}</pre>
                 </div>
               )}
-              <LogRow label="阶段" value={buildStageId ? BUILD_STAGES.find((stage) => stage.id === buildStageId)?.label || buildStageId : "等待构建"} tone={status === "generating" || status === "streaming" ? "primary" : "default"} compact />
               <LogRow
                 label="质量检查"
                 value={generationTelemetry.qualityChecked ? generationTelemetry.qualitySummary : "等待最终 HTML"}

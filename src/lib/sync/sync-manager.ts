@@ -738,6 +738,7 @@ export class SyncManager {
       await store.set('logs', logs)
       await store.save()
     } catch {
+      // Ignore sync log persistence failures.
     }
   }
 
@@ -763,6 +764,7 @@ export class SyncManager {
       await store.set('logs', [])
       await store.save()
     } catch {
+      // Ignore sync log persistence failures.
     }
   }
 

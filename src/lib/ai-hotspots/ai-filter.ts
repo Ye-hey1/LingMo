@@ -141,7 +141,7 @@ ${interests}
 
 async function extractTags(interestsText: string): Promise<AiTag[]> {
   const content = await callAi(
-    `${EXTRACT_TAGS_USER(interestsText)}`,
+    `${EXTRACT_TAGS_SYSTEM}\n\n${EXTRACT_TAGS_USER(interestsText)}`,
     0.3,
   )
   const parsed = extractJsonObject<ExtractedTagsResponse>(content)
@@ -204,7 +204,7 @@ async function classifyBatch(
 ): Promise<AiClassification[]> {
   const tagsList = tags.map(t => `${t.id}. ${t.tag}（${t.description}）`).join('\n')
   const newsList = items.map((item, index) => `${index + 1}. ${item.title}`).join('\n')
-  const content = await callAi(`${CLASSIFY_USER(tagsList, newsList, items.length)}`, 0.2)
+  const content = await callAi(`${CLASSIFY_SYSTEM}\n\n${CLASSIFY_USER(tagsList, newsList, items.length)}`, 0.2)
 
   const parsed = extractJsonObject<ClassifyBatchResponse[]>(content)
   if (!Array.isArray(parsed)) return []

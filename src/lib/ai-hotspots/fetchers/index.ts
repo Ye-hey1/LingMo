@@ -4,6 +4,7 @@ export * from './newsnow'
 export * from './youtube'
 export * from './default-rss'
 export * from './user-rss'
+export * from './wechat-mp'
 export * from './wechat-rss'
 export * from './extra-sources'
 

@@ -40,34 +40,8 @@
   color: hsl(var(--foreground));
 }
 
-@keyframes agent-thinking-thread {
-  0% {
-    background-position: 130% 0;
-    opacity: 0.25;
-  }
-  45% {
-    opacity: 0.75;
-  }
-  100% {
-    background-position: -130% 0;
-    opacity: 0.25;
-  }
-}
-
 .agent-thinking-label-active {
   color: hsl(var(--primary) / 0.62);
-}
-
-.agent-thinking-thread {
-  background:
-    linear-gradient(
-      90deg,
-      hsl(var(--primary) / 0),
-      hsl(var(--primary) / 0.45),
-      hsl(var(--primary) / 0)
-    );
-  background-size: 220% 100%;
-  animation: agent-thinking-thread 1.4s ease-in-out infinite;
 }
 
 @keyframes shimmer-opacity {
@@ -85,10 +59,6 @@
   .animate-shimmer {
     animation: none;
     opacity: 1;
-  }
-  .agent-thinking-thread {
-    animation: none;
-    opacity: 0.45;
   }
   /* Framer-motion inline transforms should be instant when reduced motion is preferred. */
   [style*="transform: translate"] {
@@ -386,6 +356,100 @@ pre.hljs {
   margin-bottom: 0 !important;
 }
 
+.markdown-body .chat-copy-shell {
+  position: relative;
+  max-width: 100%;
+  margin: 0.75rem 0 1rem;
+}
+
+.markdown-body .chat-copy-shell > pre,
+.markdown-body .chat-copy-shell > table {
+  margin: 0 !important;
+}
+
+.markdown-body .chat-copy-code-shell > pre {
+  padding-right: 3rem !important;
+}
+
+.markdown-body .chat-copy-table-shell {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.markdown-body .chat-copy-button {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--background) / 0.86);
+  border: 1px solid hsl(var(--border) / 0.75);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px hsl(var(--foreground) / 0.08);
+  opacity: 0;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+.markdown-body .chat-copy-shell:hover > .chat-copy-button,
+.markdown-body .chat-copy-shell:focus-within > .chat-copy-button,
+.markdown-body .chat-copy-button:focus-visible {
+  opacity: 1;
+}
+
+.markdown-body .chat-copy-button:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  border-color: hsl(var(--border));
+  transform: translateY(-1px);
+}
+
+.markdown-body .chat-copy-button svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.markdown-body .chat-copy-button.copied {
+  color: hsl(142 71% 36%);
+  border-color: hsl(142 71% 45% / 0.35);
+  background: hsl(142 76% 96% / 0.92);
+  opacity: 1;
+}
+
+.markdown-body .chat-copy-button.copy-error {
+  color: hsl(var(--destructive));
+  border-color: hsl(var(--destructive) / 0.35);
+  opacity: 1;
+}
+
+.markdown-dark .chat-copy-button {
+  background: hsl(var(--background) / 0.78);
+  box-shadow: 0 8px 22px hsl(0 0% 0% / 0.24);
+}
+
+.markdown-dark .chat-copy-button.copied {
+  color: hsl(142 69% 58%);
+  border-color: hsl(142 69% 48% / 0.4);
+  background: hsl(142 36% 16% / 0.9);
+}
+
 /* 覆盖代码块背景色 - 使用主题变量 */
 .markdown-body pre,
 .markdown-body .highlight pre,
@@ -485,6 +549,220 @@ pre.hljs {
 .mermaid-canvas-viewport > svg {
   max-width: none;
   pointer-events: none;
+}
+
+.mermaid-canvas-render svg,
+.mermaid-viewer-content svg {
+  font-family: inherit !important;
+  font-size: 13px !important;
+  color: hsl(var(--foreground));
+  background: transparent !important;
+}
+
+.mermaid-canvas-render svg *,
+.mermaid-viewer-content svg * {
+  font-family: inherit !important;
+}
+
+.mermaid-canvas-render svg text,
+.mermaid-viewer-content svg text,
+.mermaid-canvas-render svg tspan,
+.mermaid-viewer-content svg tspan,
+.mermaid-canvas-render svg .label,
+.mermaid-viewer-content svg .label,
+.mermaid-canvas-render svg .nodeLabel,
+.mermaid-viewer-content svg .nodeLabel,
+.mermaid-canvas-render svg .edgeLabel,
+.mermaid-viewer-content svg .edgeLabel,
+.mermaid-canvas-render svg .titleText,
+.mermaid-viewer-content svg .titleText,
+.mermaid-canvas-render svg .messageText,
+.mermaid-viewer-content svg .messageText,
+.mermaid-canvas-render svg .labelText,
+.mermaid-viewer-content svg .labelText,
+.mermaid-canvas-render svg .loopText,
+.mermaid-viewer-content svg .loopText,
+.mermaid-canvas-render svg .sectionTitle,
+.mermaid-viewer-content svg .sectionTitle,
+.mermaid-canvas-render svg .taskText,
+.mermaid-viewer-content svg .taskText {
+  fill: hsl(var(--foreground)) !important;
+  color: hsl(var(--foreground)) !important;
+  stroke: none !important;
+}
+
+.mermaid-canvas-render svg .node rect,
+.mermaid-viewer-content svg .node rect,
+.mermaid-canvas-render svg .node circle,
+.mermaid-viewer-content svg .node circle,
+.mermaid-canvas-render svg .node ellipse,
+.mermaid-viewer-content svg .node ellipse,
+.mermaid-canvas-render svg .node polygon,
+.mermaid-viewer-content svg .node polygon,
+.mermaid-canvas-render svg .node path,
+.mermaid-viewer-content svg .node path,
+.mermaid-canvas-render svg .cluster rect,
+.mermaid-viewer-content svg .cluster rect,
+.mermaid-canvas-render svg .actor,
+.mermaid-viewer-content svg .actor,
+.mermaid-canvas-render svg rect.note,
+.mermaid-viewer-content svg rect.note,
+.mermaid-canvas-render svg .labelBox,
+.mermaid-viewer-content svg .labelBox,
+.mermaid-canvas-render svg .state,
+.mermaid-viewer-content svg .state {
+  fill: hsl(var(--muted) / 0.28) !important;
+  stroke: hsl(var(--foreground) / 0.36) !important;
+  stroke-width: 1.4px !important;
+  filter: none !important;
+}
+
+.mermaid-canvas-render svg .cluster rect,
+.mermaid-viewer-content svg .cluster rect,
+.mermaid-canvas-render svg rect.note,
+.mermaid-viewer-content svg rect.note,
+.mermaid-canvas-render svg .labelBox,
+.mermaid-viewer-content svg .labelBox {
+  fill: hsl(var(--muted) / 0.34) !important;
+}
+
+.mermaid-canvas-render svg .edgePath .path,
+.mermaid-viewer-content svg .edgePath .path,
+.mermaid-canvas-render svg .flowchart-link,
+.mermaid-viewer-content svg .flowchart-link,
+.mermaid-canvas-render svg .messageLine0,
+.mermaid-viewer-content svg .messageLine0,
+.mermaid-canvas-render svg .messageLine1,
+.mermaid-viewer-content svg .messageLine1,
+.mermaid-canvas-render svg .actor-line,
+.mermaid-viewer-content svg .actor-line,
+.mermaid-canvas-render svg .loopLine,
+.mermaid-viewer-content svg .loopLine,
+.mermaid-canvas-render svg .transition,
+.mermaid-viewer-content svg .transition,
+.mermaid-canvas-render svg .relation,
+.mermaid-viewer-content svg .relation,
+.mermaid-canvas-render svg .edge,
+.mermaid-viewer-content svg .edge {
+  fill: none !important;
+  stroke: hsl(var(--foreground) / 0.82) !important;
+  stroke-width: 1.8px !important;
+  filter: none !important;
+}
+
+.mermaid-canvas-render svg marker path,
+.mermaid-viewer-content svg marker path,
+.mermaid-canvas-render svg [id$="-arrowhead"] path,
+.mermaid-viewer-content svg [id$="-arrowhead"] path,
+.mermaid-canvas-render svg [id$="-crosshead"] path,
+.mermaid-viewer-content svg [id$="-crosshead"] path {
+  fill: hsl(var(--foreground) / 0.82) !important;
+  stroke: hsl(var(--foreground) / 0.82) !important;
+}
+
+.mermaid-canvas-render svg .edgeLabel,
+.mermaid-viewer-content svg .edgeLabel,
+.mermaid-canvas-render svg .edgeLabel rect,
+.mermaid-viewer-content svg .edgeLabel rect,
+.mermaid-canvas-render svg .labelBkg,
+.mermaid-viewer-content svg .labelBkg {
+  background-color: hsl(var(--background)) !important;
+  fill: hsl(var(--background)) !important;
+}
+
+.mermaid-canvas-render svg .timeline-node rect,
+.mermaid-viewer-content svg .timeline-node rect,
+.mermaid-canvas-render svg .timeline-node path,
+.mermaid-viewer-content svg .timeline-node path,
+.mermaid-canvas-render svg .timeline-node circle,
+.mermaid-viewer-content svg .timeline-node circle,
+.mermaid-canvas-render svg .timeline-node polygon,
+.mermaid-viewer-content svg .timeline-node polygon,
+.mermaid-canvas-render svg .section0,
+.mermaid-viewer-content svg .section0,
+.mermaid-canvas-render svg .section1,
+.mermaid-viewer-content svg .section1,
+.mermaid-canvas-render svg .section2,
+.mermaid-viewer-content svg .section2,
+.mermaid-canvas-render svg .section3,
+.mermaid-viewer-content svg .section3 {
+  fill: hsl(var(--muted) / 0.34) !important;
+  stroke: hsl(var(--foreground) / 0.52) !important;
+  stroke-width: 1.45px !important;
+  filter: none !important;
+}
+
+.mermaid-canvas-render svg .timeline-node line,
+.mermaid-viewer-content svg .timeline-node line,
+.mermaid-canvas-render svg [class*="section-edge-"],
+.mermaid-viewer-content svg [class*="section-edge-"],
+.mermaid-canvas-render svg .lineWrapper line,
+.mermaid-viewer-content svg .lineWrapper line,
+.mermaid-canvas-render svg .today,
+.mermaid-viewer-content svg .today,
+.mermaid-canvas-render svg .grid .tick line,
+.mermaid-viewer-content svg .grid .tick line {
+  stroke: hsl(var(--foreground) / 0.76) !important;
+  stroke-width: 1.5px !important;
+  filter: none !important;
+}
+
+.mermaid-canvas-render svg .timeline-node text,
+.mermaid-viewer-content svg .timeline-node text,
+.mermaid-canvas-render svg :not(.section-root)[class*="section-"] text,
+.mermaid-viewer-content svg :not(.section-root)[class*="section-"] text {
+  fill: hsl(var(--foreground)) !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  paint-order: stroke !important;
+  stroke: hsl(var(--background) / 0.7) !important;
+  stroke-width: 2px !important;
+  stroke-linejoin: round !important;
+}
+
+.mermaid-canvas-render svg .lineWrapper line,
+.mermaid-viewer-content svg .lineWrapper line {
+  stroke: hsl(var(--foreground) / 0.9) !important;
+  stroke-width: 2px !important;
+}
+
+.mermaid-canvas-render svg .task,
+.mermaid-viewer-content svg .task,
+.mermaid-canvas-render svg .task0,
+.mermaid-viewer-content svg .task0,
+.mermaid-canvas-render svg .task1,
+.mermaid-viewer-content svg .task1,
+.mermaid-canvas-render svg .task2,
+.mermaid-viewer-content svg .task2,
+.mermaid-canvas-render svg .task3,
+.mermaid-viewer-content svg .task3,
+.mermaid-canvas-render svg .active0,
+.mermaid-viewer-content svg .active0,
+.mermaid-canvas-render svg .active1,
+.mermaid-viewer-content svg .active1,
+.mermaid-canvas-render svg .active2,
+.mermaid-viewer-content svg .active2,
+.mermaid-canvas-render svg .active3,
+.mermaid-viewer-content svg .active3,
+.mermaid-canvas-render svg .done0,
+.mermaid-viewer-content svg .done0,
+.mermaid-canvas-render svg .done1,
+.mermaid-viewer-content svg .done1,
+.mermaid-canvas-render svg .done2,
+.mermaid-viewer-content svg .done2,
+.mermaid-canvas-render svg .done3,
+.mermaid-viewer-content svg .done3 {
+  fill: hsl(var(--muted) / 0.34) !important;
+  stroke: hsl(var(--foreground) / 0.42) !important;
+}
+
+.mermaid-canvas-render svg .pieCircle,
+.mermaid-viewer-content svg .pieCircle,
+.mermaid-canvas-render svg [class*="slice"],
+.mermaid-viewer-content svg [class*="slice"] {
+  stroke: hsl(var(--border)) !important;
+  stroke-width: 1px !important;
+  filter: none !important;
 }
 
 .mermaid-canvas-loading {
@@ -608,9 +886,9 @@ pre.hljs {
 
 @media (hover: none), (pointer: coarse) {
   .mermaid-canvas-controls {
-    top: auto;
+    top: 8px;
     right: 8px;
-    bottom: 8px;
+    bottom: auto;
     opacity: 0.9;
     pointer-events: auto;
   }

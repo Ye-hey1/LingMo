@@ -27,7 +27,6 @@ const NOISY_SELECTOR = [
   "iframe",
   "embed",
   "object",
-  "picture",
   "video",
   "audio",
   "source",
@@ -170,6 +169,20 @@ const turndown = new TurndownService({
   bulletListMarker: "-",
 })
 
+turndown.addRule("articleImage", {
+  filter: "img",
+  replacement: (_content, node) => {
+    const img = node as HTMLElement
+    const src = img.getAttribute("src") || ""
+    if (!src || /^data:/i.test(src)) return ""
+    const alt = (img.getAttribute("alt") || "article image")
+      .replace(/\s+/g, " ")
+      .replace(/[[\]]/g, "")
+      .trim()
+    return `\n\n![${alt || "article image"}](${src})\n\n`
+  },
+})
+
 function normalizeText(text: string): string {
   return text
     .replace(/\u00A0/g, " ")
@@ -216,25 +229,79 @@ function stripTinyMetadataNodes(doc: Document) {
   doc.querySelectorAll(FORUM_NOISE_NODE_SELECTOR).forEach(node => node.remove())
 }
 
-function cleanImages(doc: Document) {
+function getImageSource(img: HTMLImageElement) {
+  const src =
+    img.getAttribute("src")
+    || img.getAttribute("data-src")
+    || img.getAttribute("data-original")
+    || img.getAttribute("data-lazy-src")
+    || img.getAttribute("data-url")
+    || ""
+  if (src) return src.trim()
+
+  const srcset = img.getAttribute("srcset") || img.getAttribute("data-srcset") || ""
+  const firstCandidate = srcset
+    .split(",")
+    .map(candidate => candidate.trim().split(/\s+/)[0])
+    .find(Boolean)
+  return firstCandidate || ""
+}
+
+function resolveImageSource(src: string, baseUrl?: string) {
+  if (!src || /^data:/i.test(src)) return ""
+  try {
+    return new URL(src, baseUrl).href
+  } catch {
+    return /^https?:\/\//i.test(src) ? src : ""
+  }
+}
+
+function getImageAlt(src: string, alt: string, title: string) {
+  if (alt) return alt
+  if (title) return title
+  try {
+    const pathname = new URL(src).pathname
+    const filename = decodeURIComponent(pathname.split("/").filter(Boolean).pop() || "")
+    return filename || "article image"
+  } catch {
+    return "article image"
+  }
+}
+
+function cleanImages(doc: Document, baseUrl?: string) {
+  doc.querySelectorAll("picture").forEach((picture) => {
+    const img = picture.querySelector("img")
+    if (img) {
+      picture.replaceWith(img)
+    } else {
+      picture.remove()
+    }
+  })
+
   doc.querySelectorAll("img").forEach((img) => {
     const alt = normalizeText(img.getAttribute("alt") || "")
     const title = normalizeText(img.getAttribute("title") || "")
-    const src = img.getAttribute("src") || ""
-    const replacementText = alt || title
-    if (!replacementText || /^data:/i.test(src)) {
+    const src = resolveImageSource(getImageSource(img), baseUrl)
+    if (!src) {
       img.remove()
       return
     }
-    img.replaceWith(doc.createTextNode(`[图片：${replacementText.slice(0, 120)}]`))
+    img.setAttribute("src", src)
+    img.setAttribute("alt", getImageAlt(src, alt, title).slice(0, 120))
+    img.removeAttribute("srcset")
+    img.removeAttribute("data-src")
+    img.removeAttribute("data-original")
+    img.removeAttribute("data-lazy-src")
+    img.removeAttribute("data-url")
+    img.removeAttribute("loading")
   })
 }
 
-function removeNoisyNodes(doc: Document, options: { clearAttrs?: boolean } = {}) {
+function removeNoisyNodes(doc: Document, options: { clearAttrs?: boolean, baseUrl?: string } = {}) {
   removeComments(doc)
   doc.querySelectorAll(NOISY_SELECTOR).forEach(node => node.remove())
   stripTinyMetadataNodes(doc)
-  cleanImages(doc)
+  cleanImages(doc, options.baseUrl)
   if (options.clearAttrs) {
     clearAttributes(doc)
   }
@@ -288,9 +355,9 @@ function cloneDocument(html: string): Document {
   return new DOMParser().parseFromString(html, "text/html")
 }
 
-function selectReadableHtml(doc: Document, originalHtml: string): string {
+function selectReadableHtml(doc: Document, originalHtml: string, baseUrl?: string): string {
   const readabilityDoc = cloneDocument(originalHtml)
-  removeNoisyNodes(readabilityDoc)
+  removeNoisyNodes(readabilityDoc, { baseUrl })
   const article = new Readability(readabilityDoc).parse()
 
   const candidates = Array.from(doc.querySelectorAll(CONTENT_CANDIDATE_SELECTOR))
@@ -395,14 +462,19 @@ function cleanMarkdownLine(line: string): string {
     .replace(/[ \t]+$/g, "")
 }
 
+function unwrapMarkdownSyntaxCodeLine(line: string): string {
+  const trimmed = line.trim()
+  const match = trimmed.match(/^`(#{1,6}\s+[^`]+)`$/)
+  return match ? match[1] : line
+}
+
 export function formatExtractedWebMarkdown(markdown: string): string {
-  const withoutImages = markdown
-    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+  const withoutUnsafeImages = markdown
+    .replace(/!\[[^\]]*]\(\s*data:image\/[a-z0-9.+-]+;base64,[^)]+\)/gi, "")
     .replace(/<img\b[^>]*>/gi, "")
     .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/gi, "")
-    .replace(/\[(?:image|图片|logo|icon|avatar|screenshot)[^\]]*]\([^)]*\)/gi, "")
 
-  const lines = normalizeText(withoutImages)
+  const lines = normalizeText(withoutUnsafeImages)
     .split("\n")
     .map(cleanMarkdownLine)
 
@@ -411,7 +483,7 @@ export function formatExtractedWebMarkdown(markdown: string): string {
   let blankPending = false
 
   for (const rawLine of lines) {
-    const line = rawLine.trim()
+    const line = unwrapMarkdownSyntaxCodeLine(rawLine.trim())
     if (!line) {
       blankPending = result.length > 0
       continue
@@ -443,6 +515,7 @@ export function formatExtractedWebMarkdown(markdown: string): string {
 
   return result.join("\n")
     .replace(/\n{3,}/g, "\n\n")
+    .replace(/([^\n])\s+(#{1,6}\s+[^\n]+)/g, "$1\n\n$2")
     .replace(/(?:^|\n)(#{1,6})([^\s#])/g, "\n$1 $2")
     .replace(/^\n+/, "")
     .trim()
@@ -460,13 +533,13 @@ export function looksLikeHtml(value: string): boolean {
   return /<html|<body|<div|<p|<article|<section|<main/i.test(value)
 }
 
-export function htmlToMarkdown(html: string): string {
+export function htmlToMarkdown(html: string, baseUrl?: string): string {
   try {
     const doc = cloneDocument(html)
-    removeNoisyNodes(doc)
-    const contentHtml = selectReadableHtml(doc, html)
+    removeNoisyNodes(doc, { baseUrl })
+    const contentHtml = selectReadableHtml(doc, html, baseUrl)
     const contentDoc = cloneDocument(contentHtml)
-    removeNoisyNodes(contentDoc, { clearAttrs: true })
+    removeNoisyNodes(contentDoc, { clearAttrs: true, baseUrl })
     const markdown = turndown.turndown(contentDoc.body?.innerHTML || contentHtml)
     return normalizeMarkdown(markdown)
   } catch {
@@ -539,9 +612,9 @@ export function parseWebPageContent(
       || doc.querySelector("meta[property='og:description']")?.getAttribute("content")
       || ""
   )
-  removeNoisyNodes(doc)
+  removeNoisyNodes(doc, { baseUrl: url })
 
-  const mainContent = htmlToMarkdown(doc.documentElement?.outerHTML || html)
+  const mainContent = htmlToMarkdown(doc.documentElement?.outerHTML || html, url)
   const bodyText = formatExtractedWebMarkdown(normalizeText(doc.body?.textContent || ""))
 
   return {

@@ -824,6 +824,10 @@
         "condense": {
           "title": "Condense Model",
           "desc": "Used to compress historical conversation content to save token usage"
+        },
+        "structuredExtraction": {
+          "title": "Extraction model",
+          "desc": "Optional chat model for semantic extraction. Falls back to the primary model if unset."
         }
       },
       "mainModel": "Main Model"
@@ -1472,6 +1476,8 @@
       "addModel": "Add Model",
       "newModel": "New Model",
       "checkConnection": "Test Connection",
+      "modelDisplayName": "Display name",
+      "modelDisplayNamePlaceholder": "Shows the model ID when empty",
       "model": "Model"
     },
     "ocr": {
@@ -1539,6 +1545,59 @@
     "webSearch": {
       "title": "Web Search",
       "desc": "Configure web search channels, automatic web access behavior, and project identification credentials."
+    },
+    "structured-knowledge": {
+      "title": "Structured Knowledge",
+      "desc": "Configure automatic background LLM extraction for Markdown knowledge graphs."
+    },
+    "structuredKnowledge": {
+      "title": "Structured Knowledge",
+      "desc": "Configure automatic background LLM extraction. It is disabled by default and only runs after you accept the cost and privacy warnings.",
+      "autoExtraction": {
+        "title": "Automatic LLM Extraction"
+      },
+      "mode": {
+        "title": "Extraction mode",
+        "desc": "Choose when LingMo may send Markdown blocks to your configured LLM service.",
+        "options": {
+          "off": "Off",
+          "manual": "Manual only",
+          "onSave": "After save",
+          "onIdle": "When idle"
+        }
+      },
+      "maxBlocks": {
+        "title": "Maximum blocks",
+        "desc": "Maximum Markdown evidence blocks sent per extraction."
+      },
+      "idleSeconds": {
+        "title": "Idle wait seconds",
+        "desc": "How long to wait after activity before idle extraction starts."
+      },
+      "cooldownMinutes": {
+        "title": "Cooldown minutes",
+        "desc": "Minimum time before extracting the same unchanged note again."
+      },
+      "maxNotesPerRun": {
+        "title": "Notes per run",
+        "desc": "Maximum notes processed in one background batch."
+      },
+      "dailyLimit": {
+        "title": "Daily limit",
+        "desc": "Maximum automatic extraction calls per day. Set 0 to block automatic calls."
+      },
+      "costWarningAccepted": {
+        "title": "Accept API cost warning",
+        "desc": "Automatic extraction may consume paid LLM tokens."
+      },
+      "privacyWarningAccepted": {
+        "title": "Accept privacy warning",
+        "desc": "Automatic extraction sends selected Markdown content blocks to the configured LLM provider."
+      },
+      "model": {
+        "title": "Extraction model",
+        "desc": "Optional chat model for semantic extraction. Falls back to the primary model if unset."
+      }
     }
   },
   "record": {
@@ -3236,6 +3295,7 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "more": "More",
       "blockType": "Block type",
       "paragraph": "Text",
       "heading1": "Heading 1",
@@ -3267,6 +3327,15 @@
       "highlight": "Highlight",
       "clearHighlight": "Clear highlight",
       "restoreDefault": "Restore default",
+      "cellFillColor": "Cell fill color",
+      "white": "White",
+      "clearCellFill": "Clear fill",
+      "mergeCells": "Merge cells",
+      "splitCell": "Split cell",
+      "deleteCurrentRow": "Delete current row",
+      "deleteCurrentColumn": "Delete current column",
+      "deleteRowsOrColumns": "Delete rows/columns",
+      "align": "Align",
       "alignLeft": "Align left",
       "alignCenter": "Align center",
       "alignRight": "Align right",
@@ -3277,6 +3346,7 @@
       "taskList": "Task List",
       "codeBlock": "Code Block",
       "languages": {
+        "Chinese": "Chinese",
         "English": "English",
         "Japanese": "Japanese",
         "Korean": "Korean",
@@ -3288,6 +3358,13 @@
         "Arabic": "Arabic"
       },
       "customLanguagePlaceholder": "Custom language..."
+    },
+    "chatCopy": {
+      "copyCode": "Copy code",
+      "copyTable": "Copy table",
+      "copiedCode": "Code copied",
+      "copiedTable": "Table copied",
+      "copyFailed": "Copy failed"
     },
     "inlineAI": {
       "generateTitle": "AI inspiration",
@@ -3339,10 +3416,13 @@
       "abort": "Abort",
       "explainTitle": "AI Explanation",
       "explaining": "Explaining...",
+      "translateTitle": "AI Translation",
+      "translating": "Translating...",
       "selectedText": "Selected text",
       "explainHint": "For reading only, not inserted into the note",
       "copy": "Copy",
       "copied": "Copied",
+      "replaceOriginal": "Replace original",
       "close": "Close"
     },
     "image": {

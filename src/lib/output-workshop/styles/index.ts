@@ -1,6 +1,11 @@
 /**
  * 智能排版风格构建器注册表
  * 按 templateId 分发到对应 build* 函数，替代 use-output-generation 里的 19-case switch。
+ *
+ * 注意：social-redbook-* 系列模板（小红书组图）**不**纳入此注册表。它们走独立的
+ * `src/lib/output-workshop/social-redbook-builder.ts` + `rebuildAutoRedbookIfNeeded`
+ * 流程，因为组图需要「从源材料拆分多卡 + 主题配色 + lint 驱动重建」的动态管线，
+ * 不是简单的 templateId → 单段 HTML 映射。强行塞进注册表会破坏其重建逻辑。
  */
 import type { BuildHtmlOptions } from "../shared/builder-utils"
 import { buildEditorialArticle } from "./article-editorial"

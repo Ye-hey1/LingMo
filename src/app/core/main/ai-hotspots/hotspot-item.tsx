@@ -1,6 +1,7 @@
 'use client'
 
 import { memo, type ReactNode } from 'react'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import {
   ArchiveRestore,
   BookOpenCheck,
@@ -26,7 +27,7 @@ import {
 import { cn } from '@/lib/utils'
 import { prefetchArticle } from '@/lib/web/fetch-article'
 import type { AiHotspotItem } from '@/lib/ai-hotspots'
-import { formatHotspotTime, getPrimaryHotspotTag } from './hotspot-utils'
+import { formatHotspotDateTime, formatHotspotTime, getDisplayHotspotTags, getHotspotDisplayTimeValue } from './hotspot-utils'
 import type { HotspotViewMode } from './hotspot-filter-bar'
 
 interface HotspotItemProps {
@@ -83,8 +84,8 @@ function IconBtn({ label, active, onClick, children }: { label: string; active?:
       title={label}
       aria-label={label}
       className={cn(
-        'flex size-7 shrink-0 items-center justify-center rounded-md transition-colors',
-        active ? 'text-amber-500' : 'text-muted-foreground/60 hover:bg-muted hover:text-foreground',
+        'ai-hotspots-icon-button flex size-7 shrink-0 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30',
+        active ? 'bg-amber-500/10 text-amber-600 dark:text-amber-300' : 'text-muted-foreground/60 hover:bg-muted hover:text-foreground',
       )}
       onClick={(e) => { e.stopPropagation(); onClick() }}
     >
@@ -95,44 +96,49 @@ function IconBtn({ label, active, onClick, children }: { label: string; active?:
 
 function SourceBadge({ item }: { item: AiHotspotItem }) {
   return (
-    <span className="inline-flex max-w-[160px] items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+    <span className="inline-flex max-w-[160px] items-center gap-1 text-[11px] text-muted-foreground">
       <Radar className="size-2.5 shrink-0 text-muted-foreground/60" />
       <span className="truncate">{item.sourceName}</span>
     </span>
   )
 }
 
-function ScoreBadge({ score }: { score: number }) {
-  if (score >= 24) {
-    return <span className="shrink-0 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-amber-600 dark:text-amber-400">{score}</span>
+function ScoreBadge({ score, subtle }: { score: number; subtle?: boolean }) {
+  if (subtle) {
+    return <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/55">热度 {score}</span>
   }
-  return <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">{score}</span>
+  if (score >= 24) {
+    return <span className="shrink-0 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-amber-600 dark:text-amber-400">S {score}</span>
+  }
+  return <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">S {score}</span>
 }
 
 function MetaLine({ item }: { item: AiHotspotItem }) {
+  const tags = getDisplayHotspotTags(item, 3)
+  const timeText = formatHotspotDateTime(getHotspotDisplayTimeValue(item))
+
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground/80">
       <span className="inline-flex items-center gap-0.5">
         <Clock className="size-3" />
-        {formatHotspotTime(item.lastSeenAt || item.publishedAt)}
+        {timeText}
       </span>
-      <span className="rounded bg-muted px-1 py-0.5">{getPrimaryHotspotTag(item)}</span>
-      {item.tags.slice(1, 3).map(tag => (
-        <span key={tag} className="rounded bg-muted/60 px-1 py-0.5">{tag}</span>
+      {tags.map(tag => (
+        <span key={tag} className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground/90">#{tag}</span>
       ))}
     </div>
   )
 }
 
 export const HotspotItem = memo(function HotspotItem({
-  featured: _featured,
+  featured,
   item,
   query,
   selected,
   selectable,
   checked,
   trashMode,
-  viewMode: _viewMode = 'list',
+  viewMode = 'list',
   onCheckedChange,
   onSelect,
   onToggleFavorite,
@@ -147,23 +153,102 @@ export const HotspotItem = memo(function HotspotItem({
   onGenerateInsight: _onGenerateInsight,
 }: HotspotItemProps) {
   const markRead = () => { if (!item.isRead) onMarkRead(item.id, true) }
+  const isGrid = viewMode === 'grid'
+  const isHeadline = viewMode === 'headline'
   const openOriginal = (e: React.MouseEvent) => {
     e.stopPropagation()
     markRead()
-    if (item.url) window.open(item.url, '_blank', 'noopener,noreferrer')
+    if (!item.url) return
+    void openUrl(item.url).catch(() => {
+      window.open(item.url, '_blank', 'noopener,noreferrer')
+    })
   }
   const handlePrefetch = () => prefetchArticle(item.url)
+  const headlineTags = getDisplayHotspotTags(item, 1)
+  const headlineTime = formatHotspotTime(getHotspotDisplayTimeValue(item))
+
+  if (isHeadline) {
+    return (
+      <article
+        role="button"
+        tabIndex={0}
+        onMouseEnter={handlePrefetch}
+        className={cn(
+          'group relative cursor-pointer rounded-md border border-transparent px-3 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35',
+          selected || checked
+            ? 'bg-[hsl(var(--hotspot-accent)/0.10)]'
+            : 'hover:bg-muted/65',
+        )}
+        onClick={() => {
+          markRead()
+          onSelect?.(item.id)
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          markRead()
+          onSelect?.(item.id)
+        }}
+      >
+        <div className="grid min-h-7 grid-cols-[minmax(92px,160px)_minmax(0,1fr)_auto] items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
+            {selectable ? (
+              <Checkbox
+                checked={checked}
+                className={cn(
+                  'size-4 shrink-0 border-muted-foreground/35 bg-background transition-opacity',
+                  checked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+                )}
+                onClick={(e) => e.stopPropagation()}
+                onCheckedChange={(v) => onCheckedChange?.(item.id, v === true)}
+              />
+            ) : null}
+            <span className="truncate">{item.feedName || item.sourceName}</span>
+          </div>
+
+          <div className="flex min-w-0 items-center gap-2">
+            {!item.isRead ? <span className="size-1.5 shrink-0 rounded-full bg-[hsl(var(--hotspot-accent))]" /> : null}
+            <span className={cn(
+              'min-w-0 truncate text-[15px] leading-6 text-foreground',
+              item.isRead ? 'font-medium text-foreground/82' : 'font-semibold',
+            )}>
+              <HighlightText text={item.title} query={query} />
+            </span>
+            {headlineTags[0] ? (
+              <span className="hidden shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground md:inline-flex">
+                {headlineTags[0]}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="flex min-w-[76px] justify-end text-[13px] tabular-nums text-muted-foreground/75">
+            {headlineTime}
+          </div>
+        </div>
+      </article>
+    )
+  }
 
   return (
     <article
+      role="button"
+      tabIndex={0}
       onMouseEnter={handlePrefetch}
       className={cn(
-        'group relative cursor-pointer rounded-lg border bg-card transition-colors duration-150',
+        'ai-hotspots-card group relative cursor-pointer rounded-md border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35',
+        isGrid && 'ai-hotspots-card-grid',
         selected || checked
-          ? 'border-primary/40 bg-primary/[0.03]'
-          : 'border-border hover:border-foreground/15 hover:bg-muted/40',
+          ? 'is-selected border-[hsl(var(--hotspot-accent)/0.38)] bg-[hsl(var(--hotspot-accent)/0.06)]'
+          : 'border-border/70',
+        featured && !isGrid && 'border-[hsl(var(--hotspot-accent)/0.34)]',
       )}
       onClick={() => {
+        markRead()
+        onSelect?.(item.id)
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
         markRead()
         onSelect?.(item.id)
       }}
@@ -183,11 +268,14 @@ export const HotspotItem = memo(function HotspotItem({
         </div>
       )}
 
-      <div className="flex items-start gap-3 p-3.5">
+      <div className={cn('flex items-start gap-3', isGrid ? 'min-h-full p-4' : 'px-3 py-3')}>
         {/* 左侧：来源图标 */}
-        <div className="relative flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-[11px] font-semibold text-muted-foreground">
+        <div className={cn(
+          'relative flex shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/45 text-[11px] font-semibold text-muted-foreground',
+          isGrid ? 'size-10' : 'size-9',
+        )}>
           {(item.sourceName || 'AI').slice(0, 2).toUpperCase()}
-          {!item.isRead && <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary" />}
+          {!item.isRead && <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-[hsl(var(--hotspot-accent))]" />}
         </div>
 
         {/* 中间：内容区 */}
@@ -204,15 +292,21 @@ export const HotspotItem = memo(function HotspotItem({
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); markRead(); onSelect?.(item.id) }}
-            className="block w-full text-left text-[14px] font-semibold leading-5 text-foreground transition-colors hover:text-primary"
+            className={cn(
+              'block w-full text-left font-semibold text-foreground transition-colors hover:text-[hsl(var(--hotspot-accent-foreground))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 dark:hover:text-[hsl(var(--hotspot-accent))]',
+              isGrid ? 'text-[15px] leading-6' : 'text-[14px] leading-5',
+            )}
           >
-            {!item.isRead && <span className="mr-1.5 inline-block size-1.5 rounded-full bg-primary align-middle" />}
+            {!item.isRead && <span className="mr-1.5 inline-block size-1.5 rounded-full bg-[hsl(var(--hotspot-accent))] align-middle" />}
             <HighlightText text={item.title} query={query} />
           </button>
 
           {/* 摘要 */}
           {(item.signalSummary || item.summary) && (
-            <p className="mt-1.5 line-clamp-1 text-[13px] leading-5 text-muted-foreground/90">
+            <p className={cn(
+              'mt-2 text-[13px] leading-5 text-muted-foreground/90',
+              isGrid ? 'line-clamp-3' : 'line-clamp-2',
+            )}>
               {item.signalSummary || item.summary}
             </p>
           )}
@@ -225,8 +319,11 @@ export const HotspotItem = memo(function HotspotItem({
 
         {/* 右侧：评分 + 操作按钮 */}
         <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <ScoreBadge score={item.score} />
-          <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <ScoreBadge score={item.score} subtle={!isGrid} />
+          <div className={cn(
+            'flex items-center gap-0.5 transition-opacity',
+            isGrid ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
+          )}>
             <IconBtn label="收藏" active={item.isFavorite} onClick={() => onToggleFavorite(item.id)}>
               <Star className={cn('size-3.5', item.isFavorite && 'fill-current')} />
             </IconBtn>
@@ -239,7 +336,7 @@ export const HotspotItem = memo(function HotspotItem({
               title="在浏览器中打开原文"
               aria-label="在浏览器中打开原文"
               onClick={openOriginal}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+              className="ai-hotspots-icon-button flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
             >
               <ExternalLink className="size-3.5" />
             </button>
@@ -247,7 +344,7 @@ export const HotspotItem = memo(function HotspotItem({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground/60 hover:bg-muted hover:text-foreground"
+                  className="ai-hotspots-icon-button flex size-7 items-center justify-center rounded-md text-muted-foreground/60 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <EllipsisVertical className="size-3.5" />

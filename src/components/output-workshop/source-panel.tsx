@@ -44,6 +44,8 @@ import { isLocalWechatOutputTemplate } from "@/lib/output-workshop/template-rout
 import type { ExtractedSection } from "./types"
 import { getMermaidRenderModeLabel } from "./workshop-controls"
 import { useWorkshopContext } from "./workshop-context"
+import { WechatThemeEditor } from "./wechat-theme-editor"
+import { isCustomWechatThemeId, loadCustomWechatThemes } from "@/lib/output-workshop/wechat-styles"
 
 const FONT_PRESETS = [
   {
@@ -179,6 +181,8 @@ export function SourcePanel() {
   const { handleSelectTemplate: onSelectTemplate } = ctx.templates
   const selectedTemplateName = ctx.selectedTemplate.name
   const isOneClickLayoutTemplate = isLocalWechatOutputTemplate(ctx.selectedTemplate, selectedTemplateId)
+  const isCustomWechatTheme = isCustomWechatThemeId(selectedTemplateId)
+  const [themeEditorOpen, setThemeEditorOpen] = React.useState(false)
   const generatedHtmlLength = ctx.generatedHtml.length
   const sourceTextareaRef = React.useRef<HTMLTextAreaElement | null>(null)
   const [styleRewriting, setStyleRewriting] = React.useState<StyleDocId | null>(null)
@@ -262,15 +266,29 @@ export function SourcePanel() {
                 停止
               </Button>
             ) : (
-              <Button
-                size="sm"
-                className="h-8 gap-1.5 px-3 text-xs font-semibold shadow-none"
-                onClick={onGenerate}
-                disabled={!sourceContent.trim() || exportBusy}
-              >
-                <Send className="size-3.5" />
-                {isOneClickLayoutTemplate ? "一键排版" : "开始构建"}
-              </Button>
+              <>
+                {isOneClickLayoutTemplate && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1.5 px-3 text-xs shadow-none"
+                    onClick={() => setThemeEditorOpen(true)}
+                    title={isCustomWechatTheme ? "编辑当前自定义主题" : "新建自定义主题"}
+                  >
+                    <Pencil className="size-3.5" />
+                    {isCustomWechatTheme ? "编辑主题" : "新建主题"}
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5 px-3 text-xs font-semibold shadow-none"
+                  onClick={onGenerate}
+                  disabled={!sourceContent.trim() || exportBusy}
+                >
+                  <Send className="size-3.5" />
+                  {isOneClickLayoutTemplate ? "一键排版" : "开始构建"}
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -913,6 +931,20 @@ export function SourcePanel() {
           </div>
         )}
       </div>
+      {/* 微信自定义主题编辑器：选中微信模板时可新建/编辑主题，保存后刷新模板列表 */}
+      <WechatThemeEditor
+        open={themeEditorOpen}
+        onOpenChange={setThemeEditorOpen}
+        initialTheme={
+          isCustomWechatTheme
+            ? loadCustomWechatThemes().find((t) => t.id === selectedTemplateId) ?? null
+            : null
+        }
+        onSaved={() => {
+          // 保存后刷新模板列表，使新主题出现在「一键排版」分类
+          void ctx.templates.loadTemplates()
+        }}
+      />
     </div>
   )
 }

@@ -50,7 +50,8 @@ import {
   summarizeGitHubProject,
 } from "@/lib/github-project"
 import { ensureTagByName } from "@/db/tags"
-import { fetchWechatArticleAsMarkdown, isWechatArticleUrl, parseWechatArticleHtml, WECHAT_ARTICLE_TAG_NAME } from "@/lib/wechat-article"
+import { isWechatArticleUrl, WECHAT_ARTICLE_TAG_NAME } from "@/lib/wechat-article"
+import { captureWechatArticleToMark } from "@/lib/wechat-article-capture"
 import { fetchVideoTranscript, getVideoPlatform, isVideoTranscriptUrl, VIDEO_TRANSCRIPT_TAG_NAME } from "@/lib/video-transcript"
 import { buildXhsNoteRecord, fetchXhsNoteData, isXhsUrl, XHS_NOTE_TAG_NAME } from "@/lib/xhs-extractor"
 import { extractAudioTrack, segmentAudio } from "@/lib/ffmpeg-wasm"
@@ -891,20 +892,9 @@ export function ControlLink() {
 
       if (isWechatArticleUrl(targetUrl)) {
         setQueue(queueId, { progress: '55%' })
-        const wechatArticle = wechatHtmlSource
-          ? parseWechatArticleHtml(wechatHtmlSource, targetUrl)
-          : await fetchWechatArticleAsMarkdown(targetUrl)
-        const articleTag = await ensureTagByName(WECHAT_ARTICLE_TAG_NAME)
+        const mark = await captureWechatArticleToMark(targetUrl, wechatHtmlSource)
 
-        await insertMark({
-          tagId: articleTag.id,
-          type: 'link',
-          desc: wechatArticle.desc,
-          content: wechatArticle.content,
-          url: targetUrl,
-        })
-
-        setQueue(queueId, { progress: '100%', tagId: articleTag.id })
+        setQueue(queueId, { progress: '100%', tagId: mark.tagId })
         const { fetchAllMarks } = useMarkStore.getState()
         await fetchMarks()
         await fetchAllMarks()
@@ -912,7 +902,7 @@ export function ControlLink() {
         getCurrentTag()
         toast({
           title: '公众号文章已保存',
-          description: `状态：完成。${wechatArticle.title} 已归入「${WECHAT_ARTICLE_TAG_NAME}」。`,
+          description: `状态：完成。${mark.desc?.split('\n')[0] || '公众号文章'} 已归入「${WECHAT_ARTICLE_TAG_NAME}」。`,
         })
         return
       }

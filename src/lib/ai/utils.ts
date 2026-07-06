@@ -9,6 +9,16 @@ import { buildXiaoMoChatSystemPrompt } from "./xiaomo-prompt";
 import { matchesConfiguredModelSelection } from "./model-selection";
 import { formatError } from "./error-handler";
 
+function isChunkLoadFailure(error: unknown) {
+  const message = error instanceof Error
+    ? `${error.name} ${error.message}`
+    : typeof error === 'string'
+      ? error
+      : String(error ?? '')
+
+  return /ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module|importing a module script failed/i.test(message)
+}
+
 const MERMAID_OUTPUT_GUIDE = `When a process, architecture, relationship, decision tree, timeline, or comparison is better expressed visually, include a valid Mermaid fenced code block in the answer:
 \`\`\`mermaid
 flowchart TD
@@ -17,6 +27,7 @@ flowchart TD
 Keep the Mermaid syntax valid and keep node labels concise.
 All visible Mermaid node labels and edge labels must be Simplified Chinese by default, unless the user explicitly asks for another language.
 Do not use English labels such as "Input Tokens", "Layer Norm", "Transformer Layer", or "Softmax"; translate them into concise Simplified Chinese.
+Keep diagrams clean and document-like: do not use custom colors, classDef, class assignments, style directives, icon directives, or decorative gradients. Rely on the app's neutral Mermaid theme.
 For Mermaid flowcharts:
 - Put every node or edge statement on its own line.
 - Do not use horizontal divider lines such as ----- inside the code block.
@@ -232,7 +243,11 @@ export async function prepareMessages(
     }
   } catch (error) {
     // 如果记忆加载失败，不影响正常对话
-    console.error('Failed to load memory context:', error)
+    if (isChunkLoadFailure(error)) {
+      console.warn('Skipped memory context because its chunk is not available. Refreshing the dev window or restarting the dev server will restore it.')
+    } else {
+      console.error('Failed to load memory context:', error)
+    }
   }
 
   promptSections.push(MERMAID_OUTPUT_GUIDE)

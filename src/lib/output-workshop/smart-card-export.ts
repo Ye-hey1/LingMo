@@ -4,7 +4,19 @@
  * 替代原有的像素级切割导出方案
  */
 
-import { domToBlob, waitUntilLoad } from "modern-screenshot"
+import { domToBlob } from "modern-screenshot"
+import { pick, extractAttr } from "./shared/html-parse"
+import type { ExportResult, SmartCardExportSkip } from "./shared/types"
+import { saveBlobAs } from "./shared/file-save"
+import {
+  nextFrame,
+  sleep,
+  withTimeout,
+  createOffscreenIframe,
+  waitForDocumentResources,
+} from "./shared/offscreen-render"
+import { logWarn } from "./shared/log"
+import { buildCardRootStyles } from "./shared/card-styles"
 
 // ---------------------------------------------------------------------------
 // 1. 类型定义
@@ -66,20 +78,8 @@ export type SmartCardParsed = {
   pagingMode: SmartCardPagingMode
 }
 
-export interface ExportResult {
-  fileName: string
-  filePath?: string
-  canceled?: boolean
-  exportedCount?: number
-  totalCount?: number
-  skipped?: SmartCardExportSkip[]
-}
-
-export interface SmartCardExportSkip {
-  index: number
-  title: string
-  reason: string
-}
+// 注：ExportResult / SmartCardExportSkip 已统一下沉到 ./shared/types.ts，本文件按需 import。
+export type { ExportResult, SmartCardExportSkip } from "./shared/types"
 
 export interface SmartCardRenderOptions {
   pagingMode?: SmartCardPagingMode
@@ -90,15 +90,7 @@ export interface SmartCardRenderOptions {
 // 2. HTML 解析辅助
 // ---------------------------------------------------------------------------
 
-function pick(re: RegExp, src: string): string {
-  const m = re.exec(src)
-  return m ? m[1] : ""
-}
-
-function extractAttr(tag: string, name: string): string {
-  const re = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i")
-  return pick(re, tag)
-}
+// 注：pick / extractAttr 已统一收口到 ./shared/html-parse.ts，本文件按需 import。
 
 function normalizePagingMode(mode: string | undefined): SmartCardPagingMode {
   if (mode === "separator" || mode === "auto-fit" || mode === "auto-split" || mode === "dynamic") return mode
@@ -149,11 +141,15 @@ const DEFAULT_CARD_SELECTORS = [
   ".xhs-card",
   ".learning-card",
   ".outline-section",
-  "section",
+  ".card-section",
+  ".content-section",
+  "[data-section]",
+  ".section-card",
   ".section-container",
   ".hero-section",
   ".report-section",
   ".kpi-card",
+  // 通用选择器放末尾，仅当更具体的选择器均不匹配时才尝试
   "article",
 ]
 
@@ -162,8 +158,11 @@ const DEFAULT_CARD_SELECTORS = [
 // ---------------------------------------------------------------------------
 
 /**
- * 将生成的 HTML 解析为独立的语义卡片
- * 4 级检测降级：模板蓝图 → CSS 选择器 → 标题边界 → 整页兜底
+ * 将生成的 HTML 解析为独立的语义卡片。
+ *
+ * 检测采用「策略数组 + 首个命中即返回」的降级链，便于追踪与扩展：
+ *   separator → blueprint → selector → auto-split → heading → fallback
+ * 每个策略返回 >1 张卡片即视为命中；全部未命中则整页兜底为单张。
  */
 export function parseSmartCards(
   fullHtml: string,
@@ -182,47 +181,65 @@ export function parseSmartCards(
   const parser = new DOMParser()
   const doc = parser.parseFromString(fullHtml, "text/html")
 
-  // Tier 0: Auto-Redbook 手动分隔模式，识别 Markdown/HTML 中保留的 --- 分隔段
-  if (pagingMode === "separator") {
-    const cards = splitBySeparatorBoundaries(doc, head, bodyClass, bodyStyle, blueprint)
-    if (cards.length > 1) {
-      return { hasCards: true, cards, head, bodyClass, bodyStyle, detectionMethod: "separator", pagingMode }
-    }
+  // 检测上下文，供各策略闭包共享
+  const ctx = { doc, head, bodyClass, bodyStyle, blueprint, pagingMode }
+
+  /** 单个检测策略：返回 >1 张卡片即命中，否则返回 null 让下一个策略继续 */
+  type DetectionStrategy = {
+    name: SmartCardParsed["detectionMethod"]
+    detect: (c: typeof ctx) => SmartCard[] | null
   }
 
-  // Tier 1: 模板蓝图选择器
-  if (blueprint?.cardSelectors?.length) {
-    const combinedCards = shouldTryCombinedCardSelectors(blueprint.cardSelectors)
-      ? tryCombinedSelectors(doc, blueprint.cardSelectors, head, bodyClass, bodyStyle, blueprint)
-      : []
-    if (combinedCards.length > 1) {
-      return { hasCards: true, cards: combinedCards, head, bodyClass, bodyStyle, detectionMethod: "blueprint", pagingMode }
+  // 命中条件：产出多于 1 张卡片。封装为 helper 避免每个策略重复 length 判断。
+  const hit = (cards: SmartCard[]): SmartCard[] | null => (cards.length > 1 ? cards : null)
+
+  const strategies: DetectionStrategy[] = [
+    // Tier 0: Auto-Redbook 手动分隔模式（--- 分隔段）
+    {
+      name: "separator",
+      detect: (c) =>
+        c.pagingMode === "separator"
+          ? hit(splitBySeparatorBoundaries(c.doc, c.head, c.bodyClass, c.bodyStyle, c.blueprint))
+          : null,
+    },
+    // Tier 1: 模板蓝图选择器（先尝试组合选择器，再尝试逐个选择器）
+    {
+      name: "blueprint",
+      detect: (c) => {
+        if (!c.blueprint?.cardSelectors?.length) return null
+        const selectors = c.blueprint.cardSelectors
+        if (shouldTryCombinedCardSelectors(selectors)) {
+          const combined = tryCombinedSelectors(c.doc, selectors, c.head, c.bodyClass, c.bodyStyle, c.blueprint)
+          if (combined.length > 1) return combined
+        }
+        return hit(trySelectors(c.doc, selectors, c.head, c.bodyClass, c.bodyStyle, c.blueprint))
+      },
+    },
+    // Tier 2: 默认 CSS 选择器级联
+    {
+      name: "selector",
+      detect: (c) => hit(trySelectors(c.doc, DEFAULT_CARD_SELECTORS, c.head, c.bodyClass, c.bodyStyle, c.blueprint)),
+    },
+    // Tier 3: Auto-Redbook auto-split 语义拆分（按标题与内容体量组合为固定比例卡）
+    {
+      name: "auto-split",
+      detect: (c) =>
+        c.pagingMode === "auto-split"
+          ? hit(splitByContentWeight(c.doc, c.head, c.bodyClass, c.bodyStyle, c.blueprint))
+          : null,
+    },
+    // Tier 4: 标题边界分割
+    {
+      name: "heading",
+      detect: (c) => hit(splitByHeadingBoundaries(c.doc, c.head, c.bodyClass, c.bodyStyle, c.blueprint)),
+    },
+  ]
+
+  for (const strategy of strategies) {
+    const cards = strategy.detect(ctx)
+    if (cards) {
+      return { hasCards: true, cards, head, bodyClass, bodyStyle, detectionMethod: strategy.name, pagingMode }
     }
-
-    const cards = trySelectors(doc, blueprint.cardSelectors, head, bodyClass, bodyStyle, blueprint)
-    if (cards.length > 1) {
-      return { hasCards: true, cards, head, bodyClass, bodyStyle, detectionMethod: "blueprint", pagingMode }
-    }
-  }
-
-  // Tier 2: 默认 CSS 选择器级联
-  const selectorCards = trySelectors(doc, DEFAULT_CARD_SELECTORS, head, bodyClass, bodyStyle, blueprint)
-  if (selectorCards.length > 1) {
-    return { hasCards: true, cards: selectorCards, head, bodyClass, bodyStyle, detectionMethod: "selector", pagingMode }
-  }
-
-  // Tier 3: Auto-Redbook auto-split 语义拆分，根据标题和内容体量组合为多张固定比例卡
-  if (pagingMode === "auto-split") {
-    const autoSplitCards = splitByContentWeight(doc, head, bodyClass, bodyStyle, blueprint)
-    if (autoSplitCards.length > 1) {
-      return { hasCards: true, cards: autoSplitCards, head, bodyClass, bodyStyle, detectionMethod: "auto-split", pagingMode }
-    }
-  }
-
-  // Tier 4: 标题边界分割
-  const headingCards = splitByHeadingBoundaries(doc, head, bodyClass, bodyStyle, blueprint)
-  if (headingCards.length > 1) {
-    return { hasCards: true, cards: headingCards, head, bodyClass, bodyStyle, detectionMethod: "heading", pagingMode }
   }
 
   // Tier 5: 整页兜底
@@ -248,8 +265,9 @@ function trySelectors(
       if (valid.length > 1) {
         return valid.map((el, i) => buildStandaloneCardHtml(el, head, bodyClass, bodyStyle, i, selector, blueprint))
       }
-    } catch {
-      // 选择器无效，跳过
+    } catch (error) {
+      // 选择器无效，跳过；留痕便于排查蓝图配置
+      logWarn(`card-selector:${selector}`, error)
     }
   }
   return []
@@ -272,8 +290,9 @@ function tryCombinedSelectors(
     if (valid.length > 1) {
       return valid.map((el, i) => buildStandaloneCardHtml(el, head, bodyClass, bodyStyle, i, combinedSelector, blueprint))
     }
-  } catch {
-    // 组合选择器无效时回退到逐个选择器。
+  } catch (error) {
+    // 组合选择器无效时回退到逐个选择器；留痕便于排查
+    logWarn("combined-card-selector", error)
   }
   return []
 }
@@ -342,32 +361,13 @@ function buildStandaloneCardHtml(
       })();
     </script>`
     : ""
-  const standalone =
-    `<!DOCTYPE html><html><head>${head}\n` +
-    `<style>
-      html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; }
-      body { display:grid; place-items:center; ${bodyStyle} }
-      .lingmo-smart-card-export-root {
-        width: 100%;
-        height: 100%;
-        display: grid;
-        place-items: center;
-        overflow: hidden;
-      }
-      .lingmo-smart-card-export-root *,
-      .lingmo-smart-card-export-root *::before,
-      .lingmo-smart-card-export-root *::after {
-        animation: none !important;
-        transition: none !important;
-        caret-color: transparent !important;
-      }
-      .lingmo-smart-card-export-root > * {
-        max-width: 100%;
-        max-height: 100%;
-      }
-      body.redbook-output .lingmo-smart-card-export-root > .card-container,
-      body.redbook-output .lingmo-smart-card-export-root > .cover-container,
-      .lingmo-smart-card-export-root > [data-redbook-card] {
+  const rootSelector = ".lingmo-smart-card-export-root"
+  const sharedCss = buildCardRootStyles(rootSelector)
+  const bodyStyleOverride = bodyStyle ? `body { ${bodyStyle} }` : ""
+  const redbookCss = `
+      body.redbook-output ${rootSelector} > .card-container,
+      body.redbook-output ${rootSelector} > .cover-container,
+      ${rootSelector} > [data-redbook-card] {
         width: 1080px !important;
         height: 1440px !important;
         min-height: 1440px !important;
@@ -375,32 +375,11 @@ function buildStandaloneCardHtml(
         max-height: none !important;
         overflow: hidden !important;
       }
-      .lingmo-smart-card-export-root .card-inner,
-      .lingmo-smart-card-export-root .cover-inner {
-        width: 100% !important;
-        height: 100% !important;
-      }
-      .lingmo-smart-card-export-root .card-content,
-      .lingmo-smart-card-export-root .card-content-scale {
-        opacity: 1 !important;
-        visibility: visible !important;
-      }
-      .lingmo-smart-card-export-root .slide,
-      .lingmo-smart-card-export-root .deck-slide,
-      .lingmo-smart-card-export-root .gz-deck-slide {
-        opacity: 1 !important;
-        pointer-events: auto !important;
-        position: relative !important;
-        inset: auto !important;
-        transform: none !important;
-        margin: 0 !important;
-      }
-      .lingmo-smart-card-export-root .gz-deck-slide {
-        width: 100% !important;
-        height: 100% !important;
-      }
-    </style></head>` +
-    `<body class="${bodyClass}"><div class="lingmo-smart-card-export-root">${cardHtml}</div>${redbookAutoFitScript}</body></html>`
+    `
+  const standalone =
+    `<!DOCTYPE html><html><head>${head}\n` +
+    `<style>\n${sharedCss}\n${bodyStyleOverride}\n${redbookCss}\n</style></head>` +
+    `<body class="${bodyClass}"><div class="${rootSelector}">${cardHtml}</div>${redbookAutoFitScript}</body></html>`
 
   return {
     html: standalone,
@@ -646,8 +625,9 @@ function wrapAsSingleCard(fullHtml: string, blueprint?: ExportBlueprint): SmartC
 // 4. 卡片渲染管线
 // ---------------------------------------------------------------------------
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
-const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+// nextFrame / sleep / withTimeout / createOffscreenIframe / waitForDocumentResources
+// 已统一收口到 ./shared/offscreen-render.ts，本文件按需 import。
+
 const CARD_LOAD_TIMEOUT_MS = 3500
 const CARD_RESOURCE_TIMEOUT_MS = 6500
 const CARD_SCREENSHOT_TIMEOUT_MS = 9000
@@ -660,18 +640,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(`${label}超时，请检查卡片中的远程图片、字体或复杂样式`))
-    }, timeoutMs)
-  })
-
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timeoutId) clearTimeout(timeoutId)
-  })
-}
+/** 卡片资源加载超时配置，与原 waitForIframeReadyInner 一致 */
+const CARD_RESOURCE_CONFIG = {
+  stylesheetMs: CARD_LOAD_TIMEOUT_MS,
+  fontsMs: 2500,
+  imageMs: 4000,
+  waitUntilLoadMs: 5000,
+  settleMs: 100,
+} as const
 
 function getRenderViewport(card: SmartCard, targetWidth: number, targetHeight: number): { width: number; height: number } {
   const maxDynamicHeight = Math.min(Math.max(card.dynamicMaxHeight ?? targetHeight, targetHeight), 4096)
@@ -807,59 +783,16 @@ function applyAutoFitScale(doc: Document): void {
   scaleEl.style.transform = `scale(${fitScale})`
 }
 
-/** 等待 iframe 文档就绪 */
-async function waitForIframeReady(iframe: HTMLIFrameElement): Promise<void> {
-  await withTimeout(waitForIframeReadyInner(iframe), CARD_RESOURCE_TIMEOUT_MS, "卡片资源加载")
-}
-
-async function waitForIframeReadyInner(iframe: HTMLIFrameElement): Promise<void> {
+/** 等待 iframe 文档资源就绪（统一走共享底座，外层套 CARD_RESOURCE_TIMEOUT_MS 超时） */
+function waitForIframeReady(iframe: HTMLIFrameElement): Promise<void> {
   const doc = iframe.contentDocument
-  if (!doc) return
-
-  // 样式表
-  const links = Array.from(doc.querySelectorAll('link[rel="stylesheet"]'))
-  await Promise.all(
-    links.map(
-      (l) =>
-        new Promise<void>((res) => {
-          if ((l as HTMLLinkElement).sheet) return res()
-          l.addEventListener("load", () => res(), { once: true })
-          setTimeout(res, CARD_LOAD_TIMEOUT_MS)
-        })
-    )
+  const win = iframe.contentWindow
+  if (!doc) return Promise.resolve()
+  return withTimeout(
+    waitForDocumentResources(doc, win, CARD_RESOURCE_CONFIG),
+    CARD_RESOURCE_TIMEOUT_MS,
+    "卡片资源加载"
   )
-
-  // 字体
-  try {
-    const fonts = (doc as Document & { fonts?: FontFaceSet }).fonts
-    if (fonts?.ready) {
-      await withTimeout(fonts.ready, 2500, "卡片字体加载").catch(() => undefined)
-    }
-  } catch { /* noop */ }
-
-  // 图片
-  const imgs = Array.from(doc.images)
-  await Promise.all(
-    imgs.map(
-      (img) =>
-        new Promise<void>((res) => {
-          if (img.complete && img.naturalWidth > 0) return res()
-          const done = () => res()
-          img.addEventListener("load", done, { once: true })
-          img.addEventListener("error", done, { once: true })
-          if ("decode" in img) img.decode().then(done, done)
-          setTimeout(done, 4000)
-        })
-    )
-  )
-
-  try {
-    await waitUntilLoad(doc.documentElement, { timeout: 5000 })
-  } catch { /* noop */ }
-
-  await nextFrame()
-  await sleep(100)
-  await nextFrame()
 }
 
 /**
@@ -880,37 +813,16 @@ export async function renderCardToBlob(
     dynamicMaxHeight: options?.dynamicMaxHeight ?? card.dynamicMaxHeight,
   }
   const viewport = getRenderViewport(renderCard, targetWidth, targetHeight)
-  const wrap = document.createElement("div")
-  wrap.style.cssText = `
-    position: fixed;
-    top: 0; left: -100000px;
-    width: ${viewport.width}px; height: ${viewport.height}px;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: -1;
-  `
-
-  const iframe = document.createElement("iframe")
-  iframe.style.cssText = `
-    width: ${viewport.width}px; height: ${viewport.height}px;
-    border: 0; background: ${card.bg ?? "#fff"};
-  `
-  iframe.srcdoc = card.html
-
-  wrap.appendChild(iframe)
-  document.body.appendChild(wrap)
+  const handle = createOffscreenIframe(viewport.width, viewport.height, card.bg ?? "#fff")
+  handle.iframe.srcdoc = card.html
 
   try {
     // 等待加载
-    await new Promise<void>((res) => {
-      const done = () => res()
-      if (iframe.contentDocument?.readyState === "complete") return done()
-      iframe.addEventListener("load", done, { once: true })
-      setTimeout(done, CARD_LOAD_TIMEOUT_MS)
-    })
+    await handle.waitForLoad(CARD_LOAD_TIMEOUT_MS)
 
-    await waitForIframeReady(iframe)
+    await waitForIframeReady(handle.iframe)
 
+    const iframe = handle.iframe
     // 截图
     const doc = iframe.contentDocument!
     const prevHtmlStyle = doc.documentElement.getAttribute("style")
@@ -966,7 +878,7 @@ export async function renderCardToBlob(
       else doc.body.setAttribute("style", prevBodyStyle)
     }
   } finally {
-    wrap.remove()
+    handle.dispose()
   }
 }
 
@@ -1050,32 +962,8 @@ export async function downloadSingleCard(
 // 6. 文件保存辅助
 // ---------------------------------------------------------------------------
 
-async function saveBlobAs(blob: Blob, defaultName: string): Promise<ExportResult> {
-  // 优先尝试 Tauri 原生保存对话框
-  try {
-    const { save } = await import("@tauri-apps/plugin-dialog")
-    const { writeFile } = await import("@tauri-apps/plugin-fs")
-    const path = await save({
-      defaultPath: defaultName,
-      filters: [{ name: defaultName.endsWith(".zip") ? "ZIP" : "PNG", extensions: [defaultName.split(".").pop() || "zip"] }],
-    })
-    if (!path) return { fileName: defaultName, canceled: true }
-    const buf = await blob.arrayBuffer()
-    await writeFile(path, new Uint8Array(buf))
-    return { fileName: defaultName, filePath: path }
-  } catch {
-    // 降级为浏览器下载
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = defaultName
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-    return { fileName: defaultName }
-  }
-}
+// saveBlobAs 已统一收口到 ./shared/file-save.ts（更严谨的 isTauri 判定 + 友好 filter），
+// 本文件按需 import。
 
 // ---------------------------------------------------------------------------
 // 7. 生成缩略图（用于 UI 预览）

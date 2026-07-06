@@ -69,6 +69,7 @@ export async function initActivityDb() {
       where dedupeKey is not null
     `)
   } catch {
+    // Older SQLite builds may not support this partial index; continue without dedupe enforcement.
   }
 
   await db.execute(`

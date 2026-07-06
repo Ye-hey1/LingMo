@@ -33,7 +33,9 @@ export async function initConversationsDb() {
     await db.execute(`
       alter table chats add column conversationId integer default null
     `)
-  } catch {}
+  } catch {
+    // Column may already exist in upgraded databases.
+  }
 
   await migrateExistingChats()
 }

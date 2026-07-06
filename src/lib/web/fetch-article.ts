@@ -9,18 +9,29 @@
  */
 
 import { parseWebPageContent } from './content-extractor'
+import { isWechatArticleUrl } from '@/lib/wechat-article'
+import { findSavedWechatArticle } from '@/lib/wechat-article-cache'
 
 export interface ArticleFetchResult {
   url: string
   host: string
   title: string
   description: string
+  /** 可隔离渲染的正文 HTML。公众号富文本优先走这里，避免 Markdown 转换破坏结构。 */
+  html?: string
   /** 已清洗的正文 Markdown（Readability 提取 + Turndown 转换） */
   markdown: string
   /** 纯文本摘要（用于空正文时的降级展示） */
   excerpt: string
   /** 最终正文是否疑似付费墙 / 纯 JS 渲染导致正文过短 */
   thin: boolean
+}
+
+export interface ArticleFetchOptions {
+  signal?: AbortSignal
+  fallbackTitle?: string
+  fallbackSummary?: string | null
+  fallbackMarkdown?: string | null
 }
 
 export type ArticleFetchErrorCode =
@@ -53,12 +64,22 @@ function getHost(url: string) {
   }
 }
 
+function hasTauriRuntime() {
+  const scope = globalThis as typeof globalThis & {
+    __TAURI__?: unknown
+    __TAURI_INTERNALS__?: unknown
+  }
+  return typeof scope.__TAURI_INTERNALS__ !== 'undefined' || typeof scope.__TAURI__ !== 'undefined'
+}
+
 async function resolveFetcher(): Promise<typeof fetch> {
-  try {
-    const mod = await import('@tauri-apps/plugin-http')
-    if (typeof mod.fetch === 'function') return mod.fetch as typeof fetch
-  } catch {
-    // 非 Tauri 环境（纯浏览器开发服务器）降级到原生 fetch
+  if (hasTauriRuntime()) {
+    try {
+      const mod = await import('@tauri-apps/plugin-http')
+      if (typeof mod.fetch === 'function') return mod.fetch as typeof fetch
+    } catch {
+      // 非 Tauri 环境（纯浏览器开发服务器）降级到原生 fetch
+    }
   }
   if (typeof globalThis.fetch === 'function') return globalThis.fetch.bind(globalThis)
   throw new ArticleFetchError('当前环境无法发起网络请求', 'network')
@@ -169,9 +190,66 @@ async function extractResponseText(response: Response): Promise<string> {
 
 /* ------------------------------- 主入口 ------------------------------- */
 
-export async function fetchArticle(url: string, signal?: AbortSignal): Promise<ArticleFetchResult> {
+export async function fetchArticle(url: string, options: AbortSignal | ArticleFetchOptions = {}): Promise<ArticleFetchResult> {
+  const signal = options instanceof AbortSignal ? options : options.signal
+  const fallbackTitle = options instanceof AbortSignal ? '' : options.fallbackTitle || ''
+  const fallbackSummary = options instanceof AbortSignal ? '' : options.fallbackSummary || ''
+  const fallbackMarkdown = options instanceof AbortSignal ? '' : options.fallbackMarkdown || ''
   const cached = memoryCache.get(url)
   if (cached) return cached
+
+  if (isWechatArticleUrl(url)) {
+    const persistedMarkdown = String(fallbackMarkdown || '').trim()
+    if (persistedMarkdown) {
+      const result: ArticleFetchResult = {
+        url,
+        host: getHost(url),
+        title: fallbackTitle || getHost(url),
+        description: String(fallbackSummary || '').trim(),
+        markdown: persistedMarkdown,
+        excerpt: String(fallbackSummary || '').trim() || persistedMarkdown.slice(0, 500),
+        thin: false,
+      }
+      memoryCache.set(url, result)
+      return result
+    }
+
+    const saved = await findSavedWechatArticle(url)
+    if (saved) {
+      const result: ArticleFetchResult = {
+        url,
+        host: getHost(url),
+        title: saved.record.title || getHost(url),
+        description: saved.record.meta.summary || saved.mark.desc || '',
+        markdown: saved.record.body,
+        excerpt: saved.record.meta.summary || saved.mark.desc || saved.record.body.slice(0, 500),
+        thin: false,
+      }
+      memoryCache.set(url, result)
+      return result
+    }
+
+    const summary = String(fallbackSummary || '').trim()
+    if (summary || fallbackTitle) {
+      const result: ArticleFetchResult = {
+        url,
+        host: getHost(url),
+        title: fallbackTitle || getHost(url),
+        description: summary || '微信公众号文章正文将在后台尝试补采。',
+        markdown: [
+          summary || '这篇微信公众号文章暂时只有 RSS 摘要。正文会在后台限速补采；也可以直接打开原文阅读。',
+          '',
+          `[打开原文](${url})`,
+        ].join('\n'),
+        excerpt: summary,
+        thin: true,
+      }
+      memoryCache.set(url, result)
+      return result
+    }
+
+    throw new ArticleFetchError('微信公众号文章暂时只有摘要，正文会在后台尝试补采。', 'empty')
+  }
 
   const fetcher = await resolveFetcher()
   let response: Response
@@ -246,6 +324,7 @@ export async function fetchArticle(url: string, signal?: AbortSignal): Promise<A
 /** 预热缓存（列表渲染时静默抓取，打开时即时显示） */
 export function prefetchArticle(url: string) {
   if (!url || memoryCache.has(url)) return
+  if (isWechatArticleUrl(url)) return
   void fetchArticle(url).catch(() => {
     // 预热失败静默忽略，正式打开时会重试
   })

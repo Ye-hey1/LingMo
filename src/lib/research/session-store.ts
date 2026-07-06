@@ -85,6 +85,27 @@ export interface DeepResearchSessionSummary {
 export type DeepResearchSessionStatus = 'running' | 'completed' | 'failed' | 'cancelled'
 export type DeepResearchSessionStage = 'initializing' | 'planning' | 'searching' | 'analyzing' | 'verifying' | 'writing' | 'done'
 
+const VALID_STATUSES: readonly DeepResearchSessionStatus[] = ['running', 'completed', 'failed', 'cancelled']
+const VALID_STAGES: readonly DeepResearchSessionStage[] = ['initializing', 'planning', 'searching', 'analyzing', 'verifying', 'writing', 'done']
+
+/** 对加载的 Session 状态做基本 schema 校验，防止损坏文件导致静默失败 */
+function validateSessionState(data: unknown): data is DeepResearchSessionState {
+  if (!data || typeof data !== 'object') return false
+  const s = data as Record<string, unknown>
+  if (typeof s.id !== 'string' || !s.id) return false
+  if (typeof s.query !== 'string' || !s.query) return false
+  if (typeof s.startedAt !== 'string' || !s.startedAt) return false
+  // 验证 ISO 时间格式
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s.startedAt)) return false
+  if (s.status && !VALID_STATUSES.includes(s.status as DeepResearchSessionStatus)) return false
+  if (s.stage && !VALID_STAGES.includes(s.stage as DeepResearchSessionStage)) return false
+  if (typeof s.currentDepth !== 'number') return false
+  if (typeof s.totalDepth !== 'number') return false
+  if (typeof s.currentBreadth !== 'number') return false
+  if (typeof s.totalBreadth !== 'number') return false
+  return true
+}
+
 // 缓存文件相对路径
 function getSessionRelativePath(sessionId: string): string {
   return `.tmp/deep_research/sessions/${sessionId}.json`
@@ -234,7 +255,12 @@ export async function loadSessionState(sessionId: string): Promise<DeepResearchS
       content = await readTextFile(options.path, { baseDir: options.baseDir })
     }
 
-    return JSON.parse(content) as DeepResearchSessionState
+    const parsed = JSON.parse(content)
+    if (!validateSessionState(parsed)) {
+      console.warn(`[DeepResearch] Session ${sessionId} 数据校验失败，可能已损坏，跳过加载`)
+      return null
+    }
+    return parsed
   } catch (error) {
     console.error(`[DeepResearch] 无法加载 Session ${sessionId}:`, error)
     return null

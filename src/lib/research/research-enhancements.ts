@@ -258,15 +258,5 @@ export interface EnhancedResearchProgress extends DeepResearchProgress {
   qualityPreview?: string
 }
 
-/**
- * 格式化增强进度为 HTML 注释（嵌入 chat content）
- */
-export function encodeEnhancedProgress(progress: EnhancedResearchProgress): string {
-  const base = { ...progress }
-  // providerStatuses 和 intermediateSummary 不序列化到 content 中
-  // 它们通过 eventBus 实时传递给前端
-  delete (base as any).providerStatuses
-  delete (base as any).intermediateSummary
-  delete (base as any).qualityPreview
-  return '' // 实际序列化由 progress-status.ts 处理
-}
+// 注：encodeEnhancedProgress 已移除（dead code），实际序列化由 progress-status.ts 处理。
+// EnhancedResearchProgress 接口保留作为类型扩展点，供前端实时进度展示使用。

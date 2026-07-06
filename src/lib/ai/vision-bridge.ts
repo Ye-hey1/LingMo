@@ -119,7 +119,9 @@ async function hashText(value: string) {
         .map(byte => byte.toString(16).padStart(2, '0'))
         .join('')
     }
-  } catch {}
+  } catch {
+    // Fall back to the deterministic string hash below when Web Crypto is unavailable.
+  }
 
   let hash = 0
   for (let i = 0; i < value.length; i++) {

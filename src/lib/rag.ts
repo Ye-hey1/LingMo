@@ -513,6 +513,24 @@ export async function processMarkdownFile(
     const store = await Store.load('store.json')
     const chunkSize = await store.get<number>('ragChunkSize');
     const chunkOverlap = await store.get<number>('ragChunkOverlap');
+    let structuredChunks: Array<{ chunkId: number; content: string; metadata?: unknown }> | null = null;
+    try {
+      const { syncStructuredMarkdownContent } = await import('@/lib/structured-knowledge/sync');
+      const { getStructuredDocumentBundleByPath } = await import('@/db/structured-knowledge');
+      const { buildStructuredRagChunks } = await import('@/lib/structured-knowledge/rag-adapter');
+      await syncStructuredMarkdownContent({ filePath, content, updateKnowledgeObject: true });
+      const bundle = await getStructuredDocumentBundleByPath(filePath);
+      if (bundle) {
+        structuredChunks = buildStructuredRagChunks(bundle.document, bundle.blocks).map(chunk => ({
+          chunkId: chunk.chunkId,
+          content: chunk.content,
+          metadata: chunk.metadata,
+        }));
+      }
+    } catch (error) {
+      console.warn('[RAG] structured markdown indexing failed, falling back to legacy chunks:', error);
+    }
+
     const indexContent = prepareKnowledgeIndexText(content);
     if (!indexContent || indexContent.trim().length === 0) {
       return false;
@@ -531,23 +549,28 @@ export async function processMarkdownFile(
     // 旧向量的维度可能与当前模型不匹配
     const persistedEmbeddingCache = new Map<string, number[]>();
 
+    const sourceChunks = structuredChunks?.length
+      ? structuredChunks
+      : chunks.map((chunk, index) => ({ chunkId: index, content: chunk, metadata: undefined }));
+
     const indexedAt = Date.now();
     const vectorDocs = (
       await runWithConcurrencyLimit(
-      chunks.map((chunk, index) => async () => {
-        const embedding = await getEmbeddingForChunk(chunk, persistedEmbeddingCache);
+      sourceChunks.map((item) => async (): Promise<Omit<VectorDocument, 'id'> | null> => {
+        const embedding = await getEmbeddingForChunk(item.content, persistedEmbeddingCache);
         if (!embedding) {
-          console.error(`Failed to compute embedding for ${vectorDocumentKey} chunk ${index + 1}`);
+          console.error(`Failed to compute embedding for ${vectorDocumentKey} chunk ${item.chunkId + 1}`);
           return null;
         }
 
         return {
           filename: vectorDocumentKey,
-          chunk_id: index,
-          content: chunk,
+          chunk_id: item.chunkId,
+          content: item.content,
           embedding: JSON.stringify(embedding),
-          updated_at: indexedAt
-        } satisfies Omit<VectorDocument, 'id'>;
+          updated_at: indexedAt,
+          metadata: item.metadata ? JSON.stringify(item.metadata) : null,
+        };
       }),
       2
     )).filter((doc): doc is Omit<VectorDocument, 'id'> => Boolean(doc));

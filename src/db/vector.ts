@@ -7,6 +7,7 @@ export interface VectorDocument {
   content: string;
   embedding: string;
   updated_at: number;
+  metadata?: string | null;
 }
 
 interface CachedVector {
@@ -16,6 +17,7 @@ interface CachedVector {
   content: string;
   embedding: number[];
   updated_at: number;
+  metadata?: string | null;
 }
 
 export interface VectorEmbeddingDocument {
@@ -25,6 +27,7 @@ export interface VectorEmbeddingDocument {
   content: string;
   embedding: number[];
   updated_at: number;
+  metadata?: string | null;
 }
 
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000
@@ -56,7 +59,7 @@ class VectorCache {
   async update() {
     const db = await getDb();
     const docs = await db.select<VectorDocument[]>(`
-      select id, filename, content, embedding, updated_at from vector_documents
+      select id, filename, chunk_id, content, embedding, updated_at, metadata from vector_documents
     `);
 
     this.cache.clear();
@@ -72,6 +75,7 @@ class VectorCache {
           content: doc.content,
           embedding,
           updated_at: doc.updated_at,
+          metadata: doc.metadata ?? null,
         };
         this.cache.set(doc.id, cached);
 
@@ -98,6 +102,7 @@ class VectorCache {
         content: doc.content,
         embedding,
         updated_at: doc.updated_at,
+        metadata: doc.metadata ?? null,
       };
       this.cache.set(doc.id, cached);
 
@@ -141,6 +146,15 @@ export async function initVectorDb() {
     )
   `);
 
+  try {
+    await db.execute('alter table vector_documents add column metadata text')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!/duplicate column|already exists/i.test(message)) {
+      console.warn('[VectorDB] metadata migration skipped:', error)
+    }
+  }
+
   await db.execute(`
     create index if not exists idx_vector_documents_filename
     on vector_documents(filename)
@@ -153,8 +167,8 @@ export async function upsertVectorDocument(doc: Omit<VectorDocument, 'id'>) {
   return serializedWrite(async () => {
     const db = await getDb();
     await db.execute(
-      'insert into vector_documents (filename, chunk_id, content, embedding, updated_at) values ($1, $2, $3, $4, $5) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at',
-      [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at],
+      'insert into vector_documents (filename, chunk_id, content, embedding, updated_at, metadata) values ($1, $2, $3, $4, $5, $6) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at, metadata = excluded.metadata',
+      [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at, doc.metadata ?? null],
     );
 
     const inserted = await db.select<VectorDocument[]>(
@@ -173,8 +187,8 @@ export async function upsertVectorDocumentsBatch(docs: Omit<VectorDocument, 'id'
     const db = await getDb();
     for (const doc of docs) {
       await db.execute(
-        'insert into vector_documents (filename, chunk_id, content, embedding, updated_at) values ($1, $2, $3, $4, $5) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at',
-        [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at],
+        'insert into vector_documents (filename, chunk_id, content, embedding, updated_at, metadata) values ($1, $2, $3, $4, $5, $6) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at, metadata = excluded.metadata',
+        [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at, doc.metadata ?? null],
       );
     }
     await vectorCache.update();
@@ -201,8 +215,8 @@ export async function replaceVectorDocumentsForFile(
 
     for (const doc of docs) {
       await db.execute(
-        'insert into vector_documents (filename, chunk_id, content, embedding, updated_at) values ($1, $2, $3, $4, $5) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at',
-        [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at],
+        'insert into vector_documents (filename, chunk_id, content, embedding, updated_at, metadata) values ($1, $2, $3, $4, $5, $6) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at, metadata = excluded.metadata',
+        [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at, doc.metadata ?? null],
       );
     }
 
@@ -321,6 +335,7 @@ export async function getAllVectorEmbeddingDocuments(): Promise<VectorEmbeddingD
     content: doc.content,
     embedding: [...doc.embedding],
     updated_at: doc.updated_at,
+    metadata: doc.metadata ?? null,
   }));
 }
 

@@ -10,7 +10,7 @@ import { getTopDialogPortalContainer } from "@/components/ui/portal-container"
 type ContextMenuProps = React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Root>
 
 // ponytail: inline helper, moved from text-size-context
-const getContextMenuTextSize = (menuType: 'file' | 'record') => {
+const useContextMenuTextSize = (menuType: 'file' | 'record') => {
   const { fileManagerTextSize, recordTextSize } = useSettingStore()
   return menuType === 'file' ? fileManagerTextSize : recordTextSize
 }
@@ -39,7 +39,7 @@ const ContextMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubTrigger>,
   ContextMenuSubTriggerProps
 >(({ className, inset, children, menuType = 'file', ...props }, ref) => {
-  const textSize = getContextMenuTextSize(menuType)
+  const textSize = useContextMenuTextSize(menuType)
   
   return (
     <ContextMenuPrimitive.SubTrigger
@@ -101,7 +101,7 @@ const ContextMenuItem = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Item>,
   ContextMenuItemProps
 >(({ className, inset, menuType = 'file', onClick, ...props }, ref) => {
-  const textSize = getContextMenuTextSize(menuType)
+  const textSize = useContextMenuTextSize(menuType)
 
   const handleClick = (e: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
     // 阻止事件冒泡，防止触发父元素的点击事件（如文件夹折叠/展开）
@@ -134,7 +134,7 @@ const ContextMenuCheckboxItem = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.CheckboxItem>,
   ContextMenuCheckboxItemProps
 >(({ className, children, checked, menuType = 'file', ...props }, ref) => {
-  const textSize = getContextMenuTextSize(menuType)
+  const textSize = useContextMenuTextSize(menuType)
   
   return (
     <ContextMenuPrimitive.CheckboxItem
@@ -166,7 +166,7 @@ const ContextMenuRadioItem = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.RadioItem>,
   ContextMenuRadioItemProps
 >(({ className, children, menuType = 'file', ...props }, ref) => {
-  const textSize = getContextMenuTextSize(menuType)
+  const textSize = useContextMenuTextSize(menuType)
   
   return (
     <ContextMenuPrimitive.RadioItem
@@ -197,7 +197,7 @@ const ContextMenuLabel = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Label>,
   ContextMenuLabelProps
 >(({ className, inset, menuType = 'file', ...props }, ref) => {
-  const textSize = getContextMenuTextSize(menuType)
+  const textSize = useContextMenuTextSize(menuType)
   
   return (
     <ContextMenuPrimitive.Label
@@ -234,7 +234,7 @@ const ContextMenuShortcut = ({
   menuType = 'file',
   ...props
 }: ContextMenuShortcutProps) => {
-  const textSize = getContextMenuTextSize(menuType)
+  const textSize = useContextMenuTextSize(menuType)
   
   return (
     <span

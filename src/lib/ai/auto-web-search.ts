@@ -23,12 +23,13 @@ export interface AutoWebSearchOptions {
   userInput: string
   manualDefaultEnabled?: boolean
   hasSearchProvider?: boolean
+  forceManualDefault?: boolean
 }
 
 const MAX_QUERY_LENGTH = 1200
 
 const STABLE_TASK_HINTS = [
-  /^(解释|说明|总结|翻译|润色|改写|写一段|生成|帮我写|脑暴|取名|分析这段|概括)/,
+  /^(解释|说明|总结|翻译|润色|改写|写一段|生成|帮我写|脑暴|取名|分析这段|概括|你好|您好|哈喽|嗨|在吗)/,
   /^(explain|summarize|translate|rewrite|draft|brainstorm|write|name)\b/i,
   /怎么算|证明|推导|代码报错|这段代码|帮我实现|重构|优化这段/,
 ]
@@ -93,6 +94,30 @@ export function decideAutoWebSearch(options: AutoWebSearchOptions): AutoWebSearc
   }
 
   if (options.manualDefaultEnabled) {
+    const matchedSignals = [
+      ...matchSignals(query, RECENT_TEMPORAL_HINTS, '时间/最新'),
+      ...matchSignals(query, LIVE_DOMAIN_HINTS, '动态领域'),
+      ...matchSignals(query, EXTERNAL_LOOKUP_HINTS, '外部检索'),
+      ...matchSignals(query, FRESH_VERSION_HINTS, '版本/年份'),
+    ]
+    const stableSignals = matchSignals(query, STABLE_TASK_HINTS, '稳定任务')
+    const shouldSearch = options.forceManualDefault || matchedSignals.length > 0
+
+    if (!shouldSearch) {
+      return {
+        enabled: false,
+        shouldSearch: false,
+        confidence: stableSignals.length > 0 ? 0.9 : 0.78,
+        reason: 'stable',
+        label: '自动',
+        detail: stableSignals.length > 0
+          ? '默认联网已开启，但当前更像寒暄、写作或本地上下文任务，暂不联网。'
+          : '默认联网已开启，但未检测到外部检索或实时资料需求，暂不联网。',
+        matchedSignals: Array.from(new Set(stableSignals)),
+        query,
+      }
+    }
+
     if (!hasSearchProvider) {
       return {
         enabled: false,
@@ -112,8 +137,10 @@ export function decideAutoWebSearch(options: AutoWebSearchOptions): AutoWebSearc
       confidence: 1,
       reason: 'manual-default',
       label: '联网',
-      detail: '按全局默认设置，本轮会带入网页搜索结果。',
-      matchedSignals: ['默认联网'],
+      detail: matchedSignals.length > 0
+        ? `默认联网已开启，且检测到${Array.from(new Set(matchedSignals)).join('、')}信号，本轮会带入网页搜索结果。`
+        : '按全局默认设置，本轮会带入网页搜索结果。',
+      matchedSignals: matchedSignals.length > 0 ? Array.from(new Set(matchedSignals)) : ['默认联网'],
       query,
     }
   }

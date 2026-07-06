@@ -12,6 +12,7 @@ import { useTranslations } from 'next-intl'
 import emitter from '@/lib/emitter'
 import useSettingStore from '@/stores/setting'
 import { isLargeMarkdownContentFast } from '@/lib/editor-document-profile'
+import { EMPTY_PARAGRAPH_MARKDOWN } from './markdown-paragraph'
 
 interface MdEditorProps {
   tabContentsRef: RefObject<Record<string, string>>
@@ -50,6 +51,7 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
   } = useSettingStore()
   // State for editor instance (to trigger re-render when ready)
   const [editorInstance, setEditorInstance] = useState<any>(null)
+  const editorInstanceRef = useRef<any>(null)
   // Track if editor has called onEditorReady (meaning it's fully initialized)
   const [editorReady, setEditorReady] = useState(false)
   // AI streaming state
@@ -97,6 +99,7 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
 
       expectedContentRef.current = event.content
       setInitialContent(event.content)
+      setCurrentArticle(event.content)
       if (tabContentsRef.current) {
         tabContentsRef.current[filePath] = event.content
       }
@@ -109,7 +112,7 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
     return () => {
       emitter.off('sync-content-updated', handleSyncContentUpdated as any)
     }
-  }, [filePath, tabContentsRef])
+  }, [filePath, tabContentsRef, setCurrentArticle])
 
   // Listen for AI streaming state
   useEffect(() => {
@@ -149,6 +152,15 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
       }
     }
   }, [])
+
+  useEffect(() => {
+    setInitialContent(null)
+    setIsLoading(true)
+    isLoadingRef.current = true
+    currentArticlePathRef.current = null
+    contentInitializedRef.current = false
+    expectedContentRef.current = null
+  }, [filePath])
 
   const openHoverOutline = useCallback(() => {
     if (outlineHoverCloseTimerRef.current) {
@@ -281,6 +293,18 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
     if (content.length === 0 && !contentInitializedRef.current) {
       return
     }
+    const previousContent = filePath && tabContentsRef.current
+      ? tabContentsRef.current[filePath]
+      : initialContent
+    const previousContentIsSubstantial =
+      typeof previousContent === 'string' &&
+      previousContent.trim().length > EMPTY_PARAGRAPH_MARKDOWN.length &&
+      previousContent.trim() !== EMPTY_PARAGRAPH_MARKDOWN
+    const isPlaceholderOnlyContent = content.trim() === EMPTY_PARAGRAPH_MARKDOWN
+    const editorHasFocus = Boolean(editorInstanceRef.current?.view?.hasFocus?.())
+    if (isPlaceholderOnlyContent && previousContentIsSubstantial && !editorHasFocus) {
+      return
+    }
     // Bug fix: If expected content is set and incoming content doesn't match, skip save
     // This prevents saving stale content during editor initialization race
     // But clear expectedContentRef so subsequent edits can be saved
@@ -322,12 +346,14 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
 
   // Handle editor ready - store editor instance
   const handleEditorReady = useCallback((editor: any) => {
+    editorInstanceRef.current = editor
     setEditorInstance(editor)
     setEditorReady(true)
   }, [])
 
   // Reset editor instance and ready state when file changes
   useEffect(() => {
+    editorInstanceRef.current = null
     setEditorInstance(null)
     setEditorReady(false)
   }, [filePath])
@@ -375,37 +401,41 @@ export function MdEditor({ tabContentsRef, filePath }: MdEditorProps) {
   const cachedContent = filePath && tabContentsRef.current?.[filePath] !== undefined
     ? tabContentsRef.current[filePath]
     : null
+  const hasEditorContent = cachedContent !== null || initialContent !== null
   const editorContent = cachedContent ?? initialContent ?? ''
   const performanceMode = useMemo(
     () => isLargeMarkdownContentFast(editorContent),
     [editorContent],
   )
+  const loadingOverlayClass = 'absolute inset-0 z-50 flex min-h-full items-center justify-center bg-background'
 
   // Loading state - wait for content to be loaded
   // 如果正在从远程拉取，优先显示拉取遮罩
   if (isPulling) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-muted-foreground">
-          <div className="relative">
-            <Loader2 className="size-8 animate-spin" />
-            <Download className="size-4 absolute inset-0 m-auto" />
-          </div>
-          <div className="text-center">
-            <p className="text-sm font-medium">{t('syncingRemote')}</p>
-            <p className="text-xs mt-1">{t('pullingRemote')}</p>
+      <div className="relative h-full min-h-0 w-full flex-1">
+        <div className={loadingOverlayClass}>
+          <div className="flex flex-col items-center gap-3 text-muted-foreground">
+            <div className="relative">
+              <Loader2 className="size-8 animate-spin" />
+              <Download className="size-4 absolute inset-0 m-auto" />
+            </div>
+            <div className="text-center">
+              <p className="text-sm font-medium">{t('syncingRemote')}</p>
+              <p className="text-xs mt-1">{t('pullingRemote')}</p>
+            </div>
           </div>
         </div>
       </div>
     )
   }
 
-  // 如果 currentArticle 已经有内容，直接显示（拉取完成）
-  const showContent = (currentArticle && currentArticle.length > 0) || initialContent !== null
-  if (isLoading && !showContent) {
+  if (isLoading && !hasEditorContent) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <Loader2 className="size-8 animate-spin text-muted-foreground" />
+      <div className="relative h-full min-h-0 w-full flex-1">
+        <div className={loadingOverlayClass}>
+          <Loader2 className="size-8 animate-spin text-muted-foreground" />
+        </div>
       </div>
     )
   }

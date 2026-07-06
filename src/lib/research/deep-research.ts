@@ -223,13 +223,43 @@ export type ResearchClarification = {
 
 const DEFAULT_BREADTH = 3
 const DEFAULT_DEPTH = 2
-const MAX_CONTENT_CHARS_PER_ITEM = 10000
-const MAX_LEARNINGS_FOR_REPORT = 60
-const MAX_EVIDENCES_FOR_REPORT = 80
-const MAX_PARALLEL_SEARCHES = 3
-const ASK_JSON_MAX_RETRIES = 2
-const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000
-const SEARCH_CACHE_MAX_ENTRIES = 250
+
+/** 深研全局配置集中管理 */
+const DEFAULT_DEEP_RESEARCH_CONFIG = {
+  /** 单条内容最大字符数 */
+  maxContentCharsPerItem: 10000,
+  /** 报告最大 learnings 条数 */
+  maxLearningsForReport: 60,
+  /** 报告最大 evidences 条数 */
+  maxEvidencesForReport: 80,
+  /** 并行搜索上限 */
+  maxParallelSearches: 3,
+  /** 结构化提问最大重试次数 */
+  askJsonMaxRetries: 2,
+  /** 搜索缓存 TTL（30 分钟） */
+  searchCacheTtlMs: 30 * 60 * 1000,
+  /** 搜索缓存最大条目数 */
+  searchCacheMaxEntries: 250,
+  /** 搜索超时：Firecrawl（20s） */
+  firecrawlSearchTimeoutMs: 20000,
+  /** 搜索超时：AnySearch MCP（25s） */
+  anysearchMcpSearchTimeoutMs: 25000,
+  /** 通用搜索超时（15s） */
+  genericSearchTimeoutMs: 15000,
+  /** 搜索供应商熔断冷却时间（5 分钟） */
+  providerCircuitBreakerCooldownMs: 5 * 60 * 1000,
+  /** 搜索供应商熔断失败阈值 */
+  providerCircuitBreakerTripAfterFailures: 3,
+}
+
+// Legacy aliases for backward compatibility within the file
+const MAX_CONTENT_CHARS_PER_ITEM = DEFAULT_DEEP_RESEARCH_CONFIG.maxContentCharsPerItem
+const MAX_LEARNINGS_FOR_REPORT = DEFAULT_DEEP_RESEARCH_CONFIG.maxLearningsForReport
+const MAX_EVIDENCES_FOR_REPORT = DEFAULT_DEEP_RESEARCH_CONFIG.maxEvidencesForReport
+const MAX_PARALLEL_SEARCHES = DEFAULT_DEEP_RESEARCH_CONFIG.maxParallelSearches
+const ASK_JSON_MAX_RETRIES = DEFAULT_DEEP_RESEARCH_CONFIG.askJsonMaxRetries
+const SEARCH_CACHE_TTL_MS = DEFAULT_DEEP_RESEARCH_CONFIG.searchCacheTtlMs
+const SEARCH_CACHE_MAX_ENTRIES = DEFAULT_DEEP_RESEARCH_CONFIG.searchCacheMaxEntries
 
 export type ResearchSearchCacheStats = {
   hits: number
@@ -436,7 +466,12 @@ function normalizeUrl(url: string) {
     parsed.searchParams.delete('utm_content')
     return parsed.toString().replace(/\/$/, '')
   } catch {
-    return url.trim()
+    const trimmed = url.trim()
+    // 相对 URL（以 / 开头）标记为 relative:// 前缀，避免与绝对 URL 冲突
+    if (/^\/\w/.test(trimmed)) {
+      return `relative://${trimmed}`
+    }
+    return trimmed
   }
 }
 
@@ -493,6 +528,11 @@ function trimResearchSearchCache(now = Date.now()) {
     if (!oldestKey) break
     researchSearchCache.delete(oldestKey)
   }
+}
+
+function clearResearchSearchCache() {
+  researchSearchCache.clear()
+  researchSearchInflight.clear()
 }
 
 async function searchProviderWithCache(input: {
@@ -2649,6 +2689,7 @@ export async function runDeepResearch(params: {
     '',
     '## Visual Richness',
     '- Include Mermaid diagrams (flowchart, sequence, timeline, mindmap) wherever they genuinely clarify a process, relationship, or timeline.',
+    '- Mermaid diagrams must stay clean and document-like: no custom colors, classDef, class assignments, style directives, icon directives, decorative gradients, or dense poster-style layouts. Use concise labels and let the app theme handle styling.',
     '- Use Markdown tables for comparisons instead of prose.',
     '- Use blockquote callouts (> **💡** / > **⚠️**) sparingly to highlight key points.',
     '- Use **bold** only for genuine key terms on first mention. Do not bold entire phrases mechanically.',
@@ -2826,5 +2867,7 @@ export async function runDeepResearch(params: {
       providerHealth: getProviderHealth(),
     })
     throw error
+  } finally {
+    clearResearchSearchCache()
   }
 }

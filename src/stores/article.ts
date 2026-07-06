@@ -1552,7 +1552,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
       try {
         if (workspace.isCustom) {
           children = (await readDir(fullFolderPath))
-            .filter(file => file.name !== '.DS_Store' && !file.name.startsWith('.') && !file.name.endsWith('.research.json') && (file.isDirectory || file.name.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)))
+            .filter(file => file.name !== '.DS_Store' && !file.name.startsWith('.') && !file.name.endsWith('.research.json') && (file.isDirectory || file.name.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|drawio|mmd|mermaid|excalidraw|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)))
             .map(file => ({
               ...file,
               parent: currentFolder,
@@ -1567,7 +1567,7 @@ const useArticleStore = create<NoteState>((set, get) => ({
           const dirRelative = await toWorkspaceRelativePath(fullFolderPath)
           const pathOptions = await getFilePathOptions(dirRelative)
           children = (await readDir(pathOptions.path, { baseDir: pathOptions.baseDir }))
-            .filter(file => file.name !== '.DS_Store' && !file.name.startsWith('.') && !file.name.endsWith('.research.json') && (file.isDirectory || file.name.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)))
+            .filter(file => file.name !== '.DS_Store' && !file.name.startsWith('.') && !file.name.endsWith('.research.json') && (file.isDirectory || file.name.match(/\.(md|txt|markdown|py|js|ts|jsx|tsx|css|scss|less|html|xml|json|yaml|yml|sh|bash|java|c|cpp|h|go|rs|sql|rb|php|vue|svelte|astro|toml|ini|conf|cfg|gitignore|env|example|template|drawio|mmd|mermaid|excalidraw|jpg|jpeg|png|gif|bmp|webp|svg|pdf)$/i)))
             .map(file => ({
               ...file,
               parent: currentFolder,

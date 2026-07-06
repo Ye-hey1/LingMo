@@ -23,6 +23,14 @@ import { isSupportOnlyToolName } from "@/lib/agent/support-tools"
 import { cn } from "@/lib/utils"
 import { estimateTokens } from "@/lib/ai/token-counter"
 import { getClawStatusGlyph } from "./claw-stream-format"
+import {
+  getAssistantLiveHeadlineLabel,
+  getAssistantStatusLabel,
+  isAssistantAnsweringLabel,
+  isAssistantThinkingLabel,
+  type AssistantStatusPhase,
+  type AssistantStatusTone,
+} from "@/lib/ai/assistant-status-projection"
 
 type AgentRunSummaryProps = {
   elapsedMs?: number
@@ -653,17 +661,17 @@ function getActivityStep(input: {
     ? undefined
     : compactText(input.activity?.detail || visibleStatus?.detail, 160)
 
-  if (phase === "answering" || visibleStatus?.label === "正在写答案") {
+  if (phase === "answering" || isAssistantAnsweringLabel(visibleStatus?.label)) {
     return {
       id: "live-answering",
-      label: "正在流式输出回答",
+      label: getAssistantStatusLabel('answering', 'running'),
       detail: input.live ? undefined : detail || "正文会直接显示在下方，前面的动作已收拢为摘要。",
       tone: input.live ? "running" : "done",
       kind: "tool",
     }
   }
 
-  if (phase === "planning" || phase === "thinking" || visibleStatus?.label === "思考中") return undefined
+  if (phase === "planning" || phase === "thinking" || isAssistantThinkingLabel(visibleStatus?.label)) return undefined
 
   if (phase === "waiting-confirmation" || visibleStatus?.label === "等待确认") {
     return {
@@ -1204,7 +1212,7 @@ function buildLifecycleStatusEntries(input: {
     const running = input.live && phase === "thinking" && !hasTool && !hasReachedOutput
     entries.push(createStatusEntry({
       id: "status-thinking",
-      label: running ? "思考中" : "已思考",
+      label: getAssistantStatusLabel('thinking', running ? 'running' : 'done'),
       detail: running ? compactText(input.activity?.detail || input.partSnapshot?.visibleStatus?.detail, 120) : undefined,
       tone: running ? "running" : "done",
       phase: "thinking",
@@ -1224,11 +1232,11 @@ function buildLifecycleStatusEntries(input: {
     }))
   }
 
-  if (hasReachedOutput || phase === "answering" || input.partSnapshot?.visibleStatus?.label === "正在写答案") {
+  if (hasReachedOutput || phase === "answering" || isAssistantAnsweringLabel(input.partSnapshot?.visibleStatus?.label)) {
     const running = input.live && phase === "answering"
     entries.push(createStatusEntry({
       id: "status-output",
-      label: running ? "正在输出" : "输出完成",
+      label: getAssistantStatusLabel('answering', running ? 'running' : 'done'),
       tone: running ? "running" : "done",
       phase: "answering",
       timestamp: getLatestEventTimestamp(input.events, ["agent.stream.delta", "final", "final.answer.rendered"]),
@@ -1236,7 +1244,7 @@ function buildLifecycleStatusEntries(input: {
   } else if (outputFinished) {
     entries.push(createStatusEntry({
       id: "status-output",
-      label: "输出完成",
+      label: getAssistantStatusLabel('answering', 'done'),
       tone: "done",
       phase: "answering",
       timestamp: getLatestEventTimestamp(input.events, ["agent.stream.finished", "final.answer.rendered"]),
@@ -1319,7 +1327,7 @@ function getThoughtTimelineTone(input: {
     (
       phase === "thinking" ||
       phase === "planning" ||
-      input.partSnapshot?.visibleStatus?.label === "思考中" ||
+      isAssistantThinkingLabel(input.partSnapshot?.visibleStatus?.label) ||
       (!phase && hasLiveActivity(input))
     )
   ) {
@@ -1602,14 +1610,47 @@ function getLivePrimaryEntry(entries: TimelineEntry[]) {
   return [...source].sort((left, right) => getTimelineEntryRank(right) - getTimelineEntryRank(left)).at(0)
 }
 
-function getLiveStatusLabel(entry: TimelineEntry | undefined, activity?: AgentActivity) {
-  if (!entry) return activity?.label || "正在处理"
-  if (entry.type === "status") {
-    if (entry.label === "正在请求模型" || entry.label === "思考中") return "正在思考"
-    if (entry.label === "正在输出") return "正在整理回答"
-    return entry.label
+function getAssistantPhaseFromAgentPhase(phase?: AgentActivity["phase"]): AssistantStatusPhase | undefined {
+  switch (phase) {
+    case "thinking":
+    case "planning":
+      return "thinking"
+    case "answering":
+      return "answering"
+    case "error":
+      return "blocked"
+    case "completed":
+      return "done"
+    default:
+      return undefined
   }
-  if (entry.type === "thought") return entry.tone === "running" ? "正在思考" : "已思考"
+}
+
+function getAssistantToneFromTimelineTone(tone?: "running" | "done" | "error" | "muted"): AssistantStatusTone {
+  if (tone === "error") return "error"
+  if (tone === "running") return "running"
+  if (tone === "muted") return "muted"
+  return "done"
+}
+
+function getLiveStatusLabel(entry: TimelineEntry | undefined, activity?: AgentActivity) {
+  if (!entry) return getAssistantLiveHeadlineLabel({
+    phase: getAssistantPhaseFromAgentPhase(activity?.phase),
+    label: activity?.label,
+    fallback: "正在处理",
+  })
+  if (entry.type === "status") {
+    return getAssistantLiveHeadlineLabel({
+      phase: getAssistantPhaseFromAgentPhase(entry.phase),
+      label: entry.label,
+      tone: getAssistantToneFromTimelineTone(entry.tone),
+      fallback: activity?.label,
+    })
+  }
+  if (entry.type === "thought") return getAssistantStatusLabel(
+    entry.tone === "error" ? "blocked" : "pending",
+    getAssistantToneFromTimelineTone(entry.tone),
+  )
   if (entry.toolCall) return getToolProgressVerb(entry.step)
   return entry.step.label
 }
@@ -1911,7 +1952,7 @@ function TimelineThought({
   const statusTone = getThoughtStatusTone(thought.tone)
   const running = statusTone === "running"
   const failed = statusTone === "error"
-  const label = failed ? "思考受阻" : running ? "思考中" : "已思考"
+  const label = getAssistantStatusLabel(failed ? 'blocked' : 'thinking', statusTone)
 
   return (
     <div className="min-w-0">
@@ -1949,12 +1990,6 @@ function TimelineThought({
             已压缩
           </span>
         ) : null}
-        {running && (
-          <span
-            className="agent-thinking-thread h-px w-8 shrink-0 rounded-full"
-            aria-hidden="true"
-          />
-        )}
       </div>
       {thought.text && (
         <div

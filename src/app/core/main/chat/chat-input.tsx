@@ -11,6 +11,7 @@ import { useSkillsStore } from "@/stores/skills"
 import { fetchAiQuickPrompts } from "@/lib/ai/placeholder"
 import { enhanceChatPrompt } from "@/lib/ai/prompt-enhancer"
 import { decideAutoWebSearch } from "@/lib/ai/auto-web-search"
+import { decideDocumentGrounding } from "@/lib/ai/document-grounding"
 import {
   DICTATION_POLISH_MODE_LABELS,
   isDictationPolishMode,
@@ -56,6 +57,7 @@ import { findAiDocCommand, type AiDocCommandId } from '@/lib/ai-doc-commands'
 import { skillExecutor } from '@/lib/skills'
 import { loadActivityCalendarData, loadCachedActivityCalendarData } from '@/lib/activity'
 import { createActivityReviewNote } from '@/lib/activity/review-note'
+import { matchesConfiguredModelSelection } from '@/lib/ai/model-selection'
 
 import { FileAutocompletePopover, type FileAutocompleteItem } from './file-autocomplete-popover'
 import type { DirTree } from '@/stores/article'
@@ -426,7 +428,11 @@ function resolvePrimaryChatModel(aiModelList: AiConfig[], primaryModel: string):
   }
 
   for (const config of aiModelList) {
-    const targetModel = config.models?.find(model => model.id === primaryModel)
+    const targetModel = config.models?.find(model => matchesConfiguredModelSelection({
+      configKey: config.key,
+      modelId: model.id,
+      selectionId: primaryModel,
+    }))
     if (targetModel) {
       return { config, model: targetModel }
     }
@@ -517,6 +523,7 @@ export const ChatInput = React.memo(function ChatInput({ expanded = false }: Cha
   } = useChatStore()
   const { marks, trashState } = useMarkStore()
   const activeFilePath = useArticleStore((state) => state.activeFilePath)
+  const currentArticle = useArticleStore((state) => state.currentArticle)
   const fileTree = useArticleStore((state) => state.fileTree)
   const loadFileTree = useArticleStore((state) => state.loadFileTree)
 
@@ -530,12 +537,6 @@ export const ChatInput = React.memo(function ChatInput({ expanded = false }: Cha
     return match[1]
   }, [text])
   const atOpen = atQuery !== null
-  const autoWebSearchDecision = useMemo(() => decideAutoWebSearch({
-    userInput: text,
-    manualDefaultEnabled: webSearchEnabled,
-    hasSearchProvider: true,
-  }), [text, webSearchEnabled])
-
   // 对话模式下,对需要工具或长任务的指令给出模式切换建议。
   const [suggestedMode, setSuggestedMode] = useState<null | {
     mode: Extract<ChatMode, 'agent' | 'research'>
@@ -888,6 +889,34 @@ ${exec.prompt}`
   const [contextPanelExpandedPref, setContextPanelExpandedPref] = useLocalStorage<boolean>('chat-input-context-expanded', false)
   const [isFilePointerOverInput, setIsFilePointerOverInput] = useState(false)
   const [isFilePointerDragging, setIsFilePointerDragging] = useState(false)
+  const autoWebSearchDecision = useMemo(() => {
+    const baseDecision = decideAutoWebSearch({
+      userInput: text,
+      manualDefaultEnabled: webSearchEnabled,
+      hasSearchProvider: true,
+    })
+    const documentDecision = decideDocumentGrounding({
+      userInput: text,
+      hasDocumentContext: Boolean(
+        (currentArticle && activeFilePath) ||
+        linkedResources.length > 0 ||
+        pendingQuote
+      ),
+    })
+    if (!documentDecision.suppressWebSearch || !baseDecision.enabled) {
+      return baseDecision
+    }
+
+    return {
+      ...baseDecision,
+      enabled: false,
+      shouldSearch: false,
+      reason: 'stable' as const,
+      label: '自动',
+      detail: `${baseDecision.detail} 当前输入更适合先使用工作台文档上下文。`,
+      matchedSignals: [...baseDecision.matchedSignals, '工作台上下文'],
+    }
+  }, [activeFilePath, currentArticle, linkedResources.length, pendingQuote, text, webSearchEnabled])
   const inputDropZoneStateClassName = isFilePointerOverInput
     ? 'border-primary bg-primary/5'
     : ''

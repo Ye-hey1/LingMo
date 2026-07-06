@@ -3,9 +3,26 @@
  * 借鉴并优化自 html-anything 的导出系统，适配 Tauri 桌面端与 Web 浏览器双模式运行环境
  */
 
-import { domToBlob, waitUntilLoad } from "modern-screenshot"
+import { domToBlob } from "modern-screenshot"
 import juice from "juice"
 import { escapeHtml } from "./shared/escape"
+import {
+  pick,
+  extractAttr,
+  stripTags,
+  normalizeExternalUrl,
+} from "./shared/html-parse"
+import type { ExportResult } from "./shared/types"
+import { isTauri } from "./shared/runtime"
+import { downloadBlob, getExtension, getMimeFilter, saveBlobAs } from "./shared/file-save"
+import {
+  nextFrame,
+  sleep,
+  createOffscreenIframe,
+  waitForDocumentResources,
+} from "./shared/offscreen-render"
+import { logWarn } from "./shared/log"
+import { buildSlideStandaloneCss } from "./shared/card-styles"
 
 // ---------------------------------------------------------------------------
 // 1. 类型定义与结构体
@@ -39,11 +56,9 @@ export type DeckParsed = {
   title: string
 }
 
-export interface ExportResult {
-  fileName: string
-  filePath?: string
-  canceled?: boolean
-}
+// ExportResult / SmartCardExportSkip 已统一下沉到 ./shared/types.ts，
+// 这里 re-export 以保持对外导入路径 `@/lib/output-workshop/export` 不变。
+export type { ExportResult, SmartCardExportSkip } from "./shared/types"
 
 // ---------------------------------------------------------------------------
 // 2. 幻灯片/多卡片解析器 (Deck Parser)
@@ -61,40 +76,8 @@ export function isDeck(html: string): boolean {
   return SLIDE_RE.test(html)
 }
 
-/**
- * 正则提取工具函数
- */
-function pick(re: RegExp, src: string): string {
-  const m = re.exec(src)
-  return m ? m[1] : ""
-}
-
-/**
- * 提取 HTML 标签的指定属性值
- */
-function extractAttr(tag: string, name: string): string {
-  const re = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i")
-  return pick(re, tag)
-}
-
-/**
- * HTML 转义实体反向解码
- */
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-}
-
-/**
- * 剥除 HTML 标签获取纯文本
- */
-function stripTags(s: string): string {
-  return decodeEntities(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim()
-}
+// 注：pick / extractAttr / decodeEntities / stripTags / URL 过滤已统一收口到
+// ./shared/html-parse.ts，本文件按需 import。
 
 /**
  * 将整篇 HTML 文档解析为单页幻灯片 (DeckParsed)
@@ -155,12 +138,7 @@ export function parseDeck(fullHtml: string): DeckParsed {
     // 构建该 Slide 的独立自包含 HTML，使其可被独立渲染/截图
     const standalone =
       `<!DOCTYPE html><html><head>${head}\n` +
-      `<style>
-        html, body { margin:0; padding:0; height:100vh; overflow:hidden; }
-        body { display:flex; align-items:center; justify-content:center; }
-        .slide { transform: none !important; margin: 0 !important; width: 100vw !important; height: 100vh !important; display: flex !important; align-items: center !important; justify-content: center !important; }
-        .slide-content { opacity: 1 !important; transform: none !important; }
-      </style></head>` +
+      `<style>\n${buildSlideStandaloneCss()}\n</style></head>` +
       `<body class="${bodyClass}" style="${bodyStyle}">${slideForRender}</body></html>`
 
     slides.push({
@@ -186,6 +164,93 @@ export function parseDeck(fullHtml: string): DeckParsed {
 // 3. 微信公众号/知乎样式内联转换 (WeChat & Zhihu Inline-CSS)
 // ---------------------------------------------------------------------------
 
+// 剪贴板场景一律拒绝 data:（与原 normalizeClipboardUrl 行为一致）
+const normalizeClipboardUrl = (value: string | null): string => normalizeExternalUrl(value, false)
+
+function sanitizeInlineStyle(value: string | null): string {
+  return (value || "")
+    .split(";")
+    .map((rule) => rule.trim())
+    .filter(Boolean)
+    .filter((rule) => !/expression\s*\(|behavior\s*:|javascript\s*:|vbscript\s*:|data:text\/html/i.test(rule))
+    .join("; ")
+}
+
+function appendInlineStyle(element: HTMLElement, extraStyle: string): void {
+  const current = sanitizeInlineStyle(element.getAttribute("style"))
+  const extra = sanitizeInlineStyle(extraStyle)
+  const merged = [current, extra].filter(Boolean).join("; ")
+  if (merged) element.setAttribute("style", merged)
+}
+
+function sanitizeWechatClipboardRoot(root: HTMLElement): void {
+  root.querySelectorAll("script, iframe, object, embed, form, input, textarea, select, button").forEach((node) => {
+    node.remove()
+  })
+
+  root.querySelectorAll<HTMLElement>("*").forEach((element) => {
+    Array.from(element.attributes).forEach((attr) => {
+      const name = attr.name.toLowerCase()
+      const value = attr.value
+
+      if (name.startsWith("on") || name === "srcdoc") {
+        element.removeAttribute(attr.name)
+        return
+      }
+
+      if (name === "style") {
+        const safeStyle = sanitizeInlineStyle(value)
+        if (safeStyle) {
+          element.setAttribute("style", safeStyle)
+        } else {
+          element.removeAttribute("style")
+        }
+        return
+      }
+
+      if (name === "href" || name === "src" || name === "xlink:href") {
+        const safeUrl = normalizeClipboardUrl(value)
+        if (safeUrl) {
+          element.setAttribute(attr.name, safeUrl)
+        } else {
+          element.removeAttribute(attr.name)
+        }
+      }
+    })
+
+    if (element.tagName.toLowerCase() === "a") {
+      const href = normalizeClipboardUrl(element.getAttribute("href"))
+      if (href) {
+        element.setAttribute("href", href)
+        element.setAttribute("target", "_blank")
+        element.setAttribute("rel", "noreferrer")
+      } else {
+        element.removeAttribute("href")
+      }
+    }
+
+    if (element.tagName.toLowerCase() === "img") {
+      const src = normalizeClipboardUrl(element.getAttribute("src") || element.getAttribute("data-src"))
+      if (!src) {
+        element.remove()
+        return
+      }
+      element.setAttribute("src", src)
+      element.setAttribute("data-src", src)
+      if (!element.hasAttribute("alt")) element.setAttribute("alt", "")
+      appendInlineStyle(element, "max-width: 100% !important; height: auto !important; display: block;")
+    }
+  })
+}
+
+export function sanitizeWechatClipboardHtml(html: string): string {
+  if (typeof document === "undefined") return html
+
+  const root = document.createElement("div")
+  root.innerHTML = html
+  sanitizeWechatClipboardRoot(root)
+  return root.innerHTML
+}
 
 /**
  * 将整篇 HTML 中的 CSS 样式通过 juice 内联注入到各标签上，用于直接粘贴至微信公众号或知乎
@@ -221,20 +286,17 @@ export function toWechatHtml(fullHtml: string): string {
     console.error("Juice CSS 内联失败:", e)
   }
 
-  return `<section data-tool="lingmo-output" style="box-sizing:border-box;">${inlined}</section>`
+  return sanitizeWechatClipboardHtml(
+    `<section data-tool="lingmo-output" style="box-sizing:border-box;">${inlined}</section>`
+  )
 }
 
 // ---------------------------------------------------------------------------
 // 4. 双端兼容剪贴板操作 (Cross-platform Clipboard)
 // ---------------------------------------------------------------------------
 
-/**
- * 判断是否在 Tauri 桌面端环境中
- */
-export function isTauri(): boolean {
-  type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown }
-  return typeof window !== "undefined" && (window as TauriWindow).__TAURI_INTERNALS__ !== undefined
-}
+// isTauri 已统一收口到 ./shared/runtime.ts，本地按需 import；这里 re-export 保持对外导入路径不变。
+export { isTauri }
 
 /**
  * 跨平台文本复制（兼容普通 Web 与 Tauri）
@@ -342,79 +404,11 @@ export async function copyImageBlobToClipboard(blob: Blob): Promise<void> {
 // 5. 网页/IFrame 截图与资源载入逻辑
 // ---------------------------------------------------------------------------
 
-/**
- * 轮询等待下一帧渲染
- */
-const nextFrame = () =>
-  new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+// nextFrame / sleep / waitForDocumentResources / createOffscreenIframe 已统一收口到
+// ./shared/offscreen-render.ts，本文件按需 import。
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
-
-/**
- * 等待文档的所有资源（字体、图像、样式、Tailwind）稳定加载
- */
-async function waitForDocumentReady(doc: Document, win: Window): Promise<void> {
-  if (doc.readyState !== "complete") {
-    await new Promise<void>((res) => {
-      const done = () => res()
-      doc.addEventListener("readystatechange", () => {
-        if (doc.readyState === "complete") done()
-      })
-      win.addEventListener?.("load", done, { once: true })
-      setTimeout(done, 6000)
-    })
-  }
-
-  // 等待样式表加载
-  const sheets = Array.from(doc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
-  await Promise.all(
-    sheets.map(
-      (link) =>
-        new Promise<void>((res) => {
-          if (link.sheet) return res()
-          const done = () => res()
-          link.addEventListener("load", done, { once: true })
-          link.addEventListener("error", done, { once: true })
-          setTimeout(done, 4000)
-        })
-    )
-  )
-
-  // 等待中文字体加载完毕
-  try {
-    const fonts = (doc as Document & { fonts?: FontFaceSet }).fonts
-    if (fonts?.ready) await fonts.ready
-  } catch {
-    /* 无需处理 */
-  }
-
-  // 等待图片资源加载与解码完成
-  const imgs = Array.from(doc.images)
-  await Promise.all(
-    imgs.map(
-      (img) =>
-        new Promise<void>((res) => {
-          if (img.complete && img.naturalWidth > 0) return res()
-          const done = () => res()
-          img.addEventListener("load", done, { once: true })
-          img.addEventListener("error", done, { once: true })
-          if ("decode" in img) img.decode().then(done, done)
-          setTimeout(done, 5000)
-        })
-    )
-  )
-
-  try {
-    await waitUntilLoad(doc.documentElement, { timeout: 5000 })
-  } catch {
-    /* 无需处理 */
-  }
-
-  // 预留微量时间让排版在视口中 reflow
-  await nextFrame()
-  await sleep(100)
-  await nextFrame()
-}
+// 防止 iframe 拉伸到过高高度导致 GPU 纹理分配失败或内存飙升
+const MAX_IFRAME_STRETCH_HEIGHT = 15000
 
 /**
  * 解析预览 iframe 中的背景颜色
@@ -428,8 +422,9 @@ function resolveBackground(doc: Document, win: Window): string {
     if (computedBg && computedBg !== "transparent" && computedBg !== "rgba(0, 0, 0, 0)") {
       return computedBg
     }
-  } catch {
-    /* 无需处理 */
+  } catch (error) {
+    // 跨域 iframe 的 getComputedStyle 可能抛错，属可容忍降级，留痕便于排查
+    logWarn("resolve-background", error)
   }
   return "#ffffff"
 }
@@ -445,8 +440,8 @@ export async function iframeToBlob(
   const win = iframe.contentWindow
   if (!doc || !win) throw new Error("预览视口尚未准备就绪")
 
-  // 等待所有资源准备好
-  await waitForDocumentReady(doc, win)
+  // 等待所有资源准备好（默认配置与原 waitForDocumentReady 一致）
+  await waitForDocumentResources(doc, win)
 
   // 暂存原有的 iframe 尺寸和溢出样式
   const prevIframeHeight = iframe.style.height
@@ -464,9 +459,15 @@ export async function iframeToBlob(
   if (!fullHeight) throw new Error("页面内容尚未渲染，无法生成截图")
 
   // 核心拉伸逻辑：暂时让 iframe 放大到内容大小，并允许溢出可见
-  iframe.style.height = `${fullHeight}px`
-  doc.documentElement.style.overflow = "visible"
-  doc.body.style.overflow = "visible"
+  // 限制最大拉伸高度，防止超长页面导致 GPU 纹理分配失败或内存飙升
+  const clampedHeight = Math.min(fullHeight, MAX_IFRAME_STRETCH_HEIGHT)
+  if (fullHeight > MAX_IFRAME_STRETCH_HEIGHT) {
+    console.warn(`[iframeToBlob] 内容高度 ${fullHeight}px 超出限制 ${MAX_IFRAME_STRETCH_HEIGHT}px，截图将截断`)
+  }
+
+  iframe.style.height = `${clampedHeight}px`
+  doc.documentElement.style.overflow = fullHeight > MAX_IFRAME_STRETCH_HEIGHT ? "hidden" : "visible"
+  doc.body.style.overflow = fullHeight > MAX_IFRAME_STRETCH_HEIGHT ? "hidden" : "visible"
 
   // 等待重绘
   await nextFrame()
@@ -482,7 +483,7 @@ export async function iframeToBlob(
       type: "image/png",
       backgroundColor,
       width: layoutWidth,
-      height: fullHeight,
+      height: clampedHeight,
       fetch: {
         requestInit: { cache: "force-cache" },
       },
@@ -502,21 +503,9 @@ export async function iframeToBlob(
  * 从页面离屏中渲染指定的 Slide 碎片为图片
  */
 async function renderSlideToBlob(slide: DeckSlide, scale = 2): Promise<Blob> {
-  const wrap = document.createElement("div")
-  wrap.style.cssText = `
-    position: fixed;
-    top: 0; left: -100000px;
-    width: 1920px; height: 1080px;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: -1;
-  `
-  const iframe = document.createElement("iframe")
-  iframe.style.cssText = `
-    width: 1920px; height: 1080px; border: 0; background: ${slide.bg ?? "#fff"};
-  `
+  const handle = createOffscreenIframe(1920, 1080, slide.bg ?? "#fff")
   // 修正 slide 在离屏中不缩放而 1:1 展示的样式
-  iframe.srcdoc = slide.html.replace(
+  handle.iframe.srcdoc = slide.html.replace(
     /\.slide\s*\{\s*transform-origin[^}]*\}/i,
     ".slide { transform: none !important; transform-origin: top left !important; }"
   ).replace(
@@ -524,19 +513,11 @@ async function renderSlideToBlob(slide: DeckSlide, scale = 2): Promise<Blob> {
     "body { margin:0; padding:0; }"
   )
 
-  wrap.appendChild(iframe)
-  document.body.appendChild(wrap)
-
   try {
-    await new Promise<void>((res) => {
-      const done = () => res()
-      if (iframe.contentDocument?.readyState === "complete") return done()
-      iframe.addEventListener("load", done, { once: true })
-      setTimeout(done, 3000)
-    })
-    return await iframeToBlob(iframe, scale)
+    await handle.waitForLoad(3000)
+    return await iframeToBlob(handle.iframe, scale)
   } finally {
-    wrap.remove()
+    handle.dispose()
   }
 }
 
@@ -544,62 +525,31 @@ async function renderSlideToBlob(slide: DeckSlide, scale = 2): Promise<Blob> {
 // 6. 文件下载/大纲物理导出
 // ---------------------------------------------------------------------------
 
+// downloadBlob / getExtension / getMimeFilter / saveBlobAs 本地按需 import（见顶部），
+// 这里 re-export 保持对外导入路径 `@/lib/output-workshop/export` 不变。
+// blobToUint8Array 仅对外暴露，本地未直接使用，单独 from re-export。
+export { downloadBlob, getExtension, getMimeFilter, saveBlobAs }
+export { blobToUint8Array } from "./shared/file-save"
+
 /**
- * 下载二进制文件 Blob
+ * File System Access API 的最小类型定义（lib.dom 默认未包含）。
+ * 仅声明 saveTextAs 用到的 showSaveFilePicker / createWritable / write / close，
+ * 替代此前的 `(window as any).showSaveFilePicker` 强转。
  */
-export function downloadBlob(blob: Blob, filename: string): ExportResult {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-  return { fileName: filename }
+interface FileSystemWritableFileStream {
+  write: (data: string | BufferSource | Blob) => Promise<void>
+  close: () => Promise<void>
 }
-
-function getExtension(filename: string): string {
-  const match = /\.([a-z0-9]+)$/i.exec(filename)
-  return match?.[1]?.toLowerCase() || ""
+interface FileSystemFileHandleMinimal {
+  name: string
+  createWritable: () => Promise<FileSystemWritableFileStream>
 }
-
-function getMimeFilter(extension: string): string {
-  switch (extension) {
-    case "png":
-      return "PNG Image"
-    case "zip":
-      return "ZIP Archive"
-    case "html":
-      return "HTML Document"
-    case "md":
-      return "Markdown"
-    case "pptx":
-      return "PowerPoint"
-    default:
-      return "File"
-  }
+interface SaveFilePickerOptions {
+  suggestedName?: string
+  types?: Array<{ description?: string; accept: Record<string, string[]> }>
 }
-
-async function blobToUint8Array(blob: Blob): Promise<Uint8Array> {
-  return new Uint8Array(await blob.arrayBuffer())
-}
-
-export async function saveBlobAs(blob: Blob, filename: string): Promise<ExportResult> {
-  if (isTauri()) {
-    const extension = getExtension(filename)
-    const { save } = await import("@tauri-apps/plugin-dialog")
-    const { writeFile } = await import("@tauri-apps/plugin-fs")
-    const filePath = await save({
-      defaultPath: filename,
-      filters: extension ? [{ name: getMimeFilter(extension), extensions: [extension] }] : undefined,
-    })
-    if (!filePath) return { fileName: filename, canceled: true }
-    await writeFile(filePath, await blobToUint8Array(blob))
-    return { fileName: filePath.split(/[\\/]/).pop() || filename, filePath }
-  }
-
-  return downloadBlob(blob, filename)
+interface SaveFilePickerWindow extends Window {
+  showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandleMinimal>
 }
 
 export async function saveTextAs(
@@ -620,10 +570,11 @@ export async function saveTextAs(
     return { fileName: filePath.split(/[\\/]/).pop() || filename, filePath }
   }
 
-  if (typeof window !== "undefined" && "showSaveFilePicker" in window) {
+  const pickerWindow = window as SaveFilePickerWindow
+  if (typeof window !== "undefined" && pickerWindow.showSaveFilePicker) {
     try {
       const extension = getExtension(filename)
-      const handle = await (window as any).showSaveFilePicker({
+      const handle = await pickerWindow.showSaveFilePicker({
         suggestedName: filename,
         types: extension ? [{
           description: getMimeFilter(extension),
@@ -636,7 +587,7 @@ export async function saveTextAs(
       return { fileName: handle.name }
     } catch (err) {
       if ((err as Error).name === "AbortError") return { fileName: filename, canceled: true }
-      console.warn("另存为 API 失败，退回普通下载方式:", err)
+      logWarn("save-text-file-picker", err)
     }
   }
 
