@@ -356,6 +356,100 @@ pre.hljs {
   margin-bottom: 0 !important;
 }
 
+.markdown-body .chat-copy-shell {
+  position: relative;
+  max-width: 100%;
+  margin: 0.75rem 0 1rem;
+}
+
+.markdown-body .chat-copy-shell > pre,
+.markdown-body .chat-copy-shell > table {
+  margin: 0 !important;
+}
+
+.markdown-body .chat-copy-code-shell > pre {
+  padding-right: 3rem !important;
+}
+
+.markdown-body .chat-copy-table-shell {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.markdown-body .chat-copy-button {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--background) / 0.86);
+  border: 1px solid hsl(var(--border) / 0.75);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px hsl(var(--foreground) / 0.08);
+  opacity: 0;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+.markdown-body .chat-copy-shell:hover > .chat-copy-button,
+.markdown-body .chat-copy-shell:focus-within > .chat-copy-button,
+.markdown-body .chat-copy-button:focus-visible {
+  opacity: 1;
+}
+
+.markdown-body .chat-copy-button:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  border-color: hsl(var(--border));
+  transform: translateY(-1px);
+}
+
+.markdown-body .chat-copy-button svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.markdown-body .chat-copy-button.copied {
+  color: hsl(142 71% 36%);
+  border-color: hsl(142 71% 45% / 0.35);
+  background: hsl(142 76% 96% / 0.92);
+  opacity: 1;
+}
+
+.markdown-body .chat-copy-button.copy-error {
+  color: hsl(var(--destructive));
+  border-color: hsl(var(--destructive) / 0.35);
+  opacity: 1;
+}
+
+.markdown-dark .chat-copy-button {
+  background: hsl(var(--background) / 0.78);
+  box-shadow: 0 8px 22px hsl(0 0% 0% / 0.24);
+}
+
+.markdown-dark .chat-copy-button.copied {
+  color: hsl(142 69% 58%);
+  border-color: hsl(142 69% 48% / 0.4);
+  background: hsl(142 36% 16% / 0.9);
+}
+
 /* 覆盖代码块背景色 - 使用主题变量 */
 .markdown-body pre,
 .markdown-body .highlight pre,

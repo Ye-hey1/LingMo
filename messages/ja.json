@@ -3139,6 +3139,7 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "more": "その他",
       "blockType": "ブロック種類",
       "paragraph": "本文",
       "heading1": "見出し 1",
@@ -3170,6 +3171,15 @@
       "highlight": "ハイライト",
       "clearHighlight": "ハイライトをクリア",
       "restoreDefault": "デフォルトに戻す",
+      "cellFillColor": "セルの塗りつぶし色",
+      "white": "白",
+      "clearCellFill": "塗りつぶしをクリア",
+      "mergeCells": "セルを結合",
+      "splitCell": "セルを分割",
+      "deleteCurrentRow": "現在の行を削除",
+      "deleteCurrentColumn": "現在の列を削除",
+      "deleteRowsOrColumns": "行/列を削除",
+      "align": "配置",
       "alignLeft": "左揃え",
       "alignCenter": "中央揃え",
       "alignRight": "右揃え",
@@ -3180,6 +3190,7 @@
       "taskList": "タスクリスト",
       "codeBlock": "コードブロック",
       "languages": {
+        "Chinese": "中国語",
         "English": "英語",
         "Japanese": "日本語",
         "Korean": "韓国語",
@@ -3191,6 +3202,13 @@
         "Arabic": "アラビア語"
       },
       "customLanguagePlaceholder": "カスタム言語..."
+    },
+    "chatCopy": {
+      "copyCode": "コードをコピー",
+      "copyTable": "表をコピー",
+      "copiedCode": "コードをコピーしました",
+      "copiedTable": "表をコピーしました",
+      "copyFailed": "コピーに失敗しました"
     },
     "inlineAI": {
       "generateTitle": "AI インスピレーション",
@@ -3242,10 +3260,13 @@
       "abort": "中止",
       "explainTitle": "AI 説明",
       "explaining": "説明中...",
+      "translateTitle": "AI 翻訳",
+      "translating": "翻訳中...",
       "selectedText": "選択したテキスト",
       "explainHint": "理解のための表示のみで、本文には挿入されません",
       "copy": "コピー",
       "copied": "コピー済み",
+      "replaceOriginal": "元の文を置換",
       "close": "閉じる"
     },
     "image": {

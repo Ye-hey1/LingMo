@@ -1,7 +1,7 @@
 'use client'
 
 import { Editor } from '@tiptap/react'
-import { BookOpenText, Brain, Check, ChevronRight, CircleX, Clipboard, Loader2, Sparkles, X } from 'lucide-react'
+import { BookOpenText, Brain, Check, ChevronRight, CircleX, Clipboard, Languages, Loader2, Sparkles, X } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import emitter from '@/lib/emitter'
@@ -324,6 +324,7 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
   const showThinkingPanel = Boolean(thinkingText)
   const currentLabel = suggestion && typeLabels[suggestion.type] ? typeLabels[suggestion.type] : t('bubbleMenu.ai')
   const isExplain = suggestion?.type === 'explain'
+  const isTranslate = suggestion?.type === 'translate'
   const previewText = suggestion?.suggestedText.trimStart() || ''
   const selectedText = suggestion?.originalText.trim().replace(/\s+/g, ' ') || ''
   const selectedPreview = selectedText.length > 88 ? `${selectedText.slice(0, 88)}...` : selectedText
@@ -416,9 +417,12 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
           ) : (
             <Sparkles className="size-4 text-primary" />
           )}
-          <span className="flex-1 text-xs text-muted-foreground">
-            {isStreaming ? t('aiSuggestion.generating') : t('aiSuggestion.explainHint')}
-          </span>
+          {isStreaming && (
+            <span className="flex-1 text-xs text-muted-foreground">
+              {t('aiSuggestion.generating')}
+            </span>
+          )}
+          {!isStreaming && <div className="flex-1" />}
           {!isStreaming && previewText && (
             <button
               onClick={() => void handleCopy()}
@@ -440,6 +444,105 @@ export function AISuggestionFloating({ editor }: AISuggestionFloatingProps) {
               <X className="size-3.5" />
               <span>{t('aiSuggestion.close')}</span>
             </button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  if (isTranslate) {
+    return (
+      <div
+        ref={panelRef}
+        className="absolute z-50 w-[360px] max-w-[calc(100%-24px)] overflow-hidden rounded-xl border border-border/70 bg-background text-foreground shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-150"
+        style={{
+          top: position.top,
+          left: position.left,
+        }}
+      >
+        <div className="flex items-start gap-3 border-b border-border/60 px-3 py-3">
+          <div className="mt-0.5 rounded-md bg-primary/10 p-1.5 text-primary">
+            <Languages className="size-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold">
+              {isStreaming ? t('aiSuggestion.translating') : t('aiSuggestion.translateTitle')}
+            </div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {t('aiSuggestion.selectedText')}
+            </div>
+          </div>
+          <button
+            onClick={handleClose}
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={isStreaming ? t('aiSuggestion.abort') : t('aiSuggestion.close')}
+            type="button"
+          >
+            {isStreaming ? <CircleX className="size-4" /> : <X className="size-4" />}
+          </button>
+        </div>
+
+        {selectedPreview && (
+          <div className="px-3 pt-3">
+            <div className="line-clamp-2 rounded-md bg-muted/35 px-3 py-2 text-xs leading-5 text-muted-foreground break-words">
+              {selectedPreview}
+            </div>
+          </div>
+        )}
+
+        <div className="px-3 py-3">
+          <div className="min-h-[92px] max-h-64 overflow-y-auto rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-sm leading-7 text-foreground whitespace-pre-wrap break-words">
+            {previewText || (
+              <span className="text-muted-foreground">
+                {t('aiSuggestion.translating')}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 border-t border-border/60 px-3 py-2.5">
+          {isStreaming ? (
+            <>
+              <Loader2 className="size-4 animate-spin text-primary" />
+              <span className="flex-1 text-xs text-muted-foreground">
+                {t('aiSuggestion.generating')}
+              </span>
+            </>
+          ) : (
+            <>
+              <div className="flex-1" />
+              {previewText && (
+                <button
+                  onClick={() => void handleCopy()}
+                  className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted"
+                  title={t('aiSuggestion.copy')}
+                  type="button"
+                >
+                  {hasCopied ? <Check className="size-3.5" /> : <Clipboard className="size-3.5" />}
+                  <span>{hasCopied ? t('aiSuggestion.copied') : t('aiSuggestion.copy')}</span>
+                </button>
+              )}
+              {previewText && (
+                <button
+                  onClick={handleAccept}
+                  className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted"
+                  title={t('aiSuggestion.replaceOriginal')}
+                  type="button"
+                >
+                  <Check className="size-3.5" />
+                  <span>{t('aiSuggestion.replaceOriginal')}</span>
+                </button>
+              )}
+              <button
+                onClick={closeSuggestion}
+                className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted"
+                title={t('aiSuggestion.close')}
+                type="button"
+              >
+                <X className="size-3.5" />
+                <span>{t('aiSuggestion.close')}</span>
+              </button>
+            </>
           )}
         </div>
       </div>

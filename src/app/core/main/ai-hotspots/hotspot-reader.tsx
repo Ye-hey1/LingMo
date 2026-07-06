@@ -76,7 +76,7 @@ function getProxiedWechatImageSrc(value?: string) {
   try {
     const url = new URL(src.startsWith('//') ? `https:${src}` : src)
     if (url.protocol === 'https:' && ['mmbiz.qpic.cn', 'mmbiz.qlogo.cn'].includes(url.hostname)) {
-      return `/api/wx-img?url=${encodeURIComponent(url.toString())}`
+      return url.toString()
     }
   } catch {
     return value
@@ -198,10 +198,6 @@ function SourcePill({ item }: { item: AiHotspotItem }) {
       <span className="truncate">{item.sourceName}</span>
     </span>
   )
-}
-
-function getWechatProxyUrl(value: string) {
-  return `/api/wx-proxy?url=${encodeURIComponent(value)}`
 }
 
 function proxyWechatImages(html: string) {
@@ -356,36 +352,6 @@ function LoadingSkeleton() {
   )
 }
 
-function WechatProxyFrame({ url }: { url: string }) {
-  return (
-    <div className="mx-auto mt-6 flex h-[72vh] w-full max-w-[960px] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-sm">
-      <div className="flex shrink-0 items-center justify-between border-b border-border bg-muted/35 px-3 py-2">
-        <div className="min-w-0 text-[12px] text-muted-foreground">
-          <span className="font-medium text-foreground">代理原文视图</span>
-          <span className="mx-1.5 text-muted-foreground/45">·</span>
-          <span className="truncate">mp.weixin.qq.com</span>
-        </div>
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[11px] font-medium text-background transition-colors hover:bg-foreground/88"
-        >
-          <ExternalLink className="size-3" />
-          浏览器打开
-        </a>
-      </div>
-      <iframe
-        src={getWechatProxyUrl(url)}
-        title="微信公众号代理原文"
-        className="min-h-0 flex-1 border-0 bg-white"
-        referrerPolicy="no-referrer"
-        sandbox="allow-same-origin allow-popups"
-      />
-    </div>
-  )
-}
-
 function ErrorCard({
   error,
   isCapturingWechat,
@@ -515,7 +481,6 @@ export const HotspotReader = memo(function HotspotReader({
   const isError = status === 'error' && !displayResult
   const isReady = Boolean(displayResult)
   const displayTags = useMemo(() => getDisplayHotspotTags(item, 5), [item])
-  const canShowWechatProxy = isError && isWechatArticleUrl(item.url)
   const isWechatItem = isWechatArticleUrl(item.url)
   const thinReason = state.error?.message?.trim()
 
@@ -634,16 +599,13 @@ export const HotspotReader = memo(function HotspotReader({
           {showSkeleton ? <LoadingSkeleton /> : null}
 
           {isError ? (
-            <>
-              <ErrorCard
-                error={state.error ?? { message: '未知错误' }}
-                isCapturingWechat={isCapturingWechat}
-                onCaptureWechat={canShowWechatProxy ? handleCaptureWechat : undefined}
-                onRetry={retry}
-                onOpenOriginal={openOriginal}
-              />
-              {canShowWechatProxy ? <WechatProxyFrame url={item.url} /> : null}
-            </>
+            <ErrorCard
+              error={state.error ?? { message: '未知错误' }}
+              isCapturingWechat={isCapturingWechat}
+              onCaptureWechat={isWechatItem ? handleCaptureWechat : undefined}
+              onRetry={retry}
+              onOpenOriginal={openOriginal}
+            />
           ) : null}
 
           {isReady && displayResult ? (

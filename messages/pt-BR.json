@@ -3054,6 +3054,7 @@
   "editor": {
     "bubbleMenu": {
       "ai": "IA",
+      "more": "Mais",
       "blockType": "Tipo de bloco",
       "paragraph": "Texto",
       "heading1": "Título 1",
@@ -3085,6 +3086,15 @@
       "highlight": "Destacar",
       "clearHighlight": "Limpar destaque",
       "restoreDefault": "Restaurar padrão",
+      "cellFillColor": "Cor de preenchimento da célula",
+      "white": "Branco",
+      "clearCellFill": "Limpar preenchimento",
+      "mergeCells": "Mesclar células",
+      "splitCell": "Dividir célula",
+      "deleteCurrentRow": "Excluir linha atual",
+      "deleteCurrentColumn": "Excluir coluna atual",
+      "deleteRowsOrColumns": "Excluir linhas/colunas",
+      "align": "Alinhar",
       "alignLeft": "Alinhar à esquerda",
       "alignCenter": "Centralizar",
       "alignRight": "Alinhar à direita",
@@ -3095,6 +3105,7 @@
       "taskList": "Lista de tarefas",
       "codeBlock": "Bloco de código",
       "languages": {
+        "Chinese": "Chinês",
         "English": "Inglês",
         "Japanese": "Japonês",
         "Korean": "Coreano",
@@ -3106,6 +3117,13 @@
         "Arabic": "Árabe"
       },
       "customLanguagePlaceholder": "Idioma personalizado..."
+    },
+    "chatCopy": {
+      "copyCode": "Copiar código",
+      "copyTable": "Copiar tabela",
+      "copiedCode": "Código copiado",
+      "copiedTable": "Tabela copiada",
+      "copyFailed": "Falha ao copiar"
     },
     "inlineAI": {
       "generateTitle": "Inspiração com IA",
@@ -3157,10 +3175,13 @@
       "abort": "Abortar",
       "explainTitle": "Explicação da IA",
       "explaining": "Explicando...",
+      "translateTitle": "Tradução por IA",
+      "translating": "Traduzindo...",
       "selectedText": "Texto selecionado",
       "explainHint": "Apenas para leitura, não será inserido na nota",
       "copy": "Copiar",
       "copied": "Copiado",
+      "replaceOriginal": "Substituir original",
       "close": "Fechar"
     },
     "image": {

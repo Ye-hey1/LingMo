@@ -3295,6 +3295,7 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "more": "More",
       "blockType": "Block type",
       "paragraph": "Text",
       "heading1": "Heading 1",
@@ -3326,6 +3327,15 @@
       "highlight": "Highlight",
       "clearHighlight": "Clear highlight",
       "restoreDefault": "Restore default",
+      "cellFillColor": "Cell fill color",
+      "white": "White",
+      "clearCellFill": "Clear fill",
+      "mergeCells": "Merge cells",
+      "splitCell": "Split cell",
+      "deleteCurrentRow": "Delete current row",
+      "deleteCurrentColumn": "Delete current column",
+      "deleteRowsOrColumns": "Delete rows/columns",
+      "align": "Align",
       "alignLeft": "Align left",
       "alignCenter": "Align center",
       "alignRight": "Align right",
@@ -3336,6 +3346,7 @@
       "taskList": "Task List",
       "codeBlock": "Code Block",
       "languages": {
+        "Chinese": "Chinese",
         "English": "English",
         "Japanese": "Japanese",
         "Korean": "Korean",
@@ -3347,6 +3358,13 @@
         "Arabic": "Arabic"
       },
       "customLanguagePlaceholder": "Custom language..."
+    },
+    "chatCopy": {
+      "copyCode": "Copy code",
+      "copyTable": "Copy table",
+      "copiedCode": "Code copied",
+      "copiedTable": "Table copied",
+      "copyFailed": "Copy failed"
     },
     "inlineAI": {
       "generateTitle": "AI inspiration",
@@ -3398,10 +3416,13 @@
       "abort": "Abort",
       "explainTitle": "AI Explanation",
       "explaining": "Explaining...",
+      "translateTitle": "AI Translation",
+      "translating": "Translating...",
       "selectedText": "Selected text",
       "explainHint": "For reading only, not inserted into the note",
       "copy": "Copy",
       "copied": "Copied",
+      "replaceOriginal": "Replace original",
       "close": "Close"
     },
     "image": {

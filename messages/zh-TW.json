@@ -3002,6 +3002,7 @@
     },
     "bubbleMenu": {
       "ai": "AI",
+      "more": "更多",
       "blockType": "區塊類型",
       "paragraph": "正文",
       "heading1": "一級標題",
@@ -3033,6 +3034,15 @@
       "highlight": "高亮",
       "clearHighlight": "清除高亮",
       "restoreDefault": "恢復預設",
+      "cellFillColor": "單元格填充色",
+      "white": "白色",
+      "clearCellFill": "清除填充",
+      "mergeCells": "合併單元格",
+      "splitCell": "拆分單元格",
+      "deleteCurrentRow": "刪除目前行",
+      "deleteCurrentColumn": "刪除目前列",
+      "deleteRowsOrColumns": "刪除行/列",
+      "align": "對齊",
       "alignLeft": "靠左對齊",
       "alignCenter": "置中對齊",
       "alignRight": "靠右對齊",
@@ -3043,6 +3053,7 @@
       "taskList": "任務列表",
       "codeBlock": "代碼塊",
       "languages": {
+        "Chinese": "中文",
         "English": "英語",
         "Japanese": "日語",
         "Korean": "韓語",
@@ -3054,6 +3065,13 @@
         "Arabic": "阿拉伯語"
       },
       "customLanguagePlaceholder": "自定義語言..."
+    },
+    "chatCopy": {
+      "copyCode": "複製代碼",
+      "copyTable": "複製表格",
+      "copiedCode": "已複製代碼",
+      "copiedTable": "已複製表格",
+      "copyFailed": "複製失敗"
     },
     "inlineAI": {
       "generateTitle": "AI 靈感生成",
@@ -3105,10 +3123,13 @@
       "abort": "終止",
       "explainTitle": "AI 解釋",
       "explaining": "正在解釋...",
+      "translateTitle": "AI 翻譯",
+      "translating": "正在翻譯...",
       "selectedText": "選中文本",
       "explainHint": "僅用於理解，不會寫入原文",
       "copy": "複製",
       "copied": "已複製",
+      "replaceOriginal": "替換原文",
       "close": "關閉"
     },
     "image": {
