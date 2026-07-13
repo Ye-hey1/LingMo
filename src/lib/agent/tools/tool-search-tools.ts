@@ -1,15 +1,8 @@
 import type { Tool, ToolResult } from '../types'
+import { clampNumber } from '@/lib/clamp'
 
 type SearchableTool = Pick<Tool, 'name' | 'description' | 'category' | 'parameters' | 'requiresConfirmation' | 'risk' | 'capabilities'>
 
-function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
-  const parsed = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(parsed)) {
-    return fallback
-  }
-
-  return Math.min(max, Math.max(min, Math.floor(parsed)))
-}
 
 function baseToolName(name: string): string {
   return name.includes('__') ? name.split('__').pop() || name : name

@@ -60,3 +60,7 @@ export async function listWechatMpArticles(input: { fakeid: string; begin?: numb
 export async function fetchWechatMpArticleHtml(url: string) {
   return invoke<string>('wechat_mp_fetch_article_html', { url })
 }
+
+export async function fetchWechatMpImageDataUrl(url: string) {
+  return invoke<string>('wechat_mp_fetch_image_data_url', { url })
+}

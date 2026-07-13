@@ -21,6 +21,8 @@ import useTagStore from '@/stores/tag'
 import { clearTrash, deleteMarks, deleteMarksForever, initMarksDb, Mark, restoreMark, restoreMarks, updateMark as updateMarkDb } from '@/db/marks'
 import { insertTag } from '@/db/tags'
 import { cn } from '@/lib/utils'
+import { LinkJobStatus } from '@/app/core/main/mark/link-job-status'
+import { retryLinkCaptureJob } from '@/lib/link-pipeline/capture-runner'
 
 const TIME_OPTIONS: RecordTimePreset[] = ['all', 'today', 'last7Days', 'last30Days']
 
@@ -453,8 +455,21 @@ export function MobileRecordStream() {
                   <Badge variant="secondary" className="text-[10px]">
                     {t(`record.mark.type.${queue.type}`)}
                   </Badge>
-                  <span className="text-xs text-muted-foreground">{t('common.loading')}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {queue.status === 'failed' ? '抓取失败' : t('common.loading')}
+                  </span>
                   <span className="ml-auto text-xs text-muted-foreground">{queue.progress}</span>
+                  {queue.status === 'failed' && queue.jobId ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => void retryLinkCaptureJob(queue.jobId!)}
+                    >
+                      重试
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             ))}
@@ -584,6 +599,7 @@ export function MobileRecordStream() {
                           <Badge variant="secondary" className="text-[10px]">
                             {t(`record.mark.type.${mark.type}`)}
                           </Badge>
+                          {mark.type === 'link' ? <LinkJobStatus markId={mark.id} disabled={trashState} /> : null}
                           <span className="text-xs text-muted-foreground">{dayjs(mark.createdAt).format('HH:mm')}</span>
                           {!trashState && (
                             <span className="ml-auto text-xs text-muted-foreground">{tagMap.get(mark.tagId) || '-'}</span>

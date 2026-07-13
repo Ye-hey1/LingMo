@@ -11,6 +11,8 @@ export interface AgentTaskRouteInput {
   hasLinkedContext?: boolean
   hasQuote?: boolean
   hasRag?: boolean
+  hasConversationHistory?: boolean
+  conversationDependent?: boolean
 }
 
 export interface AgentTaskRouteDecision {
@@ -108,7 +110,7 @@ export function classifyAgentTask(input: AgentTaskRouteInput): AgentTaskRouteDec
   const forcedSkillIds = (input.forcedSkillIds || []).filter(Boolean)
   const intentPolicy = deriveIntentPolicy(userInput)
   const hasImages = (input.imageCount || 0) > 0
-  const hasExternalContext = Boolean(input.hasLinkedContext || input.hasQuote)
+  const hasExternalContext = Boolean(input.hasLinkedContext || input.hasQuote || input.hasRag)
   const hasRuntimeRequirement = forcedSkillIds.length > 0 ||
     Boolean(input.webSearchEnabled) ||
     intentPolicy.allowWrite ||
@@ -151,21 +153,30 @@ export function classifyAgentTask(input: AgentTaskRouteInput): AgentTaskRouteDec
   }
 
   const complexityScore = estimateComplexityScore(userInput)
-  const needsContextFollowUp = matchesAny(FOLLOW_UP_PATTERNS, userInput)
+  const needsContextFollowUp = Boolean(input.conversationDependent) || matchesAny(FOLLOW_UP_PATTERNS, userInput)
+  const contextualQuickAnswer = Boolean(input.hasConversationHistory && input.conversationDependent) &&
+    !hasRuntimeRequirement &&
+    !hasExternalContext &&
+    !hasImages &&
+    complexityScore === 0
   const simpleIndependentQuestion = !hasRuntimeRequirement &&
     !hasExternalContext &&
     !needsContextFollowUp &&
     complexityScore === 0 &&
     (matchesAny(QUICK_QUESTION_PATTERNS, userInput) || Array.from(userInput).length <= 80)
 
-  if (simpleIndependentQuestion || (hasImages && !hasRuntimeRequirement && complexityScore <= 1 && !needsContextFollowUp)) {
+  if (contextualQuickAnswer || simpleIndependentQuestion || (hasImages && !hasRuntimeRequirement && complexityScore <= 1 && !needsContextFollowUp)) {
     return {
       route: 'quick_answer',
       complexity: 'simple',
       requiresRuntime: false,
       allowPlanning: false,
       maxIterations: 1,
-      reason: hasImages ? 'simple vision/chat answer without tools' : 'simple independent answer without tools',
+      reason: contextualQuickAnswer
+        ? 'context-dependent quick answer'
+        : hasImages
+          ? 'simple vision/chat answer without tools'
+          : 'simple independent answer without tools',
     }
   }
 

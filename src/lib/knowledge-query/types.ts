@@ -12,13 +12,24 @@ export interface KnowledgeQueryInput {
   requireEvidence?: boolean
   includeGraph?: boolean
   includeContentPreview?: boolean
+  timeoutMs?: number
 }
 
 export interface KnowledgeQueryTrace {
   step: string
-  status: 'success' | 'skipped' | 'failed'
+  status: 'success' | 'skipped' | 'failed' | 'timed_out'
   detail?: string
   count?: number
+  durationMs?: number
+}
+
+export interface KnowledgeQueryStats {
+  startedAt: number
+  completedAt: number
+  totalDurationMs: number
+  branchDurations: Record<string, number>
+  timeoutMs?: number
+  timedOutBranches: string[]
 }
 
 export interface KnowledgeQueryEvidence {
@@ -49,6 +60,7 @@ export interface KnowledgeQueryResult {
   graph?: KnowledgeQueryGraph
   warnings: string[]
   trace: KnowledgeQueryTrace[]
+  stats: KnowledgeQueryStats
 }
 
 export type KnowledgeQueryEvidenceSource = EvidenceBlockResult

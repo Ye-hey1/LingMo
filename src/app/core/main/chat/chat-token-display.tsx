@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/tooltip"
 import { resolveModelContextWindow } from "@/lib/ai/context-window"
 import { buildLatestContextTokenUsage } from "@/lib/ai/chat-token-usage"
+import { getConversationTurnCount } from "@/lib/ai/conversation-continuity"
 
 // ============================================================
 // Helper Functions
@@ -122,6 +123,7 @@ export const ChatContextRing = React.memo(function ChatContextRing({
   className,
 }: ChatContextRingProps) {
   const { chats } = useChatStore()
+  const conversationTurnCount = React.useMemo(() => getConversationTurnCount(chats), [chats])
   const [tokenStats, setTokenStats] = React.useState({
     inputTokens: 0,
     historyTokens: 0,
@@ -184,12 +186,12 @@ export const ChatContextRing = React.memo(function ChatContextRing({
           <button
             type="button"
             className={cn(
-              "group flex h-7 w-7 items-center justify-center rounded-md text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground",
+              "group relative flex h-7 w-7 items-center justify-center rounded-md text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground",
               isOverLimit && "text-red-500",
               isNearLimit && !isOverLimit && "text-amber-500",
               className
             )}
-            aria-label={`上下文占用 ${percentage}%`}
+            aria-label={`上下文占用 ${percentage}%，延续 ${conversationTurnCount} 轮对话，长期记忆按需检索`}
             >
               <svg
                 viewBox="0 0 18 18"
@@ -217,13 +219,19 @@ export const ChatContextRing = React.memo(function ChatContextRing({
                 strokeDashoffset={dashOffset}
               />
             </svg>
+            {conversationTurnCount > 0 && (
+              <span
+                className="absolute bottom-1 right-1 size-1.5 rounded-full border border-background bg-emerald-500"
+                aria-hidden="true"
+              />
+            )}
           </button>
         </TooltipTrigger>
         <TooltipContent
           side="top"
           align="end"
           sideOffset={6}
-          className="w-[168px] rounded-md border bg-popover px-2.5 py-2 text-popover-foreground shadow-sm"
+          className="w-[188px] rounded-md border bg-popover px-2.5 py-2 text-popover-foreground shadow-sm"
         >
           <div className="space-y-2 text-[11px]">
             <div className="flex items-center justify-between gap-2">
@@ -249,6 +257,16 @@ export const ChatContextRing = React.memo(function ChatContextRing({
             </div>
 
             <div className="grid gap-1 border-t border-border/50 pt-2 tabular-nums">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">会话延续</span>
+                <span className="text-foreground">
+                  {conversationTurnCount > 0 ? `${conversationTurnCount} 轮` : '新会话'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">长期记忆</span>
+                <span className="text-foreground">按需检索</span>
+              </div>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-muted-foreground">输入</span>
                 <span className="text-foreground">{formatTokenCount(inputTokens)}</span>

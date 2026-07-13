@@ -40,9 +40,11 @@ interface ModelSelectProps {
   triggerClassName?: string
   popoverClassName?: string
   hideClear?: boolean
+  emptyLabel?: string
+  clearTooltip?: string
 }
 
-export function ModelSelect({ modelKey, className, triggerClassName, popoverClassName, hideClear }: ModelSelectProps) {
+export function ModelSelect({ modelKey, className, triggerClassName, popoverClassName, hideClear, emptyLabel, clearTooltip }: ModelSelectProps) {
   const [groupedModels, setGroupedModels] = useState<GroupedModel[]>([])
   const {
     aiModelList,
@@ -54,6 +56,8 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
     setSttModel,
     setEmbeddingModel,
     setRerankingModel,
+    setImageGenerationModel,
+    setVideoGenerationModel,
     setCondenseModel,
     setInspirationModel,
     setPromptEnhancerModel,
@@ -68,6 +72,8 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
     switch (modelKey) {
       case 'primaryModel': return state.primaryModel
       case 'imageMethod': return state.imageMethodModel
+      case 'imageGeneration': return state.imageGenerationModel
+      case 'videoGeneration': return state.videoGenerationModel
       case 'completion': return state.completionModel
       case 'markDesc': return state.markDescModel
       case 'audio':
@@ -87,6 +93,8 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
     switch (modelKey) {
       case 'primaryModel': return 'primaryModel'
       case 'imageMethod': return 'imageMethodModel'
+      case 'imageGeneration': return 'imageGenerationModel'
+      case 'videoGeneration': return 'videoGenerationModel'
       case 'completion': return 'completionModel'
       case 'markDesc': return 'markDescModel'
       case 'audio':
@@ -111,6 +119,8 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
     switch (modelKey) {
       case 'primaryModel': setPrimaryModel(primaryModel); break
       case 'imageMethod': setImageMethodModel(primaryModel); break
+      case 'imageGeneration': setImageGenerationModel(primaryModel); break
+      case 'videoGeneration': setVideoGenerationModel(primaryModel); break
       case 'completion': setCompletionModel(primaryModel); break
       case 'markDesc': setMarkDescModel(primaryModel); break
       case 'audio':
@@ -132,6 +142,8 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
       case 'audio':
       case 'tts': return 'tts'
       case 'stt': return 'stt'
+      case 'imageGeneration': return 'image'
+      case 'videoGeneration': return 'video'
       default: return 'chat'
     }
   }
@@ -291,7 +303,7 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
               <span className="min-w-0 truncate">
                 {model
                   ? findSelectedModelDisplay() || t('tooltip')
-                  : modelKey === 'primaryModel' ? t('noModel') : t('tooltip')}
+                  : emptyLabel || (modelKey === 'primaryModel' ? t('noModel') : t('tooltip'))}
               </span>
               <ChevronsUpDown className="shrink-0 opacity-50" />
             </Button>
@@ -303,7 +315,7 @@ export function ModelSelect({ modelKey, className, triggerClassName, popoverClas
             icon={<X className="h-4 w-4" />}
             onClick={resetDefaultModel}
             variant="default"
-            tooltipText={t('tooltip')}
+            tooltipText={clearTooltip || t('tooltip')}
           />
         )}
       </div>

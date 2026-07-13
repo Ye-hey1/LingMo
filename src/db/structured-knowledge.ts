@@ -1,4 +1,4 @@
-import { getDb, runDbTransaction, serializedWrite } from './index.ts'
+import { getDb, runDbBatch, serializedWrite } from './index.ts'
 import type Database from '@tauri-apps/plugin-sql'
 import type {
   ExtractedEntity,
@@ -9,6 +9,8 @@ import type {
   StructuredMarkdownDocument,
   StructuredSemanticExtractionStatus,
 } from '../lib/structured-knowledge/types.ts'
+
+export const DEFAULT_SEMANTIC_EXTRACTION_LEASE_MS = 15 * 60 * 1000
 
 export function encodeJson(value: unknown): string {
   return JSON.stringify(value ?? null)
@@ -283,7 +285,7 @@ function rowToRelation(row: StructuredRelationRow): ExtractedRelation {
 export async function upsertStructuredDocument(parsed: ParsedMarkdownStructure): Promise<void> {
   await serializedWrite(async () => {
     const db = await getDb()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       const doc = parsed.document
       await db.execute(
         `insert into structured_documents (
@@ -303,6 +305,7 @@ export async function upsertStructuredDocument(parsed: ParsedMarkdownStructure):
           updated_at = excluded.updated_at,
           structured_at = excluded.structured_at,
           semantic_extraction_status = case
+            when structured_documents.semantic_extraction_status = 'running' then 'running'
             when structured_documents.content_hash != excluded.content_hash then 'pending'
             else coalesce(structured_documents.semantic_extraction_status, excluded.semantic_extraction_status, 'idle')
           end,
@@ -406,7 +409,7 @@ export async function upsertStructuredEntities(
 ): Promise<void> {
   await serializedWrite(async () => {
     const db = await getDb()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       for (const entity of entities.filter(entity => entity.documentId === documentId && (!method || entity.extractionMethod === method))) {
         await upsertEntityRow(db, entity)
       }
@@ -417,37 +420,41 @@ export async function upsertStructuredEntities(
 export async function upsertStructuredRelations(documentId: string, relations: ExtractedRelation[]): Promise<void> {
   await serializedWrite(async () => {
     const db = await getDb()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       for (const relation of relations.filter(relation => relation.documentId === documentId)) {
-        await db.execute(
-          `insert into structured_relations (
-            id, document_id, source_entity_id, target_entity_id, relation_type, evidence_block_ids,
-            confidence, extraction_method, created_at, updated_at
-          ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-          on conflict(id) do update set
-            source_entity_id = excluded.source_entity_id,
-            target_entity_id = excluded.target_entity_id,
-            relation_type = excluded.relation_type,
-            evidence_block_ids = excluded.evidence_block_ids,
-            confidence = excluded.confidence,
-            extraction_method = excluded.extraction_method,
-            updated_at = excluded.updated_at`,
-          [
-            relation.id,
-            relation.documentId,
-            relation.sourceEntityId,
-            relation.targetEntityId,
-            relation.relationType,
-            encodeJson(relation.evidenceBlockIds),
-            relation.confidence,
-            relation.extractionMethod,
-            relation.createdAt,
-            relation.updatedAt,
-          ],
-        )
+        await upsertRelationRow(db, relation)
       }
     })
   })
+}
+
+async function upsertRelationRow(db: Database, relation: ExtractedRelation) {
+  await db.execute(
+    `insert into structured_relations (
+      id, document_id, source_entity_id, target_entity_id, relation_type, evidence_block_ids,
+      confidence, extraction_method, created_at, updated_at
+    ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    on conflict(id) do update set
+      source_entity_id = excluded.source_entity_id,
+      target_entity_id = excluded.target_entity_id,
+      relation_type = excluded.relation_type,
+      evidence_block_ids = excluded.evidence_block_ids,
+      confidence = excluded.confidence,
+      extraction_method = excluded.extraction_method,
+      updated_at = excluded.updated_at`,
+    [
+      relation.id,
+      relation.documentId,
+      relation.sourceEntityId,
+      relation.targetEntityId,
+      relation.relationType,
+      encodeJson(relation.evidenceBlockIds),
+      relation.confidence,
+      relation.extractionMethod,
+      relation.createdAt,
+      relation.updatedAt,
+    ],
+  )
 }
 
 export async function getStructuredDocumentByPath(filePath: string): Promise<StructuredMarkdownDocument | undefined> {
@@ -506,7 +513,7 @@ export async function countStructuredRelations(documentId: string): Promise<numb
 export async function clearStructuredLlmSemantics(documentId: string): Promise<void> {
   await serializedWrite(async () => {
     const db = await getDb()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       await db.execute('delete from structured_relations where document_id = $1 and extraction_method = $2', [documentId, 'llm'])
       await db.execute('delete from structured_entities where document_id = $1 and extraction_method = $2', [documentId, 'llm'])
     })
@@ -514,80 +521,186 @@ export async function clearStructuredLlmSemantics(documentId: string): Promise<v
 }
 
 export async function markStructuredSemanticExtractionRequested(documentId: string, contentHash?: string, now = Date.now()): Promise<void> {
-  const db = await getDb()
-  await db.execute(
-    `update structured_documents set
-      semantic_extraction_status = 'pending',
-      semantic_extraction_requested_at = $2,
-      semantic_extraction_error = null,
-      semantic_extraction_content_hash = coalesce($3, semantic_extraction_content_hash),
-      updated_at = $2
-    where id = $1`,
-    [documentId, now, contentHash ?? null],
-  )
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await db.execute(
+      `update structured_documents set
+        semantic_extraction_status = case
+          when semantic_extraction_status = 'running' then 'running'
+          else 'pending'
+        end,
+        semantic_extraction_requested_at = $2,
+        semantic_extraction_error = null,
+        semantic_extraction_content_hash = coalesce($3, semantic_extraction_content_hash),
+        updated_at = $2
+      where id = $1`,
+      [documentId, now, contentHash ?? null],
+    )
+  })
 }
 
-export async function markStructuredSemanticExtractionRunning(documentId: string, now = Date.now()): Promise<void> {
-  const db = await getDb()
-  await db.execute(
-    `update structured_documents set
-      semantic_extraction_status = 'running',
-      semantic_extraction_started_at = $2,
-      semantic_extraction_error = null,
-      semantic_extraction_attempts = coalesce(semantic_extraction_attempts, 0) + 1,
-      updated_at = $2
-    where id = $1`,
-    [documentId, now],
-  )
+export async function markStructuredSemanticExtractionRunning(
+  documentId: string,
+  now = Date.now(),
+  leaseMs = DEFAULT_SEMANTIC_EXTRACTION_LEASE_MS,
+): Promise<number | undefined> {
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    const result = await db.execute(
+      `update structured_documents set
+        semantic_extraction_status = 'running',
+        semantic_extraction_started_at = $2,
+        semantic_extraction_error = null,
+        semantic_extraction_attempts = coalesce(semantic_extraction_attempts, 0) + 1,
+        updated_at = $2
+      where id = $1 and (
+        semantic_extraction_status is null
+        or semantic_extraction_status != 'running'
+        or semantic_extraction_started_at is null
+        or semantic_extraction_started_at <= $3
+      )`,
+      [documentId, now, now - Math.max(0, leaseMs)],
+    )
+    return (result?.rowsAffected ?? 0) > 0 ? now : undefined
+  })
 }
 
-export async function markStructuredSemanticExtractionCompleted(documentId: string, contentHash: string, now = Date.now()): Promise<void> {
-  const db = await getDb()
-  await db.execute(
-    `update structured_documents set
-      semantic_extraction_status = 'completed',
-      semantic_extracted_at = $2,
-      semantic_extraction_content_hash = $3,
-      semantic_extraction_error = null,
-      updated_at = $2
-    where id = $1`,
-    [documentId, now, contentHash],
-  )
+export interface StructuredSemanticExtractionCommitInput {
+  documentId: string
+  ownerToken: number
+  contentHash: string
+  entities: ExtractedEntity[]
+  relations: ExtractedRelation[]
+  overwrite?: boolean
+  now?: number
 }
 
-export async function markStructuredSemanticExtractionFailed(documentId: string, error: string, now = Date.now()): Promise<void> {
-  const db = await getDb()
-  await db.execute(
-    `update structured_documents set
-      semantic_extraction_status = 'failed',
-      semantic_extraction_error = $2,
-      updated_at = $3
-    where id = $1`,
-    [documentId, error.slice(0, 1000), now],
-  )
+export async function commitStructuredSemanticExtraction(
+  input: StructuredSemanticExtractionCommitInput,
+): Promise<boolean> {
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    return await runDbBatch(db, async () => {
+      const owners = await db.select<Array<{
+        semantic_extraction_status: StructuredSemanticExtractionStatus | null
+        semantic_extraction_started_at: number | null
+        content_hash: string
+      }>>(
+        `select semantic_extraction_status, semantic_extraction_started_at, content_hash
+         from structured_documents
+         where id = $1`,
+        [input.documentId],
+      )
+      const owner = owners[0]
+      const ownsLease = owner?.semantic_extraction_status === 'running'
+        && owner.semantic_extraction_started_at === input.ownerToken
+      if (!ownsLease) return false
+
+      if (owner.content_hash !== input.contentHash) {
+        await db.execute(
+          `update structured_documents set
+            semantic_extraction_status = 'pending',
+            semantic_extraction_started_at = null,
+            semantic_extraction_error = null
+           where id = $1
+             and semantic_extraction_status = 'running'
+             and semantic_extraction_started_at = $2
+             and content_hash != $3`,
+          [input.documentId, input.ownerToken, input.contentHash],
+        )
+        return false
+      }
+
+      if (input.overwrite) {
+        await db.execute('delete from structured_relations where document_id = $1 and extraction_method = $2', [input.documentId, 'llm'])
+        await db.execute('delete from structured_entities where document_id = $1 and extraction_method = $2', [input.documentId, 'llm'])
+      }
+      for (const entity of input.entities.filter(entity => (
+        entity.documentId === input.documentId && entity.extractionMethod === 'llm'
+      ))) {
+        await upsertEntityRow(db, entity)
+      }
+      for (const relation of input.relations.filter(relation => (
+        relation.documentId === input.documentId && relation.extractionMethod === 'llm'
+      ))) {
+        await upsertRelationRow(db, relation)
+      }
+
+      const now = input.now ?? Date.now()
+      const completed = await db.execute(
+        `update structured_documents set
+          semantic_extraction_status = 'completed',
+          semantic_extracted_at = $4,
+          semantic_extraction_content_hash = $3,
+          semantic_extraction_started_at = null,
+          semantic_extraction_error = null,
+          updated_at = $4
+         where id = $1
+           and semantic_extraction_status = 'running'
+           and semantic_extraction_started_at = $2
+           and content_hash = $3`,
+        [input.documentId, input.ownerToken, input.contentHash, now],
+      )
+      if ((completed?.rowsAffected ?? 0) === 0) {
+        throw new Error('Semantic extraction ownership changed during commit')
+      }
+      return true
+    })
+  })
+}
+
+export async function markStructuredSemanticExtractionFailed(
+  documentId: string,
+  ownerToken: number,
+  error: string,
+  now = Date.now(),
+): Promise<boolean> {
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    const result = await db.execute(
+      `update structured_documents set
+        semantic_extraction_status = 'failed',
+        semantic_extraction_started_at = null,
+        semantic_extraction_error = $3,
+        updated_at = $4
+      where id = $1
+        and semantic_extraction_status = 'running'
+        and semantic_extraction_started_at = $2`,
+      [documentId, ownerToken, error.slice(0, 1000), now],
+    )
+    return (result?.rowsAffected ?? 0) > 0
+  })
 }
 
 export async function getStructuredDocumentsNeedingSemanticExtraction(options: {
   limit?: number
   cooldownMs?: number
   now?: number
+  includeActiveRunning?: boolean
 } = {}): Promise<StructuredMarkdownDocument[]> {
   const db = await getDb()
   const now = options.now ?? Date.now()
-  const cooldownMs = Math.max(0, options.cooldownMs ?? 0)
+  const leaseMs = Math.max(0, options.cooldownMs ?? DEFAULT_SEMANTIC_EXTRACTION_LEASE_MS)
   const limit = Math.max(1, Math.min(50, options.limit ?? 10))
   const rows = await db.select<StructuredDocumentRow[]>(
     `select * from structured_documents
      where (
        semantic_extraction_status = 'pending'
+       or semantic_extraction_status = 'running'
        or semantic_extracted_at is null
        or semantic_extraction_content_hash is null
        or semantic_extraction_content_hash != content_hash
      )
-     and (semantic_extraction_started_at is null or semantic_extraction_started_at <= $1)
+     and (
+       $3 = 1
+       or semantic_extraction_status is null
+       or semantic_extraction_status != 'running'
+       or semantic_extraction_started_at is null
+       or semantic_extraction_started_at <= $1
+     )
      order by coalesce(semantic_extraction_requested_at, updated_at, structured_at) asc
      limit $2`,
-    [now - cooldownMs, limit],
+    [now - leaseMs, limit, options.includeActiveRunning ? 1 : 0],
   )
   return rows.map(row => rowToDocument(row))
 }

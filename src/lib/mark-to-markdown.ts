@@ -19,13 +19,23 @@ export function markToMarkdown(mark: Mark): string {
       const scanDesc = mark.desc || 'screenshot';
       return `![${scanDesc}](${mark.url})`;
     
-    case 'link':
-      if (/<!--\s*lingmo:github-project\b/.test(mark.content || '')) {
-        return mark.content || ''
+    case 'link': {
+      const linkContent = mark.content?.trim() || '';
+      if (/<!--\s*lingmo:github-project\b/.test(linkContent)) {
+        return linkContent;
       }
-      // Link: insert as markdown link with description
+
+      if (linkContent) {
+        if (!mark.url || linkContent.includes(mark.url)) {
+          return linkContent;
+        }
+        return `${linkContent}\n\n[原链接](${mark.url})`;
+      }
+
+      // Link without captured content: insert the source link only.
       const linkDesc = mark.desc || mark.url;
       return `[${linkDesc}](${mark.url})`;
+    }
     
     case 'file':
       // File: insert file link first, then content (e.g., extracted PDF text)

@@ -16,11 +16,6 @@ function classifyError(error: string): ToolObservation['errorKind'] {
   return 'tool'
 }
 
-function isRetryableError(error: string) {
-  if (/invalid[_\s-]?api[_\s-]?key|api key|unauthorized|forbidden|permission/i.test(error)) return false
-  return /timeout|network|fetch|connect/i.test(error)
-}
-
 function isResultMarkedRetryable(result: ToolResult) {
   if (typeof result.data?.retryable === 'boolean') {
     return result.data.retryable
@@ -176,7 +171,7 @@ export async function executeHarnessTool(
 
     if (!result.success) {
       const error = result.error || result.message || 'Tool failed'
-      const retryable = isRetryableError(error) || isResultMarkedRetryable(result)
+      const retryable = isTransientError(error) || isResultMarkedRetryable(result)
       const observation = await maybeOffloadObservation({
         toolName: tool.name,
         success: false,
@@ -211,7 +206,7 @@ export async function executeHarnessTool(
       success: false,
       summary: message,
       errorKind: classifyError(message),
-      retryable: isRetryableError(message),
+      retryable: isTransientError(message),
     }, message, tool, context)
     return { result, observation }
   }

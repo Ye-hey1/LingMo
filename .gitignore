@@ -101,3 +101,7 @@ tmp-*
 M01
 LingMo-Dev-Quick.cmd
 LingMo-Dev-Rebuild.cmd
+
+# Playwright CLI / screenshot artifacts
+.playwright-cli/
+output/

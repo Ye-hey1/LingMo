@@ -37,9 +37,48 @@ function trimContentToTokenBudget(content: string, maxTokens: number) {
     return content
   }
 
-  const ratio = Math.max(0.05, Math.min(1, maxTokens / Math.max(tokenCount, 1)))
-  const approxChars = Math.max(80, Math.floor(content.length * ratio))
-  return `${content.slice(0, approxChars).trimEnd()}\n\n[历史内容已按预算截断]`
+  const budget = Math.max(0, Math.floor(maxTokens))
+  if (budget === 0) return ''
+
+  const marker = '\n\n[历史内容已按预算截断]\n\n'
+  const buildHeadTail = (visibleChars: number) => {
+    const headChars = Math.max(0, Math.floor(visibleChars * 0.55))
+    const tailChars = Math.max(0, visibleChars - headChars)
+    const tail = tailChars > 0 ? content.slice(-tailChars).trimStart() : ''
+    return `${content.slice(0, headChars).trimEnd()}${marker}${tail}`
+  }
+
+  if (estimateTokens(marker) > budget) {
+    let low = 0
+    let high = content.length
+    let best = ''
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2)
+      const candidate = middle > 0 ? content.slice(-middle) : ''
+      if (estimateTokens(candidate) <= budget) {
+        best = candidate
+        low = middle + 1
+      } else {
+        high = middle - 1
+      }
+    }
+    return best
+  }
+
+  let low = 0
+  let high = content.length
+  let best = marker.trim()
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2)
+    const candidate = buildHeadTail(middle)
+    if (estimateTokens(candidate) <= budget) {
+      best = candidate
+      low = middle + 1
+    } else {
+      high = middle - 1
+    }
+  }
+  return best
 }
 
 function estimateMessagesTokens(messages: MessageLike[]) {
@@ -78,8 +117,30 @@ function buildTurnMessages(
 }
 
 function trimTurnMessagesToBudget(messages: MessageLike[], maxTokens: number) {
+  const budget = Math.max(0, Math.floor(maxTokens))
+  const lastAssistantIndex = messages.findLastIndex(message => message.role === 'assistant')
+  if (lastAssistantIndex >= 0 && estimateMessagesTokens(messages) > budget) {
+    const assistantBudget = Math.max(1, Math.floor(budget * 0.65))
+    const otherBudget = Math.max(0, budget - assistantBudget)
+    const result: MessageLike[] = []
+    let remainingOther = otherBudget
+
+    messages.forEach((message, index) => {
+      const available = index === lastAssistantIndex ? assistantBudget : remainingOther
+      if (available <= 0) return
+      const content = trimContentToTokenBudget(message.content, available)
+      if (!content.trim()) return
+      result.push({ ...message, content })
+      if (index !== lastAssistantIndex) {
+        remainingOther = Math.max(0, remainingOther - estimateTokens(content))
+      }
+    })
+
+    return result
+  }
+
   const result: MessageLike[] = []
-  let remaining = Math.max(0, Math.floor(maxTokens))
+  let remaining = budget
 
   for (const message of messages) {
     if (remaining <= 0) break

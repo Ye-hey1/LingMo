@@ -20,8 +20,9 @@ const TOOL_AFFINITY_GROUPS: Record<string, string[]> = {
   'get_editor_content': ['replace_editor_content', 'insert_at_cursor', 'read_markdown_file'],
   'create_file': ['update_markdown_file', 'read_markdown_file'],
   'get_current_note_context': ['search_knowledge_objects', 'get_connected_notes', 'get_note_backlinks', 'suggest_links_for_note'],
-  'search_knowledge_objects': ['get_knowledge_object_overview', 'get_current_note_context', 'read_markdown_file'],
-  'get_knowledge_object_overview': ['search_knowledge_objects', 'find_unindexed_notes', 'reindex_knowledge_objects', 'query_agent_runs'],
+  'search_knowledge_objects': ['get_knowledge_object_overview', 'get_knowledge_system_health', 'get_current_note_context', 'read_markdown_file'],
+  'get_knowledge_object_overview': ['search_knowledge_objects', 'get_knowledge_system_health', 'find_unindexed_notes', 'reindex_knowledge_objects', 'query_agent_runs'],
+  'get_knowledge_system_health': ['query_knowledge', 'search_knowledge_objects', 'get_knowledge_object_overview', 'reindex_knowledge_objects', 'get_semantic_extraction_status'],
 
   // Search operations
   'safe_grep': ['safe_read_file', 'read_markdown_file'],
@@ -41,6 +42,14 @@ const TOOL_AFFINITY_GROUPS: Record<string, string[]> = {
   'append_drawio_diagram_cells': ['read_diagram_file', 'edit_drawio_diagram', 'validate_drawio_diagram', 'export_drawio_diagram'],
   'validate_drawio_diagram': ['read_diagram_file', 'edit_drawio_diagram', 'append_drawio_diagram_cells', 'export_drawio_diagram'],
   'export_drawio_diagram': ['read_diagram_file', 'validate_drawio_diagram'],
+
+  // Creative canvas operations
+  'creative_canvas_get_state': ['creative_canvas_get_selection', 'creative_canvas_create_generation_flow', 'creative_canvas_run_generation', 'creative_canvas_insert_asset_into_note', 'creative_canvas_analyze_asset_cleanup'],
+  'creative_canvas_get_selection': ['creative_canvas_get_state', 'creative_canvas_update_node', 'creative_canvas_move_nodes', 'creative_canvas_run_generation'],
+  'creative_canvas_create_generation_flow': ['creative_canvas_get_state', 'creative_canvas_run_generation', 'creative_canvas_connect_nodes'],
+  'creative_canvas_generate_image': ['creative_canvas_get_state', 'creative_canvas_run_generation', 'creative_canvas_insert_asset_into_note'],
+  'creative_canvas_run_generation': ['creative_canvas_get_state', 'creative_canvas_get_selection', 'creative_canvas_insert_asset_into_note', 'creative_canvas_retry_generation'],
+  'creative_canvas_import_infinite_canvas_json': ['creative_canvas_get_state', 'creative_canvas_export_snapshot'],
 
   // Web operations
   'web_search': ['web_fetch', 'web_extract'],
@@ -115,8 +124,8 @@ const QUERY_TOOL_AFFINITY: QueryToolAffinityRule[] = [
     boost: 50,
   },
   {
-    keywords: /知识库|知识对象|知识管理|当前笔记|相关笔记|关联笔记|我的笔记|记忆|图谱|关系|证据|重建索引|刷新索引|重新索引|同步索引|索引不同步|memory|knowledge\s*base|current\s*note|related\s*notes|evidence|graph|graphrag|reindex/i,
-    tools: ['query_knowledge', 'search_knowledge_objects', 'get_knowledge_object_overview', 'get_current_note_context', 'reindex_knowledge_objects', 'get_connected_notes', 'get_note_backlinks'],
+    keywords: /知识库|知识对象|知识管理|当前笔记|相关笔记|关联笔记|我的笔记|记忆|图谱|关系|证据|健康|诊断|缓存|队列|陈旧|重建索引|刷新索引|重新索引|同步索引|索引不同步|memory|knowledge\s*base|current\s*note|related\s*notes|evidence|health|diagnos|cache|queue|stale|graph|graphrag|reindex/i,
+    tools: ['query_knowledge', 'search_knowledge_objects', 'get_knowledge_object_overview', 'get_knowledge_system_health', 'get_current_note_context', 'reindex_knowledge_objects', 'get_connected_notes', 'get_note_backlinks'],
     boost: 55,
   },
   {
@@ -147,6 +156,42 @@ const QUERY_TOOL_AFFINITY: QueryToolAffinityRule[] = [
       'export_drawio_diagram',
     ],
     boost: 55,
+  },
+  {
+    keywords: /创意画布|无限画布|生图|文生图|图生图|参考图|图片生成|画布节点|画布助手|缩略图|素材清理|任务恢复|infinite-canvas|creative\s*canvas|image\s*generation|text\s*to\s*image/i,
+    tools: [
+      'creative_canvas_get_state',
+      'creative_canvas_get_selection',
+      'creative_canvas_export_snapshot',
+      'creative_canvas_get_tool_schema',
+      'creative_canvas_apply_ops',
+      'creative_canvas_create_node',
+      'creative_canvas_create_text_node',
+      'creative_canvas_create_text_nodes',
+      'creative_canvas_create_config_node',
+      'creative_canvas_create_image_prompt_flow',
+      'creative_canvas_create_generation_flow',
+      'creative_canvas_generate_text',
+      'creative_canvas_generate_image',
+      'creative_canvas_generate_video',
+      'creative_canvas_generate_audio',
+      'creative_canvas_update_node',
+      'creative_canvas_update_node_text',
+      'creative_canvas_move_nodes',
+      'creative_canvas_resize_node',
+      'creative_canvas_delete_nodes',
+      'creative_canvas_connect_nodes',
+      'creative_canvas_select_nodes',
+      'creative_canvas_set_viewport',
+      'creative_canvas_run_generation',
+      'creative_canvas_insert_asset_into_note',
+      'creative_canvas_recover_jobs',
+      'creative_canvas_retry_generation',
+      'creative_canvas_analyze_asset_cleanup',
+      'creative_canvas_cleanup_assets',
+      'creative_canvas_import_infinite_canvas_json',
+    ],
+    boost: 60,
   },
 ]
 
@@ -261,6 +306,7 @@ const DEFAULT_OPTIONS: DynamicFilterOptions = {
     'get_current_note_context',
     'search_knowledge_objects',
     'get_knowledge_object_overview',
+    'get_knowledge_system_health',
     'reindex_knowledge_objects',
     'safe_grep',
     'get_current_time',

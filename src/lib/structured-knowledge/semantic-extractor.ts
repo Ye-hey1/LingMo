@@ -3,15 +3,12 @@ import type { AiConfig } from '../../app/core/setting/config'
 import { invokeAiJson } from '../ai/tauri-client.ts'
 import { matchesConfiguredModelSelection } from '../ai/model-selection.ts'
 import {
-  clearStructuredLlmSemantics,
+  commitStructuredSemanticExtraction,
   countStructuredEntities,
   countStructuredRelations,
   getStructuredDocumentBundleByPath,
-  markStructuredSemanticExtractionCompleted,
   markStructuredSemanticExtractionFailed,
   markStructuredSemanticExtractionRunning,
-  upsertStructuredEntities,
-  upsertStructuredRelations,
 } from '../../db/structured-knowledge.ts'
 import { createStableId } from './markdown-parser.ts'
 import type {
@@ -246,7 +243,20 @@ async function updateStructuredKnowledgeObjectMetadata(document: StructuredMarkd
 export async function extractNoteSemantics(input: { filePath: string; mode?: 'entities' | 'relations' | 'both'; maxBlocks?: number; overwrite?: boolean }): Promise<SemanticExtractionResult> {
   const bundle = await getStructuredDocumentBundleByPath(input.filePath)
   if (!bundle) throw new Error(`Structured document not found for ${input.filePath}`)
-  await markStructuredSemanticExtractionRunning(bundle.document.id)
+  const ownerToken = await markStructuredSemanticExtractionRunning(bundle.document.id)
+  if (ownerToken === undefined) {
+    // 并发任务已在抽取，跳过本次以避免重复消耗 LLM token
+    return {
+      documentId: bundle.document.id,
+      filePath: bundle.document.filePath,
+      contentHash: bundle.document.contentHash,
+      semanticExtractedAt: Date.now(),
+      entities: [],
+      relations: [],
+      discardedRelations: 0,
+      warnings: ['语义抽取已在其他任务中运行，已跳过'],
+    }
+  }
   try {
     const config = await getAIConfig()
     if (!config) throw new Error('No chat AI model configured')
@@ -270,11 +280,28 @@ export async function extractNoteSemantics(input: { filePath: string; mode?: 'en
     const content = response?.choices?.[0]?.message?.content || ''
     const parsed = parseSemanticExtractionResponse(content)
     const validated = validateSemanticExtraction(parsed, bundle.document, bundle.blocks)
-    if (input.overwrite) await clearStructuredLlmSemantics(bundle.document.id)
-    await upsertStructuredEntities(bundle.document.id, validated.entities)
-    await upsertStructuredRelations(bundle.document.id, validated.relations)
     const semanticExtractedAt = Date.now()
-    await markStructuredSemanticExtractionCompleted(bundle.document.id, bundle.document.contentHash, semanticExtractedAt)
+    const committed = await commitStructuredSemanticExtraction({
+      documentId: bundle.document.id,
+      ownerToken,
+      contentHash: bundle.document.contentHash,
+      entities: validated.entities,
+      relations: validated.relations,
+      overwrite: input.overwrite,
+      now: semanticExtractedAt,
+    })
+    if (!committed) {
+      return {
+        documentId: bundle.document.id,
+        filePath: bundle.document.filePath,
+        contentHash: bundle.document.contentHash,
+        semanticExtractedAt,
+        entities: [],
+        relations: [],
+        discardedRelations: validated.discardedRelations,
+        warnings: [...validated.warnings, '语义抽取租约已失效或文档内容已变化，结果已丢弃'],
+      }
+    }
     await updateStructuredKnowledgeObjectMetadata(bundle.document, semanticExtractedAt)
     return {
       documentId: bundle.document.id,
@@ -287,7 +314,11 @@ export async function extractNoteSemantics(input: { filePath: string; mode?: 'en
       warnings: validated.warnings,
     }
   } catch (error) {
-    await markStructuredSemanticExtractionFailed(bundle.document.id, error instanceof Error ? error.message : String(error))
+    await markStructuredSemanticExtractionFailed(
+      bundle.document.id,
+      ownerToken,
+      error instanceof Error ? error.message : String(error),
+    )
     throw error
   }
 }

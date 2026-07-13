@@ -14,13 +14,17 @@ import { S3Config } from '@/types/sync'
 import { normalizeRecordFilters } from '@/app/core/main/mark/mark-filters'
 import { normalizeRecordViewMode } from '@/app/core/main/mark/mark-view-mode.mjs'
 import { getTags } from '@/db/tags'
+import emitter from '@/lib/emitter'
 
 export interface MarkQueue {
   queueId: string
+  jobId?: string
   tagId: number
   type: Mark["type"]
   progress: string
   startTime: number
+  status?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  errorMessage?: string
 }
 
 export type RecordTimePreset = 'all' | 'today' | 'last7Days' | 'last30Days'
@@ -649,5 +653,45 @@ const useMarkStore = create<MarkState>((set, get) => ({
     return result
   },
 }))
+
+emitter.on('link-pipeline-mark-updated', () => {
+  void useMarkStore.getState().refreshVisibleMarks()
+})
+
+emitter.on('link-pipeline-capture-progress', event => {
+  const store = useMarkStore.getState()
+  const existing = store.queues.some(queue => queue.queueId === event.jobId)
+  const progress = event.status === 'failed'
+    ? `${event.progress}% 抓取失败：${event.errorMessage || '可稍后重试'}`
+    : event.status === 'succeeded'
+      ? `100% ${event.message || '链接内容已保存'}`
+      : `${event.progress}% ${event.message || (event.progress < 60 ? '正在抓取链接内容' : '正在保存并整理')}`
+  const patch: Partial<MarkQueue> = {
+    jobId: event.jobId,
+    tagId: event.tagId,
+    progress,
+    status: event.status,
+    errorMessage: event.errorMessage,
+  }
+
+  if (existing) {
+    store.setQueue(event.jobId, patch)
+  } else if (event.status !== 'cancelled') {
+    store.addQueue({
+      queueId: event.jobId,
+      jobId: event.jobId,
+      tagId: event.tagId,
+      type: 'link',
+      progress,
+      startTime: event.startedAt,
+      status: event.status,
+      errorMessage: event.errorMessage,
+    })
+  }
+
+  if (event.status === 'succeeded' || event.status === 'cancelled') {
+    setTimeout(() => useMarkStore.getState().removeQueue(event.jobId), 1_500)
+  }
+})
 
 export default useMarkStore

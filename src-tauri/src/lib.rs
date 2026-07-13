@@ -5,8 +5,10 @@ mod device;
 mod llm_memory;
 mod mcp;
 mod mcp_runtime;
+mod ocr_packages;
 mod skills;
 mod skills_v2;
+mod wechat_mp;
 
 use ai::{
     AiRequestManager, ai_binary_request, ai_chat_completion_stream, ai_json_request,
@@ -22,6 +24,7 @@ use mcp::{
 use mcp_runtime::{
     RuntimeInstallManager, cancel_mcp_runtime_install, inspect_mcp_runtime, install_mcp_runtime,
 };
+use ocr_packages::{list_ocr_providers, run_ocr_provider};
 use skills::import_skill_zip;
 use skills_v2::commands::SkillState;
 use skills_v2::db;
@@ -41,6 +44,7 @@ pub fn run() {
         .manage(McpServerManager::new())
         .manage(RuntimeInstallManager::new())
         .manage(AiRequestManager::new())
+        .manage(wechat_mp::WechatMpState::default())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let store =
@@ -67,6 +71,15 @@ pub fn run() {
             ai_multipart_request,
             ai_chat_completion_stream,
             cancel_ai_request,
+            list_ocr_providers,
+            run_ocr_provider,
+            wechat_mp::wechat_mp_start_login,
+            wechat_mp::wechat_mp_poll_login,
+            wechat_mp::wechat_mp_status,
+            wechat_mp::wechat_mp_search_accounts,
+            wechat_mp::wechat_mp_list_articles,
+            wechat_mp::wechat_mp_fetch_article_html,
+            wechat_mp::wechat_mp_fetch_image_data_url,
             llm_memory::llm_memory_list_sessions,
             llm_memory::llm_memory_get_session_detail,
             llm_memory::llm_memory_update_message,

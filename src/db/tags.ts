@@ -1,4 +1,4 @@
-import { getDb, runDbTransaction, serializedWrite } from './index'
+import { getDb, runDbBatch, serializedWrite } from './index'
 import { Store } from '@tauri-apps/plugin-store'
 
 export const TAG_COLORS = [
@@ -388,7 +388,7 @@ export async function deleteAllTags() {
 export async function insertTags(tags: Tag[]) {
   await serializedWrite(async () => {
     const db = await getDb()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       for (const tag of tags) {
         if (tag.isLocked) continue
         const exists = await db.select<Tag[]>('select * from tags where id = $1', [tag.id])
@@ -412,7 +412,7 @@ export async function insertTags(tags: Tag[]) {
 export async function updateTagsOrder(tags: { id: number; sortOrder: number }[]) {
   await serializedWrite(async () => {
     const db = await getDb()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       for (const tag of tags) {
         await db.execute(
           'update tags set sortOrder = $1 where id = $2',

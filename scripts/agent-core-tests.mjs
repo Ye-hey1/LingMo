@@ -39,6 +39,23 @@ function resolveRelativeDependency(currentRelativePath, specifier) {
     .replace(/^[/\\]/, '')
 }
 
+function resolveAliasedDependency(specifier) {
+  if (!specifier.startsWith('@/')) return null
+  const basePath = join(repoRoot, 'src', specifier.slice(2))
+  const candidates = [
+    basePath,
+    `${basePath}.ts`,
+    `${basePath}.tsx`,
+    join(basePath, 'index.ts'),
+    join(basePath, 'index.tsx'),
+  ]
+  const dependencyPath = candidates.find(candidate => existsSync(candidate))
+  if (!dependencyPath) return null
+  return resolve(dependencyPath)
+    .replace(resolve(repoRoot), '')
+    .replace(/^[/\\]/, '')
+}
+
 function rewriteSpecifier(currentRelativePath, dependencyRelativePath) {
   const currentOutDir = dirname(toMjsRelativePath(currentRelativePath))
   const dependencyOutPath = toMjsRelativePath(dependencyRelativePath)
@@ -70,11 +87,11 @@ function rewriteSpecifier(currentRelativePath, dependencyRelativePath) {
 async function rewriteLocalImports(output, relativePath) {
   const dependencies = new Set()
   const rewrite = (match, prefix, specifier, suffix) => {
-    if (!specifier.startsWith('.')) {
-      return match
-    }
-
-    const dependencyRelativePath = resolveRelativeDependency(relativePath, specifier)
+    const dependencyRelativePath = specifier.startsWith('@/')
+      ? resolveAliasedDependency(specifier)
+      : specifier.startsWith('.')
+        ? resolveRelativeDependency(relativePath, specifier)
+        : null
     if (!dependencyRelativePath) {
       return match
     }
@@ -83,8 +100,8 @@ async function rewriteLocalImports(output, relativePath) {
     return `${prefix}${rewriteSpecifier(relativePath, dependencyRelativePath)}${suffix}`
   }
 
-  let rewritten = output.replace(/(from\s+['"])(\.{1,2}\/[^'"]+)(['"])/g, rewrite)
-  rewritten = rewritten.replace(/(import\s*\(\s*['"])(\.{1,2}\/[^'"]+)(['"]\s*\))/g, rewrite)
+  let rewritten = output.replace(/(from\s+['"])(@\/[^'"]+|\.{1,2}\/[^'"]+)(['"])/g, rewrite)
+  rewritten = rewritten.replace(/(import\s*\(\s*['"])(@\/[^'"]+|\.{1,2}\/[^'"]+)(['"]\s*\))/g, rewrite)
 
   for (const dependency of dependencies) {
     await compileTsModule(dependency)
@@ -126,6 +143,7 @@ try {
     deriveIntentPolicy,
     evaluateIntentAwareToolPolicy,
     formatIntentPolicyForPrompt,
+    getBaseToolName,
     getToolRiskLevel,
   } = await importTsModule('src/lib/agent/tool-policy.ts')
   const {
@@ -226,6 +244,20 @@ try {
   const {
     buildMessagesWithHistory,
   } = await importTsModule('src/lib/ai/history-messages.ts')
+  const {
+    estimateTokens,
+  } = await importTsModule('src/lib/ai/token-counter.ts')
+  const {
+    analyzeConversationContinuity,
+    buildConversationContinuityPrompt,
+    getConversationTurnCount,
+  } = await importTsModule('src/lib/ai/conversation-continuity.ts')
+  const {
+    buildHarnessConversationMessages,
+  } = await importTsModule('src/lib/agent-harness/conversation-messages.ts')
+  const {
+    scoreMemoryRelevance,
+  } = await importTsModule('src/lib/context/memory-relevance.ts')
   const {
     decideAutoWebSearch,
   } = await importTsModule('src/lib/ai/auto-web-search.ts')
@@ -762,6 +794,119 @@ try {
   assert.equal(travelNoteRoute.requiresRuntime, true)
   assert.notEqual(travelNoteRoute.route, 'quick_answer')
   assert.equal(shouldBypassAgentRuntime(travelNoteRoute), false)
+  const optionHistory = [
+    { role: 'user', type: 'chat', content: '我应该重点准备哪些方向？' },
+    {
+      role: 'system',
+      type: 'chat',
+      content: [
+        '你可以优先准备：',
+        '1. RAG 架构最佳实践',
+        '2. 数字人渲染技术栈',
+        '3. ToG 产品商业化路径',
+      ].join('\n'),
+    },
+  ]
+  const numericSelection = analyzeConversationContinuity(optionHistory, '3')
+  assert.equal(numericSelection.hasHistory, true)
+  assert.equal(numericSelection.isFollowUp, true)
+  assert.equal(numericSelection.kind, 'selection')
+  assert.equal(numericSelection.selectedOption?.index, 3)
+  assert.match(numericSelection.selectedOption?.content || '', /ToG 产品商业化路径/)
+  assert.match(numericSelection.retrievalQuery, /ToG 产品商业化路径/)
+  assert.match(buildConversationContinuityPrompt(numericSelection), /不要重新询问.*3.*含义|不要把.*3.*当作独立问题/)
+  assert.equal(getConversationTurnCount(optionHistory), 1)
+
+  const letterSelection = analyzeConversationContinuity([
+    { role: 'user', type: 'chat', content: '选一个方案' },
+    { role: 'system', type: 'chat', content: 'A. 保持现状\nB. 小步重构\nC. 全量重写' },
+  ], 'C')
+  assert.equal(letterSelection.kind, 'selection')
+  assert.equal(letterSelection.selectedOption?.label, 'C')
+  assert.match(letterSelection.selectedOption?.content || '', /全量重写/)
+  assert.equal(analyzeConversationContinuity(optionHistory, '3.').selectedOption?.index, 3)
+  assert.equal(analyzeConversationContinuity(optionHistory, '3、').selectedOption?.index, 3)
+  assert.equal(analyzeConversationContinuity([
+    { role: 'user', type: 'chat', content: '选一个方案' },
+    { role: 'system', type: 'chat', content: 'A. 保持现状\nB. 小步重构\nC. 全量重写' },
+  ], 'C.').selectedOption?.label, 'C')
+
+  const clearedSelection = analyzeConversationContinuity([
+    ...optionHistory,
+    { role: 'system', type: 'clear', content: '' },
+    { role: 'user', type: 'chat', content: '3' },
+  ], '3')
+  assert.equal(clearedSelection.kind, 'standalone')
+  assert.equal(clearedSelection.isFollowUp, false)
+
+  const latestAnswerWins = analyzeConversationContinuity([
+    ...optionHistory,
+    { role: 'user', type: 'chat', content: '谢谢' },
+    { role: 'system', type: 'chat', content: '不客气。' },
+  ], '3')
+  assert.equal(latestAnswerWins.kind, 'standalone')
+
+  const ambiguousLatter = analyzeConversationContinuity(optionHistory, '后者')
+  assert.equal(ambiguousLatter.isFollowUp, true)
+  assert.equal(ambiguousLatter.selectedOption, undefined)
+
+  const persistedCurrentTurn = analyzeConversationContinuity([
+    ...optionHistory,
+    { role: 'user', type: 'chat', content: '3' },
+    { role: 'system', type: 'chat', content: '' },
+  ], '3')
+  assert.equal(persistedCurrentTurn.selectedOption?.index, 3)
+  assert.equal(persistedCurrentTurn.historyTurnCount, 1)
+
+  const noOptionSelection = analyzeConversationContinuity([
+    { role: 'user', type: 'chat', content: '今天怎么样？' },
+    { role: 'system', type: 'chat', content: '今天状态不错。' },
+  ], '3')
+  assert.equal(noOptionSelection.isFollowUp, false)
+  assert.equal(noOptionSelection.kind, 'standalone')
+
+  const continuation = analyzeConversationContinuity(optionHistory, '继续讲第三个')
+  assert.equal(continuation.isFollowUp, true)
+  assert.equal(continuation.selectedOption?.index, 3)
+
+  const contextualQuickRoute = classifyAgentTask({
+    userInput: '3',
+    hasConversationHistory: true,
+    conversationDependent: true,
+  })
+  assert.equal(contextualQuickRoute.route, 'quick_answer')
+  assert.equal(contextualQuickRoute.requiresRuntime, false)
+  assert.equal(contextualQuickRoute.reason, 'context-dependent quick answer')
+
+  const mergedHarnessMessages = buildHarnessConversationMessages(
+    '主系统提示',
+    '3',
+    [
+      { role: 'user', content: '上一轮问题' },
+      { role: 'assistant', content: '1. 方案甲\n2. 方案乙\n3. 方案丙' },
+      { role: 'system', content: '会话连续性：用户选择第 3 项。' },
+      { role: 'user', content: '3' },
+    ],
+  )
+  assert.equal(mergedHarnessMessages.filter(message => message.role === 'system').length, 1)
+  assert.match(String(mergedHarnessMessages[0].content), /主系统提示/)
+  assert.match(String(mergedHarnessMessages[0].content), /用户选择第 3 项/)
+  assert.equal(mergedHarnessMessages.at(-1)?.content, '3')
+  assert.equal(
+    mergedHarnessMessages.filter(message => message.role === 'user' && message.content === '3').length,
+    1,
+  )
+  assert.deepEqual(mergedHarnessMessages.map(message => message.role), ['system', 'user', 'assistant', 'user'])
+  const harnessWithMissingCurrentUser = buildHarnessConversationMessages('主系统提示', '当前问题', [
+    { role: 'user', content: '上一轮问题' },
+    { role: 'assistant', content: '上一轮回答' },
+  ])
+  assert.equal(harnessWithMissingCurrentUser.at(-1)?.content, '当前问题')
+  const deduplicatedHarnessSystem = buildHarnessConversationMessages('同一系统提示', '问题', [
+    { role: 'system', content: '同一系统提示' },
+    { role: 'user', content: '问题' },
+  ])
+  assert.equal(String(deduplicatedHarnessSystem[0].content).match(/同一系统提示/g)?.length, 1)
   const agentHistoryMessages = buildMessagesWithHistory([
     { role: 'system', type: 'chat', content: '第零轮回答' },
     { role: 'user', type: 'chat', content: '第一轮问题' },
@@ -817,18 +962,56 @@ try {
   ])
   const longHistory = buildMessagesWithHistory([
     { role: 'user', type: 'chat', content: '上一轮问题' },
-    { role: 'system', type: 'chat', content: '长'.repeat(200) },
+    {
+      role: 'system',
+      type: 'chat',
+      content: `${'长'.repeat(200)}\n\n1. 第一项\n2. 第二项\n3. ToG 产品商业化路径`,
+    },
     { role: 'user', type: 'chat', content: '当前问题' },
   ], undefined, undefined, '当前问题', {
     includeAssistantMessages: true,
     includeLatestUserMessage: false,
-    maxHistoryTokens: 24,
-    maxSingleMessageTokens: 12,
+    maxHistoryTokens: 80,
+    maxSingleMessageTokens: 64,
   })
   const truncatedAssistant = longHistory.find(message => message.role === 'assistant')
   assert.ok(truncatedAssistant)
   assert.match(truncatedAssistant.content, /历史内容已按预算截断/)
-  assert.ok(truncatedAssistant.content.length < 200)
+  assert.match(truncatedAssistant.content, /3\. ToG 产品商业化路径/)
+  assert.ok(truncatedAssistant.content.length < 240)
+  assert.ok(estimateTokens(truncatedAssistant.content) <= 64)
+  assert.ok(
+    longHistory
+      .filter(message => !(message.role === 'user' && message.content === '当前问题'))
+      .reduce((sum, message) => sum + estimateTokens(message.content), 0) <= 80,
+  )
+  const tinyBudgetHistory = buildMessagesWithHistory([
+    { role: 'user', type: 'chat', content: '这是一个非常长的历史用户问题'.repeat(20) },
+    { role: 'system', type: 'chat', content: `很长的回答${'答'.repeat(100)}\n3. 尾部行动项` },
+    { role: 'user', type: 'chat', content: '当前问题' },
+  ], undefined, undefined, '当前问题', {
+    includeLatestUserMessage: false,
+    maxHistoryTokens: 8,
+    maxSingleMessageTokens: 64,
+  })
+  assert.ok(
+    tinyBudgetHistory
+      .filter(message => !(message.role === 'user' && message.content === '当前问题'))
+      .reduce((sum, message) => sum + estimateTokens(message.content), 0) <= 8,
+  )
+
+  const relevantMemoryScore = scoreMemoryRelevance(
+    '继续讲 ToG 产品商业化路径',
+    '用户正在准备面向政府和国企客户的 ToG 产品商业化方案。',
+  )
+  const unrelatedMemoryScore = scoreMemoryRelevance(
+    '继续讲 ToG 产品商业化路径',
+    '用户喜欢在周末烘焙酸面包。',
+  )
+  assert.ok(relevantMemoryScore.lexical > unrelatedMemoryScore.lexical)
+  assert.ok(relevantMemoryScore.combined > unrelatedMemoryScore.combined)
+  assert.equal(scoreMemoryRelevance('3', '3. ToG 产品商业化路径').lexical, 0)
+  assert.ok(scoreMemoryRelevance(numericSelection.retrievalQuery, 'ToG 产品商业化路径').lexical > 0)
   assert.equal(createConfiguredModelSelectionId('provider-a', 'model-b'), 'provider-a:model-b')
   assert.deepEqual(parseConfiguredModelSelectionId('provider-a:model-b'), {
     configKey: 'provider-a',
@@ -1182,6 +1365,7 @@ try {
   assert.match(agentMemoryCandidatesSource, /buildDistillRecommendations/)
   assert.match(agentMemoryCandidatesSource, /upsertAgentMemoryCandidatesInDb/)
   assert.match(agentMemoryCandidatesSource, /upsertMemory/)
+  assert.doesNotMatch(agentMemoryCandidatesSource, /fetchEmbedding/)
   assert.match(agentMemoryCandidatesSource, /insertAgentWorkflowTemplateInDb/)
   const agentSelfEvolutionSource = await readFile(join(repoRoot, 'src/lib/agent/self-evolution.ts'), 'utf8')
   assert.match(agentSelfEvolutionSource, /export async function runPostSessionSelfEvolution/)
@@ -1839,6 +2023,38 @@ try {
   assert.equal(getToolRiskLevel('github_update_star_notes_tags', 'web'), 'medium')
   assert.equal(getToolRiskLevel('github_subscribe_star_releases', 'web'), 'medium')
   assert.equal(getToolRiskLevel('github_unstar_repo', 'web'), 'high')
+  assert.equal(getBaseToolName('server__delete__records'), 'delete__records')
+  assert.equal(getToolRiskLevel('server__delete__records', 'mcp'), 'high')
+
+  const noDestructiveIntent = deriveIntentPolicy('只读取记录，不要删除')
+  assert.equal(
+    evaluateIntentAwareToolPolicy({
+      toolName: 'server__delete__records',
+      category: 'mcp',
+      intentPolicy: noDestructiveIntent,
+    }).allowed,
+    false,
+  )
+  assert.equal(
+    evaluateIntentAwareToolPolicy({
+      toolName: 'creative_canvas_apply_ops',
+      category: 'system',
+      capabilities: ['write', 'delete'],
+      params: { ops: [{ type: 'update_node' }] },
+      intentPolicy: noDestructiveIntent,
+    }).allowed,
+    false,
+  )
+  assert.equal(
+    evaluateIntentAwareToolPolicy({
+      toolName: 'creative_canvas_apply_ops',
+      category: 'system',
+      capabilities: ['write'],
+      params: { ops: [{ type: 'delete_node', id: 'node-1' }] },
+      intentPolicy: noDestructiveIntent,
+    }).allowed,
+    false,
+  )
 
   assert.deepEqual(
     evaluateIntentAwareToolPolicy({
@@ -2731,6 +2947,8 @@ artifactSchema: markdown json
   assert.match(toolGovernanceSource, /export async function executeGovernedHarnessTool/)
   assert.match(toolGovernanceSource, /validateToolInput/)
   assert.match(toolGovernanceSource, /evaluateIntentAwareToolPolicy/)
+  assert.match(toolGovernanceSource, /capabilities:\s*tool\.capabilities/)
+  assert.match(toolGovernanceSource, /params,/)
   assert.match(toolGovernanceSource, /getGlobalToolCache/)
   assert.match(toolGovernanceSource, /runControl\.authorizeTool/)
   assert.match(toolGovernanceSource, /requestConfirmation/)
@@ -2842,6 +3060,12 @@ artifactSchema: markdown json
   assert.match(agentHandlerSource, /finishWithErrorState/)
   assert.match(agentHandlerSource, /pendingConfirmation:\s*undefined/)
   assert.match(agentHandlerSource, /await this\.config\.onError/)
+  assert.match(agentHandlerSource, /onComplete\?:[^\n]+void \| Promise<void>/)
+  assert.equal(
+    (agentHandlerSource.match(/await this\.config\.onComplete\?\.\(/g) || []).length,
+    3,
+    'direct, completed, and stopped runs must all await persistence callbacks',
+  )
   assert.ok(
     agentHandlerSource.indexOf('await this.config.onError?.(errorMessage)') < agentHandlerSource.indexOf('throw error'),
     'agent handler must publish the user-visible error and stop UI state before rethrowing to orchestrator'
@@ -2851,6 +3075,29 @@ artifactSchema: markdown json
   assert.doesNotMatch(agentHandlerSource, /ReActConfig/)
   assert.doesNotMatch(agentHandlerSource, /runControl\?\.recordEvent\(event\)/)
   assert.equal(existsSync(join(repoRoot, 'src/app/core/main/chat/agent-history.tsx')), false)
+
+  const chatsDbSource = await readFile(join(repoRoot, 'src/db/chats.ts'), 'utf8')
+  assert.equal(
+    (chatsDbSource.match(/order by createdAt, id/g) || []).length,
+    3,
+    'all chat reads need deterministic ordering when timestamps collide',
+  )
+
+  const memoriesDbSource = await readFile(join(repoRoot, 'src/db/memories.ts'), 'utf8')
+  assert.doesNotMatch(memoriesDbSource, /无法计算记忆向量/)
+  assert.match(memoriesDbSource, /embedding \? JSON\.stringify\(embedding\) : null/)
+  const contextLoaderSource = await readFile(join(repoRoot, 'src/lib/context/loader.ts'), 'utf8')
+  assert.match(contextLoaderSource, /scoreMemoryRelevance/)
+  assert.match(contextLoaderSource, /Promise\.allSettled/)
+  const memoriesStoreSource = await readFile(join(repoRoot, 'src/stores/memories.ts'), 'utf8')
+  assert.doesNotMatch(memoriesStoreSource, /fetchEmbedding/)
+  const memoryToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/memory-tools.ts'), 'utf8')
+  assert.doesNotMatch(memoryToolsSource, /fetchEmbedding/)
+  assert.equal((memoryToolsSource.match(/upsertMemory\(/g) || []).length, 2)
+
+  const chatCondenseStoreSource = await readFile(join(repoRoot, 'src/stores/chat.ts'), 'utf8')
+  assert.match(chatCondenseStoreSource, /let condenseRequestVersion = 0/)
+  assert.doesNotMatch(chatCondenseStoreSource, /const versionRef = \{ current: 0 \}/)
 
   const chatInputSource = await readFile(join(repoRoot, 'src/app/core/main/chat/chat-input.tsx'), 'utf8')
   assert.match(chatInputSource, /routeOverride:\s*slashCommand\.runtimeProfile/)
@@ -3386,6 +3633,8 @@ artifactSchema: markdown json
   const knowledgeQueryToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/knowledge-query-tools.ts'), 'utf8')
   assert.match(knowledgeQueryToolsSource, /name:\s*['"]query_knowledge['"]/)
   assert.match(knowledgeQueryToolsSource, /queryKnowledge/)
+  assert.match(knowledgeQueryToolsSource, /name:\s*['"]timeoutMs['"]/)
+  assert.match(knowledgeQueryToolsSource, /timedOutBranches/)
   assert.match(knowledgeQueryToolsSource, /requiresConfirmation:\s*false/)
   assert.match(knowledgeQueryToolsSource, /capabilities:\s*\[\s*['"]read['"]\s*\]/)
   const knowledgeQueryEngineSource = await readFile(join(repoRoot, 'src/lib/knowledge-query/query-engine.ts'), 'utf8')
@@ -3430,6 +3679,12 @@ artifactSchema: markdown json
   assert.match(structuredKnowledgeToolsSource, /export const structuredKnowledgeTools/)
 
   const knowledgeWorkflowToolsSource = await readFile(join(repoRoot, 'src/lib/agent/tools/knowledge-workflow-tools.ts'), 'utf8')
+  assert.match(knowledgeWorkflowToolsSource, /name:\s*['"]get_knowledge_system_health['"]/)
+  assert.match(knowledgeWorkflowToolsSource, /getKnowledgeIndexHealth/)
+  assert.match(knowledgeWorkflowToolsSource, /getVectorCacheStats/)
+  assert.match(knowledgeWorkflowToolsSource, /getSemanticExtractionQueue/)
+  assert.match(knowledgeWorkflowToolsSource, /getStructuredDocumentsNeedingSemanticExtraction/)
+  assert.match(knowledgeWorkflowToolsSource, /export const getKnowledgeSystemHealthTool/)
   assert.match(knowledgeWorkflowToolsSource, /name:\s*['"]reindex_knowledge_objects['"]/)
   assert.match(knowledgeWorkflowToolsSource, /incrementalReindex/)
   assert.match(knowledgeWorkflowToolsSource, /reindexFile/)
@@ -3450,6 +3705,7 @@ artifactSchema: markdown json
   assert.match(toolPolicySource, /query_knowledge/)
   assert.match(toolPolicySource, /search_knowledge_objects/)
   assert.match(toolPolicySource, /get_knowledge_object_overview/)
+  assert.match(toolPolicySource, /get_knowledge_system_health/)
   assert.match(toolPolicySource, /get_current_note_context/)
   assert.match(toolPolicySource, /reindex_knowledge_objects/)
   assert.match(toolPolicySource, /allowFileCreation/)
@@ -3460,8 +3716,11 @@ artifactSchema: markdown json
   assert.match(dynamicToolFilterSource, /get_current_note_context/)
   assert.match(dynamicToolFilterSource, /search_knowledge_objects/)
   assert.match(dynamicToolFilterSource, /get_knowledge_object_overview/)
+  assert.match(dynamicToolFilterSource, /get_knowledge_system_health/)
   assert.match(dynamicToolFilterSource, /reindex_knowledge_objects/)
   assert.match(dynamicToolFilterSource, /知识库/)
+  assert.match(dynamicToolFilterSource, /诊断/)
+  assert.match(dynamicToolFilterSource, /缓存/)
   assert.match(dynamicToolFilterSource, /证据/)
   assert.match(dynamicToolFilterSource, /graphrag/)
   assert.match(dynamicToolFilterSource, /重建索引/)
@@ -3509,6 +3768,7 @@ artifactSchema: markdown json
 
   const promptAssemblerQuerySource = await readFile(join(repoRoot, 'src/lib/agent/prompt-assembler.ts'), 'utf8')
   assert.match(promptAssemblerQuerySource, /query_knowledge/)
+  assert.match(promptAssemblerQuerySource, /get_knowledge_system_health/)
   assert.match(promptAssemblerQuerySource, /GraphRAG/)
   assert.match(promptAssemblerQuerySource, /evidence|证据/)
 

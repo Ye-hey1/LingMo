@@ -37,6 +37,7 @@ import type { AiHotspotItem } from '@/lib/ai-hotspots'
 import type { ArticleFetchResult } from '@/lib/web/fetch-article'
 import { captureWechatArticleToMark } from '@/lib/wechat-article-capture'
 import { isWechatArticleUrl } from '@/lib/wechat-article'
+import { fetchWechatMpImageDataUrl } from '@/lib/wechat-mp-native'
 import { useArticleReader } from './use-article-reader'
 import { formatHotspotDateTime, getDisplayHotspotTags, getHotspotDisplayTimeValue, getHotspotHost } from './hotspot-utils'
 
@@ -70,18 +71,249 @@ function isCodeElement(child: ReactNode): child is ReactElement<{ children?: Rea
   return isValidElement(child) && child.type === 'code'
 }
 
-function getProxiedWechatImageSrc(value?: string) {
+const WECHAT_IMAGE_HOSTS = new Set(['mmbiz.qpic.cn', 'mmbiz.qlogo.cn'])
+const WECHAT_IMAGE_MAX_CONCURRENT = 2
+const WECHAT_IMAGE_CACHE_MAX_ENTRIES = 8
+const WECHAT_IMAGE_CACHE_MAX_BYTES = 24 * 1024 * 1024
+
+interface WechatImageCacheEntry {
+  promise: Promise<string>
+  byteSize: number
+  controller: AbortController
+  consumerCount: number
+  settled: boolean
+}
+
+interface WechatImageWaiter {
+  resolve: () => void
+  reject: (error: Error) => void
+  signal?: AbortSignal
+  onAbort?: () => void
+}
+
+const wechatImageDataUrlCache = new Map<string, WechatImageCacheEntry>()
+const wechatImageWaiters: WechatImageWaiter[] = []
+let activeWechatImageRequests = 0
+let wechatImageCacheBytes = 0
+
+function createWechatImageAbortError() {
+  const error = new Error('微信图片加载已取消')
+  error.name = 'AbortError'
+  return error
+}
+
+function isWechatImageAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+function removeWechatImageCacheEntry(key: string, expectedEntry?: WechatImageCacheEntry) {
+  const entry = wechatImageDataUrlCache.get(key)
+  if (!entry || (expectedEntry && entry !== expectedEntry)) return
+  wechatImageDataUrlCache.delete(key)
+  wechatImageCacheBytes = Math.max(0, wechatImageCacheBytes - entry.byteSize)
+}
+
+function pruneWechatImageCache(protectedKey?: string) {
+  while (
+    wechatImageDataUrlCache.size > WECHAT_IMAGE_CACHE_MAX_ENTRIES
+    || wechatImageCacheBytes > WECHAT_IMAGE_CACHE_MAX_BYTES
+  ) {
+    const oldestKey = Array.from(wechatImageDataUrlCache.keys()).find(key => key !== protectedKey)
+      || protectedKey
+    if (!oldestKey) break
+    removeWechatImageCacheEntry(oldestKey)
+  }
+}
+
+function removeWechatImageWaiter(waiter: WechatImageWaiter) {
+  const index = wechatImageWaiters.indexOf(waiter)
+  if (index >= 0) wechatImageWaiters.splice(index, 1)
+  if (waiter.signal && waiter.onAbort) {
+    waiter.signal.removeEventListener('abort', waiter.onAbort)
+  }
+}
+
+function acquireWechatImageSlot(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(createWechatImageAbortError())
+  if (activeWechatImageRequests < WECHAT_IMAGE_MAX_CONCURRENT) {
+    activeWechatImageRequests += 1
+    return Promise.resolve()
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const waiter: WechatImageWaiter = { resolve, reject, signal }
+    if (signal) {
+      waiter.onAbort = () => {
+        removeWechatImageWaiter(waiter)
+        reject(createWechatImageAbortError())
+      }
+      signal.addEventListener('abort', waiter.onAbort, { once: true })
+    }
+    wechatImageWaiters.push(waiter)
+  })
+}
+
+function releaseWechatImageSlot() {
+  activeWechatImageRequests = Math.max(0, activeWechatImageRequests - 1)
+  while (wechatImageWaiters.length > 0) {
+    const waiter = wechatImageWaiters.shift()!
+    if (waiter.signal && waiter.onAbort) {
+      waiter.signal.removeEventListener('abort', waiter.onAbort)
+    }
+    if (waiter.signal?.aborted) {
+      waiter.reject(createWechatImageAbortError())
+      continue
+    }
+    activeWechatImageRequests += 1
+    waiter.resolve()
+    break
+  }
+}
+
+async function withWechatImageConcurrency<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  await acquireWechatImageSlot(signal)
+  try {
+    if (signal?.aborted) throw createWechatImageAbortError()
+    return await task()
+  } finally {
+    releaseWechatImageSlot()
+  }
+}
+
+function waitForWechatImageResult<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(createWechatImageAbortError())
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort)
+      reject(createWechatImageAbortError())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+function waitForWechatImageCacheEntry(
+  key: string,
+  entry: WechatImageCacheEntry,
+  signal?: AbortSignal,
+): Promise<string> {
+  entry.consumerCount += 1
+  let released = false
+  const releaseConsumer = () => {
+    if (released) return
+    released = true
+    entry.consumerCount = Math.max(0, entry.consumerCount - 1)
+    if (entry.consumerCount === 0 && !entry.settled) {
+      removeWechatImageCacheEntry(key, entry)
+      entry.controller.abort()
+    }
+  }
+
+  return waitForWechatImageResult(entry.promise, signal).finally(releaseConsumer)
+}
+
+function normalizeWechatImageSrc(value?: string) {
   if (!value) return undefined
   const src = value.replace(/&amp;/g, '&')
   try {
     const url = new URL(src.startsWith('//') ? `https:${src}` : src)
-    if (url.protocol === 'https:' && ['mmbiz.qpic.cn', 'mmbiz.qlogo.cn'].includes(url.hostname)) {
+    if (url.protocol === 'https:' && WECHAT_IMAGE_HOSTS.has(url.hostname)) {
       return url.toString()
     }
   } catch {
     return value
   }
   return value
+}
+
+function getNativeWechatImageUrl(value?: string) {
+  const src = normalizeWechatImageSrc(value)
+  if (!src) return null
+  try {
+    const url = new URL(src)
+    return url.protocol === 'https:' && WECHAT_IMAGE_HOSTS.has(url.hostname) ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
+async function resolveNativeWechatImageSrc(value?: string, signal?: AbortSignal) {
+  const normalized = normalizeWechatImageSrc(value)
+  const nativeUrl = getNativeWechatImageUrl(normalized)
+  if (!nativeUrl) return normalized
+
+  const cached = wechatImageDataUrlCache.get(nativeUrl)
+  if (cached) {
+    wechatImageDataUrlCache.delete(nativeUrl)
+    wechatImageDataUrlCache.set(nativeUrl, cached)
+    return waitForWechatImageCacheEntry(nativeUrl, cached, signal)
+  }
+
+  const controller = new AbortController()
+  const promise = withWechatImageConcurrency(
+    () => fetchWechatMpImageDataUrl(nativeUrl),
+    controller.signal,
+  )
+    .catch((error) => {
+      if (isWechatImageAbortError(error)) {
+        const cachedEntry = wechatImageDataUrlCache.get(nativeUrl)
+        if (cachedEntry?.promise === promise) removeWechatImageCacheEntry(nativeUrl, cachedEntry)
+        throw error
+      }
+      return nativeUrl
+    })
+    .then((resolved) => {
+      const cachedEntry = wechatImageDataUrlCache.get(nativeUrl)
+      if (cachedEntry?.promise === promise) {
+        cachedEntry.byteSize = resolved.startsWith('data:') ? resolved.length * 2 : 0
+        wechatImageCacheBytes += cachedEntry.byteSize
+        pruneWechatImageCache(nativeUrl)
+      }
+      return resolved
+    })
+    .finally(() => {
+      const cachedEntry = wechatImageDataUrlCache.get(nativeUrl)
+      if (cachedEntry?.promise === promise) cachedEntry.settled = true
+    })
+  const entry = { promise, byteSize: 0, controller, consumerCount: 0, settled: false }
+  wechatImageDataUrlCache.set(nativeUrl, entry)
+  pruneWechatImageCache(nativeUrl)
+  return waitForWechatImageCacheEntry(nativeUrl, entry, signal)
+}
+
+function ReaderImage({ src, alt }: { src?: string; alt?: string }) {
+  const initialSrc = normalizeWechatImageSrc(src)
+  const [displaySrc, setDisplaySrc] = useState(initialSrc)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setDisplaySrc(initialSrc)
+    if (!initialSrc) return () => controller.abort()
+
+    void resolveNativeWechatImageSrc(initialSrc, controller.signal)
+      .then((nextSrc) => {
+        if (!controller.signal.aborted) setDisplaySrc(nextSrc)
+      })
+      .catch((error) => {
+        if (!isWechatImageAbortError(error)) console.warn('微信图片加载失败:', error)
+      })
+
+    return () => controller.abort()
+  }, [initialSrc])
+
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={displaySrc} alt={alt || ''} loading="lazy" className="my-7 max-h-[520px] w-full rounded-md object-contain" />
 }
 
 const READER_COMPONENTS: Components = {
@@ -135,9 +367,7 @@ const READER_COMPONENTS: Components = {
     )
   },
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-  img: ({ src, alt }) =>
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src={getProxiedWechatImageSrc(typeof src === 'string' ? src : undefined)} alt={alt || ''} loading="lazy" className="my-7 max-h-[520px] w-full rounded-md object-contain" />,
+  img: ({ src, alt }) => <ReaderImage src={typeof src === 'string' ? src : undefined} alt={alt || ''} />,
   table: ({ children }) => (
     <div className="my-6 overflow-x-auto rounded-md border border-border">
       <table className="w-full border-collapse text-[13px]">{children}</table>
@@ -204,11 +434,35 @@ function proxyWechatImages(html: string) {
   return html
     .replace(/\sdata-src=(["'])(.*?)\1/gi, (_match, quote, src) => ` src=${quote}${src}${quote}`)
     .replace(/(src|data-backsrc)=(["'])(https:\/\/mmbiz\.(?:qpic|qlogo)\.cn\/[^"']+)\2/gi, (_match, attr, quote, src) => {
-      return `${attr}=${quote}${getProxiedWechatImageSrc(src) || src}${quote}`
+      return `${attr}=${quote}${normalizeWechatImageSrc(src) || src}${quote}`
     })
     .replace(/(src|data-backsrc)=(["'])\/\/(mmbiz\.(?:qpic|qlogo)\.cn\/[^"']+)\2/gi, (_match, attr, quote, src) => {
-      return `${attr}=${quote}${getProxiedWechatImageSrc(`https://${src}`) || `https://${src}`}${quote}`
+      return `${attr}=${quote}${normalizeWechatImageSrc(`https://${src}`) || `https://${src}`}${quote}`
     })
+}
+
+async function inlineNativeWechatImages(html: string, signal?: AbortSignal) {
+  if (!html.trim() || typeof document === 'undefined') return html
+  const template = document.createElement('template')
+  template.innerHTML = html
+  const images = Array.from(template.content.querySelectorAll('img'))
+  let nextImageIndex = 0
+  const workerCount = Math.min(WECHAT_IMAGE_MAX_CONCURRENT, images.length)
+  const worker = async () => {
+    while (nextImageIndex < images.length) {
+      if (signal?.aborted) throw createWechatImageAbortError()
+      const image = images[nextImageIndex++]
+      const source = image.getAttribute('src')
+        || image.getAttribute('data-src')
+        || image.getAttribute('data-backsrc')
+      const resolved = await resolveNativeWechatImageSrc(source || undefined, signal)
+      if (!resolved || resolved === source) continue
+      image.setAttribute('src', resolved)
+      image.setAttribute('data-src', resolved)
+    }
+  }
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  return template.innerHTML
 }
 
 function buildReaderHtml(content: string) {
@@ -304,8 +558,22 @@ function getWechatInlineResult(item: AiHotspotItem): ArticleFetchResult | null {
 }
 
 function ReaderHtmlFrame({ html }: { html: string }) {
-  const documentHtml = useMemo(() => buildReaderHtml(html), [html])
+  const [inlinedHtml, setInlinedHtml] = useState(html)
+  const documentHtml = useMemo(() => buildReaderHtml(inlinedHtml), [inlinedHtml])
   const [height, setHeight] = useState(700)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setInlinedHtml(html)
+    void inlineNativeWechatImages(html, controller.signal)
+      .then((nextHtml) => {
+        if (!controller.signal.aborted) setInlinedHtml(nextHtml)
+      })
+      .catch((error) => {
+        if (!isWechatImageAbortError(error)) console.warn('微信公众号图片内联失败:', error)
+      })
+    return () => controller.abort()
+  }, [html])
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {

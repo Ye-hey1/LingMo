@@ -62,6 +62,10 @@ import {
   type ChatCitationSource,
 } from "@/lib/ai/context-builder"
 import { buildMessagesWithHistory } from "@/lib/ai/history-messages"
+import {
+  analyzeConversationContinuity,
+  buildConversationContinuityPrompt,
+} from "@/lib/ai/conversation-continuity"
 
 interface ChatSendProps {
   inputValue: string;
@@ -676,20 +680,20 @@ export const ChatSend = forwardRef<{
       || /(继续|接着|然后|再来|再生成|再做|顺便|另外|刚才|基于刚才|在此基础上|那个|这个|它)/.test(normalized)
   }
 
-  const getAgentHistoryTurnLimit = (input: string) => (
-    shouldCarryUserHistoryForAgent(input)
+  const getAgentHistoryTurnLimit = (input: string, isFollowUp?: boolean) => (
+    (isFollowUp ?? shouldCarryUserHistoryForAgent(input))
       ? AGENT_FOLLOW_UP_HISTORY_TURNS
       : AGENT_DEFAULT_HISTORY_TURNS
   )
 
-  const getChatHistoryTurnLimit = (input: string) => (
-    shouldCarryUserHistoryForAgent(input)
+  const getChatHistoryTurnLimit = (input: string, isFollowUp?: boolean) => (
+    (isFollowUp ?? shouldCarryUserHistoryForAgent(input))
       ? CHAT_FOLLOW_UP_HISTORY_TURNS
       : CHAT_DEFAULT_HISTORY_TURNS
   )
 
-  const getChatHistoryTokenBudget = (input: string) => (
-    shouldCarryUserHistoryForAgent(input)
+  const getChatHistoryTokenBudget = (input: string, isFollowUp?: boolean) => (
+    (isFollowUp ?? shouldCarryUserHistoryForAgent(input))
       ? CHAT_FOLLOW_UP_HISTORY_TOKEN_BUDGET
       : CHAT_DEFAULT_HISTORY_TOKEN_BUDGET
   )
@@ -1204,6 +1208,11 @@ export const ChatSend = forwardRef<{
     let streamUpdater: ReturnType<typeof createLiveChatStreamUpdater> | null = null
 
     try {
+      const { chats: chatsForContinuity } = useChatStore.getState()
+      const continuity = analyzeConversationContinuity(chatsForContinuity, effectiveInstruction)
+      const continuityPrompt = buildConversationContinuityPrompt(continuity)
+      const contextQuery = continuity.retrievalQuery || effectiveInstruction
+
       // 使用统一的上下文构建器
       const useArticleStore = (await import('@/stores/article')).default
       const articleStore = useArticleStore.getState()
@@ -1213,7 +1222,7 @@ export const ChatSend = forwardRef<{
         quoteData
       )
       const { webDecision, documentDecision, effectiveWebSearchEnabled } =
-        resolveGroundedWebSearchDecision(effectiveInstruction, hasDocumentContext)
+        resolveGroundedWebSearchDecision(contextQuery, hasDocumentContext)
 
       const contextResult = await buildChatContext({
         linkedResources: effectiveLinkedResources,
@@ -1222,8 +1231,8 @@ export const ChatSend = forwardRef<{
         quoteData,
         isRagEnabled,
         webSearchEnabled: effectiveWebSearchEnabled,
-        userQuery: effectiveInstruction,
-        webSearchQuery: effectiveWebSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
+        userQuery: contextQuery,
+        webSearchQuery: effectiveWebSearchEnabled ? buildWebSearchQuery(contextQuery) || undefined : undefined,
         contextBudget: 15000,
         currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
         activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
@@ -1235,9 +1244,10 @@ export const ChatSend = forwardRef<{
       const systemContextBase = documentDecision.instruction
         ? `${documentDecision.instruction}\n\n${context}`
         : context
-      const systemContext = effectiveWebSearchEnabled
+      const groundedSystemContext = effectiveWebSearchEnabled
         ? `${buildWebSearchInstruction(webDecision)}${systemContextBase}`
         : systemContextBase
+      const systemContext = [continuityPrompt, groundedSystemContext].filter(section => section.trim()).join('\n\n')
 
       const { chats: currentChats } = useChatStore.getState()
       const messages = buildMessagesWithHistory(
@@ -1248,8 +1258,8 @@ export const ChatSend = forwardRef<{
         {
           includeAssistantMessages: true,
           includeLatestUserMessage: false,
-          maxUserMessages: getChatHistoryTurnLimit(effectiveInstruction),
-          maxHistoryTokens: getChatHistoryTokenBudget(effectiveInstruction),
+          maxUserMessages: getChatHistoryTurnLimit(effectiveInstruction, continuity.isFollowUp),
+          maxHistoryTokens: getChatHistoryTokenBudget(effectiveInstruction, continuity.isFollowUp),
           maxSingleMessageTokens: CHAT_MAX_SINGLE_HISTORY_MESSAGE_TOKENS,
         }
       )
@@ -1336,6 +1346,11 @@ export const ChatSend = forwardRef<{
     let streamUpdater: ReturnType<typeof createLiveChatStreamUpdater> | null = null
 
     try {
+      const { chats: chatsForContinuity } = useChatStore.getState()
+      const continuity = analyzeConversationContinuity(chatsForContinuity, effectiveInstruction)
+      const continuityPrompt = buildConversationContinuityPrompt(continuity)
+      const contextQuery = continuity.retrievalQuery || effectiveInstruction
+
       const useArticleStore = (await import('@/stores/article')).default
       const articleStore = useArticleStore.getState()
       const hasDocumentContext = Boolean(
@@ -1344,7 +1359,7 @@ export const ChatSend = forwardRef<{
         quoteData
       )
       const { webDecision, documentDecision, effectiveWebSearchEnabled } =
-        resolveGroundedWebSearchDecision(effectiveInstruction, hasDocumentContext)
+        resolveGroundedWebSearchDecision(contextQuery, hasDocumentContext)
 
       const contextResult = await buildChatContext({
         linkedResources: effectiveLinkedResources,
@@ -1353,8 +1368,8 @@ export const ChatSend = forwardRef<{
         quoteData,
         isRagEnabled,
         webSearchEnabled: effectiveWebSearchEnabled,
-        userQuery: effectiveInstruction,
-        webSearchQuery: effectiveWebSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
+        userQuery: contextQuery,
+        webSearchQuery: effectiveWebSearchEnabled ? buildWebSearchQuery(contextQuery) || undefined : undefined,
         contextBudget: 24000,
         currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
         activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
@@ -1398,6 +1413,7 @@ export const ChatSend = forwardRef<{
         '你正在执行一个写作型 Skill。请直接输出用户可用的正文，保持自然连贯。',
         '不要输出工具调用、执行日志、JSON 包装、Action/Observation、Final Answer 标签或对 Skill 包装提示的解释。',
         '中文内容必须保持 UTF-8 正常字符，避免 mojibake、替换字符和乱码。',
+        continuityPrompt,
         systemContext ? `\n## 可用上下文\n\n${systemContext}` : '',
       ].filter(Boolean).join('\n')
       const messages = buildMessagesWithHistory(
@@ -1408,8 +1424,8 @@ export const ChatSend = forwardRef<{
         {
           includeAssistantMessages: true,
           includeLatestUserMessage: false,
-          maxUserMessages: getChatHistoryTurnLimit(effectiveInstruction),
-          maxHistoryTokens: getChatHistoryTokenBudget(effectiveInstruction),
+          maxUserMessages: getChatHistoryTurnLimit(effectiveInstruction, continuity.isFollowUp),
+          maxHistoryTokens: getChatHistoryTokenBudget(effectiveInstruction, continuity.isFollowUp),
           maxSingleMessageTokens: CHAT_MAX_SINGLE_HISTORY_MESSAGE_TOKENS,
         }
       )
@@ -2086,8 +2102,7 @@ export const ChatSend = forwardRef<{
   // Agent 模式处理
   async function handleAgentMode(imageUrls: string[], instructionOverride?: string, options?: ChatSendOptions) {
     const effectiveInstruction = instructionOverride ?? inputValue
-    const webDecision = resolveAutoWebSearchDecision(effectiveInstruction)
-    const effectiveWebSearchEnabled = webDecision.enabled
+    let effectiveWebSearchEnabled = resolveAutoWebSearchDecision(effectiveInstruction).enabled
     // 先创建一个占位的 AI 消息
     const placeholderMessage = await insert({
       tagId: currentTagId,
@@ -2111,6 +2126,16 @@ export const ChatSend = forwardRef<{
     const liveAnswerUpdater = createLiveAgentAnswerUpdater(placeholderMessage)
 
     try {
+      const { chats: chatsForContinuity } = useChatStore.getState()
+      const continuity = analyzeConversationContinuity(chatsForContinuity, effectiveInstruction)
+      const continuityPrompt = buildConversationContinuityPrompt(continuity)
+      const contextQuery = continuity.retrievalQuery || effectiveInstruction
+      if (!effectiveWebSearchEnabled && continuity.isFollowUp) {
+        const contextualWebDecision = resolveAutoWebSearchDecision(contextQuery)
+        if (contextualWebDecision.enabled) {
+          effectiveWebSearchEnabled = true
+        }
+      }
       const routeDecision = classifyAgentTask({
         userInput: effectiveInstruction,
         imageCount: imageUrls.length,
@@ -2119,19 +2144,21 @@ export const ChatSend = forwardRef<{
         hasLinkedContext: effectiveLinkedResources.length > 0,
         hasQuote: Boolean(quoteData),
         hasRag: isRagEnabled,
+        hasConversationHistory: continuity.hasHistory,
+        conversationDependent: continuity.isFollowUp,
       })
 
       if (shouldBypassAgentRuntime(routeDecision)) {
         const { chats } = useChatStore.getState()
         const messages = buildMessagesWithHistory(
           chats,
-          undefined,
+          continuityPrompt || undefined,
           undefined,
           effectiveInstruction,
           {
             includeAssistantMessages: true,
             includeLatestUserMessage: false,
-            maxUserMessages: getAgentHistoryTurnLimit(effectiveInstruction),
+            maxUserMessages: getAgentHistoryTurnLimit(effectiveInstruction, continuity.isFollowUp),
           }
         )
 
@@ -2139,6 +2166,8 @@ export const ChatSend = forwardRef<{
           activeChatId: placeholderMessage.id,
           webSearchEnabled: effectiveWebSearchEnabled,
           forcedSkillIds: options?.forcedSkillIds,
+          taskRouteDecision: routeDecision,
+          contextRetrievalQuery: contextQuery,
           requestConfirmation,
           currentQuote: quoteData
             ? {
@@ -2240,6 +2269,8 @@ export const ChatSend = forwardRef<{
             activeChatId: placeholderMessage.id,
             webSearchEnabled: effectiveWebSearchEnabled,
             forcedSkillIds: options?.forcedSkillIds,
+            taskRouteDecision: routeDecision,
+            contextRetrievalQuery: contextQuery,
             requestConfirmation,
             currentQuote: quoteData
               ? {
@@ -2387,7 +2418,7 @@ export const ChatSend = forwardRef<{
             effectiveLinkedResources.length > 0 ||
             quoteData
           )
-          const groundedWeb = resolveGroundedWebSearchDecision(effectiveInstruction, hasDocumentContext)
+          const groundedWeb = resolveGroundedWebSearchDecision(contextQuery, hasDocumentContext)
 
           const contextResult = await buildChatContext({
             linkedResources: effectiveLinkedResources,
@@ -2396,8 +2427,8 @@ export const ChatSend = forwardRef<{
             quoteData,
             isRagEnabled,
             webSearchEnabled: groundedWeb.effectiveWebSearchEnabled,
-            userQuery: effectiveInstruction,
-            webSearchQuery: groundedWeb.effectiveWebSearchEnabled ? buildWebSearchQuery(effectiveInstruction) || undefined : undefined,
+            userQuery: contextQuery,
+            webSearchQuery: groundedWeb.effectiveWebSearchEnabled ? buildWebSearchQuery(contextQuery) || undefined : undefined,
             contextBudget: AGENT_CONTEXT_TOTAL_LIMIT,
             currentArticle: allowAutoCurrentFileContext ? articleStore.currentArticle : undefined,
             activeFilePath: allowAutoCurrentFileContext ? articleStore.activeFilePath : undefined,
@@ -2409,14 +2440,32 @@ export const ChatSend = forwardRef<{
 
           // Phase 1 #B：把结构化 sections 写回 agentHandler
           // 必须在 execute() 之前调用；setContextSections 会替换 config.contextSections
-          if (chatContextSections) {
-            agentHandler.setContextSections({
-              currentDoc: chatContextSections.current || chatContextSections.quote,
-              linkedFiles: chatContextSections.linked,
-              rag: chatContextSections.rag,
-              webSearch: chatContextSections.web,
-            })
-          }
+          agentHandler.setContextSections({
+            currentDoc: chatContextSections?.current || chatContextSections?.quote,
+            linkedFiles: chatContextSections?.linked,
+            rag: chatContextSections?.rag,
+            webSearch: chatContextSections?.web,
+            extras: [
+              ...(continuityPrompt
+                ? [{
+                    id: 'conversation-continuity',
+                    content: continuityPrompt,
+                    priority: 90,
+                    truncateStrategy: 'drop-subsection' as const,
+                    minTokens: 80,
+                  }]
+                : []),
+              ...(groundedWeb.documentDecision.instruction
+                ? [{
+                    id: 'document-grounding-instruction',
+                    content: groundedWeb.documentDecision.instruction,
+                    priority: 85,
+                    truncateStrategy: 'drop-whole' as const,
+                    minTokens: 60,
+                  }]
+                : []),
+            ],
+          })
 
           // 如果启用了 Web 搜索，添加提示
           let agentContext = groundedWeb.documentDecision.instruction
@@ -2430,7 +2479,7 @@ export const ChatSend = forwardRef<{
             tokenBudget: AGENT_CONTEXT_TOTAL_LIMIT,
             items: buildHarnessContextItems({
               userInput: effectiveInstruction,
-              context: agentContext,
+              context: [continuityPrompt, agentContext].filter(section => section.trim()).join('\n\n'),
               ragSourceDetails: visibleRagSourceDetails,
               forcedSkillIds: options?.forcedSkillIds,
             }),
@@ -2471,12 +2520,12 @@ export const ChatSend = forwardRef<{
           const messages = buildMessagesWithHistory(
             chats,
             undefined,
-            agentContext,
+            undefined,
             effectiveInstruction,
             {
               includeAssistantMessages: true,
               includeLatestUserMessage: false,
-              maxUserMessages: getAgentHistoryTurnLimit(effectiveInstruction),
+              maxUserMessages: getAgentHistoryTurnLimit(effectiveInstruction, continuity.isFollowUp),
             }
           )
 

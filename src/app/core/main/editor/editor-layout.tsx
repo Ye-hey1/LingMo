@@ -557,10 +557,10 @@ export function EditorLayout() {
                 : isMemoryTab
                   ? MEMORY_TAB_ID
                   : isGithubStarsTab
-                    ? GITHUB_STARS_TAB_ID
-                    : isAgentCenterTab
-                      ? AGENT_CENTER_TAB_ID
-                      : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+                  ? GITHUB_STARS_TAB_ID
+                  : isAgentCenterTab
+                    ? AGENT_CENTER_TAB_ID
+                    : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
           path: activeFilePath,
           name: isGraphTab
             ? KNOWLEDGE_GRAPH_TAB_NAME
@@ -571,10 +571,10 @@ export function EditorLayout() {
                 : isMemoryTab
                   ? MEMORY_TAB_NAME
                   : isGithubStarsTab
-                    ? GITHUB_STARS_TAB_NAME
-                    : isAgentCenterTab
-                      ? AGENT_CENTER_TAB_NAME
-                      : name,
+                  ? GITHUB_STARS_TAB_NAME
+                  : isAgentCenterTab
+                    ? AGENT_CENTER_TAB_NAME
+                    : name,
           isFolder: isFolder
         }
         await addTab(newTab)

@@ -1,7 +1,7 @@
 import { Store } from '@tauri-apps/plugin-store'
 import { create } from 'zustand'
 
-type SidebarTab = 'files' | 'notes' | 'favorites'
+type SidebarTab = 'files' | 'notes' | 'favorites' | 'creativeCanvas'
 
 const STORE_PATH = 'store.json'
 const STORAGE_KEYS = {
@@ -151,8 +151,9 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
       if (typeof window !== 'undefined') localStorage.setItem(STORAGE_KEYS.rightSidebarVisible, String(rightState))
     }
     if (leftTab) {
-      set({ leftSidebarTab: leftTab })
-      if (typeof window !== 'undefined') localStorage.setItem(STORAGE_KEYS.leftSidebarTab, leftTab)
+      const normalizedLeftTab = leftTab === 'creativeCanvas' ? 'files' : leftTab
+      set({ leftSidebarTab: normalizedLeftTab })
+      if (typeof window !== 'undefined') localStorage.setItem(STORAGE_KEYS.leftSidebarTab, normalizedLeftTab)
     }
   },
 }))

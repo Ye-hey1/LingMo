@@ -1,4 +1,4 @@
-import { getDb, serializedWrite } from './index';
+import { getDb, runDbBatch, serializedWrite } from './index';
 
 export interface VectorDocument {
   id: number;
@@ -37,10 +37,28 @@ class VectorCache {
   private vectorsByFilename: Map<string, number[]> = new Map();
   private lastUpdate = 0;
   private cacheVersion = 0;
+  private hasCompleteSnapshot = false;
   private cacheTtlMs: number;
 
   constructor(cacheTtlMs = DEFAULT_CACHE_TTL_MS) {
     this.cacheTtlMs = cacheTtlMs
+  }
+
+  private parseDocument(doc: VectorDocument): CachedVector | null {
+    try {
+      return {
+        id: doc.id,
+        filename: doc.filename,
+        chunk_id: doc.chunk_id,
+        content: doc.content,
+        embedding: JSON.parse(doc.embedding) as number[],
+        updated_at: doc.updated_at,
+        metadata: doc.metadata ?? null,
+      };
+    } catch (error) {
+      console.error(`Failed to parse embedding for doc ${doc.id}:`, error);
+      return null;
+    }
   }
 
   getVersion(): number {
@@ -56,64 +74,70 @@ class VectorCache {
     return ids.map(id => this.cache.get(id)).filter(Boolean) as CachedVector[];
   }
 
+  stats() {
+    return {
+      size: this.cache.size,
+      filenames: this.vectorsByFilename.size,
+      lastUpdate: this.lastUpdate,
+      version: this.cacheVersion,
+      isComplete: this.hasCompleteSnapshot,
+    };
+  }
+
+  private removeIdFromFilename(filename: string, id: number) {
+    const ids = this.vectorsByFilename.get(filename);
+    if (!ids) return;
+    const nextIds = ids.filter(existingId => existingId !== id);
+    if (nextIds.length > 0) {
+      this.vectorsByFilename.set(filename, nextIds);
+    } else {
+      this.vectorsByFilename.delete(filename);
+    }
+  }
+
+  private trackFilenameId(filename: string, id: number) {
+    const ids = this.vectorsByFilename.get(filename) || [];
+    if (!ids.includes(id)) {
+      ids.push(id);
+      this.vectorsByFilename.set(filename, ids);
+    }
+  }
+
   async update() {
     const db = await getDb();
     const docs = await db.select<VectorDocument[]>(`
       select id, filename, chunk_id, content, embedding, updated_at, metadata from vector_documents
     `);
 
-    this.cache.clear();
-    this.vectorsByFilename.clear();
+    const nextCache = new Map<number, CachedVector>();
+    const nextVectorsByFilename = new Map<string, number[]>();
 
     for (const doc of docs) {
-      try {
-        const embedding = JSON.parse(doc.embedding) as number[];
-        const cached: CachedVector = {
-          id: doc.id,
-          filename: doc.filename,
-          chunk_id: doc.chunk_id,
-          content: doc.content,
-          embedding,
-          updated_at: doc.updated_at,
-          metadata: doc.metadata ?? null,
-        };
-        this.cache.set(doc.id, cached);
-
-        if (!this.vectorsByFilename.has(doc.filename)) {
-          this.vectorsByFilename.set(doc.filename, []);
-        }
-        this.vectorsByFilename.get(doc.filename)!.push(doc.id);
-      } catch (error) {
-        console.error(`Failed to parse embedding for doc ${doc.id}:`, error);
-      }
+      const cached = this.parseDocument(doc);
+      if (!cached) continue;
+      nextCache.set(doc.id, cached);
+      const ids = nextVectorsByFilename.get(doc.filename) || [];
+      ids.push(doc.id);
+      nextVectorsByFilename.set(doc.filename, ids);
     }
 
+    this.cache = nextCache;
+    this.vectorsByFilename = nextVectorsByFilename;
     this.lastUpdate = Date.now();
+    this.hasCompleteSnapshot = true;
     this.cacheVersion++;
   }
 
   add(doc: VectorDocument) {
-    try {
-      const embedding = JSON.parse(doc.embedding) as number[];
-      const cached: CachedVector = {
-        id: doc.id,
-        filename: doc.filename,
-        chunk_id: doc.chunk_id,
-        content: doc.content,
-        embedding,
-        updated_at: doc.updated_at,
-        metadata: doc.metadata ?? null,
-      };
-      this.cache.set(doc.id, cached);
-
-      if (!this.vectorsByFilename.has(doc.filename)) {
-        this.vectorsByFilename.set(doc.filename, []);
-      }
-      this.vectorsByFilename.get(doc.filename)!.push(doc.id);
-      this.cacheVersion++;
-    } catch (error) {
-      console.error(`Failed to add vector to cache for doc ${doc.id}:`, error);
+    const cached = this.parseDocument(doc);
+    if (!cached) return;
+    const existing = this.cache.get(doc.id);
+    if (existing) {
+      this.removeIdFromFilename(existing.filename, doc.id);
     }
+    this.cache.set(doc.id, cached);
+    this.trackFilenameId(doc.filename, doc.id);
+    this.cacheVersion++;
   }
 
   deleteByFilename(filename: string) {
@@ -125,8 +149,62 @@ class VectorCache {
     this.cacheVersion++;
   }
 
+  async refreshFilenames(filenames: string[]) {
+    const uniqueFilenames = Array.from(new Set(filenames.filter(Boolean)));
+    if (uniqueFilenames.length === 0) return;
+
+    const db = await getDb();
+    const placeholders = uniqueFilenames.map((_, index) => `$${index + 1}`).join(', ');
+    const docs = await db.select<VectorDocument[]>(
+      `select id, filename, chunk_id, content, embedding, updated_at, metadata
+       from vector_documents
+       where filename in (${placeholders})`,
+      uniqueFilenames,
+    );
+
+    const nextCache = new Map(this.cache);
+    const nextVectorsByFilename = new Map(
+      Array.from(this.vectorsByFilename, ([filename, ids]) => [filename, [...ids]]),
+    );
+    for (const filename of uniqueFilenames) {
+      for (const id of nextVectorsByFilename.get(filename) || []) {
+        nextCache.delete(id);
+      }
+      nextVectorsByFilename.delete(filename);
+    }
+
+    for (const doc of docs) {
+      const cached = this.parseDocument(doc);
+      if (!cached) continue;
+      const existing = nextCache.get(doc.id);
+      if (existing) {
+        const existingIds = nextVectorsByFilename.get(existing.filename) || [];
+        const remainingIds = existingIds.filter(id => id !== doc.id);
+        if (remainingIds.length > 0) nextVectorsByFilename.set(existing.filename, remainingIds);
+        else nextVectorsByFilename.delete(existing.filename);
+      }
+      nextCache.set(doc.id, cached);
+      const ids = nextVectorsByFilename.get(doc.filename) || [];
+      ids.push(doc.id);
+      nextVectorsByFilename.set(doc.filename, ids);
+    }
+
+    this.cache = nextCache;
+    this.vectorsByFilename = nextVectorsByFilename;
+    this.lastUpdate = Date.now();
+    this.cacheVersion++;
+  }
+
+  clear() {
+    this.cache.clear();
+    this.vectorsByFilename.clear();
+    this.lastUpdate = Date.now();
+    this.hasCompleteSnapshot = true;
+    this.cacheVersion++;
+  }
+
   needsUpdate(): boolean {
-    return Date.now() - this.lastUpdate > this.cacheTtlMs || this.cache.size === 0;
+    return !this.hasCompleteSnapshot || Date.now() - this.lastUpdate > this.cacheTtlMs;
   }
 }
 
@@ -185,13 +263,15 @@ export async function upsertVectorDocument(doc: Omit<VectorDocument, 'id'>) {
 export async function upsertVectorDocumentsBatch(docs: Omit<VectorDocument, 'id'>[]) {
   return serializedWrite(async () => {
     const db = await getDb();
-    for (const doc of docs) {
-      await db.execute(
-        'insert into vector_documents (filename, chunk_id, content, embedding, updated_at, metadata) values ($1, $2, $3, $4, $5, $6) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at, metadata = excluded.metadata',
-        [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at, doc.metadata ?? null],
-      );
-    }
-    await vectorCache.update();
+    await runDbBatch(db, async () => {
+      for (const doc of docs) {
+        await db.execute(
+          'insert into vector_documents (filename, chunk_id, content, embedding, updated_at, metadata) values ($1, $2, $3, $4, $5, $6) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at, metadata = excluded.metadata',
+          [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at, doc.metadata ?? null],
+        );
+      }
+    });
+    await vectorCache.refreshFilenames(docs.map(doc => doc.filename));
   });
 }
 
@@ -206,24 +286,23 @@ export async function replaceVectorDocumentsForFile(
       new Set([filename, ...legacyFilenames].filter(Boolean)),
     );
 
-    for (const filenameToDelete of filenamesToDelete) {
-      await db.execute(
-        'delete from vector_documents where filename = $1',
-        [filenameToDelete],
-      );
-    }
+    await runDbBatch(db, async () => {
+      for (const filenameToDelete of filenamesToDelete) {
+        await db.execute(
+          'delete from vector_documents where filename = $1',
+          [filenameToDelete],
+        );
+      }
 
-    for (const doc of docs) {
-      await db.execute(
-        'insert into vector_documents (filename, chunk_id, content, embedding, updated_at, metadata) values ($1, $2, $3, $4, $5, $6) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at, metadata = excluded.metadata',
-        [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at, doc.metadata ?? null],
-      );
-    }
+      for (const doc of docs) {
+        await db.execute(
+          'insert into vector_documents (filename, chunk_id, content, embedding, updated_at, metadata) values ($1, $2, $3, $4, $5, $6) on conflict(filename, chunk_id) do update set content = excluded.content, embedding = excluded.embedding, updated_at = excluded.updated_at, metadata = excluded.metadata',
+          [doc.filename, doc.chunk_id, doc.content, doc.embedding, doc.updated_at, doc.metadata ?? null],
+        );
+      }
+    });
 
-    for (const filenameToDelete of filenamesToDelete) {
-      vectorCache.deleteByFilename(filenameToDelete);
-    }
-    await vectorCache.update();
+    await vectorCache.refreshFilenames(Array.from(new Set([...filenamesToDelete, ...docs.map(doc => doc.filename)])));
   });
 }
 
@@ -282,9 +361,8 @@ export async function getSimilarDocuments(
 }
 
 function cosineSimilarity(vecA: number[], vecB: number[]): number {
-  if (vecA.length !== vecB.length) {
-    throw new Error('Vector dimensions do not match');
-  }
+  // ponytail: 维度不符返回 0，与 memories.ts 保持一致；统一公共实现留待去重任务
+  if (vecA.length !== vecB.length) return 0;
 
   let dotProduct = 0;
   let normA = 0;
@@ -308,7 +386,7 @@ export async function clearVectorDb() {
       delete from vector_documents
     `);
 
-    await vectorCache.update();
+    vectorCache.clear();
   });
 }
 
@@ -337,6 +415,10 @@ export async function getAllVectorEmbeddingDocuments(): Promise<VectorEmbeddingD
     updated_at: doc.updated_at,
     metadata: doc.metadata ?? null,
   }));
+}
+
+export function getVectorCacheStats() {
+  return vectorCache.stats();
 }
 
 // Return file-level averaged embeddings for semantic graph computation

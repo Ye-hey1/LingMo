@@ -1,4 +1,4 @@
-import { getDb, runDbTransaction, serializedWrite } from './index'
+import { getDb, runDbBatch, serializedWrite } from './index'
 import { insertActivityEventWithDb } from './activity'
 import { truncateActivityText } from '@/lib/activity/events'
 
@@ -162,7 +162,7 @@ export async function insertChat(chat: Omit<Chat, 'id' | 'createdAt'>) {
 export async function getChats(tagId: number) {
   const db = await getDb()
   return await db.select<Chat[]>(
-    'select * from chats where tagId = $1 order by createdAt',
+    'select * from chats where tagId = $1 order by createdAt, id',
     [tagId],
   )
 }
@@ -170,7 +170,7 @@ export async function getChats(tagId: number) {
 export async function getChatsByConversation(conversationId: number) {
   const db = await getDb()
   return await db.select<Chat[]>(
-    'select * from chats where conversationId = $1 order by createdAt',
+    'select * from chats where conversationId = $1 order by createdAt, id',
     [conversationId],
   )
 }
@@ -178,7 +178,7 @@ export async function getChatsByConversation(conversationId: number) {
 export async function getAllChats() {
   const db = await getDb()
   return await db.select<Chat[]>(
-    'select * from chats order by createdAt',
+    'select * from chats order by createdAt, id',
     [],
   )
 }
@@ -186,7 +186,7 @@ export async function getAllChats() {
 export async function insertChats(chats: Chat[]) {
   await serializedWrite(async () => {
     const db = await getDb()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       for (const chat of chats) {
         await db.execute(
           'insert into chats (tagId, conversationId, content, role, type, image, images, inserted, createdAt, ragSources, ragSourceDetails, agentHistory, thinking, quoteData, condensedContent, condensedAt) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)',

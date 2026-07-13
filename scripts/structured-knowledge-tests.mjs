@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 
 const parser = await import('../src/lib/structured-knowledge/markdown-parser.ts')
 
@@ -145,5 +146,115 @@ assert.equal(settingsModule.DEFAULT_STRUCTURED_SEMANTIC_EXTRACTION_SETTINGS.mode
 assert.equal(settingsModule.DEFAULT_STRUCTURED_SEMANTIC_EXTRACTION_SETTINGS.maxBlocks, 40)
 assert.equal(settingsModule.DEFAULT_STRUCTURED_SEMANTIC_EXTRACTION_SETTINGS.costWarningAccepted, false)
 assert.equal(settingsModule.DEFAULT_STRUCTURED_SEMANTIC_EXTRACTION_SETTINGS.privacyWarningAccepted, false)
+assert.equal(settingsModule.shouldAutomaticallyProcessSemanticExtractions({
+  ...settingsModule.DEFAULT_STRUCTURED_SEMANTIC_EXTRACTION_SETTINGS,
+  mode: 'manual',
+  costWarningAccepted: true,
+  privacyWarningAccepted: true,
+}), false)
+assert.equal(settingsModule.shouldAutomaticallyProcessSemanticExtractions({
+  ...settingsModule.DEFAULT_STRUCTURED_SEMANTIC_EXTRACTION_SETTINGS,
+  mode: 'onSave',
+  costWarningAccepted: true,
+  privacyWarningAccepted: false,
+}), false)
+assert.equal(settingsModule.shouldAutomaticallyProcessSemanticExtractions({
+  ...settingsModule.DEFAULT_STRUCTURED_SEMANTIC_EXTRACTION_SETTINGS,
+  mode: 'onSave',
+  costWarningAccepted: true,
+  privacyWarningAccepted: true,
+}), true)
+
+const vectorSource = await readFile(new URL('../src/db/vector.ts', import.meta.url), 'utf8')
+assert.match(vectorSource, /runDbBatch/)
+assert.match(vectorSource, /refreshFilenames/)
+assert.match(vectorSource, /getVectorCacheStats/)
+assert.doesNotMatch(vectorSource, /upsertVectorDocumentsBatch[\s\S]{0,900}await vectorCache\.update\(\)/)
+const refreshFilenamesSource = vectorSource.match(/async refreshFilenames\(filenames: string\[\]\) \{([\s\S]*?)\r?\n  \}\r?\n\r?\n  clear\(\)/)?.[1] || ''
+assert.ok(refreshFilenamesSource.indexOf('await db.select') >= 0)
+assert.ok(refreshFilenamesSource.indexOf('await db.select') < refreshFilenamesSource.indexOf('this.cache = nextCache'))
+assert.doesNotMatch(refreshFilenamesSource, /this\.deleteByFilename/)
+
+const queryTypesSource = await readFile(new URL('../src/lib/knowledge-query/types.ts', import.meta.url), 'utf8')
+assert.match(queryTypesSource, /durationMs\?: number/)
+assert.match(queryTypesSource, /status: 'success' \| 'skipped' \| 'failed' \| 'timed_out'/)
+assert.match(queryTypesSource, /export interface KnowledgeQueryStats/)
+assert.match(queryTypesSource, /timeoutMs\?: number/)
+assert.match(queryTypesSource, /timedOutBranches: string\[\]/)
+assert.match(queryTypesSource, /stats: KnowledgeQueryStats/)
+
+const queryEngineSource = await readFile(new URL('../src/lib/knowledge-query/query-engine.ts', import.meta.url), 'utf8')
+assert.match(queryEngineSource, /branchPromises/)
+assert.match(queryEngineSource, /Promise\.all\(branchPromises\)/)
+assert.match(queryEngineSource, /DEFAULT_TIMEOUT_MS/)
+assert.match(queryEngineSource, /normalizeTimeoutMs/)
+assert.match(queryEngineSource, /timedOutBranch/)
+assert.match(queryEngineSource, /withBranchTimeout/)
+assert.match(queryEngineSource, /runSearchBranch/)
+assert.match(queryEngineSource, /runCurrentNoteBranch/)
+assert.match(queryEngineSource, /runEvidenceBranch/)
+assert.match(queryEngineSource, /runGraphBranch/)
+assert.match(queryEngineSource, /timedOutBranches: trace/)
+
+const semanticQueueSource = await readFile(new URL('../src/lib/structured-knowledge/semantic-extraction-queue.ts', import.meta.url), 'utf8')
+assert.match(semanticQueueSource, /recoverPendingSemanticExtractions/)
+assert.match(semanticQueueSource, /getStructuredDocumentsNeedingSemanticExtraction/)
+assert.match(semanticQueueSource, /startup-recovery/)
+assert.match(semanticQueueSource, /shouldAutomaticallyProcessSemanticExtractions/)
+assert.match(semanticQueueSource, /if \(this\.tasks\.size > 0 && autoProcessingEnabled\)/)
+assert.match(semanticQueueSource, /scheduleRecovery\(nextRecoveryDelay, limit\)/)
+assert.match(semanticQueueSource, /document\.semanticExtractionStartedAt \+ cooldownMs - now/)
+
+const structuredKnowledgeDbSource = await readFile(new URL('../src/db/structured-knowledge.ts', import.meta.url), 'utf8')
+const getExportedFunctionSource = (source, name) => {
+  const start = source.indexOf(`export async function ${name}`)
+  if (start < 0) return ''
+  const nextExport = source.indexOf('\nexport ', start + 1)
+  return source.slice(start, nextExport < 0 ? source.length : nextExport)
+}
+assert.match(structuredKnowledgeDbSource, /DEFAULT_SEMANTIC_EXTRACTION_LEASE_MS/)
+assert.match(structuredKnowledgeDbSource, /semantic_extraction_started_at is null[\s\S]{0,160}semantic_extraction_started_at <= \$3/)
+assert.match(structuredKnowledgeDbSource, /now - leaseMs/)
+assert.match(structuredKnowledgeDbSource, /markStructuredSemanticExtractionRunning[\s\S]{0,900}Promise<number \| undefined>/)
+assert.match(structuredKnowledgeDbSource, /return \(result\?\.rowsAffected \?\? 0\) > 0 \? now : undefined/)
+
+const requestedFunctionSource = getExportedFunctionSource(structuredKnowledgeDbSource, 'markStructuredSemanticExtractionRequested')
+assert.match(requestedFunctionSource, /semantic_extraction_status = case[\s\S]{0,180}when semantic_extraction_status = 'running' then 'running'[\s\S]{0,100}else 'pending'/)
+
+const documentUpsertSource = getExportedFunctionSource(structuredKnowledgeDbSource, 'upsertStructuredDocument')
+assert.match(documentUpsertSource, /semantic_extraction_status = case[\s\S]{0,180}when structured_documents\.semantic_extraction_status = 'running' then 'running'/)
+
+const failedFunctionSource = getExportedFunctionSource(structuredKnowledgeDbSource, 'markStructuredSemanticExtractionFailed')
+assert.match(failedFunctionSource, /where id = \$1[\s\S]{0,120}semantic_extraction_status = 'running'[\s\S]{0,120}semantic_extraction_started_at = \$2/)
+assert.match(failedFunctionSource, /return \(result\?\.rowsAffected \?\? 0\) > 0/)
+
+const commitFunctionSource = getExportedFunctionSource(structuredKnowledgeDbSource, 'commitStructuredSemanticExtraction')
+assert.match(commitFunctionSource, /serializedWrite/)
+assert.match(commitFunctionSource, /runDbBatch/)
+assert.match(commitFunctionSource, /semantic_extraction_status = 'running'/)
+assert.match(commitFunctionSource, /semantic_extraction_started_at = \$2/)
+assert.match(commitFunctionSource, /content_hash = \$3/)
+const ownerValidationIndex = commitFunctionSource.indexOf('select semantic_extraction_status')
+const contentValidationIndex = commitFunctionSource.indexOf('if (owner.content_hash !== input.contentHash)')
+const clearRelationsIndex = commitFunctionSource.indexOf('delete from structured_relations')
+const upsertEntitiesIndex = commitFunctionSource.indexOf('upsertEntityRow')
+const completedIndex = commitFunctionSource.indexOf("semantic_extraction_status = 'completed'")
+assert.ok(ownerValidationIndex >= 0)
+assert.ok(ownerValidationIndex < contentValidationIndex)
+assert.ok(contentValidationIndex < clearRelationsIndex)
+assert.ok(clearRelationsIndex < upsertEntitiesIndex)
+assert.ok(upsertEntitiesIndex < completedIndex)
+
+const needingFunctionSource = getExportedFunctionSource(structuredKnowledgeDbSource, 'getStructuredDocumentsNeedingSemanticExtraction')
+assert.match(needingFunctionSource, /semantic_extraction_status = 'pending'[\s\S]{0,100}or semantic_extraction_status = 'running'/)
+
+const semanticExtractorSource = await readFile(new URL('../src/lib/structured-knowledge/semantic-extractor.ts', import.meta.url), 'utf8')
+assert.match(semanticExtractorSource, /commitStructuredSemanticExtraction/)
+assert.doesNotMatch(semanticExtractorSource, /clearStructuredLlmSemantics/)
+assert.doesNotMatch(semanticExtractorSource, /upsertStructuredEntities/)
+assert.doesNotMatch(semanticExtractorSource, /upsertStructuredRelations/)
+assert.match(semanticExtractorSource, /if \(!committed\)[\s\S]{0,700}语义抽取租约已失效/)
+assert.ok(semanticExtractorSource.indexOf('if (!committed)') < semanticExtractorSource.indexOf('await updateStructuredKnowledgeObjectMetadata'))
+assert.doesNotMatch(semanticQueueSource, /markStructuredSemanticExtractionFailed/)
 
 console.log('structured-knowledge tests passed')

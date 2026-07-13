@@ -707,6 +707,12 @@ Use folderPath to limit scope to a specific folder.`,
   ],
   execute: async (params): Promise<ToolResult> => {
     try {
+      // ponytail: 防 LLM 传空 query 导致 indexOf('',x) 死循环
+      const trimmedQuery = String(params.query || '').trim()
+      if (!trimmedQuery) {
+        return { success: false, error: '搜索关键词不能为空' }
+      }
+
       const normalizedFolderPath = params.folderPath
         ? await ensureSafeWorkspaceRelativePath(params.folderPath)
         : undefined
@@ -1250,7 +1256,7 @@ export const renameFileTool: Tool = {
 
       // 执行重命名
       if (baseDir) {
-        await rename(oldPath, newPath, { oldPathBaseDir: baseDir, newPathBaseDir: baseDir })
+        await rename(oldPath, newPath, { oldPathBaseDir: baseDir, newPathBaseDir: newBaseDir })
       } else {
         await rename(oldPath, newPath)
       }
@@ -1369,7 +1375,7 @@ export const moveFileTool: Tool = {
 
       // 执行移动（使用 rename）
       if (oldBaseDir) {
-        await rename(oldPath, newPath, { oldPathBaseDir: oldBaseDir, newPathBaseDir: oldBaseDir })
+        await rename(oldPath, newPath, { oldPathBaseDir: oldBaseDir, newPathBaseDir: newBaseDir })
       } else {
         await rename(oldPath, newPath)
       }
@@ -1637,7 +1643,7 @@ export const moveFilesBatchTool: Tool = {
 
           // 执行移动（使用 rename）
           if (oldBaseDir) {
-            await rename(oldPath, newPath, { oldPathBaseDir: oldBaseDir, newPathBaseDir: oldBaseDir })
+            await rename(oldPath, newPath, { oldPathBaseDir: oldBaseDir, newPathBaseDir: newBaseDir })
           } else {
             await rename(oldPath, newPath)
           }
@@ -1910,7 +1916,7 @@ export const renameFilesBatchTool: Tool = {
 
           // 执行重命名
           if (baseDir) {
-            await rename(oldPath, newPath, { oldPathBaseDir: baseDir, newPathBaseDir: baseDir })
+            await rename(oldPath, newPath, { oldPathBaseDir: baseDir, newPathBaseDir: newBaseDir })
           } else {
             await rename(oldPath, newPath)
           }

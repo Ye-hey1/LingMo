@@ -163,29 +163,18 @@ export const objectRegistry: ObjectRegistry = {
   },
 
   async moveByPath(oldPathPrefix, newPathPrefix) {
-    // 简单实现：查询所有路径命中前缀的对象，逐个 touch 新 path。
-    // 高频场景下应改成单条 UPDATE，但项目其它代码也用 serializedWrite 逐行，
-    // 这里保持一致以避免破坏现有锁/事务约定。
     if (!oldPathPrefix || oldPathPrefix === newPathPrefix) return 0
-    const { runDbTransaction } = await import('@/db/index')
-    const { getDb } = await import('@/db/index')
-    const db = await getDb()
-    let updated = 0
-    await runDbTransaction(db, async () => {
-      const rows = await db.select<Array<{ id: string; path: string }>>(
-        'select id, path from knowledge_objects where path like $1',
-        [`${oldPathPrefix}%`],
+    const { getDb, serializedWrite } = await import('@/db/index')
+    return await serializedWrite(async () => {
+      const db = await getDb()
+      const result = await db.execute(
+        `update knowledge_objects
+         set path = $1 || substr(path, length($2) + 1), updated_at = $3
+         where instr(path, $2) = 1`,
+        [newPathPrefix, oldPathPrefix, Date.now()],
       )
-      for (const row of rows) {
-        const newPath = newPathPrefix + row.path.slice(oldPathPrefix.length)
-        await db.execute(
-          'update knowledge_objects set path = $1, updated_at = $2 where id = $3',
-          [newPath, Date.now(), row.id],
-        )
-        updated += 1
-      }
+      return result.rowsAffected
     })
-    return updated
   },
 }
 

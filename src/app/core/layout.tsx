@@ -26,6 +26,7 @@ import { isEditableKeyboardTarget } from "@/lib/is-editable-keyboard-target"
 import { checkIsTauri } from "@/lib/check"
 import { WebRuntimeNotice } from "@/components/web-runtime-notice"
 import { reminderScheduler } from "@/lib/reminders/scheduler"
+import { startLinkPipelineRecovery } from "@/lib/link-pipeline/organize-runner"
 
 // 动态导入：非首屏必需的重型组件，减少首屏 bundle 大小
 const SearchDialog = dynamic(() => import('@/components/search-dialog').then(m => ({ default: m.SearchDialog })), { ssr: false })
@@ -108,8 +109,13 @@ export default function RootLayout({
           initMcp()
           reportAppStart()
 
+          await initAllDatabases()
+          if (!cancelled) {
+            void startLinkPipelineRecovery().catch((error) => {
+              console.warn('[link-pipeline] Initial recovery scan failed:', error)
+            })
+          }
           await Promise.all([
-            initAllDatabases(),
             initMainHosting(),
             initSettingData(),
             initUpdateStore(),

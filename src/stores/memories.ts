@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import { Memory, getAllMemories, deleteMemory as deleteMemoryDb, upsertMemory, getMemoryStats, updateMemory as updateMemoryDb } from '@/db/memories'
-import { fetchEmbedding } from '@/lib/ai/embedding'
 
 interface MemoriesState {
   memories: Memory[]
@@ -56,14 +55,8 @@ const useMemoriesStore = create<MemoriesState>((set, get) => ({
   },
 
   addMemory: async (content, category) => {
-    const embedding = await fetchEmbedding(content)
-    if (!embedding) {
-      throw new Error('无法生成向量嵌入，请检查嵌入模型配置')
-    }
-
     const result = await upsertMemory({
       content,
-      embedding: JSON.stringify(embedding),
       category,
     })
 

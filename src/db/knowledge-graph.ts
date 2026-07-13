@@ -1,4 +1,4 @@
-import { getDb, runDbTransaction, serializedWrite } from './index'
+import { getDb, runDbBatch, serializedWrite } from './index'
 
 export type KnowledgeGraphNodeType =
   | 'knowledge_object'
@@ -230,7 +230,7 @@ export async function bulkUpsertKnowledgeGraphNodes(inputs: KnowledgeGraphNodeIn
   return serializedWrite(async () => {
     const db = await getDb()
     const now = Date.now()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       for (const input of inputs) {
         await db.execute(
           `insert into knowledge_graph_nodes (id, object_id, node_type, label, source_type, source_id, metadata_json, tags_json, confidence, created_at, updated_at, deleted_at)
@@ -274,7 +274,7 @@ export async function bulkUpsertKnowledgeGraphEdges(inputs: KnowledgeGraphEdgeIn
   return serializedWrite(async () => {
     const db = await getDb()
     const now = Date.now()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       for (const input of inputs) {
         await db.execute(
           `insert into knowledge_graph_edges (id, source_node_id, target_node_id, edge_type, source_method, label, weight, confidence, evidence, metadata_json, created_at, updated_at, deleted_at)

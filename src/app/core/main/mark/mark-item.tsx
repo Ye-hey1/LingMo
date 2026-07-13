@@ -48,6 +48,7 @@ import { ToastAction } from "@/components/ui/toast";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { getGitHubProjectDetailContent, getGitHubProjectDisplayName, getGitHubProjectIntro, getGitHubProjectMeta, isGitHubProjectMark, updateGitHubProjectMarkTitle } from "@/lib/github-project";
 import { isVideoTranscriptMark, mergeVideoTranscriptSummary, parseVideoTranscriptRecord, summarizeVideoTranscript } from "@/lib/video-transcript-record";
+import { LinkJobStatus } from "./link-job-status";
 
 dayjs.extend(relativeTime)
 
@@ -751,6 +752,7 @@ export const MarkWrapper = React.memo(({
         )}
         <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
         <MarkProcessedChip processed={isProcessed} />
+        {mark.type === 'link' ? <LinkJobStatus markId={mark.id} disabled={trashState} /> : null}
         {mark.type === 'todo' && itemContent.todo ? (
           <span className={`size-2 shrink-0 rounded-full ${todoPriorityDotClass}`} />
         ) : null}
@@ -812,6 +814,7 @@ export const MarkWrapper = React.memo(({
         <div className="flex items-center gap-2 text-muted-foreground">
           <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
           <MarkProcessedChip processed={isProcessed} />
+          {mark.type === 'link' ? <LinkJobStatus markId={mark.id} disabled={trashState} /> : null}
           {mark.type === 'todo' && itemContent.todo ? (
             <span className={`size-2 shrink-0 rounded-full ${todoPriorityDotClass}`} />
           ) : null}
@@ -960,6 +963,7 @@ export const MarkWrapper = React.memo(({
           <div className={`flex w-full items-center gap-2 text-muted-foreground text-${recordTextSize} ${lineHeight}`}>
             <MarkTypeIcon markType={mark.type} label={t(mark.type)} />
             <MarkProcessedChip processed={isProcessed} />
+            <LinkJobStatus markId={mark.id} disabled={trashState} />
             {renderTimeOrTrashActions()}
           </div>
           <DetailViewer mark={mark} content={itemContent.title || mark.desc || ''} tooltipText={gitHubProjectIntro || undefined} />

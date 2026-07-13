@@ -11,6 +11,7 @@ mod keywords;
 mod llm_memory;
 mod mcp;
 mod mcp_runtime;
+mod ocr_packages;
 mod screenshot;
 mod skills;
 mod skills_v2;
@@ -34,6 +35,7 @@ use mcp::{
 use mcp_runtime::{
     RuntimeInstallManager, cancel_mcp_runtime_install, inspect_mcp_runtime, install_mcp_runtime,
 };
+use ocr_packages::{list_ocr_providers, run_ocr_provider};
 use screenshot::{cleanup_temp_screenshot_dir, screenshot};
 use skills::import_skill_zip;
 use skills_v2::commands::SkillState;
@@ -92,6 +94,8 @@ fn main() {
             ai_multipart_request,
             ai_chat_completion_stream,
             cancel_ai_request,
+            list_ocr_providers,
+            run_ocr_provider,
             llm_memory::llm_memory_list_sessions,
             llm_memory::llm_memory_get_session_detail,
             llm_memory::llm_memory_update_message,
@@ -127,6 +131,7 @@ fn main() {
             wechat_mp::wechat_mp_search_accounts,
             wechat_mp::wechat_mp_list_articles,
             wechat_mp::wechat_mp_fetch_article_html,
+            wechat_mp::wechat_mp_fetch_image_data_url,
         ])
         // 应用设置 - 在所有插件和命令注册后
         .setup(|app| {

@@ -24,11 +24,7 @@
  *   loop-detection.ts   — 循环检测
  *   friendly-errors.ts  — 用户友好的错误消息
  *   final-answer.ts     — Final Answer 检测 + 自动恢复
- *   enhanced-resume.ts  — 增强 Resume（快照管理）
  *   resume.ts           — Agent 恢复 + 运行摘要持久化
- *   context/            — (预留) 上下文管理子目录
- *   safety/             — (预留) 安全子目录
- *   resume/             — (预留) 恢复子目录
  *   tools/              — 工具实现（note-tools, mark-tools, ...）
  */
 
@@ -184,9 +180,3 @@ export { replaceLinesInRange } from './tools/react-diff-helpers'
 
 // ---- 工具输入验证 ----
 export { validateToolInput, formatValidationErrors } from './tool-input-validator'
-
-// ---- 工具结果预算 ----
-export { applyToolResultBudget, estimateTokenCount, calculateAvailableBudget } from './tool-result-budget'
-
-// ---- 并行工具执行 ----
-export { executeToolsBatched, partitionToolCalls, type ParallelToolCall, type ParallelToolResult } from './parallel-tool-executor'

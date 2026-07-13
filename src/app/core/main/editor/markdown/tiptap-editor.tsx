@@ -788,6 +788,7 @@ export function TipTapEditor({
   performanceMode = false,
 }: TipTapEditorProps) {
   const t = useTranslations('editor')
+  const tRoot = useTranslations()
   const tMermaid = useTranslations('editor.mermaid.templates')
   const tImage = useTranslations('editor.image')
   const pendingQuote = useChatStore((state) => state.pendingQuote)
@@ -1664,6 +1665,38 @@ export function TipTapEditor({
     setFlashcardSelectionContext(selectionContext)
     setFlashcardDialogOpen(true)
   }, [getFlashcardSelectionContext, toast])
+
+  const sendSelectionToCreativeCanvas = useCallback(async () => {
+    if (!editor) return
+
+    const { from, to } = editor.state.selection
+    const text = editor.state.doc.textBetween(from, to).trim()
+    if (!text) {
+      toast({
+        title: tRoot('creativeCanvas.selectionRequiredTitle'),
+        description: tRoot('creativeCanvas.selectionRequiredDescription'),
+        variant: 'destructive',
+      })
+      return
+    }
+
+    try {
+      emitter.emit('open-creative-canvas', {
+        prompt: text,
+        sourcePath: activeFilePath,
+      })
+      toast({
+        title: tRoot('creativeCanvas.openedTitle'),
+        description: tRoot('creativeCanvas.openedDescription'),
+      })
+    } catch (error) {
+      toast({
+        title: tRoot('creativeCanvas.sendFailed'),
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      })
+    }
+  }, [activeFilePath, editor, tRoot])
 
   const runMobileEditorAction = useCallback((action: string) => {
     if (!editor || !mobileContext) return
@@ -3614,6 +3647,7 @@ export function TipTapEditor({
               onAITranslate={handleAITranslate}
               onQuoteToChat={onQuoteToChat}
               onCreateFlashcard={openFlashcardDialogFromSelection}
+              onSendToCreativeCanvas={sendSelectionToCreativeCanvas}
             />
           )}
         </EditorContent>

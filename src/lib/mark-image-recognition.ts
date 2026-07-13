@@ -1,4 +1,5 @@
 import { fetchAiDescByImage } from './ai/description'
+import { getAISettings } from './ai/utils'
 import ocr from './ocr'
 
 export type ImageRecognitionMethod = 'ocr' | 'vlm'
@@ -145,11 +146,17 @@ export async function recognizeStructuredImage({
   modelKey,
 }: RecognizeStructuredImageParams): Promise<ImageRecognitionResult> {
   if (method === 'vlm') {
-    if (!base64) {
-      return buildEmptyRecognitionResult(sourceLabel)
+    try {
+      const aiConfig = await getAISettings(modelKey || 'imageMethodModel')
+      if (base64 && aiConfig?.model) {
+        const markdown = await fetchAiDescByImage(base64, { mode: 'structured', sourceLabel, modelKey })
+        if (markdown?.trim()) {
+          return ensureStructuredMarkdown(markdown, sourceLabel)
+        }
+      }
+    } catch (error) {
+      console.warn('VLM image recognition failed, falling back to OCR:', error)
     }
-    const markdown = await fetchAiDescByImage(base64, { mode: 'structured', sourceLabel, modelKey })
-    return ensureStructuredMarkdown(markdown || '', sourceLabel)
   }
 
   const rawText = await ocr(path)

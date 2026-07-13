@@ -9,17 +9,9 @@ import OpenAI from 'openai'
 import type { SkillMatchSummary } from '@/lib/skills/types'
 import type { AgentRunControl, AgentRunMiddlewareState } from '@/lib/agent-harness/types'
 import { HarnessAgentRunner } from '@/lib/agent-harness/harness-agent-runner'
-import {
-  SnapshotManager,
-  persistSnapshot,
-  loadPersistedSnapshots,
-  buildResumePrompt,
-  canResumeSnapshot,
-  getResumeSummary,
-} from './enhanced-resume'
 import { formatFriendlyError } from './friendly-errors'
 import { getDirectAgentReply } from './orchestration'
-import { classifyAgentTask } from './task-router'
+import { classifyAgentTask, type AgentTaskRouteDecision } from './task-router'
 import {
   extractVisibleFinalAnswer,
   isInternalAgentInstruction,
@@ -27,6 +19,7 @@ import {
 } from './parse-action-input'
 import { isSupportOnlyObservationText, isSupportOnlyToolName } from './support-tools'
 import { createAgentRunId } from '@/lib/agent-harness/run-id'
+import { getBaseToolName } from './tool-policy'
 
 export interface AgentHandlerConfig {
   runControl?: AgentRunControl
@@ -36,13 +29,16 @@ export interface AgentHandlerConfig {
   onAction?: (action: string, params: Record<string, any>) => void
   onObservation?: (observation: string) => void
   onEvent?: (event: AgentEvent) => void
-  onComplete?: (result: string, steps?: any[], stopped?: boolean) => void
+  onComplete?: (result: string, steps?: any[], stopped?: boolean) => void | Promise<void>
   onError?: (error: string) => void | Promise<void>
   onAnswerDelta?: (markdownContent: string) => void
   onAnswerRejected?: () => void
   onFinalAnswerRender?: (markdownContent: string) => void  // 当检测到 Final Answer 时立即渲染 Markdown
   requestConfirmation?: (toolName: string, params: Record<string, any>) => Promise<boolean>
   forcedSkillIds?: string[]
+  taskRouteDecision?: AgentTaskRouteDecision
+  /** Semantically expanded query for memory/context retrieval; never used for tool authorization. */
+  contextRetrievalQuery?: string
   currentQuote?: {
     fileName: string
     startLine: number
@@ -60,10 +56,6 @@ export interface AgentHandlerConfig {
   getState?: () => AgentState
   setState?: (patch: Partial<AgentState>) => void
   resetState?: () => void
-}
-
-function getBaseToolName(toolName: string) {
-  return toolName.includes('__') ? toolName.split('__').pop()! : toolName
 }
 
 function formatToolLabel(toolName?: string) {
@@ -115,10 +107,6 @@ export class AgentHandler {
   private readonly stateBatcher = createAgentStateBatcher((patch) => {
     this.patchAgentState(patch)
   })
-  // 周期性 checkpoint（崩溃恢复）：每 N 个 iteration 自动保存恢复点
-  private currentInput?: string
-  private lastCheckpointIteration = 0
-  private static readonly CHECKPOINT_EVERY_ITERATIONS = 3
 
   constructor(config: AgentHandlerConfig) {
     this.config = config
@@ -167,37 +155,6 @@ export class AgentHandler {
       || event.type === 'thought.updated'
       || event.type === 'final'
       || event.type === 'final.answer.rendered'
-  }
-
-  /**
-   * 周期性保存崩溃恢复点。与 enhanced-resume 的「中断快照」互补：那里只在
-   * user_stop/error/timeout 时保存，进程崩溃/断电会丢失运行中状态；这里在每个
-   * iteration 边界自动落盘，崩溃后能恢复到最近的 iteration。
-   * fire-and-forget：写盘失败不影响主流程。
-   */
-  private async maybeCheckpoint() {
-    const store = useChatStore.getState()
-    const iteration = store.agentState.currentIteration
-    if (iteration <= 0) return
-    if (iteration - this.lastCheckpointIteration < AgentHandler.CHECKPOINT_EVERY_ITERATIONS) return
-    this.lastCheckpointIteration = iteration
-
-    const runId = store.agentState.agentRunId
-    if (!runId || !this.currentInput) return
-    try {
-      const snapshot = new SnapshotManager().createSnapshot(
-        runId,
-        this.currentInput,
-        store.agentState.completedSteps || [],
-        store.agentState.toolCalls || [],
-        store.agentState.agentEvents || [],
-        iteration,
-        'periodic',
-      )
-      await persistSnapshot(snapshot)
-    } catch {
-      // checkpoint 失败不影响主流程
-    }
   }
 
   private createActivity(
@@ -523,10 +480,6 @@ export class AgentHandler {
       taskPlan,
     }, !this.isStreamBatchableEvent(event))
     this.config.onEvent?.(event)
-    if (event.type === 'iteration.started') {
-      // 周期性保存崩溃恢复点（fire-and-forget，不阻塞事件处理）
-      void this.maybeCheckpoint()
-    }
   }
 
   async execute(
@@ -541,7 +494,6 @@ export class AgentHandler {
     }
     this.executing = true
 
-    const store = useChatStore.getState()
     const runControl = this.config.runControl
     const runId = runControl?.runId || createAgentRunId('agent')
     this.activeRunId = runId
@@ -550,8 +502,6 @@ export class AgentHandler {
     this.localPartSnapshot = undefined
     this.localAgentEvents = undefined
     this.lastAnswerDeltaContent = ''
-    this.currentInput = userInput
-    this.lastCheckpointIteration = 0
     this.stateBatcher.flush()
     this.resetAgentState()
     this.patchAgentState({
@@ -562,7 +512,7 @@ export class AgentHandler {
     })
 
     const forcedSkillIds = this.normalizeSkillIds(this.config.forcedSkillIds)
-    const routeDecision = classifyAgentTask({
+    const routeDecision = this.config.taskRouteDecision || classifyAgentTask({
       userInput,
       imageCount: imageUrls?.length || 0,
       forcedSkillIds,
@@ -583,7 +533,7 @@ export class AgentHandler {
       })
       await this.persistRunSummary(userInput, directReply, [], false)
       this.config.onFinalAnswerRender?.(directReply)
-      this.config.onComplete?.(directReply, [], false)
+      await this.config.onComplete?.(directReply, [], false)
       this.executing = false
       return directReply
     }
@@ -652,6 +602,7 @@ export class AgentHandler {
       activeSkillMatches: skillMatches,
       forcedSkillIds: forcedActiveSkillIds,
       taskRouteDecision: routeDecision,
+      contextRetrievalQuery: this.config.contextRetrievalQuery,
       contextSections: this.config.contextSections,
       onThought: (thought: string) => {
         const finalAnswerContent = sanitizeVisibleAssistantContent(extractVisibleFinalAnswer(thought) || '')
@@ -777,31 +728,13 @@ export class AgentHandler {
         activity: this.createActivity('Done', 'completed'),
       })
       await this.persistRunSummary(userInput, result, steps, false)
-      this.config.onComplete?.(result, steps, false)
+      await this.config.onComplete?.(result, steps, false)
       this.executing = false
       return result
     } catch (error) {
       // 检查是否是用户终止
       if (error instanceof Error && error.message === 'USER_STOPPED') {
         const steps = this.agent.getSteps()
-        const toolCalls = store.agentState.toolCalls || []
-        const events = store.agentState.agentEvents || []
-
-        // 使用增强的快照管理器保存中断状态
-        try {
-          const snapshot = new SnapshotManager().createSnapshot(
-            store.agentState.agentRunId || '',
-            userInput,
-            steps,
-            toolCalls,
-            events,
-            this.agent.getCurrentIteration(),
-            'user_stop'
-          )
-          await persistSnapshot(snapshot)
-        } catch {
-          // 保存恢复上下文失败不影响主流程
-        }
 
         this.patchAgentState({
           isRunning: false,
@@ -811,7 +744,7 @@ export class AgentHandler {
         })
         await this.persistRunSummary(userInput, '', steps, true)
         // 调用 onComplete，传入空结果和已产生的步骤，标记为已停止
-        this.config.onComplete?.('', steps, true)
+        await this.config.onComplete?.('', steps, true)
         this.executing = false
         return ''
       }
@@ -844,7 +777,6 @@ export class AgentHandler {
           friendlyMessage: errorMessage,
         },
       })
-      this.finishWithErrorState(errorMessage)
       await this.config.onError?.(errorMessage)
       throw error
     } finally {
@@ -881,85 +813,6 @@ export class AgentHandler {
       this.agent.stop()
       // 不立即清空 agent，等待 run 方法中的错误处理完成
       // 不调用 resetAgentState，让 onComplete 回调保存已产生的内容
-    }
-  }
-
-  /**
-   * 从上次中断处恢复执行
-   */
-  async resume(): Promise<string> {
-    try {
-      // 使用增强的快照管理器加载快照
-      const snapshots = await loadPersistedSnapshots()
-      if (snapshots.length === 0) {
-        return ''
-      }
-
-      // 获取最新的快照
-      const latestSnapshot = snapshots.sort((a, b) => b.updatedAt - a.updatedAt)[0]
-
-      // 检查是否可恢复
-      const { canResume, reason } = canResumeSnapshot(latestSnapshot)
-      if (!canResume) {
-        console.warn('[AgentHandler] Cannot resume:', reason)
-        return ''
-      }
-
-      // 构建恢复提示
-      const resumePrompt = buildResumePrompt(latestSnapshot)
-
-      // 使用恢复 prompt 作为上下文执行
-      return await this.execute(latestSnapshot.originalUserInput, resumePrompt)
-    } catch (error) {
-      console.warn('[AgentHandler] Resume failed:', error)
-      return ''
-    }
-  }
-
-  /**
-   * 获取可恢复的快照列表
-   */
-  async getResumableSnapshots(): Promise<Array<{
-    id: string
-    title: string
-    description: string
-    stepCount: number
-    interruptedAt: string
-    canResume: boolean
-    reason?: string
-  }>> {
-    try {
-      const snapshots = await loadPersistedSnapshots()
-      return snapshots.map(snapshot => getResumeSummary(snapshot))
-    } catch {
-      return []
-    }
-  }
-
-  /**
-   * 从指定快照恢复执行
-   */
-  async resumeFromSnapshot(snapshotId: string): Promise<string> {
-    try {
-      const snapshots = await loadPersistedSnapshots()
-      const snapshot = snapshots.find(s => s.id === snapshotId)
-
-      if (!snapshot) {
-        console.warn('[AgentHandler] Snapshot not found:', snapshotId)
-        return ''
-      }
-
-      const { canResume, reason } = canResumeSnapshot(snapshot)
-      if (!canResume) {
-        console.warn('[AgentHandler] Cannot resume:', reason)
-        return ''
-      }
-
-      const resumePrompt = buildResumePrompt(snapshot)
-      return await this.execute(snapshot.originalUserInput, resumePrompt)
-    } catch (error) {
-      console.warn('[AgentHandler] Resume from snapshot failed:', error)
-      return ''
     }
   }
 

@@ -1,6 +1,5 @@
 import { Tool, ToolResult } from '../types'
 import { upsertMemory, getAllMemories, getMemoriesByCategory, deleteMemory, clearAllMemories, Memory } from '@/db/memories'
-import { fetchEmbedding } from '@/lib/ai/embedding'
 import useChatStore from '@/stores/chat'
 
 async function clearMemoryContextCache() {
@@ -144,19 +143,10 @@ Examples:
   ],
   execute: async (params): Promise<ToolResult> => {
     try {
-      // Calculate embedding
-      const embedding = await fetchEmbedding(params.content)
-      if (!embedding) {
-        return {
-          success: false,
-          error: 'Cannot generate vector embedding, please check embedding model configuration',
-        }
-      }
-
-      // Save memory
+      // upsertMemory adds an embedding when available and preserves a lexical
+      // fallback when the app is offline or no embedding model is configured.
       const result = await upsertMemory({
         content: params.content,
-        embedding: JSON.stringify(embedding),
         category: params.category as 'preference' | 'memory' || undefined,
       })
       await clearMemoryContextCache()
@@ -247,18 +237,9 @@ Compared with save_memory, this tool defaults to memory category and appends tra
         ? `${content}\n\n[source-trace] ${traceParts.join(', ')}`
         : content
 
-      const embedding = await fetchEmbedding(content)
-      if (!embedding) {
-        return {
-          success: false,
-          error: '无法生成记忆向量，请检查嵌入模型配置',
-        }
-      }
-
       const category = params.category as 'preference' | 'memory' || 'memory'
       const result = await upsertMemory({
         content: persistedContent,
-        embedding: JSON.stringify(embedding),
         category,
       })
       await clearMemoryContextCache()

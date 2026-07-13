@@ -1,4 +1,5 @@
 import type { Tool, ToolResult } from '../types'
+import { clampNumber } from '@/lib/clamp'
 import { readDir, readTextFile } from '@tauri-apps/plugin-fs'
 import { ensureSafeWorkspaceRelativePath, getFilePathOptions, normalizeWorkspaceRelativePath } from '@/lib/workspace'
 
@@ -70,14 +71,6 @@ const SYMBOL_PATTERNS: Array<{ kind: string; pattern: RegExp }> = [
   { kind: 'markdown_heading', pattern: /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/ },
 ]
 
-function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
-  const parsed = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(parsed)) {
-    return fallback
-  }
-
-  return Math.min(max, Math.max(min, Math.floor(parsed)))
-}
 
 function assertNotAborted(signal?: AbortSignal) {
   signal?.throwIfAborted()

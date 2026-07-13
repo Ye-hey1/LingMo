@@ -11,6 +11,8 @@ export interface ToolPolicyEvaluationInput {
   toolName: string
   category: string
   intentPolicy: IntentPolicy
+  capabilities?: ReadonlyArray<'read' | 'write' | 'delete' | 'execute' | 'network'>
+  params?: Record<string, unknown>
 }
 
 export interface ToolPolicyEvaluationResult {
@@ -33,6 +35,11 @@ export const HIGH_RISK_TOOLS = new Set([
   'clear_chats',
   'clear_all_memories',
   'delete_memory',
+  'creative_canvas_apply_ops',
+  'creative_canvas_delete_nodes',
+  'creative_canvas_cleanup_assets',
+  'canvas_apply_ops',
+  'canvas_delete_nodes',
   'github_unstar_repo',
 ])
 
@@ -65,6 +72,46 @@ export const MEDIUM_RISK_TOOLS = new Set([
   'update_diagram_file',
   'export_drawio_diagram',
   'create_visual_report',
+  'creative_canvas_create_generation_flow',
+  'creative_canvas_create_node',
+  'creative_canvas_create_text_node',
+  'creative_canvas_create_text_nodes',
+  'creative_canvas_create_config_node',
+  'creative_canvas_create_image_prompt_flow',
+  'creative_canvas_generate_text',
+  'creative_canvas_generate_image',
+  'creative_canvas_generate_video',
+  'creative_canvas_generate_audio',
+  'creative_canvas_update_node',
+  'creative_canvas_update_node_text',
+  'creative_canvas_move_nodes',
+  'creative_canvas_resize_node',
+  'creative_canvas_connect_nodes',
+  'creative_canvas_select_nodes',
+  'creative_canvas_set_viewport',
+  'creative_canvas_run_generation',
+  'creative_canvas_insert_asset_into_note',
+  'creative_canvas_recover_jobs',
+  'creative_canvas_retry_generation',
+  'creative_canvas_import_infinite_canvas_json',
+  'canvas_create_node',
+  'canvas_create_text_node',
+  'canvas_create_text_nodes',
+  'canvas_create_config_node',
+  'canvas_create_image_prompt_flow',
+  'canvas_create_generation_flow',
+  'canvas_generate_text',
+  'canvas_generate_image',
+  'canvas_generate_video',
+  'canvas_generate_audio',
+  'canvas_update_node',
+  'canvas_update_node_text',
+  'canvas_move_nodes',
+  'canvas_resize_node',
+  'canvas_connect_nodes',
+  'canvas_select_nodes',
+  'canvas_set_viewport',
+  'canvas_run_generation',
   'safe_write_file',
   'github_star_repo',
   'github_update_star_category',
@@ -109,6 +156,14 @@ export const READ_ONLY_TOOLS = new Set([
   'get_drawio_shape_library',
   'list_visual_report_files',
   'read_visual_report_file',
+  'creative_canvas_get_state',
+  'creative_canvas_get_selection',
+  'creative_canvas_export_snapshot',
+  'creative_canvas_get_tool_schema',
+  'creative_canvas_analyze_asset_cleanup',
+  'canvas_get_state',
+  'canvas_get_selection',
+  'canvas_export_snapshot',
   'read_marks',
   'read_chats',
   'read_tags',
@@ -129,6 +184,7 @@ export const READ_ONLY_TOOLS = new Set([
   'list_reminders',
   'search_knowledge_objects',
   'get_knowledge_object_overview',
+  'get_knowledge_system_health',
   'get_current_note_context',
   // Phase 1 #A/#C 只读工具
   'find_unindexed_notes',
@@ -160,6 +216,7 @@ const fileCreationToolNames = new Set([
   'create_drawio_diagram_from_cells',
   'create_diagram_from_outline',
   'create_visual_report',
+  'creative_canvas_insert_asset_into_note',
 ])
 
 const recoverableWriteToolNames = new Set([
@@ -189,6 +246,49 @@ const intentGatedWriteToolNames = new Set([
   'rename_files_batch',
   'move_files_batch',
   'copy_files_batch',
+  'creative_canvas_apply_ops',
+  'creative_canvas_create_generation_flow',
+  'creative_canvas_create_node',
+  'creative_canvas_create_text_node',
+  'creative_canvas_create_text_nodes',
+  'creative_canvas_create_config_node',
+  'creative_canvas_create_image_prompt_flow',
+  'creative_canvas_generate_text',
+  'creative_canvas_generate_image',
+  'creative_canvas_generate_video',
+  'creative_canvas_generate_audio',
+  'creative_canvas_update_node',
+  'creative_canvas_update_node_text',
+  'creative_canvas_move_nodes',
+  'creative_canvas_resize_node',
+  'creative_canvas_connect_nodes',
+  'creative_canvas_select_nodes',
+  'creative_canvas_set_viewport',
+  'creative_canvas_run_generation',
+  'creative_canvas_insert_asset_into_note',
+  'creative_canvas_recover_jobs',
+  'creative_canvas_retry_generation',
+  'creative_canvas_import_infinite_canvas_json',
+  'canvas_apply_ops',
+  'canvas_create_node',
+  'canvas_create_text_node',
+  'canvas_create_text_nodes',
+  'canvas_create_config_node',
+  'canvas_create_image_prompt_flow',
+  'canvas_create_generation_flow',
+  'canvas_generate_text',
+  'canvas_generate_image',
+  'canvas_generate_video',
+  'canvas_generate_audio',
+  'canvas_update_node',
+  'canvas_update_node_text',
+  'canvas_move_nodes',
+  'canvas_resize_node',
+  'canvas_delete_nodes',
+  'canvas_connect_nodes',
+  'canvas_select_nodes',
+  'canvas_set_viewport',
+  'canvas_run_generation',
   'tag_files',
   'set_note_status',
   'bulk_ensure_frontmatter',
@@ -204,6 +304,7 @@ const writePatterns = [
   /(把|将).*(文件|笔记|目录|文件夹|内容).*(移动|移到|移动到|挪到|放到|放进|放入|归档|分类|整理|复制|拷贝)/,
   /(?:输出|保存|写入|整理成|存成|存为|导出|导出为|生成|创建|新建).{0,20}(?:笔记|文档|文件|markdown|md|pptx|pdf|docx|xlsx)/i,
   /(?:笔记|文档|文件|markdown|md|pptx|pdf|docx|xlsx).{0,20}(?:输出|保存|写入|整理成|存成|存为|导出|生成|创建|新建)/i,
+  /(?:生图|文生图|图生图|图片生成|生成图片|创意画布|无限画布|画布节点|画布素材|导入画布|导入.*json|import.*canvas|image\s*generation|text\s*to\s*image)/i,
   /(?:规划|设计|制定|重新规划|生成|整理).{0,30}(?:攻略|方案|行程|路线|计划|旅游|旅行).{0,24}(?:输出|保存|写入|存成|存为|导出|笔记|文档|文件)/,
   /提醒|通知|定时|闹钟|计时器|倒计时/,
   /生成(文件|笔记|文档|图表|流程图|思维导图|白板|幻灯片|ppt|pdf|docx|xlsx)/,
@@ -324,6 +425,34 @@ export function getBaseToolName(toolName: string): string {
   return separatorIndex === -1 ? toolName : toolName.slice(separatorIndex + 2)
 }
 
+const destructiveActionKeys = new Set(['action', 'operation', 'op', 'type', 'method'])
+const destructiveCollectionKeys = new Set(['actions', 'operations', 'ops'])
+const destructiveActionPattern = /^(?:delete|remove|clear|wipe|purge|destroy)(?:$|[_-]|[A-Z])/i
+
+export function hasDestructiveToolParams(params: Record<string, unknown> | undefined): boolean {
+  if (!params) return false
+
+  const visit = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(visit)
+    if (!value || typeof value !== 'object') return false
+
+    return Object.entries(value as Record<string, unknown>).some(([key, child]) => {
+      const normalizedKey = key.toLowerCase()
+      if (destructiveActionKeys.has(normalizedKey) && typeof child === 'string') {
+        return destructiveActionPattern.test(child)
+      }
+      if (destructiveActionPattern.test(key) && child !== false && child !== null && child !== undefined) {
+        return true
+      }
+      return destructiveCollectionKeys.has(normalizedKey) || typeof child === 'object'
+        ? visit(child)
+        : false
+    })
+  }
+
+  return visit(params)
+}
+
 export function isExecuteTool(toolName: string): boolean {
   const baseName = getBaseToolName(toolName)
   return baseName === 'execute_skill_script'
@@ -414,12 +543,14 @@ export function evaluateIntentAwareToolPolicy(
   input: ToolPolicyEvaluationInput
 ): ToolPolicyEvaluationResult {
   const { toolName, category, intentPolicy } = input
-  const risk = getToolRiskLevel(toolName, category)
   const baseName = getBaseToolName(toolName)
-  const isDestructive = isDestructiveTool(toolName)
-  const isExecute = isExecuteTool(toolName)
-  const isRecoverableWrite = recoverableWriteToolNames.has(toolName) || recoverableWriteToolNames.has(baseName)
-  const isIntentGatedWrite = intentGatedWriteToolNames.has(toolName) || intentGatedWriteToolNames.has(baseName)
+  const capabilities = new Set(input.capabilities || [])
+  const isDestructive = isDestructiveTool(toolName) || capabilities.has('delete') || hasDestructiveToolParams(input.params)
+  const isExecute = isExecuteTool(toolName) || capabilities.has('execute')
+  const risk = isDestructive || isExecute ? 'high' : getToolRiskLevel(toolName, category)
+  const hasDeclaredWrite = capabilities.has('write')
+  const isRecoverableWrite = hasDeclaredWrite || recoverableWriteToolNames.has(toolName) || recoverableWriteToolNames.has(baseName)
+  const isIntentGatedWrite = hasDeclaredWrite || intentGatedWriteToolNames.has(toolName) || intentGatedWriteToolNames.has(baseName)
 
   if (isExecute && !intentPolicy.allowExecute) {
     return {

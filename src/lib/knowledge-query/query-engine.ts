@@ -11,6 +11,9 @@ import type {
 
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 40
+const DEFAULT_TIMEOUT_MS = 8000
+const MIN_TIMEOUT_MS = 500
+const MAX_TIMEOUT_MS = 60000
 
 function normalizeMode(value: unknown): KnowledgeQueryMode {
   return ['auto', 'search', 'current_note', 'evidence', 'graph', 'hybrid'].includes(String(value))
@@ -22,6 +25,14 @@ function normalizeLimit(value: unknown) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LIMIT
   return Math.max(1, Math.min(MAX_LIMIT, Math.floor(parsed)))
+}
+
+function normalizeTimeoutMs(value: unknown) {
+  if (value === 0 || value === '0') return undefined
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return DEFAULT_TIMEOUT_MS
+  if (parsed <= 0) return undefined
+  return Math.max(MIN_TIMEOUT_MS, Math.min(MAX_TIMEOUT_MS, Math.floor(parsed)))
 }
 
 function compact(value: string, maxLength = 180) {
@@ -43,6 +54,61 @@ function shouldRunEvidence(mode: KnowledgeQueryMode, requireEvidence?: boolean) 
 
 function shouldRunGraph(mode: KnowledgeQueryMode, includeGraph?: boolean) {
   return mode === 'graph' || mode === 'hybrid' || includeGraph === true
+}
+
+function traceDuration(startedAt: number) {
+  return Math.max(0, Date.now() - startedAt)
+}
+
+interface KnowledgeQueryBranchResult {
+  trace: KnowledgeQueryTrace
+  warnings?: string[]
+  objects?: KnowledgeQueryResult['objects']
+  currentNoteContext?: KnowledgeQueryResult['currentNoteContext']
+  evidence?: KnowledgeQueryEvidence[]
+  graph?: KnowledgeQueryResult['graph']
+}
+
+function skippedBranch(step: string, detail: string): KnowledgeQueryBranchResult {
+  return {
+    trace: {
+      step,
+      status: 'skipped',
+      detail,
+      durationMs: 0,
+    },
+  }
+}
+
+function timedOutBranch(step: string, timeoutMs: number): KnowledgeQueryBranchResult {
+  return {
+    warnings: [`${step} timed out after ${timeoutMs}ms; returned partial knowledge query results.`],
+    trace: {
+      step,
+      status: 'timed_out',
+      detail: `Timed out after ${timeoutMs}ms`,
+      durationMs: timeoutMs,
+    },
+  }
+}
+
+async function withBranchTimeout(
+  step: string,
+  promise: Promise<KnowledgeQueryBranchResult>,
+  timeoutMs?: number,
+): Promise<KnowledgeQueryBranchResult> {
+  if (!timeoutMs) return await promise
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<KnowledgeQueryBranchResult>(resolve => {
+    timer = setTimeout(() => resolve(timedOutBranch(step, timeoutMs)), timeoutMs)
+  })
+
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 function toEvidence(result: import('./types').KnowledgeQueryEvidenceSource): KnowledgeQueryEvidence {
@@ -74,13 +140,150 @@ function buildSummary(result: Omit<KnowledgeQueryResult, 'summary'>) {
   if (result.warnings.length > 0) {
     parts.push(`${result.warnings.length} warning(s)`)
   }
+  if (result.stats.timedOutBranches.length > 0) {
+    parts.push(`${result.stats.timedOutBranches.length} timed out`)
+  }
+  parts.push(`${result.stats.totalDurationMs}ms`)
   return `Knowledge query "${result.query}" (${result.mode}): ${parts.join('; ')}.`
 }
 
+async function runSearchBranch(
+  input: KnowledgeQueryInput,
+  query: string,
+  limit: number,
+): Promise<KnowledgeQueryBranchResult> {
+  const stepStartedAt = Date.now()
+  try {
+    const search = await searchKnowledgeObjects(query, {
+      includeTypes: input.sourceTypes,
+      includeContentPreview: input.includeContentPreview === true,
+      limit,
+    })
+    return {
+      objects: search.results,
+      warnings: search.warnings,
+      trace: {
+        step: 'search_knowledge_objects',
+        status: 'success',
+        count: search.results.length,
+        durationMs: traceDuration(stepStartedAt),
+      },
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      warnings: [`Knowledge object search failed: ${detail}`],
+      trace: {
+        step: 'search_knowledge_objects',
+        status: 'failed',
+        detail,
+        durationMs: traceDuration(stepStartedAt),
+      },
+    }
+  }
+}
+
+async function runCurrentNoteBranch(
+  input: KnowledgeQueryInput,
+  filePath: string | undefined,
+  limit: number,
+): Promise<KnowledgeQueryBranchResult> {
+  const stepStartedAt = Date.now()
+  try {
+    const currentNoteContext = await getCurrentNoteKnowledgeContext(filePath, {
+      maxRelated: Math.min(limit, 12),
+      includeContentPreview: input.includeContentPreview === true,
+    })
+    return {
+      currentNoteContext,
+      warnings: currentNoteContext.warnings,
+      trace: {
+        step: 'get_current_note_context',
+        status: currentNoteContext.filePath ? 'success' : 'skipped',
+        detail: currentNoteContext.filePath || 'No current note/filePath available',
+        count: currentNoteContext.relatedObjects.length,
+        durationMs: traceDuration(stepStartedAt),
+      },
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      warnings: [`Current note context failed: ${detail}`],
+      trace: {
+        step: 'get_current_note_context',
+        status: 'failed',
+        detail,
+        durationMs: traceDuration(stepStartedAt),
+      },
+    }
+  }
+}
+
+async function runEvidenceBranch(
+  query: string,
+  filePath: string,
+  limit: number,
+): Promise<KnowledgeQueryBranchResult> {
+  const stepStartedAt = Date.now()
+  try {
+    const results = await findEvidenceBlocks({ filePath, query, limit: Math.min(limit, 12) })
+    const evidence = results.map(toEvidence)
+    return {
+      evidence,
+      trace: {
+        step: 'find_evidence_blocks',
+        status: 'success',
+        count: evidence.length,
+        durationMs: traceDuration(stepStartedAt),
+      },
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      warnings: [`Evidence search failed: ${detail}`],
+      trace: {
+        step: 'find_evidence_blocks',
+        status: 'failed',
+        detail,
+        durationMs: traceDuration(stepStartedAt),
+      },
+    }
+  }
+}
+
+async function runGraphBranch(filePath: string): Promise<KnowledgeQueryBranchResult> {
+  const stepStartedAt = Date.now()
+  try {
+    const graph = await getStructuredGraphForFile(filePath, { includeHeadings: true, minConfidence: 0.7 })
+    return {
+      graph,
+      trace: {
+        step: 'get_structured_graph',
+        status: 'success',
+        count: graph.nodes.length + graph.edges.length,
+        durationMs: traceDuration(stepStartedAt),
+      },
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      warnings: [`Graph context failed: ${detail}`],
+      trace: {
+        step: 'get_structured_graph',
+        status: 'failed',
+        detail,
+        durationMs: traceDuration(stepStartedAt),
+      },
+    }
+  }
+}
+
 export async function queryKnowledge(input: KnowledgeQueryInput): Promise<KnowledgeQueryResult> {
+  const startedAt = Date.now()
   const query = String(input.query || '').trim()
   const mode = normalizeMode(input.mode)
   const limit = normalizeLimit(input.limit)
+  const timeoutMs = normalizeTimeoutMs(input.timeoutMs)
   const filePath = typeof input.filePath === 'string' && input.filePath.trim() ? input.filePath.trim() : undefined
   const warnings: string[] = []
   const trace: KnowledgeQueryTrace[] = []
@@ -88,6 +291,7 @@ export async function queryKnowledge(input: KnowledgeQueryInput): Promise<Knowle
   let currentNoteContext: KnowledgeQueryResult['currentNoteContext']
   let evidence: KnowledgeQueryEvidence[] = []
   let graph: KnowledgeQueryResult['graph']
+  const branchPromises: Array<Promise<KnowledgeQueryBranchResult>> = []
 
   if (!query) {
     return {
@@ -97,86 +301,79 @@ export async function queryKnowledge(input: KnowledgeQueryInput): Promise<Knowle
       objects: [],
       evidence: [],
       warnings: ['Missing query.'],
-      trace: [{ step: 'validate_query', status: 'failed', detail: 'Missing query' }],
+      trace: [{ step: 'validate_query', status: 'failed', detail: 'Missing query', durationMs: 0 }],
+      stats: {
+        startedAt,
+        completedAt: Date.now(),
+        totalDurationMs: traceDuration(startedAt),
+        branchDurations: { validate_query: 0 },
+        timeoutMs,
+        timedOutBranches: [],
+      },
     }
   }
 
   if (shouldRunSearch(mode)) {
-    try {
-      const search = await searchKnowledgeObjects(query, {
-        includeTypes: input.sourceTypes,
-        includeContentPreview: input.includeContentPreview === true,
-        limit,
-      })
-      objects.push(...search.results)
-      warnings.push(...search.warnings)
-      trace.push({ step: 'search_knowledge_objects', status: 'success', count: search.results.length })
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      warnings.push(`Knowledge object search failed: ${detail}`)
-      trace.push({ step: 'search_knowledge_objects', status: 'failed', detail })
-    }
+    branchPromises.push(withBranchTimeout('search_knowledge_objects', runSearchBranch(input, query, limit), timeoutMs))
   } else {
-    trace.push({ step: 'search_knowledge_objects', status: 'skipped', detail: `mode=${mode}` })
+    branchPromises.push(Promise.resolve(skippedBranch('search_knowledge_objects', `mode=${mode}`)))
   }
 
   if (shouldRunCurrentNote(mode, filePath)) {
-    try {
-      currentNoteContext = await getCurrentNoteKnowledgeContext(filePath, {
-        maxRelated: Math.min(limit, 12),
-        includeContentPreview: input.includeContentPreview === true,
-      })
-      warnings.push(...currentNoteContext.warnings)
-      trace.push({
-        step: 'get_current_note_context',
-        status: currentNoteContext.filePath ? 'success' : 'skipped',
-        detail: currentNoteContext.filePath || 'No current note/filePath available',
-        count: currentNoteContext.relatedObjects.length,
-      })
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      warnings.push(`Current note context failed: ${detail}`)
-      trace.push({ step: 'get_current_note_context', status: 'failed', detail })
-    }
+    branchPromises.push(withBranchTimeout('get_current_note_context', runCurrentNoteBranch(input, filePath, limit), timeoutMs))
   } else {
-    trace.push({ step: 'get_current_note_context', status: 'skipped', detail: filePath ? `mode=${mode}` : 'No filePath provided' })
+    branchPromises.push(Promise.resolve(skippedBranch('get_current_note_context', filePath ? `mode=${mode}` : 'No filePath provided')))
   }
 
   if (shouldRunEvidence(mode, input.requireEvidence)) {
     if (!filePath) {
-      warnings.push('Evidence search skipped: no filePath provided.')
-      trace.push({ step: 'find_evidence_blocks', status: 'skipped', detail: 'No filePath provided' })
+      branchPromises.push(Promise.resolve({
+        ...skippedBranch('find_evidence_blocks', 'No filePath provided'),
+        warnings: ['Evidence search skipped: no filePath provided.'],
+      }))
     } else {
-      try {
-        const results = await findEvidenceBlocks({ filePath, query, limit: Math.min(limit, 12) })
-        evidence = results.map(toEvidence)
-        trace.push({ step: 'find_evidence_blocks', status: 'success', count: evidence.length })
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
-        warnings.push(`Evidence search failed: ${detail}`)
-        trace.push({ step: 'find_evidence_blocks', status: 'failed', detail })
-      }
+      branchPromises.push(withBranchTimeout('find_evidence_blocks', runEvidenceBranch(query, filePath, limit), timeoutMs))
     }
   } else {
-    trace.push({ step: 'find_evidence_blocks', status: 'skipped', detail: `mode=${mode}; requireEvidence=${input.requireEvidence === true}` })
+    branchPromises.push(Promise.resolve(skippedBranch('find_evidence_blocks', `mode=${mode}; requireEvidence=${input.requireEvidence === true}`)))
   }
 
   if (shouldRunGraph(mode, input.includeGraph)) {
     if (!filePath) {
-      warnings.push('Graph context skipped: no filePath provided.')
-      trace.push({ step: 'get_structured_graph', status: 'skipped', detail: 'No filePath provided' })
+      branchPromises.push(Promise.resolve({
+        ...skippedBranch('get_structured_graph', 'No filePath provided'),
+        warnings: ['Graph context skipped: no filePath provided.'],
+      }))
     } else {
-      try {
-        graph = await getStructuredGraphForFile(filePath, { includeHeadings: true, minConfidence: 0.7 })
-        trace.push({ step: 'get_structured_graph', status: 'success', count: graph.nodes.length + graph.edges.length })
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
-        warnings.push(`Graph context failed: ${detail}`)
-        trace.push({ step: 'get_structured_graph', status: 'failed', detail })
-      }
+      branchPromises.push(withBranchTimeout('get_structured_graph', runGraphBranch(filePath), timeoutMs))
     }
   } else {
-    trace.push({ step: 'get_structured_graph', status: 'skipped', detail: `mode=${mode}; includeGraph=${input.includeGraph === true}` })
+    branchPromises.push(Promise.resolve(skippedBranch('get_structured_graph', `mode=${mode}; includeGraph=${input.includeGraph === true}`)))
+  }
+
+  const branchResults = await Promise.all(branchPromises)
+  for (const result of branchResults) {
+    trace.push(result.trace)
+    if (result.warnings) warnings.push(...result.warnings)
+    if (result.objects) objects.push(...result.objects)
+    if (result.currentNoteContext) currentNoteContext = result.currentNoteContext
+    if (result.evidence) evidence = result.evidence
+    if (result.graph) graph = result.graph
+  }
+
+  const completedAt = Date.now()
+  const stats = {
+    startedAt,
+    completedAt,
+    totalDurationMs: completedAt - startedAt,
+    branchDurations: trace.reduce<Record<string, number>>((acc, item) => {
+      acc[item.step] = item.durationMs ?? 0
+      return acc
+    }, {}),
+    timeoutMs,
+    timedOutBranches: trace
+      .filter(item => item.status === 'timed_out')
+      .map(item => item.step),
   }
 
   const partial = {
@@ -188,6 +385,7 @@ export async function queryKnowledge(input: KnowledgeQueryInput): Promise<Knowle
     graph,
     warnings: Array.from(new Set(warnings.map(item => compact(item, 260)))),
     trace,
+    stats,
   }
 
   return {

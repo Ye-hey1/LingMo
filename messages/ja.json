@@ -976,22 +976,33 @@
     },
     "imageMethod": {
       "title": "画像認識",
-      "desc": "ここでは、画像認識に関する設定を配置できます。OCR と VLM の二つの方法をサポートします。",
+      "desc": "画像はデフォルトでシステム OCR により認識されます。VLM を設定した場合は先に VLM を試し、失敗時に OCR へ戻ります。",
       "enable": {
         "title": "画像認識を有効にする",
         "desc": "有効にすると、スクリーンショット記録と画像記録時に自動的に画像認識が行われます。無効にすると、画像認識がスキップされます。"
       },
-      "setPrimary": "設定をデフォルト",
-      "isPrimary": "{type} がデフォルト設定",
+      "setPrimary": "既定ルートに設定",
+      "isPrimary": "{type} 既定ルート",
       "ocr": {
-        "title": "OCR",
+        "title": "システム OCR",
+        "desc": "現在のシステムが提供する OCR 機能で画像内の文字を認識します。システム OCR が利用できない場合は互換 OCR に戻ります。",
+        "noProviders": "このプラットフォームには利用可能な内蔵 OCR エンジンがありません。互換 OCR を使用します。",
+        "checking": "確認中",
+        "ready": "利用可能",
+        "unavailable": "利用不可",
+        "provider": "エンジン",
+        "unknownVersion": "不明なバージョン",
         "languagePacks": "言語パック",
-        "checkModels": "ここでは、すべてのモデルを検索できます。",
-        "modelInstruction": "逗号分隔、例如：eng,chi_sim"
+        "languageDesc": "システム OCR の言語設定です。従来の Tesseract 言語コードにも対応します。",
+        "languagePlaceholder": "例：zh-Hans,en-US または eng,chi_sim",
+        "checkModels": "Tesseract 言語パックを見る",
+        "modelInstruction": "カンマ区切りで指定します。例：zh-Hans,en-US または eng,chi_sim。Windows では対応する OCR 言語パックをシステムにインストールしてください。"
       },
       "vlm": {
-        "title": "視覚的言語モデル",
-        "desc": "視覚的言語モデルを使用して画像内容を認識します。"
+        "title": "VLM 拡張（任意）",
+        "desc": "視覚言語モデルを選択すると、画像は先に VLM で認識されます。モデルが利用できない、失敗する、または内容が返らない場合は OCR に自動的に戻ります。",
+        "noModel": "VLM を使用しない",
+        "clearModel": "VLM モデルをクリア"
       }
     },
     "backupSync": {
@@ -3401,5 +3412,40 @@
     "sourceDesc": "複数のノートをドロップ、AIが統合して知識ポイントを抽出します",
     "addToSource": "現在追加",
     "clear": "クリア"
+  },
+  "creativeCanvas": {
+    "title": "クリエイティブキャンバス",
+    "sendSelection": "クリエイティブキャンバスへ送信",
+    "selectionRequiredTitle": "先にテキストを選択してください",
+    "selectionRequiredDescription": "選択範囲を画像生成プロンプトとして使用します。",
+    "openedTitle": "クリエイティブキャンバスを開きました",
+    "openedDescription": "選択範囲を画像生成プロンプトに入力しました。",
+    "sendFailed": "送信できませんでした",
+    "canvasName": "無限キャンバス",
+    "refresh": "更新",
+    "prompt": { "placeholder": "生成したい画像を入力", "create": "フローを作成", "createAndRun": "作成して生成", "required": "先にプロンプトを入力してください" },
+    "project": { "section": "キャンバス", "new": "新規キャンバス", "defaultName": "無限キャンバス {number}", "delete": "キャンバスを削除", "deleteTitle": "このキャンバスを削除しますか？", "deleteDescription": "「{title}」のノード、ジョブ、生成素材が削除されます。この操作は取り消せません。", "deleteConfirm": "キャンバスを削除", "deleteSuccess": "キャンバスを削除しました", "deleteFailed": "キャンバスを削除できませんでした", "cancel": "キャンセル", "empty": "キャンバスがありません。新しいキャンバスを作成してください。" },
+    "model": { "section": "キャンバスモデル", "inheritGlobal": "グローバルモデルを使用", "inheritCanvas": "キャンバスモデルを使用", "search": "画像モデルを検索", "empty": "利用可能な画像モデルがありません", "manage": "モデルとプロバイダーを管理", "node": "ノードモデル" },
+    "appearance": { "section": "キャンバス表示", "snap": "スナップ", "snapHint": "移動時にグリッドへスナップ", "grid": "グリッド", "dots": "ドット", "blank": "無地", "minimap": "ミニマップ", "toggleMinimap": "ミニマップの表示切替" },
+    "assets": { "section": "素材", "cleanup": "未使用素材を整理", "empty": "生成画像はここに表示されます", "add": "キャンバスに追加", "insert": "ノートに挿入", "import": "参照画像を読込", "importSuccess": "参照画像を読み込みました", "importSuccessDescription": "{count} 枚の画像をキャンバスに追加しました。", "importFailed": "参照画像を読み込めませんでした", "insertSuccess": "画像を挿入しました", "insertFailed": "画像を挿入できませんでした", "addSuccess": "参照画像ノードを追加しました", "addFailed": "素材を追加できませんでした" },
+    "jobs": { "section": "ジョブ", "recover": "中断ジョブを復元", "empty": "生成ジョブはありません", "retry": "再試行", "retrySuccess": "生成を再開しました", "retryFailed": "生成を再試行できませんでした", "idle": "待機中", "queued": "待機列", "running": "実行中", "succeeded": "完了", "failed": "失敗", "cancelled": "キャンセル済み", "stale": "中断" },
+    "toolbar": { "undo": "元に戻す", "redo": "やり直す", "select": "選択と移動", "text": "テキストノード", "box": "範囲選択", "importImage": "参照画像を読込", "importJson": "infinite-canvas JSONを読込", "run": "生成を実行", "runMany": "選択した生成を実行", "delete": "削除", "duplicate": "複製", "export": "スナップショットをコピー", "fit": "全ノードに合わせる", "zoomOut": "縮小", "zoomIn": "拡大" },
+    "assistant": { "title": "キャンバス操作", "welcome": "ノードを選択するか、キャンバスへの指示を入力してください。", "help": "キャンバス概要の確認、選択ノードの実行、中断ジョブの復元、整理可能な素材の確認を行います。AI チャットではなく、ローカルのキャンバスコマンドを実行します。", "actions": "キャンバスのクイック操作", "status": "{nodes} ノード · {selected} 選択中 · {running} 実行中", "result": "最新の操作結果", "summary": "概要を確認", "run": "選択を実行", "recover": "ジョブを復元", "cleanup": "素材を確認", "placeholder": "キャンバスコマンドを入力", "send": "コマンドを実行", "summarySelected": "{count} 個のノードを選択：{names}", "summaryNoSelection": "ノードは選択されていません", "summaryCanvas": "{title}：{nodes} ノード、{edges} 接続、{assets} 素材。", "summaryRunning": "{count} 件のジョブを実行中です。", "summaryNoRunning": "実行中のジョブはありません。", "summaryStale": "{count} 件の中断ジョブを再試行できます。", "ranSelected": "選択した {count} ノードを実行しました。", "createdFlow": "画像生成フローを作成しました。", "commands": { "summary": "キャンバス概要を確認", "run": "選択ノードを実行", "recover": "中断ジョブを復元", "cleanup": "整理可能な素材を確認" } },
+    "inspector": { "title": "ノードプロパティ", "none": "ノード未選択", "nodeTitle": "タイトル", "width": "幅", "height": "高さ", "status": "状態", "insertCurrentImage": "現在の画像をノートに挿入", "edges": "入力 / 出力", "input": "入力", "output": "出力", "deleteEdge": "接続を削除", "noEdges": "接続なし", "unknownNode": "不明なノード", "help": "ノードを選択してパラメータ編集、生成、画像挿入を行えます。" },
+    "nodes": { "imageEmpty": "画像素材なし", "imageAlt": "キャンバス画像", "textPlaceholder": "シーン、スタイル、構図、制約を入力...", "configPlaceholder": "プロンプトを上書き。既定では上流テキストを使用", "reserved": "予約済みノードタイプ" },
+    "selection": { "required": "先にノードを選択してください" },
+    "snapshot": { "copied": "キャンバスのスナップショットをコピーしました" },
+    "recovery": { "restored": "{count} 件の中断ジョブを復元しました。", "none": "復元する中断ジョブはありません。", "completed": "復元チェックが完了しました" },
+    "cleanup": { "analysis": "未使用素材 {assets} 件と孤立ファイル {files} 件を削除し、約 {bytes} を解放できます。", "analysisCompleted": "素材整理の分析が完了しました", "emptyTitle": "整理不要", "emptyDescription": "未使用素材や孤立ファイルはありません。", "confirm": "未使用素材 {assets} 件と孤立ファイル {files} 件を削除して約 {bytes} を解放しますか？", "result": "素材 {assets} 件、ファイル {files} 件を削除しました。{failures}", "failures": "{count} 件失敗。", "completed": "素材整理が完了しました" },
+    "jsonImport": { "completed": "キャンバス JSON を読み込みました", "summary": "{nodes} ノード、{edges} 接続。", "warnings": "警告付きで読み込みました：\n{warnings}", "failed": "JSON を読み込めませんでした" },
+    "ports": { "connectTo": "{title} に接続", "input": "入力ポート", "connectFrom": "{title} から接続を作成", "output": "ドラッグして接続", "resize": "{title} のサイズ変更", "resizeHint": "ドラッグしてサイズ変更" },
+    "context": { "text": "プロンプトノードを追加", "config": "画像設定を追加", "image": "参照画像を読込", "run": "選択ノードを実行", "delete": "選択ノードを削除" },
+    "actions": {
+      "cancel": "キャンセル"
+    },
+    "generation": {
+      "cancelled": "生成をキャンセルしました",
+      "cancelRequested": "生成をキャンセルしています"
+    }
   }
 }

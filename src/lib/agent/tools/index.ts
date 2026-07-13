@@ -27,6 +27,7 @@ import { reminderTools } from './reminder-tools'
 import { toolSearchTools } from './tool-search-tools'
 import { gitTools } from './git-tools'
 import { codeNavigationTools } from './code-navigation-tools'
+import { creativeCanvasTools } from './creative-canvas-tools'
 import { formatMcpToolError, formatMcpToolErrorMessage, mcpErrorKindToToolErrorKind } from '../../mcp/error-message'
 
 export const allTools: Tool[] = [
@@ -53,6 +54,7 @@ export const allTools: Tool[] = [
   ...githubStarTools,
   ...githubTrendingTools,
   ...reminderTools,
+  ...creativeCanvasTools,
   ...toolSearchTools,
   ...gitTools,
   ...codeNavigationTools,
@@ -366,6 +368,7 @@ export * from './visual-report-tools'
 export * from './github-star-tools'
 export * from './github-trending-tools'
 export * from './reminder-tools'
+export * from './creative-canvas-tools'
 export * from './tool-search-tools'
 export * from './git-tools'
 export * from './code-navigation-tools'

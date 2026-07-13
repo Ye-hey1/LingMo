@@ -7,7 +7,6 @@ import type {
 } from '@/db/agent'
 import type { DistillRecommendation, DreamCandidate } from './dream'
 import type { AgentRunSummary } from './resume'
-import { fetchEmbedding } from '@/lib/ai/embedding'
 
 export interface GenerateAgentMemoryCandidatesResult {
   candidates: AgentMemoryCandidateRecord[]
@@ -266,13 +265,8 @@ export async function approveAgentMemoryCandidate(
   }
 
   const content = buildMemoryContent(candidate)
-  const embedding = await fetchEmbedding(candidate.content)
-  if (!embedding) {
-    throw new Error('无法生成候选记忆向量，请检查嵌入模型配置')
-  }
   const result = await upsertMemory({
     content,
-    embedding: JSON.stringify(embedding),
     category: candidate.kind === 'preference' ? 'preference' : 'memory',
   })
   await clearMemoryContextCache()

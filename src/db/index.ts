@@ -8,7 +8,7 @@ type ExecuteArgs = Parameters<Database['execute']>
 interface DbRuntimeState {
   dbPromise: Promise<Database> | null
   writeQueue: Promise<unknown>
-  transactionMutexPromise: Promise<void>
+  batchMutexPromise: Promise<void>
 }
 
 const globalDbState = globalThis as typeof globalThis & {
@@ -18,8 +18,9 @@ const globalDbState = globalThis as typeof globalThis & {
 const dbRuntimeState = globalDbState.__lingmoDbRuntimeState__ ??= {
   dbPromise: null,
   writeQueue: Promise.resolve(),
-  transactionMutexPromise: Promise.resolve(),
+  batchMutexPromise: Promise.resolve(),
 }
+dbRuntimeState.batchMutexPromise ??= Promise.resolve()
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message
@@ -45,21 +46,6 @@ function getErrorMessage(error: unknown) {
 function isDatabaseLockedError(error: unknown) {
   const message = getErrorMessage(error)
   return /database is locked|database table is locked|SQLITE_BUSY|code:\s*5/i.test(message)
-}
-
-function isTransactionControlSql(sql: unknown) {
-  if (typeof sql !== 'string') return false
-  return /^(BEGIN|COMMIT|ROLLBACK)(\s|;|$)/i.test(sql.trim())
-}
-
-function isTransactionAlreadyActiveError(error: unknown) {
-  const message = getErrorMessage(error)
-  return /cannot start a transaction within a transaction/i.test(message)
-}
-
-function isNoActiveTransactionError(error: unknown) {
-  const message = getErrorMessage(error)
-  return /no transaction is active/i.test(message)
 }
 
 function sleep(ms: number) {
@@ -93,9 +79,6 @@ function withDatabaseBusyRetry(db: Database): Database {
   }) as Database['select']
 
   db.execute = ((...args: ExecuteArgs) => {
-    if (isTransactionControlSql(args[0])) {
-      return originalExecute(...args)
-    }
     return runWithDatabaseLockRetry(() => originalExecute(...args))
   }) as Database['execute']
 
@@ -137,63 +120,29 @@ export function serializedWrite<T>(fn: () => Promise<T>): Promise<T> {
   return task
 }
 
-async function rollbackActiveTransaction(db: Database) {
-  try {
-    await runWithDatabaseLockRetry(() => db.execute('ROLLBACK'))
-  } catch (rollbackError) {
-    if (!isNoActiveTransactionError(rollbackError)) {
-      console.error('[DB] rollback critical failure:', rollbackError)
-      throw rollbackError
-    }
-  }
-}
-
-async function beginTransaction(db: Database, beginSql: string) {
-  try {
-    await runWithDatabaseLockRetry(() => db.execute(beginSql))
-  } catch (error) {
-    if (!isTransactionAlreadyActiveError(error)) {
-      throw error
-    }
-
-    console.warn('[DB] stale transaction detected; rolling back before retrying BEGIN')
-    await rollbackActiveTransaction(db)
-    await runWithDatabaseLockRetry(() => db.execute(beginSql))
-  }
-}
-
-export async function runDbTransaction<T>(
-  db: Database,
+/**
+ * Runs pooled database work sequentially within this webview.
+ * This is not an atomic database transaction: tauri-plugin-sql may use a
+ * different pooled connection for every execute/select call.
+ */
+export async function runDbBatch<T>(
+  _db: Database,
   fn: () => Promise<T>,
-  beginSql = 'BEGIN IMMEDIATE',
 ): Promise<T> {
-  let releaseTransaction = () => {}
+  let releaseBatch = () => {}
   const currentMutex = new Promise<void>((resolve) => {
-    releaseTransaction = resolve
+    releaseBatch = resolve
   })
 
-  const previousMutex = dbRuntimeState.transactionMutexPromise
-  dbRuntimeState.transactionMutexPromise = currentMutex
+  const previousMutex = dbRuntimeState.batchMutexPromise
+  dbRuntimeState.batchMutexPromise = currentMutex
 
   await previousMutex.catch(() => {})
 
-  let transactionStarted = false
-
   try {
-    await beginTransaction(db, beginSql)
-    transactionStarted = true
-
-    const result = await fn()
-    await runWithDatabaseLockRetry(() => db.execute('COMMIT'))
-    transactionStarted = false
-    return result
-  } catch (error) {
-    if (transactionStarted) {
-      await rollbackActiveTransaction(db)
-    }
-    throw error
+    return await fn()
   } finally {
-    releaseTransaction()
+    releaseBatch()
   }
 }
 
@@ -219,6 +168,8 @@ export async function initAllDatabases() {
   const { initKnowledgeObjectsDb } = await import('./knowledge-objects')
   const { initStructuredKnowledgeDb } = await import('./structured-knowledge')
   const { initKnowledgeGraphDb } = await import('./knowledge-graph')
+  const { initCreativeCanvasDb } = await import('./creative-canvas')
+  const { initLinkPipelineDb } = await import('./link-pipeline')
 
   // 先确保基础表存在，再做依赖这些表的初始化。
   await initChatsDb()
@@ -238,6 +189,8 @@ export async function initAllDatabases() {
   await initGithubStarsDb()
   await initAiHotspotsDb()
   await initAgentDb()
+  await initCreativeCanvasDb()
+  await initLinkPipelineDb()
   // KnowledgeObject 是统一索引层，依赖各原表已存在，放最后
   await initKnowledgeObjectsDb()
   await initStructuredKnowledgeDb()

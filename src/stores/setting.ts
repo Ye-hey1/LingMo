@@ -37,6 +37,8 @@ const MODEL_SELECTION_KEYS = [
   'embeddingModel',
   'rerankingModel',
   'imageMethodModel',
+  'imageGenerationModel',
+  'videoGenerationModel',
   'audioModel',
   'sttModel',
   'condenseModel',
@@ -70,6 +72,8 @@ const DEFAULT_MODEL_SLOTS: Array<{
   { storeKey: 'embeddingModel', predicate: isEmbeddingModel },
   { storeKey: 'rerankingModel', predicate: isRerankModel },
   { storeKey: 'imageMethodModel', predicate: isVisionChatModel },
+  { storeKey: 'imageGenerationModel', predicate: isImageModel },
+  { storeKey: 'videoGenerationModel', predicate: isVideoModel },
   { storeKey: 'audioModel', predicate: isTtsModel },
   { storeKey: 'sttModel', predicate: isSttModel },
 ]
@@ -91,6 +95,14 @@ function isVisionChatModel(
   config: AiConfig
 ) {
   return isChatModel(model) && (model.supportsImageInput === true || config.supportsImageInput === true)
+}
+
+function isImageModel(model: { modelType?: string }) {
+  return model.modelType === 'image'
+}
+
+function isVideoModel(model: { modelType?: string }) {
+  return model.modelType === 'video'
 }
 
 function isTtsModel(model: { modelType?: string }) {
@@ -323,6 +335,12 @@ interface SettingState {
 
   imageMethodModel: string
   setImageMethodModel: (imageMethodModel: string) => Promise<void>
+
+  imageGenerationModel: string
+  setImageGenerationModel: (imageGenerationModel: string) => Promise<void>
+
+  videoGenerationModel: string
+  setVideoGenerationModel: (videoGenerationModel: string) => Promise<void>
 
   audioModel: string
   setAudioModel: (audioModel: string) => Promise<void>
@@ -816,6 +834,24 @@ const useSettingStore = create<SettingState>((set, get) => ({
     set({ imageMethodModel })
   },
 
+  imageGenerationModel: '',
+  setImageGenerationModel: async (imageGenerationModel) => {
+    if (get().imageGenerationModel === imageGenerationModel) return
+    const store = await Store.load('store.json')
+    await store.set('imageGenerationModel', imageGenerationModel)
+    await store.save()
+    set({ imageGenerationModel })
+  },
+
+  videoGenerationModel: '',
+  setVideoGenerationModel: async (videoGenerationModel) => {
+    if (get().videoGenerationModel === videoGenerationModel) return
+    const store = await Store.load('store.json')
+    await store.set('videoGenerationModel', videoGenerationModel)
+    await store.save()
+    set({ videoGenerationModel })
+  },
+
   audioModel: '',
   setAudioModel: async (audioModel) => {
     if (get().audioModel === audioModel) return
@@ -1283,7 +1319,7 @@ const useSettingStore = create<SettingState>((set, get) => ({
     await store.set('enableImageRecognition', enable)
     await store.save()
   },
-  primaryImageMethod: 'vlm',
+  primaryImageMethod: 'ocr',
   setPrimaryImageMethod: async (method: 'ocr' | 'vlm') => {
     set({ primaryImageMethod: method })
     const store = await Store.load('store.json');

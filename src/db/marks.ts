@@ -1,4 +1,4 @@
-import { getDb, runDbTransaction, serializedWrite } from './index'
+import { getDb, runDbBatch, serializedWrite } from './index'
 import { BaseDirectory, exists, mkdir, remove } from '@tauri-apps/plugin-fs'
 import { insertActivityEventWithDb } from './activity'
 import { truncateActivityText } from '@/lib/activity/events'
@@ -18,6 +18,8 @@ export interface Mark {
   processed?: 0 | 1
   processedAt?: number | null
   pinned?: 0 | 1
+  captureJobId?: string | null
+  sourceIdentity?: string | null
 }
 
 const HTTP_URL_PATTERN = /^https?:\/\//i
@@ -128,6 +130,10 @@ export async function initMarksDb() {
   await ensureMarksColumn('processedAt', 'integer default null')
   await ensureMarksColumn('deletedAt', 'integer default null')
   await ensureMarksColumn('pinned', 'integer default 0')
+  await ensureMarksColumn('captureJobId', 'text default null')
+  await ensureMarksColumn('sourceIdentity', 'text default null')
+  await db.execute('create unique index if not exists idx_marks_capture_job_unique on marks(captureJobId) where captureJobId is not null')
+  await db.execute('create unique index if not exists idx_marks_source_identity_unique on marks(sourceIdentity) where sourceIdentity is not null')
 
   await cleanupExpiredTrash()
 }
@@ -135,6 +141,146 @@ export async function initMarksDb() {
 export async function getMarks(id: number) {
   const db = await getDb()
   return await db.select<Mark[]>('select * from marks where tagId = $1 order by pinned desc, createdAt desc', [id])
+}
+
+export async function getMarkById(id: number): Promise<Mark | null> {
+  const db = await getDb()
+  const rows = await db.select<Mark[]>('select * from marks where id = $1 limit 1', [id])
+  return rows[0] || null
+}
+
+export async function getMarkByCaptureJobId(captureJobId: string): Promise<Mark | null> {
+  const db = await getDb()
+  const rows = await db.select<Mark[]>('select * from marks where captureJobId = $1 limit 1', [captureJobId])
+  return rows[0] || null
+}
+
+export async function persistCapturedLinkMarkIfOwned(input: {
+  jobId: string
+  owner: string
+  mark: Pick<Mark, 'tagId' | 'type' | 'url'> & Partial<Pick<Mark, 'content' | 'desc' | 'processed' | 'processedAt'>>
+  upsertByUrl?: boolean
+  sourceIdentity?: string
+  existingContentMarker?: string
+}): Promise<{ mark: Mark; created: boolean; updated: boolean } | null> {
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    const createdAt = Date.now()
+    let rows = await db.select<Mark[]>(
+      `select marks.* from marks
+       inner join link_jobs on link_jobs.id = marks.captureJobId
+       where marks.captureJobId = $1
+         and link_jobs.status = 'running'
+         and link_jobs.lease_owner = $2
+       limit 1`,
+      [input.jobId, input.owner],
+    )
+    let mark = rows[0]
+    let created = false
+    let updated = false
+
+    if (!mark && input.upsertByUrl) {
+      const updateResult = await db.execute(
+        `update marks set
+           tagId = $1, type = $2, content = $3, url = $4, desc = $5,
+           processed = $6, processedAt = $7, captureJobId = $8, sourceIdentity = $9
+         where id = (
+           select id from marks
+           where type = $2
+             and deleted = 0
+             and (
+               ($9 is not null and sourceIdentity = $9)
+               or (
+                 lower(rtrim(coalesce(url, ''), '/')) = lower(rtrim($4, '/'))
+                 and ($11 is null or instr(coalesce(content, ''), $11) > 0)
+               )
+             )
+           order by case when sourceIdentity = $9 then 0 else 1 end,
+                    createdAt desc, id desc
+           limit 1
+         )
+           and exists (
+             select 1 from link_jobs
+             where id = $8 and status = 'running' and lease_owner = $10
+           )`,
+        [
+          input.mark.tagId, input.mark.type, input.mark.content ?? null, input.mark.url,
+          input.mark.desc ?? null, input.mark.processed ?? 0, input.mark.processedAt ?? null,
+          input.jobId, input.sourceIdentity || null, input.owner,
+          input.existingContentMarker || null,
+        ],
+      )
+      updated = updateResult.rowsAffected > 0
+    }
+
+    if (!mark && !updated) {
+      const insertResult = await db.execute(
+        `insert into marks
+         (tagId, type, content, url, desc, createdAt, deleted, processed, processedAt, captureJobId, sourceIdentity)
+         select $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10
+         where exists (
+           select 1 from link_jobs
+           where id = $9 and status = 'running' and lease_owner = $11
+         )
+         on conflict do nothing`,
+        [
+          input.mark.tagId, input.mark.type, input.mark.content ?? null, input.mark.url,
+          input.mark.desc ?? null, createdAt, input.mark.processed ?? 0,
+          input.mark.processedAt ?? null, input.jobId, input.sourceIdentity || null, input.owner,
+        ],
+      )
+      created = insertResult.rowsAffected > 0
+    }
+
+    if (!mark) {
+      rows = await db.select<Mark[]>(
+        `select marks.* from marks
+         inner join link_jobs on link_jobs.id = marks.captureJobId
+         where marks.captureJobId = $1
+           and link_jobs.status = 'running'
+           and link_jobs.lease_owner = $2
+         limit 1`,
+        [input.jobId, input.owner],
+      )
+      mark = rows[0]
+    }
+    if (!mark && input.sourceIdentity) {
+      rows = await db.select<Mark[]>(
+        `select marks.* from marks
+         where marks.sourceIdentity = $1
+           and marks.deleted = 0
+           and exists (
+             select 1 from link_jobs
+             where id = $2 and status = 'running' and lease_owner = $3
+           )
+         limit 1`,
+        [input.sourceIdentity, input.jobId, input.owner],
+      )
+      mark = rows[0]
+    }
+    if (!mark) return null
+
+    const attachResult = await db.execute(
+      `update link_jobs set mark_id = $1, updated_at = $2
+       where id = $3 and status = 'running' and lease_owner = $4`,
+      [mark.id, Date.now(), input.jobId, input.owner],
+    )
+    if (attachResult.rowsAffected === 0) return null
+
+    if (created) {
+      const preview = truncateActivityText(input.mark.desc || input.mark.content || input.mark.url || '', 140)
+      await insertActivityEventWithDb(db, {
+        source: 'record',
+        title: preview || input.mark.type || 'record',
+        description: preview || input.mark.type || '',
+        tagId: input.mark.tagId,
+        dedupeKey: `record:${mark.id}`,
+        createdAt,
+      })
+    }
+
+    return { mark, created, updated }
+  })
 }
 
 export async function insertMark(mark: Partial<Mark>) {
@@ -176,6 +322,70 @@ export async function updateMark(mark: Mark) {
   })
 }
 
+export async function updateMarkContentIfUnchanged(input: {
+  id: number
+  expectedDesc?: string
+  expectedContent?: string
+  nextDesc?: string
+  nextContent?: string
+}): Promise<boolean> {
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    const result = await db.execute(
+      `update marks
+       set desc = $1, content = $2
+       where id = $3
+         and deleted = 0
+         and coalesce(desc, '') = $4
+         and coalesce(content, '') = $5`,
+      [
+        input.nextDesc ?? null,
+        input.nextContent ?? null,
+        input.id,
+        input.expectedDesc || '',
+        input.expectedContent || '',
+      ],
+    )
+    return result.rowsAffected > 0
+  })
+}
+
+export async function updateMarkContentIfUnchangedIfOwned(input: {
+  jobId: string
+  owner: string
+  id: number
+  expectedDesc?: string
+  expectedContent?: string
+  nextDesc?: string
+  nextContent?: string
+}): Promise<boolean> {
+  return await serializedWrite(async () => {
+    const db = await getDb()
+    const result = await db.execute(
+      `update marks
+       set desc = $1, content = $2
+       where id = $3
+         and deleted = 0
+         and coalesce(desc, '') = $4
+         and coalesce(content, '') = $5
+         and exists (
+           select 1 from link_jobs
+           where id = $6 and status = 'running' and lease_owner = $7
+         )`,
+      [
+        input.nextDesc ?? null,
+        input.nextContent ?? null,
+        input.id,
+        input.expectedDesc || '',
+        input.expectedContent || '',
+        input.jobId,
+        input.owner,
+      ],
+    )
+    return result.rowsAffected > 0
+  })
+}
+
 export async function pinMark(id: number) {
   return await serializedWrite(async () => {
     const db = await getDb()
@@ -205,7 +415,7 @@ export async function delMark(id: number) {
   return await serializedWrite(async () => {
     const db = await getDb()
     return await db.execute(
-      'update marks set deleted = $1, deletedAt = $2 where id = $3',
+      'update marks set deleted = $1, deletedAt = $2, sourceIdentity = null where id = $3',
       [1, deletedAt, id],
     )
   })
@@ -221,7 +431,7 @@ export async function deleteAllMarks() {
 export async function insertMarks(marks: Partial<Mark>[]) {
   await serializedWrite(async () => {
     const db = await getDb()
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       for (const mark of marks) {
         await db.execute(
           'insert into marks (tagId, type, content, url, desc, createdAt, deleted, processed, processedAt) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
@@ -302,7 +512,7 @@ export async function deleteMarks(ids: number[]) {
       // 优化为 SQL IN 批量移入回收站，避免循环多事务写入带来的阻塞和慢速
       const placeholders = ids.map(() => '?').join(', ')
       await db.execute(
-        `update marks set deleted = ?, deletedAt = ? where id in (${placeholders})`,
+        `update marks set deleted = ?, deletedAt = ?, sourceIdentity = null where id in (${placeholders})`,
         [1, deletedAt, ...ids],
       )
     } catch (error) {

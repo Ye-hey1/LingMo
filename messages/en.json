@@ -1144,22 +1144,33 @@
     },
     "imageMethod": {
       "title": "Image Recognition",
-      "desc": "Here, you can configure image recognition related settings, supporting OCR and VLM two ways.",
+      "desc": "Images use system OCR by default. When a VLM is configured, it can run first and fall back to OCR on failure.",
       "enable": {
         "title": "Enable Image Recognition",
         "desc": "When enabled, images will be automatically recognized during screenshot and image recording. When disabled, image recognition will be skipped."
       },
-      "setPrimary": "Set as default",
-      "isPrimary": "{type} has been set as default",
+      "setPrimary": "Set as default route",
+      "isPrimary": "{type} default route",
       "ocr": {
-        "title": "OCR",
-        "languagePacks": "Language Pack",
-        "checkModels": "Here you can search all models",
-        "modelInstruction": "Comma separated, for example: eng,chi_sim"
+        "title": "System OCR",
+        "desc": "Uses the OCR capability provided by the current system. If system OCR is unavailable, compatible OCR is used as a fallback.",
+        "noProviders": "No built-in OCR engine is available on this platform. Compatible OCR will be used as a fallback.",
+        "checking": "Checking",
+        "ready": "Available",
+        "unavailable": "Unavailable",
+        "provider": "Engine",
+        "unknownVersion": "Unknown version",
+        "languagePacks": "Language Packs",
+        "languageDesc": "Language preferences for system OCR; legacy Tesseract language codes are also supported.",
+        "languagePlaceholder": "For example: zh-Hans,en-US or eng,chi_sim",
+        "checkModels": "View Tesseract language packs",
+        "modelInstruction": "Comma separated, for example: zh-Hans,en-US or eng,chi_sim. On Windows, install the matching OCR language pack in system settings."
       },
       "vlm": {
-        "title": "Visual Language Model",
-        "desc": "Use visual language model to recognize image content."
+        "title": "VLM Enhancement (Optional)",
+        "desc": "After selecting a visual language model, images are recognized with VLM first. If the model is unavailable, fails, or returns no content, the app falls back to OCR.",
+        "noModel": "Do not use VLM",
+        "clearModel": "Clear VLM model"
       }
     },
     "backupSync": {
@@ -3680,6 +3691,41 @@
       "reviewDeck": "Review This Deck",
       "deleteDeck": "Delete Deck",
       "deleteConfirm": "Deleting a deck will also delete all cards in it. Are you sure?"
+    }
+  },
+  "creativeCanvas": {
+    "title": "Creative Canvas",
+    "sendSelection": "Send to Creative Canvas",
+    "selectionRequiredTitle": "Select some text first",
+    "selectionRequiredDescription": "Creative Canvas uses the selection as the image prompt.",
+    "openedTitle": "Creative Canvas opened",
+    "openedDescription": "The selection was added to the image prompt.",
+    "sendFailed": "Could not send selection",
+    "canvasName": "Infinite Canvas",
+    "refresh": "Refresh",
+    "prompt": { "placeholder": "Describe the image you want", "create": "Create flow", "createAndRun": "Create and generate", "required": "Enter a prompt first" },
+    "project": { "section": "Canvases", "new": "New canvas", "defaultName": "Infinite Canvas {number}", "delete": "Delete canvas", "deleteTitle": "Delete this canvas?", "deleteDescription": "The nodes, jobs, and generated assets in “{title}” will be deleted. This cannot be undone.", "deleteConfirm": "Delete canvas", "deleteSuccess": "Canvas deleted", "deleteFailed": "Could not delete canvas", "cancel": "Cancel", "empty": "No canvases yet. Create a canvas to begin." },
+    "model": { "section": "Canvas model", "inheritGlobal": "Use global model", "inheritCanvas": "Use canvas model", "search": "Search image models", "empty": "No image models available", "manage": "Manage models and providers", "node": "Node model" },
+    "appearance": { "section": "Canvas appearance", "snap": "Snap", "snapHint": "Snap movement to the grid", "grid": "Grid", "dots": "Dots", "blank": "Blank", "minimap": "Mini map", "toggleMinimap": "Show or hide mini map" },
+    "assets": { "section": "Assets", "cleanup": "Clean unused assets", "empty": "Generated images will appear here", "add": "Add to canvas", "insert": "Insert into note", "import": "Import reference", "importSuccess": "Reference imported", "importSuccessDescription": "{count} images were added to the canvas.", "importFailed": "Could not import reference", "insertSuccess": "Image inserted", "insertFailed": "Could not insert image", "addSuccess": "Reference node added", "addFailed": "Could not add asset" },
+    "jobs": { "section": "Jobs", "recover": "Recover interrupted jobs", "empty": "No generation jobs", "retry": "Retry", "retrySuccess": "Generation restarted", "retryFailed": "Could not retry generation", "idle": "Idle", "queued": "Queued", "running": "Running", "succeeded": "Completed", "failed": "Failed", "cancelled": "Cancelled", "stale": "Interrupted" },
+    "toolbar": { "undo": "Undo", "redo": "Redo", "select": "Select and move", "text": "Text node", "box": "Box select", "importImage": "Import reference image", "importJson": "Import infinite-canvas JSON", "run": "Run generation", "runMany": "Run selected generations", "delete": "Delete", "duplicate": "Duplicate", "export": "Copy snapshot", "fit": "Fit all nodes", "zoomOut": "Zoom out", "zoomIn": "Zoom in" },
+    "assistant": { "title": "Canvas actions", "welcome": "Select nodes or enter a canvas command.", "help": "View the canvas overview, run selected nodes, recover interrupted jobs, or inspect cleanable assets. This runs local canvas commands, not an AI conversation.", "actions": "Canvas quick actions", "status": "{nodes} nodes · {selected} selected · {running} running", "result": "Latest action result", "summary": "View overview", "run": "Run selected", "recover": "Recover jobs", "cleanup": "Inspect assets", "placeholder": "Enter a canvas command", "send": "Run command", "summarySelected": "Selected {count} nodes: {names}", "summaryNoSelection": "No nodes selected", "summaryCanvas": "{title}: {nodes} nodes, {edges} connections, {assets} assets.", "summaryRunning": "{count} jobs are running.", "summaryNoRunning": "No jobs are running.", "summaryStale": "{count} interrupted jobs can be retried.", "ranSelected": "Ran {count} selected nodes.", "createdFlow": "Created an image generation flow.", "commands": { "summary": "View canvas overview", "run": "Run selected nodes", "recover": "Recover interrupted jobs", "cleanup": "Inspect cleanable assets" } },
+    "inspector": { "title": "Node properties", "none": "No node selected", "nodeTitle": "Title", "width": "Width", "height": "Height", "status": "Status", "insertCurrentImage": "Insert current image into note", "edges": "Incoming / outgoing", "input": "Input", "output": "Output", "deleteEdge": "Delete connection", "noEdges": "No connections", "unknownNode": "Unknown node", "help": "Select a node to edit parameters, run generation, or insert images." },
+    "nodes": { "imageEmpty": "No image asset", "imageAlt": "Canvas image", "textPlaceholder": "Write the scene, style, composition, or constraints...", "configPlaceholder": "Prompt override; upstream text is used by default", "reserved": "Reserved node type" },
+    "selection": { "required": "Select at least one node" },
+    "snapshot": { "copied": "Canvas snapshot copied" },
+    "recovery": { "restored": "Recovered {count} interrupted jobs.", "none": "No interrupted jobs found.", "completed": "Recovery check completed" },
+    "cleanup": { "analysis": "{assets} unused assets and {files} orphan files can be removed, reclaiming about {bytes}.", "analysisCompleted": "Asset cleanup analysis completed", "emptyTitle": "Nothing to clean", "emptyDescription": "No unused assets or orphan files were found.", "confirm": "Delete {assets} unused assets and {files} orphan files to reclaim about {bytes}?", "result": "Deleted {assets} assets and {files} files. {failures}", "failures": "{count} failed.", "completed": "Asset cleanup completed" },
+    "jsonImport": { "completed": "Canvas JSON imported", "summary": "{nodes} nodes and {edges} connections.", "warnings": "Import completed with warnings:\n{warnings}", "failed": "Could not import JSON" },
+    "ports": { "connectTo": "Connect to {title}", "input": "Input port", "connectFrom": "Create connection from {title}", "output": "Drag to create connection", "resize": "Resize {title}", "resizeHint": "Drag to resize" },
+    "context": { "text": "New prompt node", "config": "New image config", "image": "Import reference image", "run": "Run selected nodes", "delete": "Delete selected nodes" },
+    "actions": {
+      "cancel": "Cancel"
+    },
+    "generation": {
+      "cancelled": "Generation cancelled",
+      "cancelRequested": "Cancelling generation"
     }
   }
 }

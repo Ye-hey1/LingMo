@@ -1,6 +1,7 @@
 import { getDb, serializedWrite } from './index'
 import type { AgentEvent } from '@/lib/agent/types'
 import type { AgentRunSnapshot, VfsRef } from '@/lib/agent-harness/types'
+import { stableStringify } from '@/lib/stable-stringify'
 
 type JsonLike = unknown
 
@@ -209,12 +210,6 @@ function safeJson(value: JsonLike): string {
   }
 }
 
-function stableStringify(value: JsonLike): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-  const record = value as Record<string, unknown>
-  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`
-}
 
 function shortHash(value: string): string {
   let hash = 0

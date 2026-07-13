@@ -1016,18 +1016,29 @@
     },
     "imageMethod": {
       "title": "Reconhecimento de Imagem",
-      "desc": "Aqui, você pode configurar definições relacionadas ao reconhecimento de imagem, suportando OCR e VLM de duas maneiras.",
-      "setPrimary": "Definir como padrão",
-      "isPrimary": "{type} foi definido como padrão",
+      "desc": "As imagens usam OCR do sistema por padrão. Quando um VLM é configurado, ele pode ser tentado primeiro e voltar para OCR em caso de falha.",
+      "setPrimary": "Definir rota padrão",
+      "isPrimary": "{type} rota padrão",
       "ocr": {
-        "title": "OCR",
-        "languagePacks": "Pacote de Idioma",
-        "checkModels": "Aqui você pode pesquisar todos os modelos",
-        "modelInstruction": "Separados por vírgula, por exemplo: eng,chi_sim"
+        "title": "OCR do Sistema",
+        "desc": "Usa a capacidade de OCR fornecida pelo sistema atual. Se o OCR do sistema estiver indisponível, um OCR compatível será usado como fallback.",
+        "noProviders": "Nenhum mecanismo OCR integrado está disponível nesta plataforma. Um OCR compatível será usado como fallback.",
+        "checking": "Verificando",
+        "ready": "Disponível",
+        "unavailable": "Indisponível",
+        "provider": "Mecanismo",
+        "unknownVersion": "Versão desconhecida",
+        "languagePacks": "Pacotes de Idioma",
+        "languageDesc": "Preferências de idioma para OCR do sistema; códigos legados do Tesseract também são suportados.",
+        "languagePlaceholder": "Por exemplo: zh-Hans,en-US ou eng,chi_sim",
+        "checkModels": "Ver pacotes de idioma do Tesseract",
+        "modelInstruction": "Separados por vírgula, por exemplo: zh-Hans,en-US ou eng,chi_sim. No Windows, instale o pacote de idioma OCR correspondente nas configurações do sistema."
       },
       "vlm": {
-        "title": "Modelo de Linguagem Visual",
-        "desc": "Use o modelo de linguagem visual para reconhecer o conteúdo da imagem."
+        "title": "Aprimoramento VLM (Opcional)",
+        "desc": "Depois de selecionar um modelo de linguagem visual, as imagens são reconhecidas primeiro pelo VLM. Se o modelo estiver indisponível, falhar ou não retornar conteúdo, o aplicativo volta para OCR.",
+        "noModel": "Não usar VLM",
+        "clearModel": "Limpar modelo VLM"
       },
       "enable": {
         "title": "Ativar reconhecimento de imagens",
@@ -3345,5 +3356,40 @@
     "sourceDesc": "Arraste várias notas, a IA irá mesclar e extrair pontos-chave.",
     "addToSource": "Adicionar Atual",
     "clear": "Limpar"
+  },
+  "creativeCanvas": {
+    "title": "Tela Criativa",
+    "sendSelection": "Enviar para a Tela Criativa",
+    "selectionRequiredTitle": "Selecione um texto primeiro",
+    "selectionRequiredDescription": "A Tela Criativa usa a seleção como prompt de imagem.",
+    "openedTitle": "Tela Criativa aberta",
+    "openedDescription": "A seleção foi adicionada ao prompt de imagem.",
+    "sendFailed": "Não foi possível enviar a seleção",
+    "canvasName": "Tela Infinita",
+    "refresh": "Atualizar",
+    "prompt": { "placeholder": "Descreva a imagem desejada", "create": "Criar fluxo", "createAndRun": "Criar e gerar", "required": "Digite um prompt primeiro" },
+    "project": { "section": "Telas", "new": "Nova tela", "defaultName": "Tela Infinita {number}", "delete": "Excluir tela", "deleteTitle": "Excluir esta tela?", "deleteDescription": "Os nós, tarefas e recursos gerados em “{title}” serão excluídos. Esta ação não pode ser desfeita.", "deleteConfirm": "Excluir tela", "deleteSuccess": "Tela excluída", "deleteFailed": "Não foi possível excluir a tela", "cancel": "Cancelar", "empty": "Nenhuma tela. Crie uma tela para começar." },
+    "model": { "section": "Modelo da tela", "inheritGlobal": "Usar modelo global", "inheritCanvas": "Usar modelo da tela", "search": "Buscar modelos de imagem", "empty": "Nenhum modelo de imagem disponível", "manage": "Gerenciar modelos e provedores", "node": "Modelo do nó" },
+    "appearance": { "section": "Aparência da tela", "snap": "Alinhar", "snapHint": "Alinhar o movimento à grade", "grid": "Grade", "dots": "Pontos", "blank": "Vazio", "minimap": "Minimapa", "toggleMinimap": "Mostrar ou ocultar o minimapa" },
+    "assets": { "section": "Recursos", "cleanup": "Limpar recursos não usados", "empty": "As imagens geradas aparecerão aqui", "add": "Adicionar à tela", "insert": "Inserir na nota", "import": "Importar referência", "importSuccess": "Referência importada", "importSuccessDescription": "{count} imagens foram adicionadas à tela.", "importFailed": "Não foi possível importar a referência", "insertSuccess": "Imagem inserida", "insertFailed": "Não foi possível inserir a imagem", "addSuccess": "Nó de referência adicionado", "addFailed": "Não foi possível adicionar o recurso" },
+    "jobs": { "section": "Tarefas", "recover": "Recuperar tarefas interrompidas", "empty": "Nenhuma tarefa de geração", "retry": "Tentar novamente", "retrySuccess": "Geração reiniciada", "retryFailed": "Não foi possível tentar novamente", "idle": "Inativa", "queued": "Na fila", "running": "Em execução", "succeeded": "Concluída", "failed": "Falhou", "cancelled": "Cancelada", "stale": "Interrompida" },
+    "toolbar": { "undo": "Desfazer", "redo": "Refazer", "select": "Selecionar e mover", "text": "Nó de texto", "box": "Seleção em área", "importImage": "Importar imagem de referência", "importJson": "Importar JSON infinite-canvas", "run": "Executar geração", "runMany": "Executar gerações selecionadas", "delete": "Excluir", "duplicate": "Duplicar", "export": "Copiar instantâneo", "fit": "Ajustar todos os nós", "zoomOut": "Reduzir zoom", "zoomIn": "Ampliar zoom" },
+    "assistant": { "title": "Ações da tela", "welcome": "Selecione nós ou digite um comando para a tela.", "help": "Veja o resumo da tela, execute nós selecionados, recupere tarefas interrompidas ou verifique recursos que podem ser limpos. Estes são comandos locais, não uma conversa com IA.", "actions": "Ações rápidas da tela", "status": "{nodes} nós · {selected} selecionados · {running} em execução", "result": "Resultado da ação mais recente", "summary": "Ver resumo", "run": "Executar seleção", "recover": "Recuperar tarefas", "cleanup": "Verificar recursos", "placeholder": "Digite um comando da tela", "send": "Executar comando", "summarySelected": "{count} nós selecionados: {names}", "summaryNoSelection": "Nenhum nó selecionado", "summaryCanvas": "{title}: {nodes} nós, {edges} conexões, {assets} recursos.", "summaryRunning": "{count} tarefas em execução.", "summaryNoRunning": "Nenhuma tarefa em execução.", "summaryStale": "{count} tarefas interrompidas podem ser repetidas.", "ranSelected": "Executados {count} nós selecionados.", "createdFlow": "Fluxo de geração de imagem criado.", "commands": { "summary": "Ver resumo da tela", "run": "Executar nós selecionados", "recover": "Recuperar tarefas interrompidas", "cleanup": "Verificar recursos removíveis" } },
+    "inspector": { "title": "Propriedades do nó", "none": "Nenhum nó selecionado", "nodeTitle": "Título", "width": "Largura", "height": "Altura", "status": "Status", "insertCurrentImage": "Inserir imagem atual na nota", "edges": "Entradas / saídas", "input": "Entrada", "output": "Saída", "deleteEdge": "Excluir conexão", "noEdges": "Sem conexões", "unknownNode": "Nó desconhecido", "help": "Selecione um nó para editar parâmetros, gerar ou inserir imagens." },
+    "nodes": { "imageEmpty": "Sem recurso de imagem", "imageAlt": "Imagem da tela", "textPlaceholder": "Descreva cena, estilo, composição ou restrições...", "configPlaceholder": "Sobrescreva o prompt; o texto anterior é usado por padrão", "reserved": "Tipo de nó reservado" },
+    "selection": { "required": "Selecione um nó primeiro" },
+    "snapshot": { "copied": "Instantâneo da tela copiado" },
+    "recovery": { "restored": "{count} tarefas interrompidas recuperadas.", "none": "Nenhuma tarefa interrompida encontrada.", "completed": "Verificação de recuperação concluída" },
+    "cleanup": { "analysis": "{assets} recursos não usados e {files} arquivos órfãos podem liberar cerca de {bytes}.", "analysisCompleted": "Análise de limpeza concluída", "emptyTitle": "Nada para limpar", "emptyDescription": "Nenhum recurso não usado ou arquivo órfão encontrado.", "confirm": "Excluir {assets} recursos não usados e {files} arquivos órfãos para liberar cerca de {bytes}?", "result": "Excluídos {assets} recursos e {files} arquivos. {failures}", "failures": "{count} falharam.", "completed": "Limpeza concluída" },
+    "jsonImport": { "completed": "JSON da tela importado", "summary": "{nodes} nós e {edges} conexões.", "warnings": "Importação concluída com avisos:\n{warnings}", "failed": "Não foi possível importar o JSON" },
+    "ports": { "connectTo": "Conectar a {title}", "input": "Porta de entrada", "connectFrom": "Criar conexão de {title}", "output": "Arraste para conectar", "resize": "Redimensionar {title}", "resizeHint": "Arraste para redimensionar" },
+    "context": { "text": "Novo nó de prompt", "config": "Nova configuração de imagem", "image": "Importar imagem de referência", "run": "Executar nós selecionados", "delete": "Excluir nós selecionados" },
+    "actions": {
+      "cancel": "Cancelar"
+    },
+    "generation": {
+      "cancelled": "Geração cancelada",
+      "cancelRequested": "Cancelando a geração"
+    }
   }
 }

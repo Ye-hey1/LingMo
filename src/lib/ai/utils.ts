@@ -59,47 +59,48 @@ export async function getPromptContent(): Promise<string> {
 /**
  * 获取AI设置
  */
-export async function getAISettings(modelType?: string): Promise<AiConfig | undefined> {
+export async function getAISettings(modelType?: string, modelSelectionOverride?: string): Promise<AiConfig | undefined> {
   const store = await Store.load('store.json')
   const aiConfigs = await store.get<AiConfig[]>('aiModelList')
-  const modelId = await store.get(modelType || 'primaryModel')
+  const defaultModelId = await store.get<string>(modelType || 'primaryModel')
 
-  if (!modelId || !aiConfigs) {
+  if (!aiConfigs) {
     return undefined
   }
 
-  // 在新的数据结构中，需要找到包含指定模型ID的配置
-  for (const config of aiConfigs) {
-    if (config.enabled === false) {
-      continue
-    }
+  const selections = Array.from(new Set(
+    [modelSelectionOverride?.trim(), defaultModelId?.trim()].filter((value): value is string => Boolean(value)),
+  ))
 
-    // 检查新的 models 数组结构
-    if (config.models && config.models.length > 0) {
-      // 首先尝试直接匹配模型ID
-      const targetModel = config.models.find(model => matchesConfiguredModelSelection({
-        configKey: config.key,
-        modelId: model.id,
-        selectionId: typeof modelId === 'string' ? modelId : undefined,
-      }))
-
-      if (targetModel) {
-        const result = {
-          ...config,
-          model: targetModel.model,
-          modelType: targetModel.modelType,
-          temperature: targetModel.temperature,
-          topP: targetModel.topP,
-          contextWindow: targetModel.contextWindow,
-          supportsImageInput: targetModel.supportsImageInput ?? config.supportsImageInput,
-          voice: targetModel.voice,
-          enableStream: targetModel.enableStream
-        }
-        return result
+  for (const modelId of selections) {
+    // 在新的数据结构中，需要找到包含指定模型ID的配置
+    for (const config of aiConfigs) {
+      if (config.enabled === false) {
+        continue
       }
-    } else {
-      // 向后兼容：处理旧的单模型结构
-      if (config.key === modelId) {
+
+      // 检查新的 models 数组结构
+      if (config.models && config.models.length > 0) {
+        const targetModel = config.models.find(model => matchesConfiguredModelSelection({
+          configKey: config.key,
+          modelId: model.id,
+          selectionId: modelId,
+        }))
+
+        if (targetModel) {
+          return {
+            ...config,
+            model: targetModel.model,
+            modelType: targetModel.modelType,
+            temperature: targetModel.temperature,
+            topP: targetModel.topP,
+            contextWindow: targetModel.contextWindow,
+            supportsImageInput: targetModel.supportsImageInput ?? config.supportsImageInput,
+            voice: targetModel.voice,
+            enableStream: targetModel.enableStream,
+          }
+        }
+      } else if (config.key === modelId) {
         return config
       }
     }
@@ -231,6 +232,26 @@ export async function prepareMessages(
       const lastUserMessage = [...baseMessages].reverse().find(m => m.role === 'user')
       if (lastUserMessage) {
         queryText = typeof lastUserMessage.content === 'string' ? lastUserMessage.content : queryText
+      }
+
+      // A short follow-up such as "3" carries little retrieval signal on its
+      // own. The continuity system section contains the resolved antecedent,
+      // so include that semantic anchor in the memory query without changing
+      // the user's original message or any tool authorization decision.
+      const continuityMessage = [...baseMessages].reverse().find(message => (
+        message.role === 'system' &&
+        typeof message.content === 'string' &&
+        message.content.includes('## Conversation Continuity')
+      ))
+      if (continuityMessage && typeof continuityMessage.content === 'string') {
+        const lines = continuityMessage.content.split(/\r?\n/)
+        const start = lines.findIndex(line => line.trim() === '## Conversation Continuity')
+        const continuityExcerpt = start >= 0
+          ? lines.slice(start, start + 5).join('\n').trim()
+          : ''
+        if (continuityExcerpt) {
+          queryText = `${queryText}\n${continuityExcerpt}`
+        }
       }
     }
 

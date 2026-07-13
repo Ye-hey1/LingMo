@@ -24,6 +24,7 @@ import { ControlRecording } from "@/app/core/main/mark/control-recording"
 import { ControlImage } from "@/app/core/main/mark/control-image"
 import { ControlLink } from "@/app/core/main/mark/control-link"
 import { ControlFile } from "@/app/core/main/mark/control-file"
+import { startLinkPipelineRecovery } from "@/lib/link-pipeline/organize-runner"
 
 export default function RootLayout({
   children,
@@ -34,20 +35,25 @@ export default function RootLayout({
   const { initSettingData, customThemeColors } = useSettingStore()
   const { initMainHosting } = useImageStore()
   const { currentLocale } = useI18n()
+  const { initVectorDb } = useVectorStore()
   useEffect(() => {
-    initSettingData()
-    initMainHosting()
-    initAllDatabases()
+    const initialize = async () => {
+      try {
+        await initAllDatabases()
+        void startLinkPipelineRecovery().catch((error) => {
+          console.warn('[link-pipeline] Initial recovery scan failed:', error)
+        })
+        await Promise.all([initSettingData(), initMainHosting()])
+        await initVectorDb()
+      } catch (error) {
+        console.error('Failed to initialize mobile app core:', error)
+      }
+    }
+
+    void initialize()
     initMcp()
     // 上报应用启动事件
     reportAppStart()
-  }, [])
-
-  const { initVectorDb } = useVectorStore()
-  
-  // 初始化向量数据库
-  useEffect(() => {
-    initVectorDb()
   }, [])
 
   useEffect(() => {

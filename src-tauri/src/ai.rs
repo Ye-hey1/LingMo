@@ -79,7 +79,9 @@ pub struct AiMultipartRequest {
     pub path: String,
     pub fields: Option<HashMap<String, String>>,
     pub file_field_name: String,
-    pub file: AiMultipartFile,
+    pub file: Option<AiMultipartFile>,
+    #[serde(default)]
+    pub files: Vec<AiMultipartFile>,
     pub request_id: Option<String>,
 }
 
@@ -458,13 +460,22 @@ pub async fn ai_multipart_request(
         }
     }
 
-    let mut part = Part::bytes(request.file.bytes).file_name(request.file.file_name);
-    if let Some(content_type) = request.file.content_type {
-        part = part
-            .mime_str(&content_type)
-            .map_err(|error| format!("Invalid file content type: {error}"))?;
+    let mut files = request.files;
+    if let Some(file) = request.file {
+        files.insert(0, file);
     }
-    form = form.part(request.file_field_name, part);
+    if files.is_empty() {
+        return Err("Multipart request requires at least one file".to_string());
+    }
+    for file in files {
+        let mut part = Part::bytes(file.bytes).file_name(file.file_name);
+        if let Some(content_type) = file.content_type {
+            part = part
+                .mime_str(&content_type)
+                .map_err(|error| format!("Invalid file content type: {error}"))?;
+        }
+        form = form.part(request.file_field_name.clone(), part);
+    }
 
     let send_future = client.post(url).headers(headers).multipart(form).send();
     let response = if let Some(token) = cancellation {

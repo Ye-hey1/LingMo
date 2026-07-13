@@ -1,7 +1,7 @@
 'use client'
 
 import emitter from '@/lib/emitter'
-import { enqueueSemanticExtraction, getSemanticExtractionQueue } from './semantic-extraction-queue'
+import { enqueueSemanticExtraction, getSemanticExtractionQueue, recoverPendingSemanticExtractions } from './semantic-extraction-queue'
 
 let installed = false
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,6 +43,9 @@ export function installSemanticExtractionHook(): () => void {
   emitter.on('sync-content-updated', syncContentUpdatedListener)
   emitter.on('editor-input', editorInputListener)
   emitter.on('article-opened', articleOpenedListener)
+  void recoverPendingSemanticExtractions({ limit: 25 }).catch(error => {
+    console.warn('[SemanticExtractionQueue] startup recovery failed:', error)
+  })
 
   return uninstallSemanticExtractionHook
 }

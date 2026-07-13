@@ -18,6 +18,7 @@ import {
   type DictationPolishMode,
 } from "@/lib/ai/dictation-polish"
 import { estimateTokens } from "@/lib/ai/token-counter"
+import { analyzeConversationContinuity } from "@/lib/ai/conversation-continuity"
 import { useTranslations } from 'next-intl'
 import { useLocalStorage } from 'react-use';
 import { ChatModeSelect } from "./chat-mode-select"
@@ -530,6 +531,13 @@ export const ChatInput = React.memo(function ChatInput({ expanded = false }: Cha
   // 行内文件联想输入状态
   const [atSelectedIndex, setAtSelectedIndex] = useState(0)
   const flattenedFiles = useMemo(() => flattenFileTree(fileTree), [fileTree])
+  const continuityHint = useMemo(() => {
+    const candidate = text.trim()
+    const maySelectPreviousOption = /^(?:\d{1,2}[.、．)]?|[A-Ha-h][.、)]?|(?:第|选|选择|展开|讲|说|继续讲|继续说).{0,16})$/i.test(candidate)
+    return maySelectPreviousOption
+      ? analyzeConversationContinuity(chats, candidate)
+      : null
+  }, [chats, text])
   const atQuery = useMemo(() => {
     const match = text.match(/@([^\s@]*)$/)
     if (!match) return null
@@ -2245,6 +2253,18 @@ ${exec.prompt}`
           </div>
         ) : null}
         <div className="relative flex w-full flex-col rounded-lg bg-muted/15 transition-colors group-focus-within:bg-muted/10">
+          {continuityHint.selectedOption && (
+            <div className="px-3 pt-2" aria-live="polite">
+              <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-500/[0.06] px-2 py-1 text-[11px] text-muted-foreground">
+                <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+                <span className="shrink-0 font-medium text-foreground/80">承接上一答</span>
+                <span className="text-muted-foreground/50">·</span>
+                <span className="truncate">
+                  {continuityHint.selectedOption.index ?? continuityHint.selectedOption.label}. {continuityHint.selectedOption.content}
+                </span>
+              </div>
+            </div>
+          )}
           <AiDocCommandPopover
             open={slashOpen}
             query={slashQuery || ''}

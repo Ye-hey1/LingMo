@@ -153,6 +153,18 @@ interface Events {
   'window-pin-register': unknown;
   'link-shortcut-register': unknown;
   'refresh-marks': unknown;
+  'link-pipeline-job-updated': { jobId: string; markId?: number };
+  'link-pipeline-mark-updated': { jobId: string; markId: number };
+  'link-pipeline-capture-progress': {
+    jobId: string;
+    tagId: number;
+    status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+    progress: number;
+    startedAt: number;
+    markId?: number;
+    message?: string;
+    errorMessage?: string;
+  };
   'quick-prompt-insert': string;
   'quick-prompt-send': string;
   'chat-message-resend': {
@@ -222,6 +234,10 @@ interface Events {
     imagePath: string;
     markdownPath?: string;
   };
+  'open-creative-canvas': {
+    prompt?: string;
+    sourcePath?: string;
+  } | undefined;
   'ai-placeholder-generated': string;
   'ai-prompts-generated': QuickPrompt[];
   'start-ai-streaming': {

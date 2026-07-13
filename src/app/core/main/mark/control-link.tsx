@@ -21,12 +21,11 @@ import {
 } from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { getAllMarks, insertMark, updateMark as updateMarkRecord } from "@/db/marks"
+import { insertMark } from "@/db/marks"
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
 import { CircleX, Link, FolderOpen } from "lucide-react"
 import { useState, useEffect, useCallback, useRef } from "react"
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import emitter from '@/lib/emitter'
 import { useRouter } from 'next/navigation'
 import { handleRecordComplete } from '@/lib/record-navigation'
@@ -35,25 +34,17 @@ import { isMobileDevice as checkIsMobileDevice } from '@/lib/check'
 import { hasText, readText } from 'tauri-plugin-clipboard-api'
 import { Store } from '@tauri-apps/plugin-store'
 import { toast } from "@/hooks/use-toast"
-import { buildReadableWebMarkdown, normalizeWebContent, parseWebPageContent, type ParsedWebPageContent } from "@/lib/web/content-extractor"
-import { organizeLinkRecord } from "@/lib/ai/link-organizer"
-import { tavilyExtract } from "@/lib/tavily"
+import { enqueueLinkCapture, type LinkCaptureOutcome } from "@/lib/link-pipeline/capture-runner"
+import { routeLinkSource } from "@/lib/link-pipeline/source-router"
 import {
-  buildGitHubProjectRecord,
-  fetchGitHubProjectInfo,
   getGitHubProjectApiToken,
-  getGitHubProjectErrorMessage,
-  getGitHubProjectMarkUrl,
   GITHUB_PROJECT_TAG_NAME,
-  isGitHubProjectMark,
   parseGitHubRepoUrl,
-  summarizeGitHubProject,
 } from "@/lib/github-project"
 import { ensureTagByName } from "@/db/tags"
 import { isWechatArticleUrl, WECHAT_ARTICLE_TAG_NAME } from "@/lib/wechat-article"
-import { captureWechatArticleToMark } from "@/lib/wechat-article-capture"
-import { fetchVideoTranscript, getVideoPlatform, isVideoTranscriptUrl, VIDEO_TRANSCRIPT_TAG_NAME } from "@/lib/video-transcript"
-import { buildXhsNoteRecord, fetchXhsNoteData, isXhsUrl, XHS_NOTE_TAG_NAME } from "@/lib/xhs-extractor"
+import { getVideoPlatform, isVideoTranscriptUrl, VIDEO_TRANSCRIPT_TAG_NAME } from "@/lib/video-transcript"
+import { isXhsUrl, XHS_NOTE_TAG_NAME } from "@/lib/xhs-extractor"
 import { extractAudioTrack, segmentAudio } from "@/lib/ffmpeg-wasm"
 import { transcribeRecording } from "@/lib/audio"
 import { readFile, writeFile, BaseDirectory, exists, mkdir } from "@tauri-apps/plugin-fs"
@@ -212,133 +203,6 @@ export function ControlLink() {
     const urlPattern = /^https?:\/\/.+/i
     const domainPattern = /^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}/i
     return urlPattern.test(trimmed) || domainPattern.test(trimmed)
-  }
-
-  type LinkCaptureErrorCode = 'http' | 'non_text' | 'parse' | 'network' | 'unknown'
-  class LinkCaptureError extends Error {
-    code: LinkCaptureErrorCode
-    status?: number
-    contentType?: string
-
-    constructor(
-      message: string,
-      code: LinkCaptureErrorCode,
-      options?: { status?: number; contentType?: string }
-    ) {
-      super(message)
-      this.name = 'LinkCaptureError'
-      this.code = code
-      this.status = options?.status
-      this.contentType = options?.contentType
-    }
-  }
-
-  function toLinkCaptureError(error: unknown): LinkCaptureError {
-    if (error instanceof LinkCaptureError) {
-      return error
-    }
-    if (error instanceof Error) {
-      const httpStatus = error.message.match(/HTTP\s+(\d+)/i)?.[1]
-      if (httpStatus) {
-        return new LinkCaptureError(error.message, 'http', {
-          status: Number(httpStatus),
-        })
-      }
-
-      const lowered = error.message.toLowerCase()
-      if (
-        lowered.includes('network')
-        || lowered.includes('timeout')
-        || lowered.includes('failed to fetch')
-        || lowered.includes('error sending request')
-      ) {
-        return new LinkCaptureError(error.message, 'network')
-      }
-      return new LinkCaptureError(error.message, 'unknown')
-    }
-    return new LinkCaptureError(String(error), 'unknown')
-  }
-
-  function getLinkErrorMessage(error: LinkCaptureError): string {
-    if (/invalid utf-8 sequence/i.test(error.message)) {
-      return '链接返回内容包含异常编码，当前解析器无法稳定读取。若是 B站视频，请确认视频可公开访问，并稍后重试音频转写。'
-    }
-
-    if (error.code === 'http') {
-      if (error.status === 403) {
-        return '请求被目标站点拒绝（403）。该站点可能开启了 Cloudflare/WAF，请更换可直连链接，或改用支持浏览器渲染的抓取方式。'
-      }
-      if (error.status === 401) {
-        return '目标网页需要登录（401），当前抓取不带登录态。请先登录后复制正文，或使用可匿名访问的链接。'
-      }
-      if (error.status === 404) {
-        return '目标网页不存在（404），请检查链接是否正确。'
-      }
-      if (error.status === 429) {
-        return '目标站点或提取服务请求过于频繁（429），暂时限流了。请稍后重试，或换一个可直接访问的链接。'
-      }
-      return `链接抓取失败（HTTP ${error.status ?? 'unknown'}）。请稍后重试，或更换链接。`
-    }
-
-    if (error.code === 'non_text') {
-      return `当前链接返回的不是网页文本内容（${error.contentType || 'unknown content-type'}）。建议改用 PDF/OCR 或文件导入方式。`
-    }
-
-    if (error.code === 'parse') {
-      return '网页内容解析失败，可能是动态渲染页面或编码异常。建议使用可公开访问的文章页链接。'
-    }
-
-    if (error.code === 'network') {
-      return '网络请求失败，请检查网络连接、代理设置，或稍后重试。'
-    }
-
-    return error.message || '链接处理失败，请重试。'
-  }
-
-  function getFallbackTitleFromUrl(targetUrl: string): string {
-    try {
-      return new URL(targetUrl).hostname.replace(/^www\./, '')
-    } catch {
-      return targetUrl
-    }
-  }
-
-  function getTitleFromMarkdown(markdown: string, targetUrl: string): string {
-    const heading = markdown
-      .split(/\r?\n/)
-      .map(line => line.trim())
-      .find(line => /^#{1,2}\s+/.test(line))
-
-    return heading?.replace(/^#{1,2}\s+/, '').trim() || getFallbackTitleFromUrl(targetUrl)
-  }
-
-  function shouldFallbackToTavily(content: string): boolean {
-    const compact = content.replace(/\s+/g, '')
-    return compact.length < 500
-  }
-
-  async function extractPageViaTavily(targetUrl: string) {
-    const response = await tavilyExtract({
-      urls: targetUrl,
-      extractDepth: 'advanced',
-      format: 'markdown',
-      timeout: 20,
-    })
-    const result = response.results[0]
-    const content = normalizeWebContent(result?.rawContent?.trim() || '')
-    if (!content) {
-      const failedReason = response.failedResults[0]?.error
-      throw new LinkCaptureError(failedReason || 'Tavily Extract 未返回可用正文', 'parse')
-    }
-
-    const title = getTitleFromMarkdown(content, targetUrl)
-    return {
-      title,
-      metaDesc: '通过 Tavily Extract 提取',
-      mainContent: content.slice(0, 20000),
-      bodyText: content.slice(0, 20000),
-      url: targetUrl,
-    }
   }
 
   // 清空输入框
@@ -500,23 +364,6 @@ export function ControlLink() {
       </label>
     </div>
   )
-
-  function findExistingGitHubProjectMark(projectUrl: string) {
-    const normalizedUrl = getGitHubProjectMarkUrl({
-      id: 0,
-      tagId: 0,
-      type: 'link',
-      content: '',
-      desc: '',
-      url: projectUrl,
-      deleted: 0,
-      createdAt: Date.now(),
-    })
-    const { allMarks, marks } = useMarkStore.getState()
-    return [...allMarks, ...marks]
-      .filter(mark => mark.deleted !== 1)
-      .find(mark => isGitHubProjectMark(mark) && getGitHubProjectMarkUrl(mark) === normalizedUrl)
-  }
 
   function normalizeTargetUrl(value: string) {
     const trimmed = value.trim()
@@ -807,6 +654,23 @@ export function ControlLink() {
     })
   }
 
+  async function refreshLinkRecordViews(includeAllMarks = true) {
+    const { fetchAllMarks } = useMarkStore.getState()
+    const refreshes: Array<Promise<unknown>> = [fetchMarks(), fetchTags()]
+    if (includeAllMarks) refreshes.push(fetchAllMarks())
+    const results = await Promise.allSettled(refreshes)
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        console.warn('[Link] Saved successfully but a record view refresh failed:', result.reason)
+      }
+    }
+    try {
+      getCurrentTag()
+    } catch (error) {
+      console.warn('[Link] Saved successfully but current tag refresh failed:', error)
+    }
+  }
+
   async function processLinkInBackground({
     targetUrl,
     queueId,
@@ -820,264 +684,70 @@ export function ControlLink() {
     shouldOrganizeAfterSave: boolean
     wechatHtmlSource?: string
   }) {
+    let managedByCaptureRunner = false
     try {
-      setQueue(queueId, { progress: '30%' });
+      const sourceRoute = routeLinkSource(targetUrl)
+      if (sourceRoute.type === 'unknown') throw new Error('暂不支持该链接类型')
 
-      const githubRepo = parseGitHubRepoUrl(targetUrl)
-      const githubToken = await getGitHubProjectApiToken()
-      if (githubRepo && githubToken) {
-        try {
-          setQueue(queueId, { progress: '45%' })
-          const projectInfo = await fetchGitHubProjectInfo(githubRepo, githubToken)
-          setQueue(queueId, { progress: '70%' })
-          const summary = await summarizeGitHubProject(projectInfo)
-          const projectRecord = buildGitHubProjectRecord({ ...projectInfo, summary })
-          const projectTag = await ensureTagByName(GITHUB_PROJECT_TAG_NAME)
-
-          const { fetchAllMarks } = useMarkStore.getState()
-          await fetchAllMarks()
-          const existingMark = findExistingGitHubProjectMark(projectInfo.url)
-          if (existingMark) {
-            const { updateMark: updateMarkInStore } = useMarkStore.getState()
-            await updateMarkInStore({
-              ...existingMark,
-              tagId: projectTag.id,
-              desc: projectRecord.desc,
-              content: projectRecord.content,
-              url: projectInfo.url,
-              deleted: 0,
-              processed: 0,
-              processedAt: null,
-            })
-
-            setQueue(queueId, { progress: '100%', tagId: projectTag.id })
-            await fetchMarks()
-            await fetchAllMarks()
-            await fetchTags()
-            getCurrentTag()
-            toast({
-              title: '已更新 GitHub 项目',
-              description: `状态：完成。${projectInfo.fullName} 的项目卡片已刷新。`,
-            })
-            return
-          }
-
-          await insertMark({
-            tagId: projectTag.id,
-            type: 'link',
-            desc: projectRecord.desc,
-            content: projectRecord.content,
-            url: projectInfo.url,
-          })
-
-          setQueue(queueId, { progress: '100%', tagId: projectTag.id })
-          await fetchMarks()
-          await fetchAllMarks()
-          await fetchTags()
-          getCurrentTag()
+      const handleCaptureSettled = async (outcome: LinkCaptureOutcome) => {
+        if (outcome.status === 'succeeded') {
+          await refreshLinkRecordViews()
+          const organizedSuffix = outcome.organizationJobId ? ' AI 正在后台整理。' : ''
+          const warningPrefix = outcome.warning || ''
+          const success = sourceRoute.type === 'github'
+            ? outcome.sourceType === 'github'
+              ? {
+                  title: outcome.updatedExisting ? '已更新 GitHub 项目' : '已收藏 GitHub 项目',
+                  description: outcome.updatedExisting
+                    ? '状态：完成。项目资料卡已刷新。'
+                    : `状态：完成。项目已归入「${GITHUB_PROJECT_TAG_NAME}」。`,
+                }
+              : {
+                  title: 'GitHub 链接已保存',
+                  description: `${warningPrefix || 'GitHub 专用识别不可用，已按普通链接保存。'}${organizedSuffix}`,
+                }
+            : sourceRoute.type === 'wechat'
+              ? {
+                  title: '公众号文章已保存',
+                  description: `公众号正文已安全保存。${organizedSuffix}`,
+                }
+              : sourceRoute.type === 'xiaohongshu'
+                ? {
+                    title: '小红书笔记已保存',
+                    description: `状态：完成。笔记已归入「${XHS_NOTE_TAG_NAME}」。`,
+                  }
+                : sourceRoute.type === 'video'
+                  ? {
+                      title: '视频转写已保存',
+                      description: `状态：完成。字幕已归入「${VIDEO_TRANSCRIPT_TAG_NAME}」。`,
+                    }
+                  : {
+                      title: '链接已保存',
+                      description: `网页正文已安全保存。${organizedSuffix}`,
+                    }
+          toast(success)
+        } else if (outcome.status === 'failed') {
           toast({
-            title: '已收藏 GitHub 项目',
-            description: `状态：完成。${projectInfo.fullName} 已归入「${GITHUB_PROJECT_TAG_NAME}」。`,
-          })
-          return
-        } catch (githubError) {
-          console.warn('[Link] GitHub project capture failed, fallback to normal link:', githubError)
-          const githubMessage = getGitHubProjectErrorMessage(githubError)
-          toast({
-            title: 'GitHub 项目识别失败',
-            description: `${githubMessage} 已回退为普通链接记录流程。`,
+            title: '链接处理失败',
+            description: outcome.error || '抓取任务已保留，可稍后重试。',
+            variant: 'destructive',
           })
         }
       }
 
-      if (isWechatArticleUrl(targetUrl)) {
-        setQueue(queueId, { progress: '55%' })
-        const mark = await captureWechatArticleToMark(targetUrl, wechatHtmlSource)
-
-        setQueue(queueId, { progress: '100%', tagId: mark.tagId })
-        const { fetchAllMarks } = useMarkStore.getState()
-        await fetchMarks()
-        await fetchAllMarks()
-        await fetchTags()
-        getCurrentTag()
-        toast({
-          title: '公众号文章已保存',
-          description: `状态：完成。${mark.desc?.split('\n')[0] || '公众号文章'} 已归入「${WECHAT_ARTICLE_TAG_NAME}」。`,
-        })
-        return
-      }
-
-      if (isXhsUrl(targetUrl)) {
-        setQueue(queueId, { progress: '55% 正在读取小红书笔记...' })
-        const xhsNote = await fetchXhsNoteData(targetUrl)
-        setQueue(queueId, { progress: '80% 正在生成笔记卡片...' })
-        const noteRecord = buildXhsNoteRecord(xhsNote)
-        const xhsTag = await ensureTagByName(XHS_NOTE_TAG_NAME)
-
-        await insertMark({
-          tagId: xhsTag.id,
-          type: 'link',
-          desc: noteRecord.desc,
-          content: noteRecord.content,
-          url: noteRecord.url,
-        })
-
-        setQueue(queueId, { progress: '100%', tagId: xhsTag.id })
-        const { fetchAllMarks } = useMarkStore.getState()
-        await fetchMarks()
-        await fetchAllMarks()
-        await fetchTags()
-        getCurrentTag()
-        toast({
-          title: '小红书笔记已保存',
-          description: `状态：完成。${noteRecord.title} 已归入「${XHS_NOTE_TAG_NAME}」。`,
-        })
-        return
-      }
-
-      if (isVideoTranscriptUrl(targetUrl)) {
-        setQueue(queueId, { progress: '55%' })
-        const videoTranscript = await fetchVideoTranscript(targetUrl, {
-          onProgress: ({ progress, message }) => {
-            setQueue(queueId, { progress: `${progress}% ${message}` })
-          },
-        })
-        const videoTag = await ensureTagByName(VIDEO_TRANSCRIPT_TAG_NAME)
-
-        await insertMark({
-          tagId: videoTag.id,
-          type: 'link',
-          desc: videoTranscript.desc,
-          content: videoTranscript.content,
-          url: videoTranscript.sourceUrl,
-        })
-
-        setQueue(queueId, { progress: '100%', tagId: videoTag.id })
-        const { fetchAllMarks } = useMarkStore.getState()
-        await fetchMarks()
-        await fetchAllMarks()
-        await fetchTags()
-        getCurrentTag()
-        toast({
-          title: '视频转写已保存',
-          description: `状态：完成。${videoTranscript.title} 已归入「${VIDEO_TRANSCRIPT_TAG_NAME}」。`,
-        })
-        return
-      }
-
-      let pageContent: ParsedWebPageContent
-      try {
-        // 使用 Tauri 的 HTTP 插件快速获取页面内容
-        const response = await tauriFetch(targetUrl, {
-          method: 'GET',
-          connectTimeout: 12000,
-          maxRedirections: 5,
-          headers: {
-            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.1',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'identity',
-          },
-        });
-
-        if (!response.ok) {
-          throw new LinkCaptureError(`HTTP 错误: ${response.status}`, 'http', {
-            status: response.status,
-          })
-        }
-
-        const contentType = (response.headers.get('content-type') || '').toLowerCase()
-        const isTextLike =
-          !contentType
-          || contentType.includes('text/')
-          || contentType.includes('application/xhtml+xml')
-          || contentType.includes('application/xml')
-          || contentType.includes('application/json')
-        if (!isTextLike) {
-          throw new LinkCaptureError(
-            `当前链接返回的不是可解析网页内容（Content-Type: ${contentType}）`,
-            'non_text',
-            { contentType }
-          )
-        }
-
-        setQueue(queueId, { progress: '60%' });
-
-        const html = await extractResponseText(response);
-        if (!html) {
-          throw new LinkCaptureError('网页内容编码异常，无法稳定解码为文本。', 'parse')
-        }
-        pageContent = parseWebPageContent(html, targetUrl);
-        const directContent = pageContent.mainContent || pageContent.bodyText || pageContent.metaDesc
-        if (shouldFallbackToTavily(directContent || '')) {
-          setQueue(queueId, { progress: '70%' });
-          pageContent = await extractPageViaTavily(targetUrl)
-        }
-      } catch (directError) {
-        const typedError = toLinkCaptureError(directError)
-        if (typedError.code === 'unknown') {
-          throw typedError
-        }
-
-        setQueue(queueId, { progress: '70%' });
-        pageContent = await extractPageViaTavily(targetUrl)
-      }
-
-      setQueue(queueId, { progress: shouldOrganizeAfterSave ? '90% 正在保存清洗正文...' : '90%' });
-
-      // 提取有用的内容
-      const { title, metaDesc, mainContent, bodyText } = pageContent;
-
-      const rawDesc = [title, metaDesc].filter(Boolean).join('\n');
-      const rawContent = mainContent || bodyText || metaDesc || `来源链接：${targetUrl}`;
-      const readableContent = buildReadableWebMarkdown({
-        title,
-        url: targetUrl,
-        metaDesc,
-        content: rawContent,
-      })
-
-      if (!rawContent.trim()) {
-        throw new LinkCaptureError('网页解析结果为空', 'parse')
-      }
-
-      // 保存到数据库
-      const insertResult = await insertMark({
+      await enqueueLinkCapture({
+        jobId: queueId,
         tagId: targetTagId,
-        type: 'link',
-        desc: rawDesc,
-        content: readableContent,
-        url: targetUrl
-      });
-
-      setQueue(queueId, { progress: '100%' });
-      await fetchMarks();
-      await fetchTags();
-      getCurrentTag();
-
-      const insertedId = Number(insertResult.lastInsertId || 0)
-      if (shouldOrganizeAfterSave && insertedId > 0) {
-        toast({
-          title: '链接已保存',
-          description: '状态：已保存正文，AI 正在后台整理为中文资料卡。',
-        })
-
-        void organizeSavedLinkRecord({
-          insertedId,
-          targetUrl,
-          title,
-          metaDesc,
-          rawContent: readableContent,
-        })
-      } else {
-        toast({
-          title: '链接已保存',
-          description: '状态：完成。网页正文已保存。',
-        })
-      }
+        url: targetUrl,
+        sourceType: sourceRoute.type,
+        autoOrganize: shouldOrganizeAfterSave,
+        wechatHtmlSource,
+      }, { onSettled: handleCaptureSettled })
+      managedByCaptureRunner = true
+      return
 
     } catch (error) {
-      const typedError = toLinkCaptureError(error)
-      const message = getLinkErrorMessage(typedError)
+      const message = error instanceof Error ? error.message : String(error)
       toast({
         title: '链接处理失败',
         description: message,
@@ -1085,210 +755,8 @@ export function ControlLink() {
       })
       console.warn('[Link] Crawling page failed:', error)
     } finally {
-      removeQueue(queueId);
+      if (!managedByCaptureRunner) removeQueue(queueId);
     }
-  }
-
-  async function organizeSavedLinkRecord({
-    insertedId,
-    targetUrl,
-    title,
-    metaDesc,
-    rawContent,
-  }: {
-    insertedId: number
-    targetUrl: string
-    title: string
-    metaDesc?: string
-    rawContent: string
-  }) {
-    try {
-      const organized = await organizeLinkRecord({
-        url: targetUrl,
-        title,
-        metaDesc,
-        content: rawContent,
-      })
-      if (!organized) {
-        return
-      }
-
-      const latestMarks = await getAllMarks()
-      const targetMark = latestMarks.find(item => item.id === insertedId)
-      if (!targetMark || targetMark.deleted === 1) {
-        return
-      }
-
-      await updateMarkRecord({
-        ...targetMark,
-        desc: organized.desc || targetMark.desc,
-        content: organized.content || targetMark.content,
-      })
-
-      const { fetchAllMarks } = useMarkStore.getState()
-      await fetchMarks()
-      await fetchAllMarks()
-
-      toast({
-        title: 'AI 整理完成',
-        description: '链接内容已更新为中文结构化资料卡。',
-      })
-    } catch (backgroundError) {
-      console.warn('[Link] Background link organize failed:', backgroundError)
-    }
-  }
-
-  async function extractResponseText(response: Response): Promise<string> {
-    const contentType = response.headers.get('content-type')
-    const contentEncoding = response.headers.get('content-encoding') || ''
-
-    try {
-      const sourceBuffer = await response.arrayBuffer()
-      const sourceBytes = new Uint8Array(sourceBuffer)
-
-      let text = decodeBestEffortText(sourceBytes, contentType)
-      if (looksLikeGarbledText(text) && contentEncoding) {
-        const decompressed = await decompressBytes(sourceBytes, contentEncoding)
-        if (decompressed) {
-          const decompressedText = decodeBestEffortText(decompressed, contentType)
-          if (!looksLikeGarbledText(decompressedText) || decompressedText.length > text.length) {
-            text = decompressedText
-          }
-        }
-      }
-
-      if (!looksLikeGarbledText(text)) {
-        return text
-      }
-    } catch (error) {
-      console.warn('[Link] response text decode fallback failed:', error)
-    }
-
-    return ''
-  }
-
-  function decodeBestEffortText(bytes: Uint8Array, contentType: string | null): string {
-    const charset = extractCharset(contentType)
-    const candidates = [charset, 'utf-8', 'gb18030', 'gbk', 'big5']
-      .filter((item, index, arr): item is string => !!item && arr.indexOf(item) === index)
-    let best = ''
-    let bestScore = Number.NEGATIVE_INFINITY
-
-    for (const encoding of candidates) {
-      try {
-        const decoded = new TextDecoder(encoding).decode(bytes)
-        const score = getTextScore(decoded)
-        if (score > bestScore) {
-          best = decoded
-          bestScore = score
-        }
-      } catch {
-        // ignore unsupported encoding
-      }
-    }
-
-    if (best) {
-      return best
-    }
-
-    try {
-      return new TextDecoder().decode(bytes)
-    } catch {
-      return ''
-    }
-  }
-
-  function extractCharset(contentType: string | null): string | null {
-    if (!contentType) {
-      return null
-    }
-    const match = contentType.match(/charset=([^\s;]+)/i)
-    return match?.[1]?.trim().toLowerCase() || null
-  }
-
-  function getTextScore(text: string): number {
-    if (!text) {
-      return Number.NEGATIVE_INFINITY
-    }
-    const length = text.length || 1
-    const replacementCount = (text.match(/\uFFFD/g) || []).length
-    const replacementRatio = replacementCount / length
-    const controlCount = (text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g) || []).length
-    const controlRatio = controlCount / length
-
-    let score = 0
-    if (/<html[\s>]/i.test(text)) score += 40
-    if (/<body[\s>]/i.test(text)) score += 20
-    if (/<title[\s>]/i.test(text)) score += 10
-    score -= replacementRatio * 300
-    score -= controlRatio * 200
-    return score
-  }
-
-  function looksLikeGarbledText(text: string): boolean {
-    if (!text) {
-      return true
-    }
-    const length = text.length
-    if (length < 20) {
-      return false
-    }
-
-    const replacementCount = (text.match(/\uFFFD/g) || []).length
-    const replacementRatio = replacementCount / length
-    if (replacementRatio > 0.02) {
-      return true
-    }
-
-    const controlCount = (text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g) || []).length
-    const controlRatio = controlCount / length
-    if (controlRatio > 0.01) {
-      return true
-    }
-
-    return false
-  }
-
-  async function decompressBytes(bytes: Uint8Array, encodingHeader: string): Promise<Uint8Array | null> {
-    if (typeof DecompressionStream === 'undefined') {
-      return null
-    }
-
-    const encodings = encodingHeader
-      .split(',')
-      .map(item => item.trim().toLowerCase())
-      .filter(Boolean)
-
-    if (encodings.length === 0) {
-      return null
-    }
-
-    let result = bytes
-    let decompressed = false
-
-    for (let index = encodings.length - 1; index >= 0; index--) {
-      const encoding = encodings[index]
-      const format: 'gzip' | 'deflate' | null = encoding === 'x-gzip'
-        ? 'gzip'
-        : encoding === 'gzip' || encoding === 'deflate'
-          ? encoding
-          : null
-
-      if (!format) {
-        continue
-      }
-
-      try {
-        const stream = new Blob([result]).stream().pipeThrough(new DecompressionStream(format))
-        const decompressedBuffer = await new Response(stream).arrayBuffer()
-        result = new Uint8Array(decompressedBuffer)
-        decompressed = true
-      } catch {
-        return null
-      }
-    }
-
-    return decompressed ? result : null
   }
 
   return (

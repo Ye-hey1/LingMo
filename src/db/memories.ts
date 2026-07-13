@@ -6,7 +6,7 @@ export type MemoryCategory = 'preference' | 'memory'
 export interface Memory {
   id: string
   content: string
-  embedding: string
+  embedding: string | null
   category: MemoryCategory
   replacedId?: string
   accessCount: number
@@ -82,7 +82,9 @@ export async function initMemoriesDb() {
 }
 
 export async function upsertMemory(
-  memory: Omit<Memory, 'id' | 'createdAt' | 'updatedAt' | 'accessCount' | 'lastAccessedAt' | 'category'> & {
+  memory: {
+    content: string
+    embedding?: string | null
     category?: MemoryCategory
   },
 ): Promise<{ id: string; replaced: boolean; replacedId?: string }> {
@@ -98,22 +100,32 @@ export async function upsertMemory(
   }
 
   if (!embedding) {
-    embedding = await fetchEmbedding(memory.content)
+    try {
+      embedding = await fetchEmbedding(memory.content)
+    } catch {
+      // Offline/local-only mode keeps the memory searchable via lexical recall.
+    }
   }
 
-  if (!embedding) {
-    throw new Error('无法计算记忆向量，请检查嵌入模型配置。')
-  }
-
-  const embeddingStr = JSON.stringify(embedding)
+  const embeddingStr = embedding ? JSON.stringify(embedding) : null
   const allMemories = await getAllMemories()
   const similarityThreshold = 0.85
 
   let similarMemory: Memory | null = null
   let maxSimilarity = 0
 
+  const normalizedContent = memory.content.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase()
   for (const existingMemory of allMemories) {
-    if (existingMemory.category !== category || !existingMemory.embedding) continue
+    if (existingMemory.category !== category) continue
+
+    const normalizedExisting = existingMemory.content.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase()
+    if (normalizedExisting === normalizedContent) {
+      similarMemory = existingMemory
+      maxSimilarity = 1
+      break
+    }
+
+    if (!embedding || !existingMemory.embedding) continue
 
     try {
       const existingEmbedding = JSON.parse(existingMemory.embedding) as number[]
@@ -240,7 +252,12 @@ export async function updateMemory(
   let newCategory = updates.category
 
   if (updates.content && !updates.embedding) {
-    newEmbedding = JSON.stringify(await fetchEmbedding(updates.content) || [])
+    try {
+      const embedding = await fetchEmbedding(updates.content)
+      newEmbedding = embedding ? JSON.stringify(embedding) : null
+    } catch {
+      newEmbedding = null
+    }
   }
 
   if (updates.content && !updates.category) {
@@ -252,11 +269,11 @@ export async function updateMemory(
     await db.execute(
       `update memories set
        content = coalesce($1, content),
-       embedding = coalesce($2, embedding),
+       embedding = case when $6 = 1 then $2 else embedding end,
        category = coalesce($3, category),
        updated_at = $4
        where id = $5`,
-      [updates.content, newEmbedding, newCategory, Date.now(), id],
+      [updates.content, newEmbedding, newCategory, Date.now(), id, updates.content || updates.embedding !== undefined ? 1 : 0],
     )
   })
 }

@@ -1,6 +1,7 @@
 import type { Tool } from '@/lib/agent/types'
 import type { AgentRuntimeSnapshot } from '@/lib/agent/runtime-snapshot'
 import type { AgentRoute, ContextPack, VfsRef } from './types'
+import { stableStringify } from '@/lib/stable-stringify'
 import {
   appendAgentSessionEntry,
   createAgentSessionLog,
@@ -57,12 +58,6 @@ type PendingAgentSessionEntry = AgentSessionLogAppendInput['entry']
 
 export type AgentLifecyclePendingEntry = AgentSessionEntryAppendData
 
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-  const record = value as Record<string, unknown>
-  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`
-}
 
 export function createAgentTurnState(input: AgentTurnSnapshotInput): AgentTurnState {
   const visibleToolNames = input.tools.map(tool => tool.name)

@@ -279,7 +279,7 @@ export async function loadProviderTemplates(builtinTemplates: AiConfig[]): Promi
       return mergeTemplateLists(mapRemoteTemplates(latest.content), mapBuiltinTemplates(builtinTemplates))
     }
   } catch (error) {
-    console.error('[provider-templates] failed to fetch remote templates', error)
+    console.warn('[provider-templates] failed to fetch remote templates; using cached or builtin templates', error)
   }
 
   if (cached?.content?.providers?.length) {

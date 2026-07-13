@@ -65,6 +65,7 @@ export const queryKnowledgeTool: Tool = {
     { name: 'requireEvidence', type: 'boolean', required: false, description: 'When true, prioritize evidence blocks for the filePath.' },
     { name: 'includeGraph', type: 'boolean', required: false, description: 'When true, include structured graph nodes and edges for the filePath.' },
     { name: 'includeContentPreview', type: 'boolean', required: false, description: 'When true, allow bounded content previews in search/current-note branches.' },
+    { name: 'timeoutMs', type: 'number', required: false, description: 'Per-branch timeout budget in ms, default 8000, max 60000. Use 0 to disable timeout.' },
   ],
   execute: async (params): Promise<ToolResult> => {
     try {
@@ -72,6 +73,7 @@ export const queryKnowledgeTool: Tool = {
       if (!query) return { success: false, error: 'Missing query' }
 
       const { queryKnowledge } = await import('@/lib/knowledge-query/query-engine')
+      const timeoutMs = params.timeoutMs === undefined ? undefined : Number(params.timeoutMs)
       const result = await queryKnowledge({
         query,
         mode: normalizeMode(params.mode),
@@ -81,6 +83,7 @@ export const queryKnowledgeTool: Tool = {
         requireEvidence: params.requireEvidence === true,
         includeGraph: params.includeGraph === true,
         includeContentPreview: params.includeContentPreview === true,
+        timeoutMs,
       })
 
       const objectLines = result.objects.slice(0, 10).map(formatObjectLine)
@@ -97,7 +100,7 @@ export const queryKnowledgeTool: Tool = {
       const graph = result.graph
         ? `Graph context: nodes=${result.graph.nodes.length}; edges=${result.graph.edges.length}`
         : ''
-      const trace = result.trace.map(item => `- ${item.step}: ${item.status}${typeof item.count === 'number' ? ` (${item.count})` : ''}${item.detail ? ` - ${item.detail}` : ''}`)
+      const trace = result.trace.map(item => `- ${item.step}: ${item.status}${typeof item.count === 'number' ? ` (${item.count})` : ''}${typeof item.durationMs === 'number' ? ` ${item.durationMs}ms` : ''}${item.detail ? ` - ${item.detail}` : ''}`)
 
       return {
         success: true,
@@ -108,6 +111,7 @@ export const queryKnowledgeTool: Tool = {
           current,
           graph,
           result.warnings.length ? `Warnings:\n${result.warnings.slice(0, 5).map(item => `- ${item}`).join('\n')}` : '',
+          result.stats.timedOutBranches.length ? `Timed out branches: ${result.stats.timedOutBranches.join(', ')}` : '',
           `Trace:\n${trace.join('\n')}`,
         ].filter(Boolean).join('\n\n'),
         data: result,

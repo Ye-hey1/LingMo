@@ -26,6 +26,14 @@ export const DEFAULT_STRUCTURED_SEMANTIC_EXTRACTION_SETTINGS: StructuredSemantic
   model: '',
 }
 
+export function shouldAutomaticallyProcessSemanticExtractions(
+  settings: StructuredSemanticExtractionSettings,
+): boolean {
+  return (settings.mode === 'onSave' || settings.mode === 'onIdle')
+    && settings.costWarningAccepted
+    && settings.privacyWarningAccepted
+}
+
 function asMode(value: unknown): StructuredExtractionMode {
   return value === 'off' || value === 'manual' || value === 'onSave' || value === 'onIdle' ? value : 'manual'
 }

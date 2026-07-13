@@ -386,6 +386,8 @@ export function evaluateHarnessToolPolicy(input: {
     toolName,
     category: tool.category,
     intentPolicy,
+    capabilities: tool.capabilities,
+    params,
   })
 }
 

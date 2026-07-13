@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, Brain, Files, Github, Highlighter, LayoutTemplate, Network, Newspaper, Settings, Star, WalletCards, Workflow } from 'lucide-react'
+import { ArrowLeft, Brain, Files, Github, Highlighter, ImagePlus, LayoutTemplate, Network, Newspaper, Settings, Star, WalletCards, Workflow } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -15,6 +15,7 @@ import { useSettingsDialogStore } from '@/stores/settings-dialog'
 import { useSidebarStore } from '@/stores/sidebar'
 import useUpdateStore from '@/stores/update'
 import { AiHotspotsModal } from '@/components/ai-hotspots-modal'
+import { CreativeCanvasModal } from '@/components/creative-canvas-modal'
 import { OutputWorkshopModal } from '@/components/output-workshop-modal'
 import emitter from '@/lib/emitter'
 
@@ -91,6 +92,10 @@ export function LeftSidebarRail() {
   const tCommon = useTranslations('common')
   const [outputWorkshopOpen, setOutputWorkshopOpen] = useState(false)
   const [aiHotspotsOpen, setAiHotspotsOpen] = useState(false)
+  const [creativeCanvasOpen, setCreativeCanvasOpen] = useState(false)
+  const [creativeCanvasRequestId, setCreativeCanvasRequestId] = useState(0)
+  const [creativeCanvasInitialPrompt, setCreativeCanvasInitialPrompt] = useState<string | null>(null)
+  const [creativeCanvasInitialSourcePath, setCreativeCanvasInitialSourcePath] = useState<string | null>(null)
   const [workshopInitialPath, setWorkshopInitialPath] = useState<string | null>(null)
   const [workshopInitialContent, setWorkshopInitialContent] = useState<string | null>(null)
 
@@ -101,9 +106,18 @@ export function LeftSidebarRail() {
       setOutputWorkshopOpen(true)
     }
 
+    const handleOpenCreativeCanvas = (event?: { prompt?: string; sourcePath?: string }) => {
+      setCreativeCanvasInitialPrompt(event?.prompt || null)
+      setCreativeCanvasInitialSourcePath(event?.sourcePath || null)
+      setCreativeCanvasRequestId(current => current + 1)
+      setCreativeCanvasOpen(true)
+    }
+
     emitter.on('open-output-workshop', handleOpenWorkshop)
+    emitter.on('open-creative-canvas', handleOpenCreativeCanvas)
     return () => {
       emitter.off('open-output-workshop', handleOpenWorkshop)
+      emitter.off('open-creative-canvas', handleOpenCreativeCanvas)
     }
   }, [])
 
@@ -168,6 +182,13 @@ export function LeftSidebarRail() {
     await setActiveFilePath(AGENT_CENTER_TAB_PATH)
   }
 
+  const openCreativeCanvas = async () => {
+    setCreativeCanvasInitialPrompt(null)
+    setCreativeCanvasInitialSourcePath(null)
+    setCreativeCanvasRequestId(current => current + 1)
+    setCreativeCanvasOpen(true)
+  }
+
   return (
     <TooltipProvider>
       <aside className="left-sidebar-rail">
@@ -218,6 +239,14 @@ export function LeftSidebarRail() {
             label="Agent 调度"
             onClick={() => {
               void openAgentCenter()
+            }}
+          />
+          <SidebarRailButton
+            active={creativeCanvasOpen}
+            icon={<ImagePlus className="size-4" />}
+            label={t('creativeCanvas.title')}
+            onClick={() => {
+              void openCreativeCanvas()
             }}
           />
           <SidebarRailButton
@@ -276,6 +305,13 @@ export function LeftSidebarRail() {
         open={aiHotspotsOpen}
         onClose={() => setAiHotspotsOpen(false)}
       />
+      <CreativeCanvasModal
+        open={creativeCanvasOpen}
+        onClose={() => setCreativeCanvasOpen(false)}
+        initialPrompt={creativeCanvasInitialPrompt}
+        initialSourcePath={creativeCanvasInitialSourcePath}
+        requestId={creativeCanvasRequestId}
+      />
     </TooltipProvider>
   )
 }
@@ -296,6 +332,12 @@ export function LeftSidebar() {
       previousPrimaryTabRef.current = leftSidebarTab
     }
   }, [leftSidebarTab])
+
+  useEffect(() => {
+    if (leftSidebarTab === 'creativeCanvas') {
+      void setLeftSidebarTab(previousPrimaryTabRef.current)
+    }
+  }, [leftSidebarTab, setLeftSidebarTab])
 
   const exitFavorites = () => {
     void setLeftSidebarTab(previousPrimaryTabRef.current)

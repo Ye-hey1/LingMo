@@ -1,4 +1,3 @@
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import TurndownService from 'turndown'
 import { fetchWechatMpArticleHtml } from '@/lib/wechat-mp-native'
 
@@ -47,34 +46,6 @@ function decodeJsString(value: string) {
       .replace(/\\r/g, '\r')
       .replace(/\\t/g, '\t')
   )
-}
-
-function extractCharset(contentType: string | null) {
-  if (!contentType) {
-    return null
-  }
-  const match = contentType.match(/charset=([^\s;]+)/i)
-  return match?.[1]?.trim().toLowerCase() || null
-}
-
-function decodeBytes(bytes: Uint8Array, contentType: string | null) {
-  const charset = extractCharset(contentType)
-  const candidates = [charset, 'utf-8', 'gb18030', 'gbk', 'big5']
-    .filter((item, index, arr): item is string => !!item && arr.indexOf(item) === index)
-
-  for (const encoding of candidates) {
-    try {
-      return new TextDecoder(encoding).decode(bytes)
-    } catch {
-      // continue
-    }
-  }
-
-  try {
-    return new TextDecoder().decode(bytes)
-  } catch {
-    return ''
-  }
 }
 
 function extractJsString(html: string, name: string) {
@@ -425,57 +396,9 @@ export function parseWechatArticleHtml(html: string, url: string): WechatArticle
 
 export async function fetchWechatArticleAsMarkdown(url: string): Promise<WechatArticleResult> {
   const articleUrl = getWechatArticleUrl(url)
-  try {
-    const nativeHtml = await fetchWechatMpArticleHtml(articleUrl)
-    if (nativeHtml.trim()) {
-      return parseWechatArticleHtml(nativeHtml, articleUrl)
-    }
-  } catch (error) {
-    console.warn('[wechat-article] native mp session fetch skipped:', error)
+  const nativeHtml = await fetchWechatMpArticleHtml(articleUrl)
+  if (nativeHtml.trim()) {
+    return parseWechatArticleHtml(nativeHtml, articleUrl)
   }
-
-  const requestHeaders = [
-    {
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.1',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Accept-Encoding': 'identity',
-      Referer: 'https://mp.weixin.qq.com/',
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.49 NetType/WIFI Language/zh_CN',
-    },
-    {
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.1',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Accept-Encoding': 'identity',
-      Referer: 'https://mp.weixin.qq.com/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 MicroMessenger/8.0.49',
-    },
-  ]
-
-  let lastError: unknown = null
-
-  for (const headers of requestHeaders) {
-    try {
-      const response = await tauriFetch(articleUrl, {
-        method: 'GET',
-        connectTimeout: 12000,
-        maxRedirections: 5,
-        headers,
-      })
-
-      if (!response.ok) {
-        throw new Error(`微信公众号文章抓取失败（HTTP ${response.status}）`)
-      }
-
-      const html = decodeBytes(new Uint8Array(await response.arrayBuffer()), response.headers.get('content-type'))
-      return parseWechatArticleHtml(html, articleUrl)
-    } catch (error) {
-      lastError = error
-    }
-  }
-
-  if (lastError instanceof Error) {
-    throw lastError
-  }
-
-  throw new Error('微信公众号文章解析失败')
+  throw new Error('微信公众号文章返回空正文')
 }

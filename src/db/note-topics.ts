@@ -1,4 +1,4 @@
-import { getDb, runDbTransaction, serializedWrite } from './index'
+import { getDb, runDbBatch, serializedWrite } from './index'
 
 export interface NoteTopic {
   id: number
@@ -57,7 +57,7 @@ export async function upsertNoteTopics(
     // 批量插入新记录
     if (topics.length === 0) return
 
-    await runDbTransaction(db, async () => {
+    await runDbBatch(db, async () => {
       for (const topic of topics) {
         await db.execute(
           'insert into note_topics (filename, keyword, weight, source, updated_at) values ($1, $2, $3, $4, $5)',

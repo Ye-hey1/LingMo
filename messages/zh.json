@@ -1462,22 +1462,33 @@
     },
     "imageMethod": {
       "title": "图像识别",
-      "desc": "在这里，你可以配置图像识别相关设置，支持 OCR 和 VLM 两种方式。",
+      "desc": "默认使用系统 OCR 识别图片；配置 VLM 后可优先使用 VLM，失败时自动回退 OCR。",
       "enable": {
         "title": "启用图像识别",
         "desc": "开启后，在截图记录和插图记录时会自动进行图片识别。关闭后将跳过图片识别步骤。"
       },
-      "setPrimary": "设置为默认",
-      "isPrimary": "{type} 已设置为默认",
+      "setPrimary": "设为默认链路",
+      "isPrimary": "{type} 默认链路",
       "ocr": {
-        "title": "OCR",
+        "title": "系统 OCR",
+        "desc": "使用当前系统提供的 OCR 能力识别图片文字。若系统 OCR 不可用，会自动使用兼容 OCR 兜底。",
+        "noProviders": "当前平台暂无可用的内置 OCR 引擎，将使用兼容 OCR 兜底。",
+        "checking": "检测中",
+        "ready": "可用",
+        "unavailable": "不可用",
+        "provider": "引擎",
+        "unknownVersion": "未知版本",
         "languagePacks": "语言包",
-        "checkModels": "在此查询全部模型",
-        "modelInstruction": "以逗号分隔，例如：eng,chi_sim"
+        "languageDesc": "用于系统 OCR 的语言偏好；同时兼容旧 Tesseract 语言包写法。",
+        "languagePlaceholder": "例如：zh-Hans,en-US 或 eng,chi_sim",
+        "checkModels": "查看 Tesseract 语言包",
+        "modelInstruction": "以逗号分隔，例如：zh-Hans,en-US 或 eng,chi_sim。Windows 需在系统中安装对应 OCR 语言包。"
       },
       "vlm": {
-        "title": "视觉语言模型",
-        "desc": "通过视觉语言模型识别图片内容。"
+        "title": "VLM 增强（可选）",
+        "desc": "选择视觉语言模型后，图片会先走 VLM 识别；如果模型不可用、识别失败或未返回内容，仍会自动回退 OCR。",
+        "noModel": "不使用 VLM",
+        "clearModel": "清除 VLM 模型"
       }
     },
     "file": {
@@ -3687,6 +3698,41 @@
       "calculating": "计算中",
       "pending": "进度 {progress}%",
       "synced": "已同步"
+    }
+  },
+  "creativeCanvas": {
+    "title": "创意画布",
+    "sendSelection": "发送到创意画布",
+    "selectionRequiredTitle": "请先选中一段文本",
+    "selectionRequiredDescription": "创意画布会把当前选区作为生图提示词。",
+    "openedTitle": "已打开创意画布",
+    "openedDescription": "选区已填入生图提示词。",
+    "sendFailed": "发送失败",
+    "canvasName": "无限画布",
+    "refresh": "刷新",
+    "prompt": { "placeholder": "输入想生成的画面", "create": "创建流程", "createAndRun": "创建并生成", "required": "请先输入提示词" },
+    "project": { "section": "画布", "new": "新建画布", "defaultName": "无限画布 {number}", "delete": "删除画布", "deleteTitle": "删除这个画布？", "deleteDescription": "“{title}”中的节点、任务和生成素材将被删除，此操作无法撤销。", "deleteConfirm": "删除画布", "deleteSuccess": "画布已删除", "deleteFailed": "画布删除失败", "cancel": "取消", "empty": "暂无画布，请新建一个画布" },
+    "model": { "section": "画布模型", "inheritGlobal": "跟随全局模型", "inheritCanvas": "跟随画布模型", "search": "搜索图片模型", "empty": "没有可用的图片模型", "manage": "管理模型与服务商", "node": "节点模型" },
+    "appearance": { "section": "画布外观", "snap": "吸附", "snapHint": "拖动时吸附到网格", "grid": "网格", "dots": "点阵", "blank": "空白", "minimap": "小地图", "toggleMinimap": "显示或隐藏小地图" },
+    "assets": { "section": "素材", "cleanup": "清理未引用素材", "empty": "生成图片会显示在这里", "add": "放到画布", "insert": "插入笔记", "import": "导入参考图", "importSuccess": "已导入参考图", "importSuccessDescription": "{count} 张图片已放到画布。", "importFailed": "导入参考图失败", "insertSuccess": "已插入图片引用", "insertFailed": "插入失败", "addSuccess": "已添加参考图节点", "addFailed": "添加失败" },
+    "jobs": { "section": "任务", "recover": "恢复中断任务", "empty": "暂无生成任务", "retry": "重试", "retrySuccess": "已重试生成任务", "retryFailed": "重试失败", "idle": "空闲", "queued": "排队中", "running": "运行中", "succeeded": "已完成", "failed": "失败", "cancelled": "已取消", "stale": "已中断" },
+    "toolbar": { "undo": "撤销", "redo": "重做", "select": "选择与移动", "text": "文本节点", "box": "框选", "importImage": "导入参考图", "importJson": "导入 infinite-canvas JSON", "run": "运行生成", "runMany": "批量运行生成", "delete": "删除", "duplicate": "复制", "export": "复制快照", "fit": "适配全部节点", "zoomOut": "缩小", "zoomIn": "放大" },
+    "assistant": { "title": "画布操作", "welcome": "选择节点或输入画布指令。", "help": "查看画布概览、运行选中节点、恢复中断任务或检查可清理素材。这里执行的是本地画布命令，不是 AI 对话。", "actions": "画布快捷操作", "status": "{nodes} 个节点 · {selected} 个已选 · {running} 个运行中", "result": "最近操作结果", "summary": "查看概览", "run": "运行选中", "recover": "恢复任务", "cleanup": "检查素材", "placeholder": "输入画布命令", "send": "执行命令", "summarySelected": "已选 {count} 个节点：{names}", "summaryNoSelection": "当前没有选中节点", "summaryCanvas": "{title}：{nodes} 个节点、{edges} 条连线、{assets} 个素材。", "summaryRunning": "{count} 个任务正在运行。", "summaryNoRunning": "没有运行中的任务。", "summaryStale": "{count} 个中断任务可重试。", "ranSelected": "已运行 {count} 个选中节点。", "createdFlow": "已创建生图流程。", "commands": { "summary": "查看画布概览", "run": "运行选中节点", "recover": "恢复中断任务", "cleanup": "检查可清理素材" } },
+    "inspector": { "title": "节点属性", "none": "未选择节点", "nodeTitle": "标题", "width": "宽", "height": "高", "status": "状态", "insertCurrentImage": "插入当前图片到笔记", "edges": "入边 / 出边", "input": "输入", "output": "输出", "deleteEdge": "删除连线", "noEdges": "暂无连线", "unknownNode": "未知节点", "help": "选择节点后可以编辑参数、运行生成或插入图片。" },
+    "nodes": { "imageEmpty": "无图片素材", "imageAlt": "画布图片", "textPlaceholder": "写下画面、风格、构图或约束...", "configPlaceholder": "可覆盖提示词；默认读取上游文本", "reserved": "预留节点类型" },
+    "selection": { "required": "请先选择一个节点" },
+    "snapshot": { "copied": "画布快照已复制" },
+    "recovery": { "restored": "已恢复 {count} 个中断任务。", "none": "没有发现需要恢复的中断任务。", "completed": "任务恢复检查完成" },
+    "cleanup": { "analysis": "可清理 {assets} 个未引用素材、{files} 个孤立文件，预计释放 {bytes}。", "analysisCompleted": "资产清理分析完成", "emptyTitle": "无需清理", "emptyDescription": "没有发现未引用素材或孤立文件。", "confirm": "将删除 {assets} 个未引用素材和 {files} 个孤立文件，预计释放 {bytes}。继续？", "result": "已清理 {assets} 个素材、{files} 个文件。{failures}", "failures": "失败 {count} 个。", "completed": "资产清理完成" },
+    "jsonImport": { "completed": "已导入画布 JSON", "summary": "{nodes} 个节点，{edges} 条连线。", "warnings": "导入完成，但有提示：\n{warnings}", "failed": "导入 JSON 失败" },
+    "ports": { "connectTo": "连接到 {title}", "input": "输入端口", "connectFrom": "从 {title} 创建连线", "output": "拖动创建连线", "resize": "调整 {title} 大小", "resizeHint": "拖动调整大小" },
+    "context": { "text": "新建提示词节点", "config": "新建生图配置", "image": "导入参考图", "run": "运行选中节点", "delete": "删除选中节点" },
+    "actions": {
+      "cancel": "取消"
+    },
+    "generation": {
+      "cancelled": "生成已取消",
+      "cancelRequested": "正在取消生成任务"
     }
   }
 }

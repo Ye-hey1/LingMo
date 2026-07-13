@@ -1,4 +1,5 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
+import { clampNumber } from '@/lib/clamp'
 import { Store } from '@tauri-apps/plugin-store'
 import { invokeAiJson } from '@/lib/ai/tauri-client'
 import useSettingStore from '@/stores/setting'
@@ -139,14 +140,6 @@ interface DuckDuckGoRawResponse {
 
 const DUCKDUCKGO_QUERY_CHAR_LIMIT = 500
 
-function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
-  const parsed = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(parsed)) {
-    return fallback
-  }
-
-  return Math.min(max, Math.max(min, Math.floor(parsed)))
-}
 
 function normalizeFallbackSearchQuery(query: string): string {
   return query.replace(/\s+/g, ' ').trim().slice(0, DUCKDUCKGO_QUERY_CHAR_LIMIT)

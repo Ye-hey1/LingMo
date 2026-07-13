@@ -86,8 +86,15 @@ export function ChatClipboard({chat}: { chat: Chat }) {
       setQueue(queueId, { progress: t('ai') });
       const file = await readFile(toPath, { baseDir: BaseDirectory.AppData })
       const base64 = `data:image/png;base64,${Buffer.from(file).toString('base64')}`
-      content = await fetchAiDescByImage(base64) || 'VLM Error'
-      desc = content
+      content = await fetchAiDescByImage(base64) || ''
+
+      if (content.trim()) {
+        desc = content
+      } else {
+        setQueue(queueId, { progress: t('ocr') });
+        content = await ocr(toPath)
+        desc = content
+      }
     } else {
       // 使用 OCR 识别图片
       setQueue(queueId, { progress: t('ocr') });

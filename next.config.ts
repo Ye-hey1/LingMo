@@ -16,6 +16,7 @@ const withNextIntl = createNextIntlPlugin();
 
 const nextConfig: NextConfig = {
   /* config options here */
+  distDir: process.env.LINGMO_NEXT_DIST_DIR || '.next',
   output: isProd ? "export" : undefined,
   images: {
     unoptimized: true,

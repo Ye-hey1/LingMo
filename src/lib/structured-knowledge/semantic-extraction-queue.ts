@@ -3,13 +3,17 @@
 import { exists, readTextFile } from '@tauri-apps/plugin-fs'
 import { getFilePathOptions, getWorkspacePath } from '@/lib/workspace'
 import {
+  DEFAULT_SEMANTIC_EXTRACTION_LEASE_MS,
   getStructuredDocumentByPath,
-  markStructuredSemanticExtractionFailed,
+  getStructuredDocumentsNeedingSemanticExtraction,
   markStructuredSemanticExtractionRequested,
 } from '@/db/structured-knowledge'
 import { syncStructuredMarkdownContent } from './sync'
 import { extractNoteSemantics } from './semantic-extractor'
-import { getStructuredSemanticExtractionSettings } from './semantic-extraction-settings'
+import {
+  getStructuredSemanticExtractionSettings,
+  shouldAutomaticallyProcessSemanticExtractions,
+} from './semantic-extraction-settings'
 
 interface SemanticExtractionTask {
   filePath: string
@@ -22,6 +26,8 @@ export interface SemanticExtractionQueueSnapshot {
   size: number
   isProcessing: boolean
   queuedPaths: string[]
+  lastRecoveryAt?: number
+  lastRecoveredCount?: number
 }
 
 function normalizePath(path: string) {
@@ -36,9 +42,12 @@ class SemanticExtractionQueue {
   private tasks = new Map<string, SemanticExtractionTask>()
   private isProcessing = false
   private timer: ReturnType<typeof setTimeout> | null = null
+  private recoveryTimer: ReturnType<typeof setTimeout> | null = null
   private lastActivityAt = Date.now()
   private dailyKey = ''
   private dailyCount = 0
+  private lastRecoveryAt: number | undefined
+  private lastRecoveredCount = 0
 
   noteActivity() {
     this.lastActivityAt = Date.now()
@@ -59,22 +68,31 @@ class SemanticExtractionQueue {
       size: this.tasks.size,
       isProcessing: this.isProcessing,
       queuedPaths: Array.from(this.tasks.keys()),
+      lastRecoveryAt: this.lastRecoveryAt,
+      lastRecoveredCount: this.lastRecoveredCount,
     }
   }
 
   clear() {
     this.tasks.clear()
     if (this.timer) clearTimeout(this.timer)
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer)
     this.timer = null
+    this.recoveryTimer = null
+    // ponytail: 重置日限额与活动时间，避免跨日 reset 后复用陈旧预算
+    this.dailyKey = ''
+    this.dailyCount = 0
+    this.lastActivityAt = Date.now()
   }
 
   async flush() {
     if (this.isProcessing) return
     this.isProcessing = true
+    let autoProcessingEnabled = false
     try {
       const settings = await getStructuredSemanticExtractionSettings()
-      if (settings.mode === 'off' || settings.mode === 'manual') return
-      if (!settings.costWarningAccepted || !settings.privacyWarningAccepted) return
+      autoProcessingEnabled = shouldAutomaticallyProcessSemanticExtractions(settings)
+      if (!autoProcessingEnabled) return
 
       const idleMs = settings.mode === 'onSave' ? 0 : settings.idleSeconds * 1000
       const waitMs = idleMs - (Date.now() - this.lastActivityAt)
@@ -92,8 +110,55 @@ class SemanticExtractionQueue {
       }
     } finally {
       this.isProcessing = false
-      if (this.tasks.size > 0) this.schedule()
+      if (this.tasks.size > 0 && autoProcessingEnabled) {
+        if (!this.timer) this.schedule()
+      }
     }
+  }
+
+  async recoverPending(limit = 25) {
+    const settings = await getStructuredSemanticExtractionSettings()
+    const autoProcessingEnabled = shouldAutomaticallyProcessSemanticExtractions(settings)
+    this.lastRecoveryAt = Date.now()
+    this.lastRecoveredCount = 0
+    if (!autoProcessingEnabled) return 0
+
+    const now = Date.now()
+    const cooldownMs = DEFAULT_SEMANTIC_EXTRACTION_LEASE_MS
+    const documents = await getStructuredDocumentsNeedingSemanticExtraction({
+      limit: Math.max(limit, 50),
+      cooldownMs,
+      now,
+      includeActiveRunning: true,
+    })
+    let recovered = 0
+    let nextRecoveryDelay: number | undefined
+
+    for (const document of documents) {
+      if (document.semanticExtractionStatus === 'running' && document.semanticExtractionStartedAt) {
+        const recoveryDelay = document.semanticExtractionStartedAt + cooldownMs - now
+        if (recoveryDelay > 0) {
+          nextRecoveryDelay = nextRecoveryDelay === undefined
+            ? recoveryDelay
+            : Math.min(nextRecoveryDelay, recoveryDelay)
+          continue
+        }
+      }
+      if (recovered >= limit) continue
+      const filePath = normalizePath(document.filePath)
+      if (!filePath || !isMarkdownPath(filePath) || this.tasks.has(filePath)) continue
+      this.tasks.set(filePath, {
+        filePath,
+        reason: 'startup-recovery',
+        queuedAt: Date.now(),
+      })
+      recovered++
+    }
+
+    this.lastRecoveredCount = recovered
+    if (recovered > 0) this.schedule()
+    if (nextRecoveryDelay !== undefined) this.scheduleRecovery(nextRecoveryDelay, limit)
+    return recovered
   }
 
   private schedule(delayMs?: number) {
@@ -103,6 +168,14 @@ class SemanticExtractionQueue {
       this.timer = null
       void this.flush()
     }, runAfter)
+  }
+
+  private scheduleRecovery(delayMs: number, limit: number) {
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer)
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = null
+      void this.recoverPending(limit)
+    }, Math.max(1000, delayMs))
   }
 
   private takeNewestTasks(limit: number) {
@@ -163,7 +236,6 @@ class SemanticExtractionQueue {
     try {
       await extractNoteSemantics({ filePath: task.filePath, mode: 'both', maxBlocks, overwrite: true })
     } catch (error) {
-      await markStructuredSemanticExtractionFailed(document.id, error instanceof Error ? error.message : String(error))
       console.warn(`[SemanticExtractionQueue] Failed to extract ${task.filePath}:`, error)
     }
   }
@@ -182,4 +254,8 @@ export function enqueueSemanticExtraction(task: { filePath: string; content?: st
 
 export async function flushSemanticExtractionQueue() {
   await getSemanticExtractionQueue().flush()
+}
+
+export async function recoverPendingSemanticExtractions(options: { limit?: number } = {}) {
+  return await getSemanticExtractionQueue().recoverPending(options.limit)
 }

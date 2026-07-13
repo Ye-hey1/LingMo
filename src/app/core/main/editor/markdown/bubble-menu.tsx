@@ -33,6 +33,7 @@ import {
   Trash2,
   WalletCards,
   MoreHorizontal,
+  ImagePlus,
 } from 'lucide-react'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
@@ -122,6 +123,7 @@ interface BubbleMenuProps {
   onAITranslate?: (targetLanguage: string) => void
   onQuoteToChat?: () => void
   onCreateFlashcard?: () => void
+  onSendToCreativeCanvas?: () => void
 }
 
 type FloatingMenuPosition = {
@@ -205,8 +207,10 @@ export function BubbleMenu({
   onAITranslate,
   onQuoteToChat,
   onCreateFlashcard,
+  onSendToCreativeCanvas,
 }: BubbleMenuProps) {
   const t = useTranslations('editor')
+  const tRoot = useTranslations()
   const [show, setShow] = useState(false)
   const [position, setPosition] = useState({ top: 0, left: 0 })
   const [showAISubmenu, setShowAISubmenu] = useState(false)
@@ -915,6 +919,9 @@ export function BubbleMenu({
           </button>
           <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onCreateFlashcard?.() }}>
             <WalletCards className="w-3.5 h-3.5" /><span>生成闪卡</span>
+          </button>
+          <button className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted flex items-center gap-2" onClick={() => { setShowAISubmenu(false); onSendToCreativeCanvas?.() }}>
+            <ImagePlus className="w-3.5 h-3.5" /><span>{tRoot('creativeCanvas.sendSelection')}</span>
           </button>
         </div>
       )}

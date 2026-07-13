@@ -9,7 +9,7 @@ import {
   ItemDescription,
   ItemActions,
 } from '@/components/ui/item'
-import { BotMessageSquare, PenTool, Zap, GitCommit, FileText, Lightbulb, WandSparkles } from 'lucide-react'
+import { BotMessageSquare, PenTool, Zap, GitCommit, FileText, Lightbulb, WandSparkles, ImagePlus } from 'lucide-react'
 import { ModelSelect } from './model-select'
 
 interface DefaultModelsSettingsProps {
@@ -75,6 +75,19 @@ export function DefaultModelsSettings({ type }: DefaultModelsSettingsProps) {
             </ItemContent>
             <ItemActions>
               <ModelSelect modelKey="promptEnhancer" />
+            </ItemActions>
+          </Item>
+
+          <Item variant="outline">
+            <ItemMedia variant="icon">
+              <ImagePlus className="size-4" />
+            </ItemMedia>
+            <ItemContent>
+              <ItemTitle>创意画布生图模型</ItemTitle>
+              <ItemDescription>选择用于文生图和参考图编辑的 image 类型模型</ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <ModelSelect modelKey="imageGeneration" />
             </ItemActions>
           </Item>
         </>

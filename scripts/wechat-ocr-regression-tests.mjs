@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+
+const wechatSource = await readFile(new URL('../src-tauri/src/wechat_mp.rs', import.meta.url), 'utf8')
+const ocrSource = await readFile(new URL('../src/lib/ocr.ts', import.meta.url), 'utf8')
+const readerSource = await readFile(new URL('../src/app/core/main/ai-hotspots/hotspot-reader.tsx', import.meta.url), 'utf8')
+
+assert.match(wechatSource, /strict_wechat_redirect_policy/)
+assert.match(wechatSource, /bytes_stream\(\)/)
+assert.match(wechatSource, /append_limited_chunk/)
+assert.match(wechatSource, /is_wechat_verification_page/)
+assert.match(wechatSource, /is_wechat_article_content/)
+assert.match(wechatSource, /请在微信客户端打开链接/)
+assert.match(wechatSource, /WECHAT_ARTICLE_REQUEST_TIMEOUT_SECS/)
+assert.match(wechatSource, /WECHAT_IMAGE_REQUEST_TIMEOUT_SECS/)
+assert.match(wechatSource, /\.connect_timeout\(/)
+assert.match(wechatSource, /\.read_timeout\(/)
+assert.match(wechatSource, /\.timeout\(/)
+
+assert.match(ocrSource, /getSystemOcrLanguages/)
+assert.match(ocrSource, /preferChineseSystemOcrLanguages/)
+assert.match(ocrSource, /eng.*chi_sim/)
+assert.match(ocrSource, /systemResult\.trim\(\)/)
+assert.doesNotMatch(ocrSource, /return systemResult \|\| ''/)
+
+assert.match(readerSource, /WECHAT_IMAGE_MAX_CONCURRENT/)
+assert.match(readerSource, /WECHAT_IMAGE_CACHE_MAX_BYTES/)
+assert.match(readerSource, /withWechatImageConcurrency/)
+assert.match(readerSource, /AbortSignal/)
+assert.match(readerSource, /signal\.addEventListener\('abort'/)
+assert.match(readerSource, /signal\.removeEventListener\('abort'/)
+assert.match(readerSource, /controller\.abort\(\)/)
+assert.match(readerSource, /consumerCount/)
+assert.match(readerSource, /entry\.consumerCount === 0/)
+assert.match(readerSource, /entry\.controller\.abort\(\)/)
+assert.match(readerSource, /fetchWechatMpImageDataUrl\(nativeUrl\),\s*controller\.signal/)
+assert.doesNotMatch(readerSource, /fetchWechatMpImageDataUrl\(nativeUrl\), signal/)
+assert.match(readerSource, /workerCount/)
+assert.match(readerSource, /inlineNativeWechatImages\(html, controller\.signal\)/)
+assert.doesNotMatch(readerSource, /const wechatImageDataUrlCache = new Map<string, Promise<string>>\(\)/)
+assert.doesNotMatch(readerSource, /Promise\.all\(images\.map/)
+
+console.log('wechat/OCR regression tests passed')

@@ -8,6 +8,7 @@ import type { AgentEvent, ReActStep, Tool, ToolCall, ToolResult } from '@/lib/ag
 import type { AgentRunControl } from './types'
 import { createAgentEventBus, type AgentEventBus } from '@/lib/agent/event-bus'
 import { deriveIntentPolicy, READ_ONLY_TOOLS, type IntentPolicy } from '@/lib/agent/tool-policy'
+import { stableStringify } from '@/lib/stable-stringify'
 import { buildContextPack } from './context-engine'
 import { buildAgentSystemPrompt } from '@/lib/agent/prompt-assembler'
 import { buildAgentHistoryContext } from '@/lib/agent/context-compression'
@@ -28,6 +29,7 @@ import type { LinkedResource } from '@/lib/files'
 import { AgentLifecycleController } from './turn-lifecycle'
 import { getAiRateLimitUserMessage, isAiRateLimitError } from '@/lib/ai/rate-limit'
 import type { StructuredContextSections } from '@/lib/agent/prompt-assembler'
+import { buildHarnessConversationMessages } from './conversation-messages'
 
 export interface HarnessAgentRunnerConfig {
   runId?: string
@@ -47,6 +49,8 @@ export interface HarnessAgentRunnerConfig {
   }
   linkedResources?: LinkedResource[]
   taskRouteDecision?: AgentTaskRouteDecision
+  /** A semantically expanded query used only for context retrieval. */
+  contextRetrievalQuery?: string
   /**
    * Phase 1 #B：上游（chat-send / 工作流）可显式注入结构化上下文段。
    * 这些段会与 unifiedContextLoader 的输出合并后传给 buildAgentSystemPrompt。
@@ -423,12 +427,6 @@ function sanitizeFinalAnswerContent(content: string) {
   return cleaned || content.trim()
 }
 
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-  const record = value as Record<string, unknown>
-  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`
-}
 
 function buildToolStepSignature(toolName?: string, params?: Record<string, any>) {
   if (!toolName || isSupportOnlyToolName(toolName)) return undefined
@@ -597,7 +595,9 @@ function buildReActBudgetPrompt(input: {
 function buildQuickAnswerSystemPrompt() {
   return [
     '你是小墨，一个响应很快的本地知识管理助手。',
-    '当前请求已被判定为简单问题，请直接回答，不要调用工具，不要输出内部思考、Action、Observation 或 JSON 包装。',
+    '当前请求已被判定为无需工具的快速回答，请直接回答，不要调用工具，不要输出内部思考、Action、Observation 或 JSON 包装。',
+    '你必须阅读随请求提供的对话历史与 Conversation Continuity：短数字、字母、“继续”“这个”等可能是在选择或承接上一条回答，不能擅自当成独立问题。',
+    '已给出唯一承接目标时直接延续；只有确实存在多个同等可能目标时，才问一个简短而精确的澄清问题。',
     '回答要短而有用；能一句话讲清就不要展开成长篇。需要步骤时最多给 3-5 条。',
     '如果用户实际需要读取本地文件、联网、写入或执行操作，请用一句话说明需要进入完整 Agent 工具模式，而不是假装已经完成。',
   ].join('\n')
@@ -842,7 +842,8 @@ export class HarnessAgentRunner {
     try {
       const { unifiedContextLoader } = await import('@/lib/context/unified-loader')
       const activeFilePath = this.config.currentQuote?.fileName || await this.getActiveNotePathForContext()
-      const unifiedContext = await unifiedContextLoader.getContextForAgent(userInput, { activeFilePath })
+      const retrievalQuery = this.config.contextRetrievalQuery?.trim() || userInput
+      const unifiedContext = await unifiedContextLoader.getContextForAgent(retrievalQuery, { activeFilePath })
       const sections = unifiedContext.sections || {}
 
       // memories + workingMemory 都属于"长期记忆"，合并到 memory 槽
@@ -935,21 +936,7 @@ export class HarnessAgentRunner {
     userInput: string,
     contextOrMessages?: string | OpenAI.Chat.ChatCompletionMessageParam[],
   ): OpenAI.Chat.ChatCompletionMessageParam[] {
-    if (Array.isArray(contextOrMessages) && contextOrMessages.length > 0) {
-      const withoutSystem = contextOrMessages.filter(message => message.role !== 'system')
-      return [
-        { role: 'system', content: systemPrompt },
-        ...withoutSystem,
-      ]
-    }
-
-    return [
-      { role: 'system', content: systemPrompt },
-      ...(typeof contextOrMessages === 'string'
-        ? [{ role: 'system' as const, content: contextOrMessages }]
-        : []),
-      { role: 'user', content: userInput },
-    ]
+    return buildHarnessConversationMessages(systemPrompt, userInput, contextOrMessages)
   }
 
   private async prepareHarnessModelStep(input: {

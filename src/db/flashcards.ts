@@ -1,4 +1,4 @@
-import { getDb, runDbTransaction, serializedWrite } from './index'
+import { getDb, runDbBatch, serializedWrite } from './index'
 import type {
   CreateFlashcardInput,
   Flashcard,
@@ -237,7 +237,7 @@ export async function createFlashcard(input: CreateFlashcardInput) {
     const db = await getDb()
     const ts = now()
     const tags = uniqueTags(input.tags)
-    await db.execute(
+    const result = await db.execute(
       `insert into flashcards
         (deckId, noteId, notePath, type, front, back, clozeText, tags, status, ease, interval, repetitions, dueAt, lastReviewAt, createdAt, updatedAt)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
@@ -260,9 +260,8 @@ export async function createFlashcard(input: CreateFlashcardInput) {
         ts,
       ],
     )
-    const rows = await db.select<Array<{ id: number }>>('select last_insert_rowid() as id')
-    if (rows[0]?.id) {
-      await syncFlashcardTagIndex(db, rows[0].id, tags)
+    if (typeof result.lastInsertId === 'number') {
+      await syncFlashcardTagIndex(db, result.lastInsertId, tags)
     }
   })
 }
@@ -273,12 +272,12 @@ export async function createFlashcardsBatch(inputs: CreateFlashcardInput[]) {
   await serializedWrite(async () => {
     const db = await getDb()
     try {
-      await runDbTransaction(db, async () => {
+      await runDbBatch(db, async () => {
         for (let index = 0; index < inputs.length; index += 1) {
           const input = inputs[index]
           const ts = now()
           const tags = uniqueTags(input.tags)
-          await db.execute(
+          const result = await db.execute(
             `insert into flashcards
               (deckId, noteId, notePath, type, front, back, clozeText, tags, status, ease, interval, repetitions, dueAt, lastReviewAt, createdAt, updatedAt)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
@@ -301,9 +300,8 @@ export async function createFlashcardsBatch(inputs: CreateFlashcardInput[]) {
               ts,
             ],
           )
-          const rows = await db.select<Array<{ id: number }>>('select last_insert_rowid() as id')
-          if (rows[0]?.id) {
-            await syncFlashcardTagIndex(db, rows[0].id, tags)
+          if (typeof result.lastInsertId === 'number') {
+            await syncFlashcardTagIndex(db, result.lastInsertId, tags)
           }
         }
       })

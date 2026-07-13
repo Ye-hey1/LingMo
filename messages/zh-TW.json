@@ -1284,22 +1284,33 @@
     },
     "imageMethod": {
       "title": "圖像識別",
-      "desc": "在這裡，你可以配置圖像識別相關設置，支持 OCR 和 VLM 兩種方式。",
-      "setPrimary": "設置為默認",
-      "isPrimary": "{type} 已設置為默認",
+      "desc": "預設使用系統 OCR 識別圖片；設定 VLM 後可優先使用 VLM，失敗時自動回退 OCR。",
+      "setPrimary": "設為預設鏈路",
+      "isPrimary": "{type} 預設鏈路",
       "ocr": {
-        "title": "OCR",
+        "title": "系統 OCR",
+        "desc": "使用目前系統提供的 OCR 能力識別圖片文字。若系統 OCR 不可用，會自動使用相容 OCR 兜底。",
+        "noProviders": "目前平台暫無可用的內建 OCR 引擎，將使用相容 OCR 兜底。",
+        "checking": "檢測中",
+        "ready": "可用",
+        "unavailable": "不可用",
+        "provider": "引擎",
+        "unknownVersion": "未知版本",
         "languagePacks": "語言包",
-        "checkModels": "在此查詢全部模型",
-        "modelInstruction": "以逗號分隔，例如：eng,chi_sim"
+        "languageDesc": "用於系統 OCR 的語言偏好；同時相容舊 Tesseract 語言包寫法。",
+        "languagePlaceholder": "例如：zh-Hans,en-US 或 eng,chi_sim",
+        "checkModels": "查看 Tesseract 語言包",
+        "modelInstruction": "以逗號分隔，例如：zh-Hans,en-US 或 eng,chi_sim。Windows 需在系統中安裝對應 OCR 語言包。"
       },
       "vlm": {
-        "title": "視覺語言模型",
-        "desc": "通過視覺語言模型識別圖片內容。"
+        "title": "VLM 增強（可選）",
+        "desc": "選擇視覺語言模型後，圖片會先走 VLM 識別；如果模型不可用、識別失敗或未返回內容，仍會自動回退 OCR。",
+        "noModel": "不使用 VLM",
+        "clearModel": "清除 VLM 模型"
       },
       "enable": {
-        "title": "启用图像识别",
-        "desc": "开启后，在截图记录和插图记录时会自动进行图片识别。关闭后将跳过图片识别步骤。"
+        "title": "啟用圖像識別",
+        "desc": "開啟後，在截圖記錄和插圖記錄時會自動進行圖片識別。關閉後將跳過圖片識別步驟。"
       }
     },
     "file": {
@@ -3264,5 +3275,40 @@
     "sourceDesc": "拖入多篇筆記，AI 會合併提煉知識點。",
     "addToSource": "加入當前",
     "clear": "清空"
+  },
+  "creativeCanvas": {
+    "title": "創意畫布",
+    "sendSelection": "傳送到創意畫布",
+    "selectionRequiredTitle": "請先選取一段文字",
+    "selectionRequiredDescription": "創意畫布會將目前選取內容作為生圖提示詞。",
+    "openedTitle": "已開啟創意畫布",
+    "openedDescription": "選取內容已填入生圖提示詞。",
+    "sendFailed": "傳送失敗",
+    "canvasName": "無限畫布",
+    "refresh": "重新整理",
+    "prompt": { "placeholder": "輸入想生成的畫面", "create": "建立流程", "createAndRun": "建立並生成", "required": "請先輸入提示詞" },
+    "project": { "section": "畫布", "new": "新增畫布", "defaultName": "無限畫布 {number}", "delete": "刪除畫布", "deleteTitle": "刪除這個畫布？", "deleteDescription": "「{title}」中的節點、任務和生成素材將被刪除，此操作無法復原。", "deleteConfirm": "刪除畫布", "deleteSuccess": "畫布已刪除", "deleteFailed": "畫布刪除失敗", "cancel": "取消", "empty": "尚無畫布，請新增一個畫布" },
+    "model": { "section": "畫布模型", "inheritGlobal": "跟隨全域模型", "inheritCanvas": "跟隨畫布模型", "search": "搜尋圖片模型", "empty": "沒有可用的圖片模型", "manage": "管理模型與服務商", "node": "節點模型" },
+    "appearance": { "section": "畫布外觀", "snap": "吸附", "snapHint": "拖動時吸附到網格", "grid": "網格", "dots": "點陣", "blank": "空白", "minimap": "小地圖", "toggleMinimap": "顯示或隱藏小地圖" },
+    "assets": { "section": "素材", "cleanup": "清理未使用素材", "empty": "生成圖片會顯示在這裡", "add": "放到畫布", "insert": "插入筆記", "import": "匯入參考圖", "importSuccess": "已匯入參考圖", "importSuccessDescription": "{count} 張圖片已放到畫布。", "importFailed": "匯入參考圖失敗", "insertSuccess": "已插入圖片引用", "insertFailed": "插入失敗", "addSuccess": "已新增參考圖節點", "addFailed": "新增失敗" },
+    "jobs": { "section": "任務", "recover": "恢復中斷任務", "empty": "暫無生成任務", "retry": "重試", "retrySuccess": "已重試生成任務", "retryFailed": "重試失敗", "idle": "閒置", "queued": "排隊中", "running": "執行中", "succeeded": "已完成", "failed": "失敗", "cancelled": "已取消", "stale": "已中斷" },
+    "toolbar": { "undo": "復原", "redo": "重做", "select": "選取與移動", "text": "文字節點", "box": "框選", "importImage": "匯入參考圖", "importJson": "匯入 infinite-canvas JSON", "run": "執行生成", "runMany": "批次執行生成", "delete": "刪除", "duplicate": "複製", "export": "複製快照", "fit": "適配全部節點", "zoomOut": "縮小", "zoomIn": "放大" },
+    "assistant": { "title": "畫布操作", "welcome": "選取節點或輸入畫布指令。", "help": "查看畫布概覽、執行選取節點、恢復中斷任務或檢查可清理素材。這裡執行本機畫布指令，不是 AI 對話。", "actions": "畫布快速操作", "status": "{nodes} 個節點 · {selected} 個已選 · {running} 個執行中", "result": "最近操作結果", "summary": "查看概覽", "run": "執行選取", "recover": "恢復任務", "cleanup": "檢查素材", "placeholder": "輸入畫布指令", "send": "執行指令", "summarySelected": "已選 {count} 個節點：{names}", "summaryNoSelection": "目前沒有選取節點", "summaryCanvas": "{title}：{nodes} 個節點、{edges} 條連線、{assets} 個素材。", "summaryRunning": "{count} 個任務正在執行。", "summaryNoRunning": "沒有執行中的任務。", "summaryStale": "{count} 個中斷任務可重試。", "ranSelected": "已執行 {count} 個選取節點。", "createdFlow": "已建立生圖流程。", "commands": { "summary": "查看畫布概覽", "run": "執行選取節點", "recover": "恢復中斷任務", "cleanup": "檢查可清理素材" } },
+    "inspector": { "title": "節點屬性", "none": "未選取節點", "nodeTitle": "標題", "width": "寬", "height": "高", "status": "狀態", "insertCurrentImage": "插入目前圖片到筆記", "edges": "入邊 / 出邊", "input": "輸入", "output": "輸出", "deleteEdge": "刪除連線", "noEdges": "暫無連線", "unknownNode": "未知節點", "help": "選取節點後可以編輯參數、執行生成或插入圖片。" },
+    "nodes": { "imageEmpty": "無圖片素材", "imageAlt": "畫布圖片", "textPlaceholder": "寫下畫面、風格、構圖或限制...", "configPlaceholder": "可覆蓋提示詞；預設讀取上游文字", "reserved": "預留節點類型" },
+    "selection": { "required": "請先選取一個節點" },
+    "snapshot": { "copied": "畫布快照已複製" },
+    "recovery": { "restored": "已恢復 {count} 個中斷任務。", "none": "沒有需要恢復的中斷任務。", "completed": "任務恢復檢查完成" },
+    "cleanup": { "analysis": "可清理 {assets} 個未使用素材、{files} 個孤立檔案，預計釋放 {bytes}。", "analysisCompleted": "素材清理分析完成", "emptyTitle": "無需清理", "emptyDescription": "沒有發現未使用素材或孤立檔案。", "confirm": "將刪除 {assets} 個未使用素材和 {files} 個孤立檔案，預計釋放 {bytes}。繼續？", "result": "已清理 {assets} 個素材、{files} 個檔案。{failures}", "failures": "失敗 {count} 個。", "completed": "素材清理完成" },
+    "jsonImport": { "completed": "已匯入畫布 JSON", "summary": "{nodes} 個節點，{edges} 條連線。", "warnings": "匯入完成，但有提示：\n{warnings}", "failed": "匯入 JSON 失敗" },
+    "ports": { "connectTo": "連接到 {title}", "input": "輸入端口", "connectFrom": "從 {title} 建立連線", "output": "拖動建立連線", "resize": "調整 {title} 大小", "resizeHint": "拖動調整大小" },
+    "context": { "text": "新增提示詞節點", "config": "新增生圖設定", "image": "匯入參考圖", "run": "執行選取節點", "delete": "刪除選取節點" },
+    "actions": {
+      "cancel": "取消"
+    },
+    "generation": {
+      "cancelled": "已取消生成",
+      "cancelRequested": "正在取消生成任務"
+    }
   }
 }

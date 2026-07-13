@@ -27,11 +27,16 @@ interface MultipartRequestPayload {
   path: string
   fields?: Record<string, string>
   fileFieldName: string
-  file: {
+  file?: {
     bytes: number[]
     fileName: string
     contentType?: string
   }
+  files?: Array<{
+    bytes: number[]
+    fileName: string
+    contentType?: string
+  }>
   requestId?: string
 }
 

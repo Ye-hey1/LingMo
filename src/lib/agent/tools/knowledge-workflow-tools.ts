@@ -55,6 +55,10 @@ function mergeTags(current: string[] | undefined, add: string[], remove: string[
   return Array.from(set)
 }
 
+function issueSummary(issue: { path: string; reason?: string; title?: string }) {
+  return `${issue.path}${issue.reason ? ` (${issue.reason})` : ''}${issue.title ? ` - ${issue.title}` : ''}`
+}
+
 /**
  * tag_files - 批量为多个文件增/删 frontmatter.tags
  */
@@ -436,10 +440,134 @@ export const reindexKnowledgeObjectsTool: Tool = {
   },
 }
 
+/**
+ * get_knowledge_system_health - 聚合知识库索引、向量缓存、语义抽取队列健康。
+ *
+ * 只读诊断工具：用于在重建索引前先判断瓶颈在哪里，避免盲目全量刷新。
+ */
+export const getKnowledgeSystemHealthTool: Tool = {
+  name: 'get_knowledge_system_health',
+  description:
+    'Diagnose local knowledge system health: note index freshness, orphan/stale registry rows, vector cache state, and semantic extraction backlog. ' +
+    'Use before reindexing when knowledge search is stale, slow, incomplete, or inconsistent.',
+  category: 'note',
+  requiresConfirmation: false,
+  risk: 'low',
+  capabilities: ['read'],
+  parameters: [
+    {
+      name: 'sampleLimit',
+      type: 'number',
+      description: 'Maximum example paths to show per issue type, default 5.',
+      required: false,
+    },
+  ],
+  execute: async (params): Promise<ToolResult> => {
+    try {
+      const sampleLimit = Math.max(1, Math.min(20, Number(params.sampleLimit) || 5))
+      const pendingLimit = 50
+      const [
+        { getKnowledgeIndexHealth },
+        { getVectorCacheStats },
+        { getSemanticExtractionQueue },
+        { getStructuredDocumentsNeedingSemanticExtraction },
+      ] = await Promise.all([
+        import('@/lib/knowledge/reindex'),
+        import('@/db/vector'),
+        import('@/lib/structured-knowledge/semantic-extraction-queue'),
+        import('@/db/structured-knowledge'),
+      ])
+
+      const [indexHealth, pendingSemanticDocuments] = await Promise.all([
+        getKnowledgeIndexHealth(),
+        getStructuredDocumentsNeedingSemanticExtraction({ limit: pendingLimit }),
+      ])
+      const vectorCache = getVectorCacheStats()
+      const semanticQueue = getSemanticExtractionQueue().snapshot()
+      const staleSamples = indexHealth.staleNotes.slice(0, sampleLimit)
+      const orphanSamples = indexHealth.orphanNotes.slice(0, sampleLimit)
+      const pendingSemanticSamples = pendingSemanticDocuments.slice(0, sampleLimit).map(document => ({
+        filePath: document.filePath,
+        title: document.title,
+        semanticExtractionStatus: document.semanticExtractionStatus || 'idle',
+        semanticExtractedAt: document.semanticExtractedAt,
+        semanticExtractionRequestedAt: document.semanticExtractionRequestedAt,
+        semanticExtractionAttempts: document.semanticExtractionAttempts || 0,
+      }))
+
+      const warnings = [
+        ...indexHealth.warnings,
+        indexHealth.orphanNotes.length > 0
+          ? `${indexHealth.orphanNotes.length} 个知识对象指向缺失文件`
+          : '',
+        indexHealth.staleNotes.length > 0
+          ? `${indexHealth.staleNotes.length} 个笔记索引陈旧或缺少向量索引`
+          : '',
+        vectorCache.isComplete ? '' : '向量缓存还没有完整快照，首次语义搜索可能需要加载缓存',
+        pendingSemanticDocuments.length > 0
+          ? `${pendingSemanticDocuments.length}${pendingSemanticDocuments.length >= pendingLimit ? '+' : ''} 个结构化笔记等待语义抽取`
+          : '',
+      ].filter(Boolean)
+
+      const messageLines = [
+        `知识系统健康: ${indexHealth.healthStatus}`,
+        `索引: Markdown 文件 ${indexHealth.totalFiles}，活跃注册 ${indexHealth.activeRegistryNotes}，已索引 ${indexHealth.indexedNotes}，陈旧 ${indexHealth.staleNotes.length}，孤儿 ${indexHealth.orphanNotes.length}`,
+        `向量缓存: chunks=${vectorCache.size}, files=${vectorCache.filenames}, complete=${vectorCache.isComplete}, version=${vectorCache.version}`,
+        `语义抽取: queued=${semanticQueue.size}, processing=${semanticQueue.isProcessing}, pendingSample=${pendingSemanticDocuments.length}${pendingSemanticDocuments.length >= pendingLimit ? '+' : ''}, lastRecovered=${semanticQueue.lastRecoveredCount ?? 0}`,
+        staleSamples.length ? `陈旧样例:\n${staleSamples.map(issue => `- ${issueSummary(issue)}`).join('\n')}` : '',
+        orphanSamples.length ? `孤儿样例:\n${orphanSamples.map(issue => `- ${issueSummary(issue)}`).join('\n')}` : '',
+        pendingSemanticSamples.length ? `待语义抽取样例:\n${pendingSemanticSamples.map(document => `- ${document.filePath} (${document.semanticExtractionStatus})`).join('\n')}` : '',
+        warnings.length ? `Warnings:\n${warnings.slice(0, 8).map(warning => `- ${warning}`).join('\n')}` : '',
+      ].filter(Boolean)
+
+      return {
+        success: true,
+        message: messageLines.join('\n'),
+        data: {
+          checkedAt: indexHealth.checkedAt,
+          indexHealth,
+          vectorCache,
+          semanticExtraction: {
+            queue: semanticQueue,
+            pendingSampleCount: pendingSemanticDocuments.length,
+            pendingSampleLimit: pendingLimit,
+            mayHaveMorePending: pendingSemanticDocuments.length >= pendingLimit,
+            pendingSamples: pendingSemanticSamples,
+          },
+          samples: {
+            staleNotes: staleSamples,
+            orphanNotes: orphanSamples,
+          },
+          warnings,
+          summary: {
+            healthStatus: indexHealth.healthStatus,
+            totalFiles: indexHealth.totalFiles,
+            activeRegistryNotes: indexHealth.activeRegistryNotes,
+            indexedNotes: indexHealth.indexedNotes,
+            staleNotes: indexHealth.staleNotes.length,
+            orphanNotes: indexHealth.orphanNotes.length,
+            vectorChunks: vectorCache.size,
+            vectorFilenames: vectorCache.filenames,
+            vectorCacheComplete: vectorCache.isComplete,
+            semanticQueueSize: semanticQueue.size,
+            semanticPendingSampleCount: pendingSemanticDocuments.length,
+          },
+        },
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: `知识系统健康诊断失败: ${formatToolError(error)}`,
+      }
+    }
+  },
+}
+
 export const knowledgeWorkflowTools: Tool[] = [
   tagFilesTool,
   setNoteStatusTool,
   findUnindexedNotesTool,
   bulkEnsureFrontmatterTool,
+  getKnowledgeSystemHealthTool,
   reindexKnowledgeObjectsTool,
 ]

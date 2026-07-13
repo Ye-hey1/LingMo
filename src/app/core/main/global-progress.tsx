@@ -6,16 +6,19 @@ import { cn } from '@/lib/utils'
 import {
   ChevronDown,
   ChevronUp,
+  AlertCircle,
   FileText,
   Globe,
   Image as ImageIcon,
   Link,
   LoaderCircle,
   Mic,
+  RefreshCw,
   Sparkles,
   Video,
 } from 'lucide-react'
 import { useTranslations } from 'next-intl'
+import { retryLinkCaptureJob } from '@/lib/link-pipeline/capture-runner'
 
 type ProgressStep = {
   label: string
@@ -175,6 +178,9 @@ function getFallbackMessage(steps: ProgressStep[], statuses: StepStatus[]) {
 }
 
 function getTaskTitle(queue: MarkQueue, totalCount: number) {
+  if (queue.status === 'failed') {
+    return '链接抓取失败'
+  }
   if (totalCount > 1) {
     return `${totalCount} 个后台任务`
   }
@@ -295,6 +301,7 @@ export function GlobalProgress() {
   const { queues } = useMarkStore()
   const [isExpanded, setIsExpanded] = useState(false)
   const [timeNow, setTimeNow] = useState(Date.now())
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const t = useTranslations('record.mark.type')
 
@@ -328,6 +335,15 @@ export function GlobalProgress() {
   const stepStatuses = getStepStatuses(activeQueue, steps)
   const activeMessage = cleanProgressMessage(activeQueue.progress) || getFallbackMessage(steps, stepStatuses)
   const progressWidth = hasAvgPercent ? avgPercent : 100
+  const retryCapture = async (queue: MarkQueue) => {
+    if (!queue.jobId || retryingJobId) return
+    setRetryingJobId(queue.jobId)
+    try {
+      await retryLinkCaptureJob(queue.jobId)
+    } finally {
+      setRetryingJobId(null)
+    }
+  }
 
   return (
     <div className="pointer-events-none fixed bottom-5 left-1/2 z-50 w-[430px] max-w-[calc(100vw-32px)] -translate-x-1/2 animate-in fade-in slide-in-from-bottom-3 duration-200 motion-reduce:animate-none">
@@ -339,7 +355,9 @@ export function GlobalProgress() {
         <div className="px-3 py-2.5">
           <div className="flex items-start gap-2.5">
             <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-              {totalCount === 1 ? (
+              {activeQueue.status === 'failed' ? (
+                <AlertCircle className="size-3.5 text-red-500" />
+              ) : totalCount === 1 ? (
                 getTaskIcon(activeQueue.type, 'size-3.5')
               ) : (
                 <Sparkles className="size-3.5" />
@@ -375,7 +393,19 @@ export function GlobalProgress() {
           </div>
 
           <div className="mt-2.5">
-            <StepRail steps={steps} statuses={stepStatuses} />
+            {activeQueue.status === 'failed' ? (
+              <button
+                type="button"
+                onClick={() => void retryCapture(activeQueue)}
+                disabled={!activeQueue.jobId || retryingJobId === activeQueue.jobId}
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-red-500/25 bg-red-500/5 py-1.5 text-[11px] text-red-600 transition-colors hover:bg-red-500/10 disabled:opacity-60 dark:text-red-400"
+              >
+                <RefreshCw className={cn('size-3', retryingJobId === activeQueue.jobId && 'animate-spin')} />
+                {retryingJobId === activeQueue.jobId ? '正在重试' : '重新抓取'}
+              </button>
+            ) : (
+              <StepRail steps={steps} statuses={stepStatuses} />
+            )}
           </div>
         </div>
 
@@ -389,7 +419,11 @@ export function GlobalProgress() {
 
               return (
                 <div key={queue.queueId} className="flex items-center gap-2 py-1.5 text-[11px] leading-4">
-                  <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+                  {queue.status === 'failed' ? (
+                    <AlertCircle className="size-3 shrink-0 text-red-500" />
+                  ) : (
+                    <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+                  )}
                   <span className="shrink-0 text-muted-foreground">
                     {t(queue.type) || queue.type}
                   </span>
@@ -404,6 +438,16 @@ export function GlobalProgress() {
                   <span className="w-8 shrink-0 text-right tabular-nums text-muted-foreground/70">
                     {formatRunTime(timeNow, queue.startTime)}
                   </span>
+                  {queue.status === 'failed' && queue.jobId ? (
+                    <button
+                      type="button"
+                      onClick={() => void retryCapture(queue)}
+                      disabled={Boolean(retryingJobId)}
+                      className="shrink-0 text-red-600 hover:underline disabled:opacity-60 dark:text-red-400"
+                    >
+                      重试
+                    </button>
+                  ) : null}
                 </div>
               )
             })}

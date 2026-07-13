@@ -19,6 +19,7 @@ import { matchesConfiguredModelSelection } from '@/lib/ai/model-selection'
 
 const SYNC_PATH = '.data'
 const SYNC_FILENAME = 'chats.json'
+let condenseRequestVersion = 0
 
 function isChunkLoadFailure(error: unknown) {
   const message = error instanceof Error
@@ -517,9 +518,9 @@ const useChatStore = create<ChatState>((set, get) => ({
       return
     }
 
-    // 添加版本号引用，防止竞态条件
-    const versionRef = { current: 0 }
-    const currentVersion = ++versionRef.current
+    // A module-level version lets a newer request invalidate an older async
+    // condensation before either request acquires the store lock.
+    const currentVersion = ++condenseRequestVersion
 
     const { chats } = state
 
@@ -533,7 +534,7 @@ const useChatStore = create<ChatState>((set, get) => ({
         const { shouldCondense, condenseChats } = await import('@/lib/ai/condense')
 
         // 版本号检查：防止被新版本覆盖
-        if (currentVersion !== versionRef.current) {
+        if (currentVersion !== condenseRequestVersion) {
           return
         }
 
@@ -542,7 +543,7 @@ const useChatStore = create<ChatState>((set, get) => ({
         }
 
         // 再次检查版本号
-        if (currentVersion !== versionRef.current) {
+        if (currentVersion !== condenseRequestVersion) {
           return
         }
 
@@ -553,7 +554,7 @@ const useChatStore = create<ChatState>((set, get) => ({
         const condensedResults = await condenseChats(chatsAfterClear)
 
         // 版本号检查：防止在压缩过程中被新版本覆盖
-        if (currentVersion !== versionRef.current) {
+        if (currentVersion !== condenseRequestVersion) {
           return
         }
 

@@ -1,4 +1,4 @@
-import { getDb, serializedWrite, runDbTransaction } from './index'
+import { getDb, runDbBatch, serializedWrite } from './index'
 
 /**
  * 知识对象类型枚举。
@@ -15,6 +15,8 @@ export type KnowledgeObjectType =
   | 'web_clip'
   | 'agent_run'
   | 'diagram'
+  | 'creative_canvas'
+  | 'creative_asset'
 
 export type KnowledgeObjectOrigin =
   | 'manual'
@@ -428,66 +430,69 @@ export async function deleteKnowledgeObject(
 }
 
 /**
- * 批量写入。所有写入在一个事务中，用于初始化或重索引。
+ * 批量顺序写入，用于初始化或重索引。tauri-plugin-sql 使用连接池，
+ * 因此这里保证进程内串行，但不声明跨多条 SQL 的原子性。
  */
 export async function bulkUpsertKnowledgeObjects(
   inputs: Parameters<typeof upsertKnowledgeObject>[0][],
 ): Promise<void> {
   if (inputs.length === 0) return
 
-  const db = await getDb()
-  await runDbTransaction(db, async () => {
-    for (const input of inputs) {
-      const id = `ko_${input.sourceType}_${input.sourceId}`
-      const now = Date.now()
-      const tags = normalizeJsonArray(input.tags)
-      const aliases = normalizeJsonArray(input.aliases)
-      const metadata =
-        typeof input.metadata === 'string'
-          ? input.metadata
-          : input.metadata
-            ? JSON.stringify(input.metadata)
-            : undefined
+  await serializedWrite(async () => {
+    const db = await getDb()
+    await runDbBatch(db, async () => {
+      for (const input of inputs) {
+        const id = `ko_${input.sourceType}_${input.sourceId}`
+        const now = Date.now()
+        const tags = normalizeJsonArray(input.tags)
+        const aliases = normalizeJsonArray(input.aliases)
+        const metadata =
+          typeof input.metadata === 'string'
+            ? input.metadata
+            : input.metadata
+              ? JSON.stringify(input.metadata)
+              : undefined
 
-      await db.execute(
-        `insert into knowledge_objects (
-          id, source_type, source_id, path, title, tags, aliases,
-          source_url, origin, status, content_hash, vector_indexed_at,
-          source_run_id, created_at, updated_at, metadata
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-        on conflict(source_type, source_id) do update set
-          path = excluded.path,
-          title = excluded.title,
-          tags = excluded.tags,
-          aliases = excluded.aliases,
-          source_url = excluded.source_url,
-          origin = excluded.origin,
-          status = excluded.status,
-          content_hash = excluded.content_hash,
-          vector_indexed_at = excluded.vector_indexed_at,
-          source_run_id = excluded.source_run_id,
-          updated_at = excluded.updated_at,
-          metadata = excluded.metadata`,
-        [
-          id,
-          input.sourceType,
-          String(input.sourceId),
-          input.path ?? null,
-          input.title || '',
-          tags ?? null,
-          aliases ?? null,
-          input.sourceUrl ?? null,
-          input.origin ?? 'manual',
-          input.status ?? 'active',
-          input.contentHash ?? null,
-          input.vectorIndexedAt ?? null,
-          input.sourceRunId ?? null,
-          now,
-          now,
-          metadata ?? null,
-        ],
-      )
-    }
+        await db.execute(
+          `insert into knowledge_objects (
+            id, source_type, source_id, path, title, tags, aliases,
+            source_url, origin, status, content_hash, vector_indexed_at,
+            source_run_id, created_at, updated_at, metadata
+          ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          on conflict(source_type, source_id) do update set
+            path = excluded.path,
+            title = excluded.title,
+            tags = excluded.tags,
+            aliases = excluded.aliases,
+            source_url = excluded.source_url,
+            origin = excluded.origin,
+            status = excluded.status,
+            content_hash = excluded.content_hash,
+            vector_indexed_at = excluded.vector_indexed_at,
+            source_run_id = excluded.source_run_id,
+            updated_at = excluded.updated_at,
+            metadata = excluded.metadata`,
+          [
+            id,
+            input.sourceType,
+            String(input.sourceId),
+            input.path ?? null,
+            input.title || '',
+            tags ?? null,
+            aliases ?? null,
+            input.sourceUrl ?? null,
+            input.origin ?? 'manual',
+            input.status ?? 'active',
+            input.contentHash ?? null,
+            input.vectorIndexedAt ?? null,
+            input.sourceRunId ?? null,
+            now,
+            now,
+            metadata ?? null,
+          ],
+        )
+      }
+    })
   })
 }
 
