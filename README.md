@@ -37,9 +37,12 @@
 | Feature | Description |
 |---|---|
 | Local Markdown workspace | Manages file-based notes, attachments, diagrams, PDFs, tags, favorites, and editor tabs inside a Tauri desktop shell. |
-| AI writing and chat | Provides OpenAI-compatible chat, completion, translation, rewriting, dictation polishing, vision bridge, prompt enhancement, and provider templates. |
-| Agent and tool runtime | Routes agent actions through local tools, MCP servers, skills, memories, task planning, approvals, retry handling, and runtime snapshots. |
-| Knowledge retrieval | Indexes notes, diagrams, structured knowledge, topics, relations, memories, and knowledge objects into local SQLite-backed query flows. |
+| AI writing and chat | Provides OpenAI-compatible chat, completion, translation, rewriting, dictation polishing, vision bridge, prompt enhancement, conversation-continuity detection, and provider templates. |
+| Creative canvas | A node-based infinite canvas for AI image-generation workflows: lay out prompt, config, and image nodes, connect them into pipelines, run them against any OpenAI-compatible image model, and reuse the generated assets in notes. |
+| Agent and tool runtime | Routes agent actions through local tools, MCP servers, skills, memories, task planning, intent-aware tool policy, read-only batch execution, loop guards, and conversation memory ranking. |
+| Knowledge retrieval and workflows | Indexes notes, diagrams, structured knowledge, topics, relations, memories, and knowledge objects into local SQLite-backed query flows, plus agent tools for batch tagging, frontmatter normalization, and incremental reindexing. |
+| Link capture pipeline | A durable, crash-safe job pipeline that captures a URL into a mark, routes it by source type, and optionally rewrites it into a structured Markdown summary card with conflict-aware AI organize. |
+| Native OCR and WeChat capture | Configurable OCR with native Windows (WinRT) provider plus Tesseract fallback, and a hardened WeChat article/image fetcher with multi-attempt scraping and strict redirect allow-lists. |
 | Capture and output workshop | Captures text, links, images, screenshots, recognition results, recordings, todos, and exports polished articles, decks, reports, cards, and diagrams. |
 | Sync and release paths | Supports GitHub, Gitee, GitLab, Gitea, S3-compatible storage, WebDAV, desktop bundling, updater metadata, and Android artifacts. |
 
@@ -97,13 +100,20 @@ pnpm dev:launch
 ### Run Project Checks
 
 ```bash
-pnpm check
-pnpm test:agent
-pnpm test:structured-knowledge
-pnpm test:output-workshop
+pnpm check                       # typecheck + lint
+pnpm test:agent                  # agent runtime core
+pnpm test:structured-knowledge   # structured-knowledge extraction & queue
+pnpm test:output-workshop        # output export flows
+pnpm test:creative-canvas        # creative-canvas generation & DB
+pnpm test:db-runtime             # link-pipeline & DB runtime
+pnpm test:wechat-ocr             # WeChat capture & OCR regression
 ```
 
-Additional targeted scripts cover GitHub stars, AI hotspots, web extraction, Draw.io XML, Draw.io tool exposure, and research evaluation.
+Additional targeted scripts cover GitHub stars, AI hotspots, web extraction, Draw.io XML, Draw.io tool exposure, and research evaluation. Run a single suite with `pnpm test:<name>`, or everything in one pass:
+
+```bash
+pnpm test:agent && pnpm test:creative-canvas && pnpm test:db-runtime && pnpm test:wechat-ocr && pnpm test:structured-knowledge
+```
 
 ### Work on the Documentation Site
 
@@ -122,14 +132,19 @@ LingMo is a stateful desktop application. The Next.js/React UI handles workspace
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
 graph LR
-    A[App UI<br/>Desktop + Mobile] --> B[Feature Workspaces<br/>Editor + Chat + Agent]
+    A[App UI<br/>Desktop + Mobile] --> B[Feature Workspaces<br/>Editor + Chat + Agent + Creative Canvas]
     A --> D[API Routes<br/>WeChat Proxy]
     B --> E[State Stores<br/>Zustand]
     B --> F[AI Runtime<br/>OpenAI-compatible]
     B --> G[Knowledge Layer<br/>RAG + Graph + Memory]
-    F --> H[Agent Tools<br/>MCP + Skills]
+    B --> L[Link Pipeline<br/>Capture + Organize]
+    B --> M[Creative Canvas<br/>Image Generation]
+    F --> H[Agent Tools<br/>MCP + Skills + Tool Policy]
+    G --> N[Native OCR<br/>WinRT + Tesseract]
     E --> I[(SQLite<br/>note.db)]
     G --> I
+    L --> I
+    M --> I
     A --> J[Tauri Runtime<br/>Rust Plugins]
     J --> I
     J --> K[OS + Sync Targets<br/>FS + Git + S3 + WebDAV]
@@ -142,10 +157,56 @@ graph LR
 
     class A client
     class D gateway
-    class B,F,G,H,J service
+    class B,F,G,H,J,L,M,N service
     class E,I data
     class K external
 ```
+
+## Feature Highlights
+
+### Creative Canvas
+
+A node-based infinite canvas for designing and running AI image-generation workflows. Lay out **text prompt**, **config**, and **image** nodes on a freely pannable/zoomable canvas, connect them into generation pipelines (prompt → config → generated image, with reference images feeding image-edit flows), and execute against any OpenAI-compatible image model configured in the app.
+
+- **Node graph**: directional edges let a config node pull its prompt from upstream text nodes and reference images from upstream image nodes, supporting both generation and edit flows.
+- **Generation jobs**: tracked with statuses (queued / running / succeeded / failed / cancelled / stale), including stale-job recovery on restart and retry of failed jobs.
+- **Asset library**: thumbnails generated lazily, drag-and-drop import, add-to-canvas, insert-into-note, and a cleanup tool that finds unused assets and reclaims disk space.
+- **Snapshot exchange**: export the full canvas graph as JSON and import `basketikun/infinite-canvas`-style JSON into a new project.
+- **Agent-driven**: ~25 `creative_canvas_*` / `canvas_*` tools (also published as MCP schemas) let the in-app agent or external MCP clients build flows, run generation, and insert assets without opening the UI. Entry point: the Creative Canvas tab, the sidebar panel, or the `open-creative-canvas` event from chat.
+
+Persistence spans five SQLite tables (`creative_canvas_projects`, `creative_canvas_nodes`, `creative_canvas_edges`, `creative_canvas_assets`, `creative_generation_jobs`) with schema versioning. Generated images are stored under `AppData/creative-canvas/assets`.
+
+### Link Capture Pipeline
+
+When you save a link, instead of fetching and organizing inline, the request is enqueued as a **durable job** that captures the page into a mark, routes it by source type, and (optionally) rewrites it into a structured Markdown summary card via an AI organize pass. Jobs are crash-safe: leases, checkpoints, retries, and an auto-recovery scan mean a half-finished capture or organize step resumes after a restart, and the original text is never lost if the AI step fails.
+
+The pipeline lives in `src/lib/link-pipeline/` and persists state through `src/db/link-pipeline.ts`. Stages run as `capture → extract → organize → render → complete`:
+
+| Layer | Responsibility |
+|---|---|
+| `source-router` | Classifies the URL into `webpage \| github \| wechat \| xiaohongshu \| video \| unknown` and decides the organization strategy (`generic_ai`, `adapter_structured`, or `capture_only`). |
+| `capture-adapters` / `capture-runner` | One adapter per source type fetches and extracts content; webpages use Tauri HTTP + charset detection with a Tavily Extract fallback for hostile/dynamic pages. The runner claims the job under a lease, persists a `link` mark, and enqueues organize if needed. |
+| `organize-runner` | Calls the AI to produce title / summary / key points / cleaned body. If the source fingerprint matches an existing output version, the previous result is reused instead of re-calling the model. |
+| `chunker` | Splits long bodies on natural breaks with overlap and balanced sampling so long articles get concurrent per-chunk extraction then a merge pass. |
+| `projection` | FNV-1a-32 fingerprint of `desc\0content` — used both as the AI-output reuse key and as the conflict-detection baseline. |
+
+AI writes use optimistic compare-and-swap keyed on the baseline projection: if you edited the mark while the AI was working, the job still completes but the output is flagged as a conflict rather than overwriting your edit. A small **Link Job Status** badge renders per link mark (spinner / "AI 已整理" / retry button / amber "结果待应用" conflict state), updated live via emitter events.
+
+### Agent Runtime
+
+A streamlined single harness runner (`src/lib/agent-harness/harness-agent-runner.ts`) owns the loop, batching, loop-guarding, and final-answer synthesis. Recent work removed three speculative modules (`enhanced-resume`, `parallel-tool-executor`, `tool-result-budget`) and folded their useful logic inline, and added:
+
+- **Intent-aware tool policy** — write / file-creation / destructive / execute tools are blocked unless the user's intent matches, so the model can't silently create or delete files it wasn't asked to.
+- **Read-only batch execution** — all-read-only tool steps run concurrently under a bounded limit; writes are forced single-step.
+- **Loop guards** — repeated identical tool calls and consecutive failures are stopped automatically, and the ReAct iteration budget adapts to lookup density.
+- **Conversation continuity** (`src/lib/ai/conversation-continuity.ts`) — classifies each user turn as selection / continuation / reference / short-reply / standalone (parsing numbered, lettered, and Chinese 第几个 / 前者后者 selections), rewrites the retrieval query, and tunes history budgets.
+- **Memory relevance scoring** (`src/lib/context/memory-relevance.ts`) — CJK-bigram + ASCII-word lexical scoring blended with optional semantic similarity, used to rank long-term memories before injection.
+- **Knowledge workflow tools** — batch `tag_files`, `set_note_status`, `bulk_ensure_frontmatter`, plus read-only triage (`find_unindexed_notes`, `get_knowledge_system_health`) and incremental `reindex_knowledge_objects`, all routed through the authoritative frontmatter parser.
+
+### Native OCR and WeChat Capture
+
+- **Configurable OCR** — `ocr(path)` now tries the **native system OCR first** (the Windows WinRT `OcrEngine`, provider `ocr-native-windows`) and falls back to **Tesseract** on empty result or error. The Tesseract language-pack list (`tesseractList` in settings) drives both engines; Chinese locales get a Chinese-first default ordering. The settings panel shows the detected native provider with a Ready / Unavailable badge.
+- **Hardened WeChat fetching** (`src-tauri/src/wechat_mp.rs`) — article fetching retries with up to three UA/cookie header sets, detects verification / captcha pages as soft failures, enforces a strict redirect allow-list (articles must stay on `mp.weixin.qq.com`; images on `mmbiz.qpic.cn` / `mmbiz.qlogo.cn`), caps image bytes at 8 MiB, and bounds timeouts to a 45 s UI budget. Session state is held in memory with a 7-day TTL.
 
 ## Configuration
 
@@ -178,7 +239,7 @@ The repository contains local `.env` and `.env.local` files. Keep real values pr
 
 | Store | Source | Purpose |
 |---|---|---|
-| `note.db` | `src/db/index.ts` and `@tauri-apps/plugin-sql` | SQLite database for chats, notes, marks, vectors, memories, activities, usage records, flashcards, knowledge objects, structured knowledge, and graph data. |
+| `note.db` | `src/db/index.ts` and `@tauri-apps/plugin-sql` | SQLite database for chats, notes, marks, vectors, memories, activities, usage records, flashcards, knowledge objects, structured knowledge, graph data, creative-canvas projects/nodes/edges/assets/jobs, and link-pipeline jobs/stage results/source blocks/output versions. |
 | `store.json` | Tauri store plugin | Application settings, AI provider configuration, sync provider options, and cached provider templates. |
 | `sync_config.json` | `src/lib/sync/sync-manager.ts` | Auto-sync, push/pull, conflict policy, queue, and status settings. |
 
@@ -199,15 +260,24 @@ Both routes run on the Next.js Node.js runtime and reject unsupported protocols,
 LingMo/
 ├── src/
 │   ├── app/                    # Next.js routes for desktop, mobile, settings, and API handlers
-│   ├── components/             # Shared UI, providers, title bar controls, sync, memories, and output workshop components
+│   │   └── core/main/creative-canvas/  # Creative canvas workspace, sidebar panel, model select, constants
+│   ├── components/             # Shared UI, providers, title bar controls, sync, memories, output workshop, creative-canvas modal
 │   ├── config/                 # Shortcut, emitter, and sync exclusion configuration
-│   ├── db/                     # SQLite initialization and table-specific data modules
+│   ├── db/                     # SQLite initialization and table-specific modules (incl. creative-canvas, link-pipeline)
 │   ├── hooks/                  # UI, AI completion, sync, output, mobile, and shortcut hooks
-│   ├── lib/                    # AI, agents, MCP, skills, sync, diagrams, knowledge, speech, web, and utilities
-│   ├── stores/                 # Zustand stores for application state
-│   └── types/                  # Shared TypeScript domain types
+│   ├── lib/
+│   │   ├── ai/                 # Provider runtime, history messages, conversation-continuity, link-organizer
+│   │   ├── agent/              # Agent handler, tool policy, dynamic tool filter, prompt assembler, tools/*
+│   │   ├── agent-harness/      # Single harness runner, tool governance/runtime, turn lifecycle, conversation messages
+│   │   ├── creative-canvas/    # Generation pipeline, importer, geometry, assets, cleanup
+│   │   ├── knowledge-query/    # Query engine and types over the local knowledge graph
+│   │   ├── link-pipeline/      # source-router, capture-adapters/runner, organize-runner, chunker, projection
+│   │   ├── context/            # Context loader and memory-relevance scoring
+│   │   └── ...                 # MCP, skills, sync, diagrams, speech, web, utilities
+│   ├── stores/                 # Zustand stores for application state (incl. creative-canvas)
+│   └── types/                  # Shared TypeScript domain types (incl. creative-canvas)
 ├── src-tauri/
-│   ├── src/                    # Rust Tauri entry points, commands, plugins, MCP runtime, backup, and skills v2
+│   ├── src/                    # Rust entry points, commands, plugins, MCP runtime, backup, skills v2, ocr_packages, wechat_mp
 │   ├── capabilities/           # Tauri capability definitions
 │   ├── icons/                  # Desktop, iOS, Android, and Windows icon assets
 │   └── tauri.conf.json         # Tauri v2 application and bundle configuration
@@ -250,11 +320,11 @@ LingMo/
 
 | Technology | Purpose |
 |---|---|
-| OpenAI SDK | OpenAI-compatible chat completions, model listing, embeddings, streaming, and provider validation. |
+| OpenAI SDK | OpenAI-compatible chat completions, model listing, embeddings, streaming, image generation/edits, and provider validation. |
 | MCP | Runtime server management and dynamic tool exposure for agents. |
 | Skills | Local `SKILL.md` parsing, matching, validation, dependency handling, and execution. |
 | ECharts / Mermaid / Draw.io | Knowledge graphs, visual reports, charting, and diagram authoring/export paths. |
-| FFmpeg / Tesseract / PDF.js | Media processing, OCR, PDF reading, and content extraction support. |
+| WinRT OcrEngine / Tesseract / PDF.js | Native Windows OCR with Tesseract fallback, PDF reading, and content extraction support. |
 | `html2canvas`, `jsPDF`, `pptxgenjs`, `jszip` | Export flows for cards, PDFs, presentations, archives, and generated artifacts. |
 
 ### Build, Quality, And Release
