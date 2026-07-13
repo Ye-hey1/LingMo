@@ -14,8 +14,12 @@ export interface ContextResult {
  * 记忆加载器 - 智能检索相关记忆
  */
 class ContextLoader {
-  private cache: Map<string, { data: ContextResult; timestamp: number }> = new Map()
+  private cache: Map<string, { data: ContextResult; timestamp: number; accessedIds: string[] }> = new Map()
   private cacheTimeout: number = 5 * 60 * 1000 // 5 分钟
+
+  private async recordMemoryAccess(ids: string[]) {
+    await Promise.allSettled([...new Set(ids)].map(id => updateMemoryAccess(id)))
+  }
 
   /**
    * 计算余弦相似度
@@ -50,6 +54,7 @@ class ContextLoader {
     const cacheKey = query.trim()
     const cached = this.cache.get(cacheKey)
     if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
+      await this.recordMemoryAccess(cached.accessedIds)
       return cached.data
     }
 
@@ -69,7 +74,7 @@ class ContextLoader {
     if (query && memoryList.length > 0) {
       let queryEmbedding: number[] | null = null
       try {
-        queryEmbedding = await fetchEmbedding(query)
+        queryEmbedding = await fetchEmbedding(query, { silent: true })
       } catch {
         // Lexical fallback below is intentionally available offline.
       }
@@ -100,8 +105,13 @@ class ContextLoader {
 
       relevantMemory.sort((a, b) => b.similarity - a.similarity)
       relevantMemory.splice(8)
-      await Promise.allSettled(relevantMemory.map(memory => updateMemoryAccess(memory.id)))
     }
+
+    const accessedIds = [
+      ...preferences.map(preference => preference.id),
+      ...relevantMemory.map(memory => memory.id),
+    ]
+    await this.recordMemoryAccess(accessedIds)
 
     const result: ContextResult = {
       preferences: preferenceContents,
@@ -109,7 +119,7 @@ class ContextLoader {
     }
 
     // 缓存结果
-    this.cache.set(cacheKey, { data: result, timestamp: Date.now() })
+    this.cache.set(cacheKey, { data: result, timestamp: Date.now(), accessedIds })
 
     return result
   }

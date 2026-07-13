@@ -6,14 +6,11 @@ function getTextContent(message: ChatMessage) {
   return typeof message.content === 'string' ? message.content.trim() : ''
 }
 
-function mergeSystemPrompts(primaryPrompt: string, messages: ChatMessage[]) {
+function mergePromptSections(contents: string[]) {
   const sections: string[] = []
   const seen = new Set<string>()
 
-  for (const content of [
-    primaryPrompt,
-    ...messages.filter(message => message.role === 'system').map(getTextContent),
-  ]) {
+  for (const content of contents) {
     const normalized = content.trim()
     if (!normalized || seen.has(normalized)) continue
     seen.add(normalized)
@@ -21,6 +18,28 @@ function mergeSystemPrompts(primaryPrompt: string, messages: ChatMessage[]) {
   }
 
   return sections.join('\n\n')
+}
+
+function mergeSystemPrompts(primaryPrompt: string, messages: ChatMessage[]) {
+  return mergePromptSections([
+    primaryPrompt,
+    ...messages.filter(message => message.role === 'system').map(getTextContent),
+  ])
+}
+
+export function getHarnessUpstreamSystemPrompt(
+  contextOrMessages?: string | ChatMessage[],
+) {
+  if (Array.isArray(contextOrMessages)) {
+    return mergePromptSections(
+      contextOrMessages.filter(message => message.role === 'system').map(getTextContent),
+    )
+  }
+  return typeof contextOrMessages === 'string' ? contextOrMessages.trim() : ''
+}
+
+export function mergeHarnessSystemPrompts(...prompts: string[]) {
+  return mergePromptSections(prompts)
 }
 
 export function buildHarnessConversationMessages(

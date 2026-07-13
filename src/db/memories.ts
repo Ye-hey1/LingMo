@@ -101,7 +101,7 @@ export async function upsertMemory(
 
   if (!embedding) {
     try {
-      embedding = await fetchEmbedding(memory.content)
+      embedding = await fetchEmbedding(memory.content, { silent: true })
     } catch {
       // Offline/local-only mode keeps the memory searchable via lexical recall.
     }
@@ -113,6 +113,7 @@ export async function upsertMemory(
 
   let similarMemory: Memory | null = null
   let maxSimilarity = 0
+  let exactContentMatch = false
 
   const normalizedContent = memory.content.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase()
   for (const existingMemory of allMemories) {
@@ -122,6 +123,7 @@ export async function upsertMemory(
     if (normalizedExisting === normalizedContent) {
       similarMemory = existingMemory
       maxSimilarity = 1
+      exactContentMatch = true
       break
     }
 
@@ -149,13 +151,14 @@ export async function upsertMemory(
     newId = similarMemory.id
     replacedId = similarMemory.id
     replaced = true
+    const persistedEmbedding = embeddingStr ?? (exactContentMatch ? similarMemory.embedding : null)
 
     await serializedWrite(async () => {
       const db = await getDb()
       await db.execute(
         `update memories set content = $1, embedding = $2, category = $3,
          replaced_id = $4, updated_at = $5 where id = $6`,
-        [memory.content, embeddingStr, category, similarMemory.id, now, newId],
+        [memory.content, persistedEmbedding, category, similarMemory.id, now, newId],
       )
     })
   } else {
@@ -253,7 +256,7 @@ export async function updateMemory(
 
   if (updates.content && !updates.embedding) {
     try {
-      const embedding = await fetchEmbedding(updates.content)
+      const embedding = await fetchEmbedding(updates.content, { silent: true })
       newEmbedding = embedding ? JSON.stringify(embedding) : null
     } catch {
       newEmbedding = null

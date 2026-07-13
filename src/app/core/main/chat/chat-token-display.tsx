@@ -191,7 +191,7 @@ export const ChatContextRing = React.memo(function ChatContextRing({
               isNearLimit && !isOverLimit && "text-amber-500",
               className
             )}
-            aria-label={`上下文占用 ${percentage}%，延续 ${conversationTurnCount} 轮对话，长期记忆按需检索`}
+            aria-label={`上下文占用 ${percentage}%，会话共 ${conversationTurnCount} 轮并按预算携带，偏好常驻、事实记忆按需检索`}
             >
               <svg
                 viewBox="0 0 18 18"
@@ -231,7 +231,7 @@ export const ChatContextRing = React.memo(function ChatContextRing({
           side="top"
           align="end"
           sideOffset={6}
-          className="w-[188px] rounded-md border bg-popover px-2.5 py-2 text-popover-foreground shadow-sm"
+          className="w-[216px] rounded-md border bg-popover px-2.5 py-2 text-popover-foreground shadow-sm"
         >
           <div className="space-y-2 text-[11px]">
             <div className="flex items-center justify-between gap-2">
@@ -258,14 +258,14 @@ export const ChatContextRing = React.memo(function ChatContextRing({
 
             <div className="grid gap-1 border-t border-border/50 pt-2 tabular-nums">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-muted-foreground">会话延续</span>
+                <span className="text-muted-foreground">会话历史</span>
                 <span className="text-foreground">
-                  {conversationTurnCount > 0 ? `${conversationTurnCount} 轮` : '新会话'}
+                  {conversationTurnCount > 0 ? `共 ${conversationTurnCount} 轮 · 按预算携带` : '新会话'}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-muted-foreground">长期记忆</span>
-                <span className="text-foreground">按需检索</span>
+                <span className="text-foreground">偏好常驻 · 事实按需</span>
               </div>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-muted-foreground">输入</span>

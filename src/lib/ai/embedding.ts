@@ -155,7 +155,10 @@ export async function checkRerankModelAvailable(): Promise<boolean> {
  * @param text 需要嵌入的文本
  * @returns 嵌入向量结果，如果失败则返回null
  */
-export async function fetchEmbedding(text: string): Promise<number[] | null> {
+export async function fetchEmbedding(
+  text: string,
+  options: { silent?: boolean } = {},
+): Promise<number[] | null> {
   try {
     if (text.length) {
       // 获取嵌入模型信息
@@ -194,7 +197,9 @@ export async function fetchEmbedding(text: string): Promise<number[] | null> {
     
     return null;
   } catch (error) {
-    handleAIError(error);
+    if (!options.silent) {
+      handleAIError(error);
+    }
     return null;
   }
 }

@@ -538,6 +538,7 @@ export const ChatInput = React.memo(function ChatInput({ expanded = false }: Cha
       ? analyzeConversationContinuity(chats, candidate)
       : null
   }, [chats, text])
+  const selectedContinuationOption = continuityHint?.selectedOption
   const atQuery = useMemo(() => {
     const match = text.match(/@([^\s@]*)$/)
     if (!match) return null
@@ -2253,14 +2254,14 @@ ${exec.prompt}`
           </div>
         ) : null}
         <div className="relative flex w-full flex-col rounded-lg bg-muted/15 transition-colors group-focus-within:bg-muted/10">
-          {continuityHint.selectedOption && (
+          {selectedContinuationOption && (
             <div className="px-3 pt-2" aria-live="polite">
               <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-500/[0.06] px-2 py-1 text-[11px] text-muted-foreground">
                 <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
                 <span className="shrink-0 font-medium text-foreground/80">承接上一答</span>
                 <span className="text-muted-foreground/50">·</span>
                 <span className="truncate">
-                  {continuityHint.selectedOption.index ?? continuityHint.selectedOption.label}. {continuityHint.selectedOption.content}
+                  {selectedContinuationOption.index ?? selectedContinuationOption.label}. {selectedContinuationOption.content}
                 </span>
               </div>
             </div>

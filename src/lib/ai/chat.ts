@@ -55,6 +55,8 @@ export interface FetchAiStreamOptions {
   onStreamFinish?: (metadata: AiStreamFinishMetadata) => void
   /** 模型store key */
   modelStoreKey?: string
+  /** 仅用于长期记忆检索的语义查询；不会替换用户原始消息 */
+  memoryRetrievalQuery?: string
 }
 
 function isTruncationFinishReason(reason?: string | null) {
@@ -325,6 +327,7 @@ export async function fetchAiStream(
     maxTokens: tokens,
     onStreamFinish: handleStreamFinish,
     modelStoreKey: storeKey,
+    memoryRetrievalQuery,
   } = options
 
   const startedAt = Date.now()
@@ -361,10 +364,10 @@ export async function fetchAiStream(
     // 准备消息 - 如果提供了 messages 数组，使用它；否则用 prepareMessages
     if (inputMessages && inputMessages.length > 0) {
       // 使用提供的消息数组
-      const prepared = await prepareMessages('', inputMessages)
+      const prepared = await prepareMessages('', inputMessages, { memoryRetrievalQuery })
       preparedMessages = prepared.messages
     } else {
-      const prepared = await prepareMessages(text)
+      const prepared = await prepareMessages(text, undefined, { memoryRetrievalQuery })
       preparedMessages = prepared.messages
     }
 

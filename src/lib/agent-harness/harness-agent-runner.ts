@@ -29,7 +29,11 @@ import type { LinkedResource } from '@/lib/files'
 import { AgentLifecycleController } from './turn-lifecycle'
 import { getAiRateLimitUserMessage, isAiRateLimitError } from '@/lib/ai/rate-limit'
 import type { StructuredContextSections } from '@/lib/agent/prompt-assembler'
-import { buildHarnessConversationMessages } from './conversation-messages'
+import {
+  buildHarnessConversationMessages,
+  getHarnessUpstreamSystemPrompt,
+  mergeHarnessSystemPrompts,
+} from './conversation-messages'
 
 export interface HarnessAgentRunnerConfig {
   runId?: string
@@ -1556,6 +1560,7 @@ export class HarnessAgentRunner {
         }
       }
 
+      const upstreamSystemPrompt = getHarnessUpstreamSystemPrompt(contextOrMessages)
       let systemPrompt = await this.buildSystemPrompt(userInput, intentPolicy)
       const messages = this.buildMessages(systemPrompt, userInput, contextOrMessages)
 
@@ -1591,7 +1596,10 @@ export class HarnessAgentRunner {
         this.currentIteration += 1
         this.emitEvent('iteration.started')
 
-        systemPrompt = await this.buildSystemPrompt(userInput, intentPolicy)
+        systemPrompt = mergeHarnessSystemPrompts(
+          await this.buildSystemPrompt(userInput, intentPolicy),
+          upstreamSystemPrompt,
+        )
         messages[0] = { role: 'system', content: systemPrompt }
         const allTools = getAllToolsSync()
         const preparedStep = await this.prepareHarnessModelStep({ allTools, userInput, intentPolicy })

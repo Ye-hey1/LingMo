@@ -105,6 +105,9 @@ const CHAT_FOLLOW_UP_HISTORY_TOKEN_BUDGET = 9000
 const CHAT_MAX_SINGLE_HISTORY_MESSAGE_TOKENS = 1800
 const AGENT_DEFAULT_HISTORY_TURNS = 6
 const AGENT_FOLLOW_UP_HISTORY_TURNS = 10
+const AGENT_DEFAULT_HISTORY_TOKEN_BUDGET = 8000
+const AGENT_FOLLOW_UP_HISTORY_TOKEN_BUDGET = 14000
+const AGENT_MAX_SINGLE_HISTORY_MESSAGE_TOKENS = 5000
 const AGENT_LIVE_ANSWER_UPDATE_INTERVAL_MS = 120
 const CHAT_LIVE_MESSAGE_UPDATE_INTERVAL_MS = 120
 const AI_DOC_COMMAND_PREFIX = '你正在执行一个应用内命令：'
@@ -559,6 +562,7 @@ export const ChatSend = forwardRef<{
   const { isRagEnabled } = useVectorStore()
   const abortControllerRef = useRef<AbortController | null>(null)
   const agentHandlerRef = useRef<AgentHandler | null>(null)
+  const submitInFlightRef = useRef(false)
   const lastAutoSuggestMessageIdRef = useRef<number | null>(null)
   const [liveInputValue, setLiveInputValue] = useState(inputValue)
   // 冷却：同一对话只提示一次可沉淀，记录已提示的 conversationId
@@ -684,6 +688,12 @@ export const ChatSend = forwardRef<{
     (isFollowUp ?? shouldCarryUserHistoryForAgent(input))
       ? AGENT_FOLLOW_UP_HISTORY_TURNS
       : AGENT_DEFAULT_HISTORY_TURNS
+  )
+
+  const getAgentHistoryTokenBudget = (input: string, isFollowUp?: boolean) => (
+    (isFollowUp ?? shouldCarryUserHistoryForAgent(input))
+      ? AGENT_FOLLOW_UP_HISTORY_TOKEN_BUDGET
+      : AGENT_DEFAULT_HISTORY_TOKEN_BUDGET
   )
 
   const getChatHistoryTurnLimit = (input: string, isFollowUp?: boolean) => (
@@ -1279,28 +1289,27 @@ export const ChatSend = forwardRef<{
         visibleRagSources,
         visibleRagSourceDetails,
       })
-      const result = await fetchAiStream(
-        effectiveInstruction,
-        (content) => {
+      const result = await fetchAiStream({
+        text: effectiveInstruction,
+        onUpdate: (content) => {
           finalContent = content
           streamUpdater?.updateContent(content)
         },
-        abortController.signal,
-        undefined,
+        abortSignal: abortController.signal,
         t,
-        placeholderMessage.id,
+        chatId: placeholderMessage.id,
         imageUrls,
-        // 思考内容更新回调
-        (thinking: string) => {
+        onThinkingUpdate: (thinking: string) => {
           thinkingContent = thinking
           streamUpdater?.updateThinking(thinking)
         },
         messages,
-        options?.maxTokens,
-        (metadata) => {
+        maxTokens: options?.maxTokens,
+        onStreamFinish: (metadata) => {
           streamMeta = metadata
         },
-      )
+        memoryRetrievalQuery: contextQuery,
+      })
       if (!finalContent && result) {
         finalContent = result
       }
@@ -1438,27 +1447,27 @@ export const ChatSend = forwardRef<{
         visibleRagSourceDetails,
         sanitizeContent: cleanAssistantGeneratedContent,
       })
-      const result = await fetchAiStream(
-        writerInstruction,
-        (content) => {
+      const result = await fetchAiStream({
+        text: writerInstruction,
+        onUpdate: (content) => {
           finalContent = cleanAssistantGeneratedContent(content)
           streamUpdater?.updateContent(content)
         },
-        abortController.signal,
-        undefined,
+        abortSignal: abortController.signal,
         t,
-        placeholderMessage.id,
+        chatId: placeholderMessage.id,
         imageUrls,
-        (thinking: string) => {
+        onThinkingUpdate: (thinking: string) => {
           thinkingContent = thinking
           streamUpdater?.updateThinking(thinking)
         },
         messages,
-        options?.maxTokens,
-        (metadata) => {
+        maxTokens: options?.maxTokens,
+        onStreamFinish: (metadata) => {
           streamMeta = metadata
         },
-      )
+        memoryRetrievalQuery: contextQuery,
+      })
 
       if (!finalContent && result) {
         finalContent = cleanAssistantGeneratedContent(result)
@@ -2159,6 +2168,8 @@ export const ChatSend = forwardRef<{
             includeAssistantMessages: true,
             includeLatestUserMessage: false,
             maxUserMessages: getAgentHistoryTurnLimit(effectiveInstruction, continuity.isFollowUp),
+            maxHistoryTokens: getAgentHistoryTokenBudget(effectiveInstruction, continuity.isFollowUp),
+            maxSingleMessageTokens: AGENT_MAX_SINGLE_HISTORY_MESSAGE_TOKENS,
           }
         )
 
@@ -2526,6 +2537,8 @@ export const ChatSend = forwardRef<{
               includeAssistantMessages: true,
               includeLatestUserMessage: false,
               maxUserMessages: getAgentHistoryTurnLimit(effectiveInstruction, continuity.isFollowUp),
+              maxHistoryTokens: getAgentHistoryTokenBudget(effectiveInstruction, continuity.isFollowUp),
+              maxSingleMessageTokens: AGENT_MAX_SINGLE_HISTORY_MESSAGE_TOKENS,
             }
           )
 
@@ -2566,62 +2579,68 @@ export const ChatSend = forwardRef<{
     const displayText = options?.displayText?.trim() || liveInputValue.trim()
 
     if (!requestText.trim() || !displayText) return
+    if (submitInFlightRef.current || isRunning) return
 
-    const conversationTitle = displayText.replace(/\s+/g, ' ').slice(0, 30) || '新对话'
-    await ensureCurrentConversation(conversationTitle)
-
-    onSent?.(displayText)
-
-    const imageUrls = attachedImages.map(img => img.url)
-    const effectiveMode = options?.modeOverride || chatMode
-    const effectiveRoute = options?.routeOverride || effectiveMode
-    const shouldPrimeAgentRunStatus = effectiveRoute === 'agent' || effectiveRoute === 'workflow'
-    if (shouldPrimeAgentRunStatus) {
-      primeAgentRunStatus(undefined, Date.now(), {
-        userInput: requestText,
-        imageCount: imageUrls.length,
-      })
-    }
-
-    const userMessage = await insert({
-      tagId: currentTagId,
-      role: 'user',
-      content: displayText,
-      type: 'chat',
-      inserted: false,
-      images: imageUrls.length > 0 ? JSON.stringify(imageUrls) : undefined,
-      quoteData: quoteData ? JSON.stringify(quoteData) : undefined,
-    })
-    if (!userMessage) {
-      if (shouldPrimeAgentRunStatus) {
-        finishVisibleAgentRun()
-      }
-      return
-    }
-
-    setLoading(true)
+    submitInFlightRef.current = true
     let keepLoading = false
-    const webDecision = resolveAutoWebSearchDecision(requestText)
-    const effectiveWebSearchEnabled = webDecision.enabled
-    if (effectiveRoute === 'writer' || effectiveRoute === 'advisor') {
-      const orchestrator = new AgentOrchestrator()
-      await orchestrator.run({
-        userInput: requestText,
-        route: effectiveRoute,
-        forcedSkillIds: options?.forcedSkillIds,
-        webSearchEnabled: effectiveWebSearchEnabled,
-        writerExecutor: async () => handleWriterMode(imageUrls, effectiveInstruction, options),
+    try {
+      const conversationTitle = displayText.replace(/\s+/g, ' ').slice(0, 30) || '新对话'
+      await ensureCurrentConversation(conversationTitle)
+
+      onSent?.(displayText)
+
+      const imageUrls = attachedImages.map(img => img.url)
+      const effectiveMode = options?.modeOverride || chatMode
+      const effectiveRoute = options?.routeOverride || effectiveMode
+      const shouldPrimeAgentRunStatus = effectiveRoute === 'agent' || effectiveRoute === 'workflow'
+      if (shouldPrimeAgentRunStatus) {
+        primeAgentRunStatus(undefined, Date.now(), {
+          userInput: requestText,
+          imageCount: imageUrls.length,
+        })
+      }
+
+      const userMessage = await insert({
+        tagId: currentTagId,
+        role: 'user',
+        content: displayText,
+        type: 'chat',
+        inserted: false,
+        images: imageUrls.length > 0 ? JSON.stringify(imageUrls) : undefined,
+        quoteData: quoteData ? JSON.stringify(quoteData) : undefined,
       })
-    } else if (effectiveRoute === 'chat') {
-      await handleChatMode(imageUrls, effectiveInstruction, options)
-    } else if (effectiveRoute === 'research') {
-      await handleClarifiedResearchMode(effectiveInstruction, options)
-      keepLoading = abortControllerRef.current !== null
-    } else {
-      await handleAgentMode(imageUrls, effectiveInstruction, options)
-    }
-    if (!keepLoading) {
-      setLoading(false)
+      if (!userMessage) {
+        if (shouldPrimeAgentRunStatus) {
+          finishVisibleAgentRun()
+        }
+        return
+      }
+
+      setLoading(true)
+      const webDecision = resolveAutoWebSearchDecision(requestText)
+      const effectiveWebSearchEnabled = webDecision.enabled
+      if (effectiveRoute === 'writer' || effectiveRoute === 'advisor') {
+        const orchestrator = new AgentOrchestrator()
+        await orchestrator.run({
+          userInput: requestText,
+          route: effectiveRoute,
+          forcedSkillIds: options?.forcedSkillIds,
+          webSearchEnabled: effectiveWebSearchEnabled,
+          writerExecutor: async () => handleWriterMode(imageUrls, effectiveInstruction, options),
+        })
+      } else if (effectiveRoute === 'chat') {
+        await handleChatMode(imageUrls, effectiveInstruction, options)
+      } else if (effectiveRoute === 'research') {
+        await handleClarifiedResearchMode(effectiveInstruction, options)
+        keepLoading = abortControllerRef.current !== null
+      } else {
+        await handleAgentMode(imageUrls, effectiveInstruction, options)
+      }
+    } finally {
+      submitInFlightRef.current = false
+      if (!keepLoading) {
+        setLoading(false)
+      }
     }
   }
 

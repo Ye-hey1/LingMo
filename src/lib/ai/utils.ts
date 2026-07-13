@@ -199,10 +199,12 @@ export function handleAIError(error: any, showToast = true): string | null {
  * 为不同AI类型准备消息
  * @param text 用户输入文本（如果提供了 baseMessages，此参数将作为最后一条用户消息）
  * @param baseMessages 基础消息数组（如对话历史），如果提供，将合并到返回结果中
+ * @param options.memoryRetrievalQuery 仅用于长期记忆检索的语义查询，不改变用户原始消息
  */
 export async function prepareMessages(
   text: string,
-  baseMessages?: OpenAI.Chat.ChatCompletionMessageParam[]
+  baseMessages?: OpenAI.Chat.ChatCompletionMessageParam[],
+  options: { memoryRetrievalQuery?: string } = {},
 ): Promise<{
   messages: OpenAI.Chat.ChatCompletionMessageParam[],
   geminiText?: string
@@ -226,32 +228,12 @@ export async function prepareMessages(
   try {
     const { contextLoader } = await import('@/lib/context/loader')
     // 确定用于检索记忆的查询文本
-    let queryText = text || ''
-    if (baseMessages && baseMessages.length > 0) {
+    let queryText = options.memoryRetrievalQuery?.trim() || text || ''
+    if (!options.memoryRetrievalQuery?.trim() && baseMessages && baseMessages.length > 0) {
       // 如果提供了消息数组，使用最后一条用户消息作为查询
       const lastUserMessage = [...baseMessages].reverse().find(m => m.role === 'user')
       if (lastUserMessage) {
         queryText = typeof lastUserMessage.content === 'string' ? lastUserMessage.content : queryText
-      }
-
-      // A short follow-up such as "3" carries little retrieval signal on its
-      // own. The continuity system section contains the resolved antecedent,
-      // so include that semantic anchor in the memory query without changing
-      // the user's original message or any tool authorization decision.
-      const continuityMessage = [...baseMessages].reverse().find(message => (
-        message.role === 'system' &&
-        typeof message.content === 'string' &&
-        message.content.includes('## Conversation Continuity')
-      ))
-      if (continuityMessage && typeof continuityMessage.content === 'string') {
-        const lines = continuityMessage.content.split(/\r?\n/)
-        const start = lines.findIndex(line => line.trim() === '## Conversation Continuity')
-        const continuityExcerpt = start >= 0
-          ? lines.slice(start, start + 5).join('\n').trim()
-          : ''
-        if (continuityExcerpt) {
-          queryText = `${queryText}\n${continuityExcerpt}`
-        }
       }
     }
 
