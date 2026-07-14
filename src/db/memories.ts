@@ -237,14 +237,22 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
   return result[0] || null
 }
 
-export async function updateMemoryAccess(id: string): Promise<void> {
+export async function updateMemoriesAccess(ids: string[]): Promise<void> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))]
+  if (uniqueIds.length === 0) return
+
   await serializedWrite(async () => {
     const db = await getDb()
+    const placeholders = uniqueIds.map((_, index) => `$${index + 2}`).join(', ')
     await db.execute(
-      'update memories set access_count = access_count + 1, last_accessed_at = $1 where id = $2',
-      [Date.now(), id],
+      `update memories set access_count = access_count + 1, last_accessed_at = $1 where id in (${placeholders})`,
+      [Date.now(), ...uniqueIds],
     )
   })
+}
+
+export async function updateMemoryAccess(id: string): Promise<void> {
+  await updateMemoriesAccess([id])
 }
 
 export async function updateMemory(
@@ -254,16 +262,28 @@ export async function updateMemory(
   let newEmbedding = updates.embedding
   let newCategory = updates.category
 
-  if (updates.content && !updates.embedding) {
-    try {
-      const embedding = await fetchEmbedding(updates.content, { silent: true })
-      newEmbedding = embedding ? JSON.stringify(embedding) : null
-    } catch {
-      newEmbedding = null
+  if (updates.content !== undefined && updates.embedding === undefined) {
+    const existingMemory = await getMemoryById(id)
+    const normalizedNextContent = updates.content.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase()
+    const normalizedExistingContent = existingMemory?.content
+      .normalize('NFKC')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase()
+
+    if (existingMemory && normalizedExistingContent === normalizedNextContent) {
+      newEmbedding = existingMemory.embedding
+    } else {
+      try {
+        const embedding = await fetchEmbedding(updates.content, { silent: true })
+        newEmbedding = embedding ? JSON.stringify(embedding) : null
+      } catch {
+        newEmbedding = null
+      }
     }
   }
 
-  if (updates.content && !updates.category) {
+  if (updates.content !== undefined && !updates.category) {
     newCategory = categorizeMemory(updates.content)
   }
 
@@ -276,7 +296,7 @@ export async function updateMemory(
        category = coalesce($3, category),
        updated_at = $4
        where id = $5`,
-      [updates.content, newEmbedding, newCategory, Date.now(), id, updates.content || updates.embedding !== undefined ? 1 : 0],
+      [updates.content, newEmbedding, newCategory, Date.now(), id, updates.content !== undefined || updates.embedding !== undefined ? 1 : 0],
     )
   })
 }

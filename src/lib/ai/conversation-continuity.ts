@@ -122,7 +122,7 @@ function parseNumericSelection(input: string) {
   if (bareSelection) return Number(bareSelection[1])
 
   const explicit = compact.match(
-    /^(?:第|选|选择|展开|讲|说|继续讲|继续说|option\s*)\s*(\d{1,2})\s*(?:个|项|点|条|种|部分|方案)?(?:\s*(?:继续|展开|详细(?:说|讲)?|讲讲|说说|吧))?[。！!]?$/i,
+    /^(?:(?:选|选择|展开|讲|说|继续讲|继续说|option)\s*)?第?\s*(\d{1,2})\s*(?:个|项|点|条|种|部分|方案)?(?:\s*(?:继续|展开|详细(?:说|讲)?|讲讲|说说|吧))?[。！!]?$/i,
   )
   return explicit ? Number(explicit[1]) : parseChineseSelection(compact)
 }

@@ -834,6 +834,9 @@ try {
   assert.match(letterSelection.selectedOption?.content || '', /全量重写/)
   assert.equal(analyzeConversationContinuity(optionHistory, '3.').selectedOption?.index, 3)
   assert.equal(analyzeConversationContinuity(optionHistory, '3、').selectedOption?.index, 3)
+  assert.equal(analyzeConversationContinuity(optionHistory, '选第3个').selectedOption?.index, 3)
+  assert.equal(analyzeConversationContinuity(optionHistory, '讲第3个').selectedOption?.index, 3)
+  assert.equal(analyzeConversationContinuity(optionHistory, '继续讲第3个').selectedOption?.index, 3)
   assert.equal(analyzeConversationContinuity([
     { role: 'user', type: 'chat', content: '选一个方案' },
     { role: 'system', type: 'chat', content: 'A. 保持现状\nB. 小步重构\nC. 全量重写' },
@@ -3116,11 +3119,15 @@ artifactSchema: markdown json
   assert.match(memoriesDbSource, /embedding \? JSON\.stringify\(embedding\) : null/)
   assert.equal((memoriesDbSource.match(/fetchEmbedding\([^\n]+\{ silent: true \}\)/g) || []).length, 2)
   assert.match(memoriesDbSource, /persistedEmbedding = embeddingStr \?\? \(exactContentMatch \? similarMemory\.embedding : null\)/)
+  assert.match(memoriesDbSource, /normalizedExistingContent === normalizedNextContent/)
+  assert.match(memoriesDbSource, /newEmbedding = existingMemory\.embedding/)
+  assert.match(memoriesDbSource, /export async function updateMemoriesAccess/)
+  assert.match(memoriesDbSource, /where id in \(\$\{placeholders\}\)/)
   const contextLoaderSource = await readFile(join(repoRoot, 'src/lib/context/loader.ts'), 'utf8')
   assert.match(contextLoaderSource, /scoreMemoryRelevance/)
-  assert.match(contextLoaderSource, /Promise\.allSettled/)
   assert.match(contextLoaderSource, /fetchEmbedding\(query, \{ silent: true \}\)/)
   assert.match(contextLoaderSource, /recordMemoryAccess\(cached\.accessedIds\)/)
+  assert.match(contextLoaderSource, /updateMemoriesAccess\(ids\)/)
   const embeddingSource = await readFile(join(repoRoot, 'src/lib/ai/embedding.ts'), 'utf8')
   assert.match(embeddingSource, /options: \{ silent\?: boolean \} = \{\}/)
   assert.match(embeddingSource, /if \(!options\.silent\)/)

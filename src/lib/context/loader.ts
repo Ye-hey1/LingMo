@@ -1,4 +1,4 @@
-import { getAllMemories, updateMemoryAccess } from '@/db/memories'
+import { getAllMemories, updateMemoriesAccess } from '@/db/memories'
 import { fetchEmbedding } from '@/lib/ai/embedding'
 import { scoreMemoryRelevance } from './memory-relevance'
 
@@ -18,7 +18,7 @@ class ContextLoader {
   private cacheTimeout: number = 5 * 60 * 1000 // 5 分钟
 
   private async recordMemoryAccess(ids: string[]) {
-    await Promise.allSettled([...new Set(ids)].map(id => updateMemoryAccess(id)))
+    await updateMemoriesAccess(ids)
   }
 
   /**
