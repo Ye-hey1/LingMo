@@ -262,6 +262,7 @@ type MermaidViewState = {
 }
 
 type MermaidViewerState = {
+  title: string;
   svg: string;
   scale: number;
   translateX: number;
@@ -337,9 +338,211 @@ function wrapMermaidSvg(svg: string): string {
 function getMermaidDiagramSvg(container: HTMLDivElement): SVGSVGElement | null {
   return (
     container.querySelector<SVGSVGElement>('.mermaid-canvas-viewport > svg') ||
+    container.querySelector<SVGSVGElement>('.chart-canvas-viewport > svg') ||
     container.querySelector<SVGSVGElement>('.mermaid-canvas-render > svg') ||
-    container.querySelector<SVGSVGElement>('.mermaid-canvas-render svg')
+    container.querySelector<SVGSVGElement>('.chart-canvas-render > svg') ||
+    container.querySelector<SVGSVGElement>('.mermaid-canvas-render svg') ||
+    container.querySelector<SVGSVGElement>('.chart-canvas-render svg')
   );
+}
+
+const CHART_CANVAS_CONTROLS_STYLE = [
+  'position:absolute',
+  'top:8px',
+  'right:8px',
+  'display:inline-flex',
+  'align-items:center',
+  'justify-content:center',
+  'flex-wrap:nowrap',
+  'gap:1px',
+  'padding:2px',
+  'white-space:nowrap',
+  'z-index:10',
+].join(';');
+
+const CHART_CANVAS_BUTTON_STYLE = [
+  'appearance:none',
+  '-webkit-appearance:none',
+  'display:inline-flex',
+  'align-items:center',
+  'justify-content:center',
+  'flex:0 0 auto',
+  'width:22px',
+  'height:22px',
+  'min-width:22px',
+  'min-height:22px',
+  'padding:0',
+  'margin:0',
+  'border:0',
+  'background:transparent',
+  'line-height:1',
+  'font-size:0',
+  'cursor:pointer',
+].join(';');
+
+const CHART_CANVAS_DIVIDER_STYLE = 'flex:0 0 auto;width:1px;height:12px;margin:0 1px';
+
+function renderChartCanvasControlButtons(kind: 'mermaid' | 'chart'): string {
+  const classPrefix = `${kind}-canvas`;
+  const buttonClass = `${classPrefix}-btn`;
+  const exportLabel = kind === 'mermaid' ? '导出图表 PNG' : '下载图表 PNG';
+  const copyLabel = kind === 'mermaid' ? '复制图表 SVG' : '复制图表';
+
+  return [
+    `<button type="button" class="${buttonClass} ${classPrefix}-zoom-in" title="放大" aria-label="放大图表" style="${CHART_CANVAS_BUTTON_STYLE}">`,
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>',
+    '</button>',
+    `<button type="button" class="${buttonClass} ${classPrefix}-zoom-out" title="缩小" aria-label="缩小图表" style="${CHART_CANVAS_BUTTON_STYLE}">`,
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>',
+    '</button>',
+    `<button type="button" class="${buttonClass} ${classPrefix}-reset" title="重置视图" aria-label="重置图表视图" style="${CHART_CANVAS_BUTTON_STYLE}">`,
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>',
+    '</button>',
+    `<div class="${classPrefix}-divider" style="${CHART_CANVAS_DIVIDER_STYLE}"></div>`,
+    `<button type="button" class="${buttonClass} ${classPrefix}-open" title="展开查看" aria-label="展开查看图表" style="${CHART_CANVAS_BUTTON_STYLE}">`,
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>',
+    '</button>',
+    `<button type="button" class="${buttonClass} ${classPrefix}-copy" title="${copyLabel}" aria-label="${copyLabel}" style="${CHART_CANVAS_BUTTON_STYLE}">`,
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+    '</button>',
+    `<button type="button" class="${buttonClass} ${classPrefix}-export" title="${exportLabel}" aria-label="${exportLabel}" style="${CHART_CANVAS_BUTTON_STYLE}">`,
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    '</button>',
+  ].join('');
+}
+
+function shouldEnhanceInlineSvgChart(svg: SVGSVGElement): boolean {
+  return !svg.closest(
+    '.mermaid-canvas-container, .chart-canvas-container, pre, code, .katex, .katex-html',
+  );
+}
+
+function wrapInlineSvgChart(svg: SVGSVGElement): HTMLDivElement | null {
+  const parent = svg.parentNode;
+  if (!parent) return null;
+
+  const container = document.createElement('div');
+  container.className = 'chart-canvas-container';
+  container.dataset.chartKind = 'svg';
+  container.tabIndex = 0;
+  container.setAttribute('aria-label', '图表画布');
+
+  const renderArea = document.createElement('div');
+  renderArea.className = 'chart-canvas-render';
+  const viewport = document.createElement('div');
+  viewport.className = 'chart-canvas-viewport';
+  parent.replaceChild(container, svg);
+  svg.classList.add('chart-canvas-graphic');
+  viewport.appendChild(svg);
+  renderArea.appendChild(viewport);
+
+  const controls = document.createElement('div');
+  controls.className = 'chart-canvas-controls';
+  controls.style.cssText = CHART_CANVAS_CONTROLS_STYLE;
+  controls.innerHTML = renderChartCanvasControlButtons('chart');
+
+  container.append(renderArea, controls);
+  return container;
+}
+
+function serializeChartSvg(svg: SVGSVGElement): string {
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  return new XMLSerializer().serializeToString(clone);
+}
+
+function getChartSvgExportSize(svg: SVGSVGElement) {
+  const rect = svg.getBoundingClientRect();
+  const viewBox = svg.viewBox.baseVal;
+  const attributeWidth = Number.parseFloat(svg.getAttribute('width') || '');
+  const attributeHeight = Number.parseFloat(svg.getAttribute('height') || '');
+  const width = rect.width || attributeWidth || viewBox.width || 960;
+  const height = rect.height || attributeHeight || viewBox.height || 540;
+
+  return {
+    width: Math.min(4096, Math.max(1, Math.round(width))),
+    height: Math.min(4096, Math.max(1, Math.round(height))),
+  };
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+        return;
+      }
+      reject(new Error('无法生成图表图片。'));
+    }, 'image/png');
+  });
+}
+
+async function chartSvgToPngBlob(svg: SVGSVGElement): Promise<Blob> {
+  const { width, height } = getChartSvgExportSize(svg);
+  const source = new Blob([serializeChartSvg(svg)], { type: 'image/svg+xml;charset=utf-8' });
+  const sourceUrl = URL.createObjectURL(source);
+
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const nextImage = new Image();
+      nextImage.onload = () => resolve(nextImage);
+      nextImage.onerror = () => reject(new Error('无法加载图表导出预览。'));
+      nextImage.src = sourceUrl;
+    });
+    const pixelRatio = 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = width * pixelRatio;
+    canvas.height = height * pixelRatio;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('当前环境不支持图表导出。');
+    context.scale(pixelRatio, pixelRatio);
+    context.drawImage(image, 0, 0, width, height);
+    return await canvasToBlob(canvas);
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
+function downloadChartBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+async function copyChartSvg(svg: SVGSVGElement): Promise<void> {
+  const svgMarkup = serializeChartSvg(svg);
+
+  try {
+    const png = await chartSvgToPngBlob(svg);
+    if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+      return;
+    }
+  } catch {
+    // Some Tauri and browser clipboard implementations only permit text writes.
+  }
+
+  if (!navigator.clipboard?.writeText) {
+    throw new Error('当前环境不支持复制图表。');
+  }
+  await navigator.clipboard.writeText(svgMarkup);
+}
+
+async function exportChartSvg(svg: SVGSVGElement): Promise<void> {
+  try {
+    downloadChartBlob(await chartSvgToPngBlob(svg), 'chart.png');
+  } catch {
+    downloadChartBlob(
+      new Blob([serializeChartSvg(svg)], { type: 'image/svg+xml;charset=utf-8' }),
+      'chart.svg',
+    );
+  }
 }
 
 function normalizeMermaidSource(source: string): string {
@@ -444,65 +647,14 @@ function renderMermaidFence(
     : resolvedCacheEntry?.error
       ? `<div class="chat-mermaid-error">${escapeHtml(resolvedCacheEntry.error)}</div>`
       : '<div class="mermaid-canvas-loading">正在渲染图表...</div>';
-  const controlsStyle = [
-    'position:absolute',
-    'top:8px',
-    'right:8px',
-    'display:inline-flex',
-    'align-items:center',
-    'justify-content:center',
-    'flex-wrap:nowrap',
-    'gap:1px',
-    'padding:2px',
-    'white-space:nowrap',
-    'z-index:10',
-  ].join(';');
-  const buttonStyle = [
-    'appearance:none',
-    '-webkit-appearance:none',
-    'display:inline-flex',
-    'align-items:center',
-    'justify-content:center',
-    'flex:0 0 auto',
-    'width:22px',
-    'height:22px',
-    'min-width:22px',
-    'min-height:22px',
-    'padding:0',
-    'margin:0',
-    'border:0',
-    'background:transparent',
-    'line-height:1',
-    'font-size:0',
-    'cursor:pointer',
-  ].join(';');
-  const dividerStyle = 'flex:0 0 auto;width:1px;height:12px;margin:0 1px';
 
   return [
-    '<div class="mermaid-canvas-container" data-mermaid-encoded="' + encoded + '" tabindex="0">',
+    '<div class="mermaid-canvas-container" data-chart-kind="mermaid" data-mermaid-encoded="' + encoded + '" tabindex="0">',
     '<div class="mermaid-canvas-render" data-mermaid-source="' + encoded + '"' + renderStateAttrs + '>',
     renderContent,
     '</div>',
-    '<div class="mermaid-canvas-controls" style="' + controlsStyle + '">',
-    '<button type="button" class="mermaid-canvas-btn mermaid-canvas-zoom-in" title="放大" aria-label="放大图表" style="' + buttonStyle + '">',
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>',
-    '</button>',
-    '<button type="button" class="mermaid-canvas-btn mermaid-canvas-zoom-out" title="缩小" aria-label="缩小图表" style="' + buttonStyle + '">',
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>',
-    '</button>',
-    '<button type="button" class="mermaid-canvas-btn mermaid-canvas-reset" title="重置视图" aria-label="重置图表视图" style="' + buttonStyle + '">',
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>',
-    '</button>',
-    '<div class="mermaid-canvas-divider" style="' + dividerStyle + '"></div>',
-    '<button type="button" class="mermaid-canvas-btn mermaid-canvas-open" title="展开查看" aria-label="展开查看图表" style="' + buttonStyle + '">',
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>',
-    '</button>',
-    '<button type="button" class="mermaid-canvas-btn mermaid-canvas-copy" title="复制 SVG" aria-label="复制图表 SVG" style="' + buttonStyle + '">',
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
-    '</button>',
-    '<button type="button" class="mermaid-canvas-btn mermaid-canvas-export" title="导出 PNG" aria-label="导出图表 PNG" style="' + buttonStyle + '">',
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
-    '</button>',
+    '<div class="mermaid-canvas-controls" style="' + CHART_CANVAS_CONTROLS_STYLE + '">',
+    renderChartCanvasControlButtons('mermaid'),
     '</div>',
     '</div>',
   ].join('');
@@ -1203,7 +1355,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
 
   const getMermaidContainer = useCallback((target: EventTarget | null) => {
     if (!(target instanceof Element)) return null
-    return target.closest<HTMLDivElement>('.mermaid-canvas-container')
+    return target.closest<HTMLDivElement>('.mermaid-canvas-container, .chart-canvas-container')
   }, [])
 
   const getMermaidViewState = useCallback((container: HTMLDivElement): MermaidViewState => {
@@ -1227,7 +1379,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
 
   const applyMermaidTransform = useCallback((container: HTMLDivElement) => {
     const state = getMermaidViewState(container)
-    const viewport = container.querySelector<HTMLDivElement>('.mermaid-canvas-viewport')
+    const viewport = container.querySelector<HTMLDivElement>('.mermaid-canvas-viewport, .chart-canvas-viewport')
     if (!viewport) return
     viewport.style.transform = `translate(${state.translateX}px, ${state.translateY}px) scale(${state.scale})`
   }, [getMermaidViewState])
@@ -1236,7 +1388,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     const target = event.target
     if (!(target instanceof Element)) return
 
-    const button = target.closest<HTMLButtonElement>('.mermaid-canvas-btn')
+    const button = target.closest<HTMLButtonElement>('.mermaid-canvas-btn, .chart-canvas-btn')
     if (!button) return
 
     const container = getMermaidContainer(button)
@@ -1248,19 +1400,24 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
     const state = getMermaidViewState(container)
     const svg = getMermaidDiagramSvg(container)
 
-    if (button.classList.contains('mermaid-canvas-zoom-in')) {
+    const hasAction = (action: string) => (
+      button.classList.contains(`mermaid-canvas-${action}`) ||
+      button.classList.contains(`chart-canvas-${action}`)
+    )
+
+    if (hasAction('zoom-in')) {
       state.scale = Math.min(4, state.scale + 0.2)
       applyMermaidTransform(container)
       return
     }
 
-    if (button.classList.contains('mermaid-canvas-zoom-out')) {
+    if (hasAction('zoom-out')) {
       state.scale = Math.max(0.25, state.scale - 0.2)
       applyMermaidTransform(container)
       return
     }
 
-    if (button.classList.contains('mermaid-canvas-reset')) {
+    if (hasAction('reset')) {
       state.scale = 1
       state.translateX = 0
       state.translateY = 0
@@ -1268,9 +1425,10 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       return
     }
 
-    if (button.classList.contains('mermaid-canvas-open')) {
+    if (hasAction('open')) {
       if (!svg) return
       setMermaidViewer({
+        title: container.dataset.chartKind === 'mermaid' ? 'Mermaid 图表' : '图表',
         svg: svg.outerHTML,
         scale: 1,
         translateX: 0,
@@ -1285,10 +1443,10 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       return
     }
 
-    if (button.classList.contains('mermaid-canvas-copy')) {
+    if (hasAction('copy')) {
       if (!svg) return
       try {
-        await navigator.clipboard.writeText(svg.outerHTML)
+        await copyChartSvg(svg)
         button.classList.add('copied')
         setTimeout(() => button.classList.remove('copied'), 1500)
       } catch (err) {
@@ -1297,30 +1455,12 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       return
     }
 
-    if (button.classList.contains('mermaid-canvas-export')) {
+    if (hasAction('export')) {
       if (!svg) return
       try {
-        const svgData = new XMLSerializer().serializeToString(svg)
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')
-        const img = new Image()
-
-        img.onload = () => {
-          canvas.width = img.width * 2
-          canvas.height = img.height * 2
-          ctx?.scale(2, 2)
-          ctx?.drawImage(img, 0, 0)
-          const url = canvas.toDataURL('image/png')
-          const link = document.createElement('a')
-          link.href = url
-          link.download = 'mermaid-chart.png'
-          link.click()
-          URL.revokeObjectURL(url)
-          button.classList.add('exported')
-          setTimeout(() => button.classList.remove('exported'), 1500)
-        }
-
-        img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)))
+        await exportChartSvg(svg)
+        button.classList.add('exported')
+        setTimeout(() => button.classList.remove('exported'), 1500)
       } catch (err) {
         console.error('导出失败:', err)
       }
@@ -1333,12 +1473,12 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target
-      if (target instanceof Element && target.closest('.mermaid-canvas-controls')) return
+      if (target instanceof Element && target.closest('.mermaid-canvas-controls, .chart-canvas-controls')) return
 
       const container = getMermaidContainer(target)
       if (!container || event.button !== 0) return
 
-      const renderArea = container.querySelector<HTMLDivElement>('.mermaid-canvas-render')
+      const renderArea = container.querySelector<HTMLDivElement>('.mermaid-canvas-render, .chart-canvas-render')
       if (!renderArea) return
 
       const state = getMermaidViewState(container)
@@ -1372,20 +1512,35 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
 
       state.isDragging = false
       state.pointerId = null
-      const renderArea = container.querySelector<HTMLDivElement>('.mermaid-canvas-render')
+      const renderArea = container.querySelector<HTMLDivElement>('.mermaid-canvas-render, .chart-canvas-render')
       renderArea?.releasePointerCapture?.(event.pointerId)
+    }
+
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return
+
+      const container = getMermaidContainer(event.target)
+      if (!container) return
+
+      event.preventDefault()
+      const state = getMermaidViewState(container)
+      const delta = event.deltaY > 0 ? -0.12 : 0.12
+      state.scale = Math.min(4, Math.max(0.25, state.scale + delta))
+      applyMermaidTransform(container)
     }
 
     el.addEventListener('pointerdown', handlePointerDown)
     el.addEventListener('pointermove', handlePointerMove)
     el.addEventListener('pointerup', endPointerDrag)
     el.addEventListener('pointercancel', endPointerDrag)
+    el.addEventListener('wheel', handleWheel, { passive: false })
 
     return () => {
       el.removeEventListener('pointerdown', handlePointerDown)
       el.removeEventListener('pointermove', handlePointerMove)
       el.removeEventListener('pointerup', endPointerDrag)
       el.removeEventListener('pointercancel', endPointerDrag)
+      el.removeEventListener('wheel', handleWheel)
     }
   }, [
     applyMermaidTransform,
@@ -1494,6 +1649,24 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
       cancelled = true;
     }
   }, [applyMermaidTransform, clawFormat, getMermaidViewState, htmlContent, mdTheme, streaming])
+
+  // 让聊天输出中的独立 SVG 图表也获得与 Mermaid 相同的画布能力。
+  useLayoutEffect(() => {
+    if (streaming || clawFormat) return
+
+    const el = previewRef.current
+    if (!el) return
+
+    const chartSvgs = Array.from(el.querySelectorAll<SVGSVGElement>('svg'))
+      .filter(shouldEnhanceInlineSvgChart)
+
+    chartSvgs.forEach((svg) => {
+      const container = wrapInlineSvgChart(svg)
+      if (!container) return
+      getMermaidViewState(container)
+      applyMermaidTransform(container)
+    })
+  }, [applyMermaidTransform, clawFormat, getMermaidViewState, htmlContent, streaming])
 
   useEffect(() => {
     if (!mermaidViewer) return
@@ -1653,10 +1826,10 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
           className="mermaid-viewer-overlay"
           role="dialog"
           aria-modal="true"
-          aria-label="Mermaid 图表查看器"
+          aria-label="图表查看器"
         >
           <div className="mermaid-viewer-header">
-            <div className="mermaid-viewer-title">Mermaid 图表</div>
+            <div className="mermaid-viewer-title">{mermaidViewer.title}</div>
             <div className="mermaid-viewer-toolbar">
               <button
                 type="button"

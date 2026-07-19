@@ -20,7 +20,7 @@ import useTagStore from "@/stores/tag";
 import { fetchAiDesc } from "@/lib/ai/description";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { appDataDir } from "@tauri-apps/api/path";
-import { CheckSquare, Code2, ExternalLink, FileIcon, GitFork, ImageIcon, ImageUp, LinkIcon, ListTree, Loader2, Mic, Pencil, Pin, PinOff, RefreshCw, Save, Settings2, Sparkles, Square, Star, TextIcon, RotateCcw, Trash2 } from "lucide-react";
+import { CheckSquare, Code2, ExternalLink, FileIcon, GitFork, ImageIcon, ImageUp, LinkIcon, Loader2, Mic, Pencil, Pin, PinOff, RefreshCw, Save, Settings2, Sparkles, Square, Star, TextIcon, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -49,6 +49,8 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { getGitHubProjectDetailContent, getGitHubProjectDisplayName, getGitHubProjectIntro, getGitHubProjectMeta, isGitHubProjectMark, updateGitHubProjectMarkTitle } from "@/lib/github-project";
 import { isVideoTranscriptMark, mergeVideoTranscriptSummary, parseVideoTranscriptRecord, summarizeVideoTranscript } from "@/lib/video-transcript-record";
 import { LinkJobStatus } from "./link-job-status";
+import { AudioRecordingDetailView } from './audio-recording-detail-view';
+import { isAudioRecordingMark, parseAudioRecordingRecord, replaceAudioRecordingTranscript } from '@/lib/audio-recording-record';
 
 dayjs.extend(relativeTime)
 
@@ -159,21 +161,18 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
     setLocalMark(mark)
   }, [mark])
   const video = useMemo(() => parseVideoTranscriptRecord(localMark), [localMark])
-  const [activeView, setActiveView] = useState<'timeline' | 'body' | 'summary'>('timeline')
+  const [activeView, setActiveView] = useState<'body' | 'summary'>('body')
   const [isSummarizing, setIsSummarizing] = useState(false)
   const { updateMark: updateMarkInStore } = useMarkStore()
 
   const views = [
-    { key: 'timeline' as const, label: '视频时间线', icon: ListTree },
     { key: 'body' as const, label: '结构化正文', icon: TextIcon },
     { key: 'summary' as const, label: 'AI 深度总结', icon: Sparkles },
   ]
 
-  const text = activeView === 'timeline'
-    ? video.timeline || video.body
-    : activeView === 'body'
-      ? video.body
-      : video.summaryMarkdown || video.description
+  const text = activeView === 'body'
+    ? video.body
+    : video.summaryMarkdown || video.description
 
   const hasSummary = Boolean(
     video.meta.summary
@@ -186,40 +185,16 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
     || video.meta.actionItems?.length
     || video.meta.questions?.length
   )
-  const platform = video.meta.platform?.toLowerCase() || ''
-  const isBilibili = platform === 'bilibili' || platform === 'b站'
-  const isYoutube = platform === 'youtube'
-  const platformLabel = isYoutube ? 'YouTube' : isBilibili ? 'B站' : '视频转写'
+  const platformLabel = (() => {
+    const platform = video.meta.platform?.toLowerCase() || ''
+    if (platform === 'youtube') return 'YouTube'
+    if (platform === 'bilibili' || platform === 'b站') return 'B站'
+    return '视频转写'
+  })()
+  const displayUrl = video.meta.sourceUrl || localMark.url
 
-  const headerCardBgClass = isBilibili
-    ? "rounded-lg border border-sky-100 bg-background px-5 py-5 dark:border-sky-950/30"
-    : isYoutube
-      ? "rounded-lg border border-rose-100 bg-background px-5 py-5 dark:border-rose-950/30"
-      : "rounded-lg border border-border bg-background px-5 py-5"
-
-  const platformBadgeClass = isBilibili
-    ? "rounded bg-sky-500 px-2.5 py-0.5 text-xs font-bold text-white"
-    : isYoutube
-      ? "rounded bg-rose-600 px-2.5 py-0.5 text-xs font-bold text-white"
-      : "rounded bg-indigo-600 px-2.5 py-0.5 text-xs font-bold text-white"
-
-  const generateBtnClass = isBilibili
-    ? "inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed"
-    : isYoutube
-      ? "inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-rose-500 disabled:cursor-not-allowed"
-      : "inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-not-allowed"
-
-  const originVideoBtnClass = isBilibili
-    ? "inline-flex items-center gap-1.5 rounded-md border border-sky-200/60 bg-background px-3.5 py-2 text-xs font-semibold text-sky-600 transition-colors hover:bg-sky-50/60 dark:border-sky-900/60 dark:text-sky-400 dark:hover:bg-sky-950/20"
-    : isYoutube
-      ? "inline-flex items-center gap-1.5 rounded-md border border-rose-200/60 bg-background px-3.5 py-2 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50/60 dark:border-rose-900/60 dark:text-rose-400 dark:hover:bg-rose-950/20"
-      : "inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent"
-
-  const activeTabClass = isBilibili
-    ? "bg-sky-50 text-sky-700 dark:bg-sky-950/20 dark:text-sky-400"
-    : isYoutube
-      ? "bg-rose-50 text-rose-700 dark:bg-rose-950/20 dark:text-rose-400"
-      : "bg-muted text-foreground"
+  // 统一 token 配色，与 GitHubProjectDetailView / 全局风格一致
+  const generateBtnClass = "inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed"
 
   const handleGenerateSummary = useCallback(async () => {
     if (isSummarizing) return
@@ -228,7 +203,7 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
       const summary = await summarizeVideoTranscript({
         title: video.title,
         transcript: video.rawTimeline || video.body || video.timeline,
-        sourceUrl: video.meta.sourceUrl || localMark.url || '',
+        sourceUrl: displayUrl || '',
       })
       const nextContent = mergeVideoTranscriptSummary(localMark.content || '', summary)
       const nextMark = {
@@ -252,98 +227,55 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
     } finally {
       setIsSummarizing(false)
     }
-  }, [isSummarizing, localMark, updateMarkInStore, video])
-
-  const formattedTimeline = useMemo(() => {
-    if (activeView !== 'timeline') return null
-    const raw = video.rawTimeline || ''
-    if (!raw) return <ChatPreview text={video.timeline} className="video-transcript-markdown w-full max-w-none overflow-x-auto" />
-
-    const lines = raw.split(/\r?\n/)
-    const hasTimestamps = lines.some(line => /(?:\d{1,2}:)?\d{2}:\d{2}/.test(line))
-
-    if (!hasTimestamps) {
-      return <ChatPreview text={video.timeline} className="video-transcript-markdown w-full max-w-none overflow-x-auto" />
-    }
-
-    return (
-      <div className="relative space-y-6 before:absolute before:inset-y-1 before:left-3 before:w-px before:bg-border">
-        {lines.map((line, idx) => {
-          const trimmed = line.trim()
-          if (!trimmed) return null
-
-          const timeMatch = trimmed.match(/^(?:[-*]\s*)?((?:\d{1,2}:)?\d{2}:\d{2})(?:\s*[🎼♪♫♬])?\s*(.*)$/)
-          if (timeMatch) {
-            const time = timeMatch[1]
-            const contentText = timeMatch[2].replace(/[🎼♪♫♬]+/g, '').trim()
-            return (
-              <div key={idx} className="relative pl-8 group">
-                <div className="absolute left-1.5 top-1.5 size-3 rounded-full border-2 border-background bg-primary transition-transform duration-200 group-hover:scale-110" />
-                <div className="flex flex-col gap-1.5">
-                  <span className="inline-flex w-fit items-center gap-1 rounded border border-border bg-muted px-2 py-0.5 font-mono text-[11px] font-bold text-muted-foreground">
-                    {time}
-                  </span>
-                  <p className="font-sans text-sm leading-relaxed text-foreground">
-                    {contentText}
-                  </p>
-                </div>
-              </div>
-            )
-          }
-          return (
-            <div key={idx} className="pl-8 font-sans text-sm leading-relaxed text-foreground">
-              {trimmed.replace(/[🎼♪♫♬]+/g, '').trim()}
-            </div>
-          )
-        })}
-      </div>
-    )
-  }, [activeView, video])
+  }, [displayUrl, isSummarizing, localMark, updateMarkInStore, video])
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5">
-      <div className={headerCardBgClass}>
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div className="min-w-0 space-y-2.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={platformBadgeClass}>
-                {platformLabel}
-              </span>
-              <span className="rounded bg-muted/60 border border-border/50 px-2.5 py-0.5 text-xs font-semibold text-muted-foreground">
-                {video.meta.transcriptSource || '语音识别'}
-              </span>
+      <div className="overflow-hidden rounded-lg border border-border bg-background">
+        <div className="border-b border-border px-5 py-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0 space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                  {platformLabel}
+                </span>
+                {video.meta.transcriptSource ? (
+                  <span className="rounded-md border border-border/60 bg-muted/30 px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                    {video.meta.transcriptSource}
+                  </span>
+                ) : null}
+              </div>
+              <h2 className="max-w-3xl text-lg font-semibold tracking-tight text-foreground">
+                {video.title}
+              </h2>
+              {video.description ? (
+                <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                  {video.description}
+                </p>
+              ) : null}
             </div>
-            <h2 className="max-w-3xl text-xl font-semibold leading-snug text-foreground tracking-tight">
-              {video.title}
-            </h2>
-            {video.description ? (
-              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-                {video.description}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleGenerateSummary}
-              disabled={isSummarizing}
-              className={generateBtnClass}
-            >
-              {isSummarizing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-              {hasSummary ? '重新生成总结' : '生成 AI 总结'}
-            </button>
-            {video.meta.sourceUrl || localMark.url ? (
-              <a
-                href={video.meta.sourceUrl || localMark.url || '#'}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={originVideoBtnClass}
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleGenerateSummary}
+                disabled={isSummarizing}
+                className={generateBtnClass}
               >
-                <ExternalLink className="size-3.5" />
-                原视频
-              </a>
-            ) : null}
+                {isSummarizing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                {hasSummary ? '重新生成总结' : '生成 AI 总结'}
+              </button>
+              {displayUrl ? (
+                <a
+                  href={displayUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent"
+                >
+                  <ExternalLink className="size-3.5" />
+                  原视频
+                </a>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
@@ -354,7 +286,7 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
             key={key}
             type="button"
             onClick={() => setActiveView(key)}
-            className={`inline-flex items-center gap-1.5 rounded-sm px-3.5 py-1.5 text-xs font-semibold transition-colors ${activeView === key ? activeTabClass : 'text-muted-foreground hover:text-foreground'}`}
+            className={`inline-flex items-center gap-1.5 rounded-sm px-3.5 py-1.5 text-xs font-semibold transition-colors ${activeView === key ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
           >
             <Icon className="size-3.5" />
             {label}
@@ -368,7 +300,7 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
             <Sparkles className="mb-2 size-6 text-muted-foreground/60" />
             <h3 className="text-sm font-semibold text-foreground">生成 AI 视频总结</h3>
             <p className="mt-1.5 max-w-xs text-xs leading-5 text-muted-foreground">
-              基于时间线和正文，梳理大纲、要点、术语和复盘问题。
+              基于正文与时间线，梳理大纲、要点、术语和复盘问题。
             </p>
             <button
               type="button"
@@ -380,12 +312,12 @@ function VideoTranscriptDetailView({ mark }: { mark: Mark }) {
               生成总结
             </button>
           </div>
-        ) : activeView === 'timeline' ? (
+        ) : activeView === 'body' ? (
           <div className="mx-auto max-w-2xl py-1">
-            {formattedTimeline}
+            <ChatPreview text={text || '暂无内容'} className="video-transcript-markdown w-full max-w-none overflow-x-auto" />
           </div>
         ) : (
-          <div className={activeView === 'body' ? "mx-auto max-w-2xl py-1" : "w-full"}>
+          <div className="w-full">
             <ChatPreview text={text || '暂无内容'} className="video-transcript-markdown w-full max-w-none" />
           </div>
         )}
@@ -421,6 +353,11 @@ const DetailViewer = React.memo(({
   const isTextType = mark.type === 'text'
   const isGitHubProject = isGitHubProjectMark(mark)
   const isVideoTranscript = isVideoTranscriptMark(mark)
+  const isAudioRecording = isAudioRecordingMark(mark)
+  const audioRecording = useMemo(
+    () => isAudioRecording ? parseAudioRecordingRecord(mark) : null,
+    [isAudioRecording, mark],
+  )
 
   const textDescChangeHandler = useCallback(async (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setDescValue(e.target.value)
@@ -432,14 +369,17 @@ const DetailViewer = React.memo(({
   }, [])
 
   const handleSave = useCallback(async () => {
-    await updateMark({ ...mark, desc: descValue, content: value })
+    const nextContent = isAudioRecording
+      ? replaceAudioRecordingTranscript(mark.content || '', value)
+      : value
+    await updateMark({ ...mark, desc: descValue, content: nextContent })
     setIsEditing(false)
-  }, [mark, value, descValue, updateMark])
+  }, [descValue, isAudioRecording, mark, updateMark, value])
 
   useEffect(() => {
-    setValue(mark.content || '')
+    setValue(audioRecording?.body ?? mark.content ?? '')
     setDescValue(mark.desc?.trim() || '')
-  }, [mark])
+  }, [audioRecording?.body, mark])
 
   // For text type, always show Textarea
   const showEditor = isTextType || isEditing
@@ -470,7 +410,7 @@ const DetailViewer = React.memo(({
         </TooltipProvider>
       ) : trigger}
       <DialogContent
-        className={isGitHubProject || isVideoTranscript ? "lg:max-w-[1040px] max-h-[88vh] flex flex-col p-0" : "lg:max-w-[800px] max-h-[85vh] flex flex-col p-0"}
+        className={isGitHubProject || isVideoTranscript || isAudioRecording ? "w-[calc(100vw-1rem)] lg:max-w-[1040px] max-h-[90vh] flex flex-col p-0" : "lg:max-w-[800px] max-h-[85vh] flex flex-col p-0"}
         onInteractOutside={(event) => {
           if (mark.type === 'image' || mark.type === 'scan') {
             event.preventDefault()
@@ -506,8 +446,8 @@ const DetailViewer = React.memo(({
             <span>{getWordCount(value)} {messageControlT('words')}</span>
           </div>
         </DialogHeader>
-        <div className={(isGitHubProject || isVideoTranscript) && !showEditor ? "flex-1 overflow-y-auto bg-muted/20 p-4 md:p-6" : "flex-1 overflow-y-auto md:p-6 p-3"}>
-          <div className={(isGitHubProject || isVideoTranscript) ? '' : 'mx-auto max-w-[680px]'}>
+        <div className={(isGitHubProject || isVideoTranscript || isAudioRecording) && !showEditor ? "flex-1 overflow-y-auto bg-muted/20 p-4 md:p-6" : "flex-1 overflow-y-auto md:p-6 p-3"}>
+          <div className={(isGitHubProject || isVideoTranscript || isAudioRecording) ? '' : 'mx-auto max-w-[680px]'}>
           {
             mark.url && (mark.type === 'image' || mark.type === 'scan') ?
             <div className="mb-5 flex justify-center">
@@ -520,17 +460,19 @@ const DetailViewer = React.memo(({
             null
           }
           {
-            isGitHubProject || isVideoTranscript || mark.type === 'text' || mark.desc === mark.content ? null :
+            isGitHubProject || isVideoTranscript || (isAudioRecording && !showEditor) || mark.type === 'text' || mark.desc === mark.content ? null :
             <>
-              <span className="mb-2 block text-[11px] font-medium tracking-wide text-muted-foreground">{markT('desc')}</span>
+              <span className="mb-2 block text-[11px] font-medium tracking-wide text-muted-foreground">{isAudioRecording ? '标题' : markT('desc')}</span>
               <Textarea placeholder="在此输入文本记录内容..." rows={3} value={descValue} onChange={textDescChangeHandler} />
             </>
           }
-          {(isGitHubProject || isVideoTranscript) && !showEditor ? null : (
+          {(isGitHubProject || isVideoTranscript || isAudioRecording) && !showEditor ? null : (
             <span className="mb-2 block text-[11px] font-medium tracking-wide text-muted-foreground">{markT('content')}</span>
           )}
           {showEditor ? (
             <Textarea placeholder="在此输入文本记录内容..." rows={14} value={value} onChange={textMarkChangeHandler} />
+          ) : isAudioRecording ? (
+            <AudioRecordingDetailView mark={mark} />
           ) : isGitHubProject ? (
             <GitHubProjectDetailView mark={mark} />
           ) : isVideoTranscript ? (
@@ -1021,13 +963,12 @@ export const MarkWrapper = React.memo(({
               )}
               {renderTimeOrTrashActions()}
             </div>
-            {/* 新增：如果存在音频文件名，则在转译文本前进行展示 */}
-            {mark.desc && (
-              <div className="mt-1.5 mb-1 text-sm font-medium text-foreground">
-                {mark.desc}
-              </div>
-            )}
-            <DetailViewer mark={mark} content={mark.content || ''} />
+            <DetailViewer mark={mark} content={itemContent.title || t(mark.type)} />
+            {itemContent.preview && itemContent.preview !== itemContent.title ? (
+              <p className={`mt-1 line-clamp-3 text-${recordTextSize} ${lineHeight} text-muted-foreground`}>
+                {itemContent.preview}
+              </p>
+            ) : null}
             {mark.url && (
               <div className="mt-2">
                 <AudioPlayer audioPath={mark.url} />

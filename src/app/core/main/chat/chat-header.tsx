@@ -62,14 +62,14 @@ export function ChatHeader() {
     : tEmpty('conversationHistory')
 
   return (
-    <header className="h-12 w-full flex items-center justify-between border-b px-4 gap-2">
+    <header className="flex h-12 w-full min-w-0 items-center gap-2 border-b px-4">
       {/* 左侧：历史对话下拉 + 模型选择 */}
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         <DropdownMenu open={showHistoryDropdown} onOpenChange={setShowHistoryDropdown}>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
-              className="px-2 hover:bg-transparent cursor-pointer justify-start gap-1.5"
+              className="min-w-0 max-w-[55%] shrink justify-start gap-1.5 px-2 hover:bg-transparent cursor-pointer"
             >
               <span className="text-sm font-medium truncate max-w-30">{dropdownTitle}</span>
               <span className="text-xs text-muted-foreground">
@@ -139,12 +139,12 @@ export function ChatHeader() {
           </DropdownMenuContent>
         </DropdownMenu>
         <ModelSelect
-          triggerClassName="flex min-w-0 items-center gap-1 truncate rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          triggerClassName="flex min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           trigger={(() => {
             if (!primaryModel || !aiModelList) return (
               <>
                 <BotOff className="size-3 shrink-0" />
-                <span>{t('record.chat.header.noModel')}</span>
+                <span className="min-w-0 truncate">{t('record.chat.header.noModel')}</span>
               </>
             )
             for (const config of aiModelList) {
@@ -158,7 +158,7 @@ export function ChatHeader() {
                   return (
                     <>
                       <BotMessageSquare className="size-3 shrink-0" />
-                      <span className="truncate max-w-48">{getModelDisplayName(targetModel)}</span>
+                      <span className="min-w-0 truncate max-w-48">{getModelDisplayName(targetModel)}</span>
                     </>
                   )
                 }
@@ -167,7 +167,7 @@ export function ChatHeader() {
                   return (
                     <>
                       <BotMessageSquare className="size-3 shrink-0" />
-                      <span className="truncate max-w-48">{getModelDisplayName({ model: config.model || config.key })}</span>
+                      <span className="min-w-0 truncate max-w-48">{getModelDisplayName({ model: config.model || config.key })}</span>
                     </>
                   )
                 }
@@ -176,7 +176,7 @@ export function ChatHeader() {
             return (
               <>
                 <BotOff className="size-3 shrink-0" />
-                <span>{t('record.chat.header.noModel')}</span>
+                <span className="min-w-0 truncate">{t('record.chat.header.noModel')}</span>
               </>
             )
           })()}
@@ -184,13 +184,15 @@ export function ChatHeader() {
       </div>
 
       {/* 右侧：新建对话 */}
-      <TooltipButton
-        icon={<MessageSquarePlus />}
-        tooltipText={t('record.chat.input.newChat')}
-        side="bottom"
-        onClick={() => startNewConversation()}
-        disabled={isDisabled}
-      />
+      <div className="shrink-0">
+        <TooltipButton
+          icon={<MessageSquarePlus />}
+          tooltipText={t('record.chat.input.newChat')}
+          side="bottom"
+          onClick={() => startNewConversation()}
+          disabled={isDisabled}
+        />
+      </div>
     </header>
   )
 }

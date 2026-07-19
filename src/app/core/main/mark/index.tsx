@@ -7,11 +7,11 @@ import { MarkToolbar } from './mark-toolbar'
 import { MarkFilterPopover } from './mark-filter-popover'
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
-import { insertMark } from "@/db/marks"
 import { toast } from '@/hooks/use-toast'
 import { transcribeRecording } from '@/lib/audio'
 import { extractAudioTrack, segmentAudio } from '@/lib/ffmpeg-wasm'
 import { Sparkles } from 'lucide-react'
+import { createAudioTranscriptionRecord } from '@/lib/audio-transcription-record'
 
 export function NoteSidebar() {
   const {
@@ -151,13 +151,19 @@ export function NoteSidebar() {
 
       const audioPath = await saveLocalAudio(audioBlob)
 
-      // 第四步：写入 SQLite 数据库
-      await insertMark({
+      // 第四步：先保存原始转写，再生成结构化会话纪要
+      const recordResult = await createAudioTranscriptionRecord({
         tagId: currentTagId!,
-        type: 'recording',
-        desc: transcription.substring(0, 100),
-        content: transcription,
-        url: audioPath
+        transcript: transcription,
+        audioPath,
+        sourceFileName: file.name,
+        organize: true,
+        onProgress: progress => setQueue(queueId, { progress }),
+        onRawSaved: async () => {
+          await fetchMarks()
+          await fetchTags()
+          getCurrentTag()
+        },
       })
 
       // 清除队列与更新 UI
@@ -166,10 +172,20 @@ export function NoteSidebar() {
       await fetchTags()
       getCurrentTag()
 
-      toast({
-        title: '拖拽音视频转写成功',
-        description: `已成功保存为语音记录。双击卡片即可查阅并一键直绘精美排版卡片！`,
-      })
+      if (recordResult.organizationError) {
+        toast({
+          title: '转写已保存，智能纪要生成失败',
+          description: '原始转写和音频已保留，可在详情页重新生成。',
+          variant: 'destructive',
+        })
+      } else {
+        toast({
+          title: recordResult.conflict ? '转写已保存' : '会话纪要已生成',
+          description: recordResult.conflict
+            ? '检测到期间发生编辑，AI 结果未覆盖你的内容。'
+            : '已整理重点、需求、决策、行动项与待确认问题。',
+        })
+      }
 
     } catch (error) {
       console.error('[WASM Drag Drop] Failed:', error)

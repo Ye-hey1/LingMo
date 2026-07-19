@@ -5,6 +5,7 @@ import { AlertTriangle, Check, Loader2, RefreshCw } from 'lucide-react'
 import { getLatestLinkJobForMark, getLinkJobBundle, type LinkJobBundle } from '@/db/link-pipeline'
 import { retryLinkOrganizationJob } from '@/lib/link-pipeline/organize-runner'
 import { retryLinkCaptureJob } from '@/lib/link-pipeline/capture-runner'
+import { isVideoTranscriptMark } from '@/lib/video-transcript-record'
 import useMarkStore from '@/stores/mark'
 import { toast } from '@/hooks/use-toast'
 import emitter from '@/lib/emitter'
@@ -12,6 +13,9 @@ import emitter from '@/lib/emitter'
 export function LinkJobStatus({ markId, disabled = false }: { markId: number; disabled?: boolean }) {
   const [bundle, setBundle] = useState<LinkJobBundle | null>(null)
   const [isRetrying, setIsRetrying] = useState(false)
+  const allMarks = useMarkStore(state => state.allMarks)
+  const mark = allMarks.find(item => item.id === markId)
+  const isVideoTranscript = mark ? isVideoTranscriptMark(mark) : false
 
   const loadStatus = useCallback(async () => {
     try {
@@ -124,6 +128,9 @@ export function LinkJobStatus({ markId, disabled = false }: { markId: number; di
   const hasOrganizedOutput = Boolean(activeOutput)
     || bundle.stages.some(stage => stage.stage === 'organize' && stage.status === 'succeeded')
   if (!hasOrganizedOutput) {
+    // 视频转写记录的抓取结果即为最终内容（AI 总结在弹窗内按需触发），
+    // 不存在单独的"整理"阶段，因此成功后无需常驻提示。
+    if (isVideoTranscript) return null
     return (
       <span
         className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-slate-600 dark:text-slate-400"

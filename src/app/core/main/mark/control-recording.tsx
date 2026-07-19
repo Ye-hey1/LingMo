@@ -1,4 +1,3 @@
-import { insertMark } from "@/db/marks"
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
 import useRecordingStore from "@/stores/recording"
@@ -18,6 +17,7 @@ import { convertToWav } from '@/lib/audio-converter'
 import { useEffect } from 'react'
 import emitter from '@/lib/emitter'
 import { handleRecordComplete } from '@/lib/record-navigation'
+import { createAudioTranscriptionRecord } from '@/lib/audio-transcription-record'
 
 export function ControlRecording() {
   const t = useTranslations();
@@ -119,6 +119,7 @@ export function ControlRecording() {
   const processTranscription = async (
     mediaBlob: Blob,
     queueId: string,
+    sourceFileName?: string,
   ) => {
     const formatSeconds = (val: number) => {
       const pad = (v: number) => String(v).padStart(2, '0')
@@ -204,13 +205,19 @@ export function ControlRecording() {
 
       const audioPath = await saveLocalAudioFile(audioBlob)
       
-      // 4. 插入记录
-      await insertMark({
+      // 4. 先保存原始转写，再在后台生成结构化会话纪要
+      const recordResult = await createAudioTranscriptionRecord({
         tagId: currentTagId!,
-        type: 'recording',
-        desc: transcription.substring(0, 100),
-        content: transcription,
-        url: audioPath
+        transcript: transcription,
+        audioPath,
+        sourceFileName,
+        organize: true,
+        onProgress: progress => setQueue(queueId, { progress }),
+        onRawSaved: async () => {
+          await fetchMarks()
+          await fetchTags()
+          getCurrentTag()
+        },
       })
       
       removeQueue(queueId)
@@ -218,10 +225,20 @@ export function ControlRecording() {
       await fetchTags()
       getCurrentTag()
       
-      toast({
-        title: '音视频文件转录完成',
-        description: `已成功保存为语音记录。双击即可查阅并一键直绘精美卡片！`,
-      })
+      if (recordResult.organizationError) {
+        toast({
+          title: '转写已保存，智能纪要生成失败',
+          description: '原始转写和音频已保留，可在详情页重新生成。',
+          variant: 'destructive',
+        })
+      } else {
+        toast({
+          title: recordResult.conflict ? '转写已保存' : '会话纪要已生成',
+          description: recordResult.conflict
+            ? '检测到期间发生编辑，AI 结果未覆盖你的内容。'
+            : '已整理重点、需求、决策、行动项与待确认问题。',
+        })
+      }
 
     } catch (error) {
       console.error('[WASM Media Select] Failed:', error)
@@ -285,7 +302,7 @@ export function ControlRecording() {
       })
       
       // 后台异步识别
-      processTranscription(audioBlob, queueId)
+      processTranscription(audioBlob, queueId, filePath)
       
     } catch (error) {
       console.error('文件选择失败:', error)
@@ -316,7 +333,7 @@ export function ControlRecording() {
       })
       
       // 后台异步识别（File 对象就是 Blob，直接传递）
-      processTranscription(file, queueId)
+      processTranscription(file, queueId, file.name)
       
       // 重置 input
       event.target.value = ''

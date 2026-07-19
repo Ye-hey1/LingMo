@@ -81,7 +81,7 @@ export default function AppStatus() {
         setGiteaUserInfo(undefined)
       }
     } catch (err) {
-      console.error('Failed to get user info:', err)
+      console.warn('Failed to get user info:', err)
       if (primaryBackupMethod === 'github') {
         setSyncRepoInfo(undefined)
         setSyncRepoState(SyncStateEnum.fail)
@@ -103,7 +103,7 @@ export default function AppStatus() {
         setSyncRepoState(SyncStateEnum.fail)
       }
     } catch (err) {
-      console.error('Failed to check GitHub repos:', err)
+      console.warn('Failed to check GitHub repos:', err)
       setSyncRepoState(SyncStateEnum.fail)
     }
   }
@@ -124,7 +124,7 @@ export default function AppStatus() {
         setGitlabSyncProjectState(SyncStateEnum.fail)
       }
     } catch (err) {
-      console.error('Failed to check Gitlab projects:', err)
+      console.warn('Failed to check Gitlab projects:', err)
       setGitlabSyncProjectState(SyncStateEnum.fail)
     }
   }
@@ -145,7 +145,7 @@ export default function AppStatus() {
         setGiteaSyncRepoState(SyncStateEnum.fail)
       }
     } catch (err) {
-      console.error('Failed to check Gitea repos:', err)
+      console.warn('Failed to check Gitea repos:', err)
       setGiteaSyncRepoState(SyncStateEnum.fail)
     }
   }
@@ -169,7 +169,7 @@ export default function AppStatus() {
         setGiteeSyncRepoState(SyncStateEnum.fail)
       }
     } catch (err) {
-      console.error('Failed to check Gitee repos:', err)
+      console.warn('Failed to check Gitee repos:', err)
       setGiteeSyncRepoState(SyncStateEnum.fail)
     }
   }

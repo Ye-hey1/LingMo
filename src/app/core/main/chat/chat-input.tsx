@@ -384,6 +384,7 @@ const RESEARCH_KEYWORDS = [
 const CHAT_DICTATION_POLISH_MODE_STORAGE_KEY = 'chat-dictation-polish-mode'
 const CHAT_RESEARCH_DEPTH_PRESET_STORAGE_KEY = 'chat-research-depth-preset'
 const CHAT_PRIMARY_ACTION_MODE_STORAGE_KEY = 'chat-primary-action-mode'
+const MODE_SUGGESTION_TIMEOUT_MS = 5_000
 
 function isSensitiveInstruction(val: string): boolean {
   const normalized = val.toLowerCase()
@@ -557,6 +558,15 @@ export const ChatInput = React.memo(function ChatInput({ expanded = false }: Cha
       setSuggestedMode(null)
     }
   }, [chatMode])
+  useEffect(() => {
+    if (!suggestedMode) return
+
+    const timeoutId = window.setTimeout(() => {
+      setSuggestedMode(null)
+    }, MODE_SUGGESTION_TIMEOUT_MS)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [suggestedMode])
 
   const { isRagEnabled } = useVectorStore()
   const { skills, enabled: skillsEnabled } = useSkillsStore()
@@ -2177,7 +2187,7 @@ ${exec.prompt}`
         <div className={cn(
           "mb-2 flex w-full items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs text-foreground animate-in slide-in-from-top-1 duration-200",
           expanded && "max-w-[1280px]",
-        )}>
+        )} data-mode-suggestion>
           <div className="flex items-center gap-1.5">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>

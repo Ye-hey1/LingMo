@@ -22,6 +22,8 @@
     "test:creative-canvas": "node scripts/creative-canvas-tests.mjs",
     "test:structured-knowledge": "node scripts/structured-knowledge-tests.mjs",
     "test:wechat-ocr": "node scripts/wechat-ocr-regression-tests.mjs",
+    "test:audio-minutes": "node scripts/audio-conversation-minutes-tests.mjs",
+    "test:app-status": "node scripts/app-status-background-check-tests.mjs",
     "test:research": "node scripts/research-eval.mjs",
     "research:index": "node scripts/research-eval.mjs --write-index .tmp/deep_research/history-index.json",
     "research:benchmark": "node scripts/research-eval.mjs --benchmark scripts/research-benchmark-cases.json --write-index .tmp/deep_research/history-index.json --json",

@@ -21,7 +21,6 @@ import {
 } from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { insertMark } from "@/db/marks"
 import useMarkStore from "@/stores/mark"
 import useTagStore from "@/stores/tag"
 import { CircleX, Link, FolderOpen } from "lucide-react"
@@ -48,6 +47,7 @@ import { isXhsUrl, XHS_NOTE_TAG_NAME } from "@/lib/xhs-extractor"
 import { extractAudioTrack, segmentAudio } from "@/lib/ffmpeg-wasm"
 import { transcribeRecording } from "@/lib/audio"
 import { readFile, writeFile, BaseDirectory, exists, mkdir } from "@tauri-apps/plugin-fs"
+import { createAudioTranscriptionRecord } from '@/lib/audio-transcription-record'
 
 const INBOX_TAG_NAME = '中转站'
 const INBOX_TAG_PATTERN = /^中转站\s*(?:[（(]\s*\d+\s*[）)])?$/
@@ -537,14 +537,20 @@ export function ControlLink() {
       const filePath = `${audioDir}/${filename}`
       await writeFile(filePath, uint8Array, { baseDir: BaseDirectory.AppData })
 
-      // 4. 插入记录
+      // 4. 先保存原始转写，再按用户设置生成结构化会话纪要
       const originalFileName = targetFilePath.split(/[/\\]/).pop() || '语音记录'
-      await insertMark({
+      const recordResult = await createAudioTranscriptionRecord({
         tagId: targetTagId,
-        type: 'recording',
-        desc: originalFileName,
-        content: transcription,
-        url: filePath
+        transcript: transcription,
+        audioPath: filePath,
+        sourceFileName: originalFileName,
+        organize: organizeAfterSave,
+        onProgress: progress => setQueue(queueId, { progress }),
+        onRawSaved: async () => {
+          await fetchMarks()
+          await fetchTags()
+          getCurrentTag()
+        },
       })
 
       removeQueue(queueId)
@@ -552,10 +558,22 @@ export function ControlLink() {
       await fetchTags()
       getCurrentTag()
 
-      toast({
-        title: '音视频文件转录完成',
-        description: `已成功保存为语音记录。双击即可查阅并一键直绘精美卡片！`,
-      })
+      if (recordResult.organizationError) {
+        toast({
+          title: '转写已保存，智能纪要生成失败',
+          description: '原始转写和音频已保留，可在详情页重新生成。',
+          variant: 'destructive',
+        })
+      } else {
+        toast({
+          title: recordResult.organized ? '会话纪要已生成' : '音视频转写完成',
+          description: recordResult.conflict
+            ? '检测到期间发生编辑，AI 结果未覆盖你的内容。'
+            : recordResult.organized
+              ? '已整理重点、需求、决策、行动项与待确认问题。'
+              : '原始转写与音频已保存。',
+        })
+      }
 
     } catch (error) {
       console.error('[WASM Media Select In Link] Failed:', error)

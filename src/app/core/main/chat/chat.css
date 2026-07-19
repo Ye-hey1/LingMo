@@ -507,8 +507,9 @@ pre.hljs {
   color: hsl(var(--muted-foreground)) !important;
 }
 
-/* Mermaid 画布容器 */
-.mermaid-canvas-container {
+/* Mermaid 与 SVG 图表画布容器 */
+.mermaid-canvas-container,
+.chart-canvas-container {
   position: relative;
   display: block;
   margin: 1rem 0;
@@ -521,7 +522,8 @@ pre.hljs {
   outline: none;
 }
 
-.mermaid-canvas-render {
+.mermaid-canvas-render,
+.chart-canvas-render {
   display: flex;
   justify-content: center;
   align-items: center;
@@ -533,11 +535,13 @@ pre.hljs {
   touch-action: none;
 }
 
-.mermaid-canvas-render:active {
+.mermaid-canvas-render:active,
+.chart-canvas-render:active {
   cursor: grabbing;
 }
 
-.mermaid-canvas-viewport {
+.mermaid-canvas-viewport,
+.chart-canvas-viewport {
   display: inline-flex;
   justify-content: center;
   align-items: center;
@@ -548,6 +552,13 @@ pre.hljs {
 
 .mermaid-canvas-viewport > svg {
   max-width: none;
+  pointer-events: none;
+}
+
+.chart-canvas-viewport > svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
   pointer-events: none;
 }
 
@@ -794,7 +805,8 @@ pre.hljs {
 }
 
 /* 控制栏 */
-.mermaid-canvas-controls {
+.mermaid-canvas-controls,
+.chart-canvas-controls {
   position: absolute;
   top: 8px;
   right: 8px;
@@ -810,20 +822,26 @@ pre.hljs {
   border: 1px solid hsl(var(--border) / 0.45);
   border-radius: 7px;
   box-shadow: none;
-  opacity: 0.72;
-  pointer-events: auto;
+  opacity: 0;
+  pointer-events: none;
   white-space: nowrap;
-  transition: opacity 0.16s ease, background-color 0.16s ease;
+  transform: translateY(-2px);
+  transition: opacity 0.16s ease, background-color 0.16s ease, transform 0.16s ease;
   z-index: 10;
 }
 
 .mermaid-canvas-container:hover .mermaid-canvas-controls,
-.mermaid-canvas-container:focus-within .mermaid-canvas-controls {
-  opacity: 0.96;
+.mermaid-canvas-container:focus-within .mermaid-canvas-controls,
+.chart-canvas-container:hover .chart-canvas-controls,
+.chart-canvas-container:focus-within .chart-canvas-controls {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
   background: hsl(var(--background) / 0.9);
 }
 
-.mermaid-canvas-btn {
+.mermaid-canvas-btn,
+.chart-canvas-btn {
   appearance: none;
   -webkit-appearance: none;
   display: inline-flex;
@@ -845,7 +863,8 @@ pre.hljs {
   transition: background-color 0.12s ease, color 0.12s ease, transform 0.12s ease;
 }
 
-.mermaid-canvas-btn svg {
+.mermaid-canvas-btn svg,
+.chart-canvas-btn svg {
   display: block;
   width: 13px;
   height: 13px;
@@ -854,16 +873,19 @@ pre.hljs {
   margin: 0;
 }
 
-.mermaid-canvas-btn:hover {
+.mermaid-canvas-btn:hover,
+.chart-canvas-btn:hover {
   background: hsl(var(--muted) / 0.55);
   color: hsl(var(--foreground));
 }
 
-.mermaid-canvas-btn:active {
+.mermaid-canvas-btn:active,
+.chart-canvas-btn:active {
   transform: scale(0.95);
 }
 
-.mermaid-canvas-divider {
+.mermaid-canvas-divider,
+.chart-canvas-divider {
   flex: 0 0 auto;
   width: 1px;
   height: 12px;
@@ -875,7 +897,15 @@ pre.hljs {
   max-width: 100%;
 }
 
+.markdown-body .chart-canvas-container {
+  max-width: 100%;
+}
+
 .markdown-body .mermaid-canvas-container .mermaid-canvas-controls {
+  box-sizing: border-box !important;
+}
+
+.markdown-body .chart-canvas-container .chart-canvas-controls {
   box-sizing: border-box !important;
 }
 
@@ -884,23 +914,32 @@ pre.hljs {
   margin: 0 !important;
 }
 
+.markdown-body .chart-canvas-container .chart-canvas-btn {
+  box-sizing: border-box !important;
+  margin: 0 !important;
+}
+
 @media (hover: none), (pointer: coarse) {
-  .mermaid-canvas-controls {
+  .mermaid-canvas-controls,
+  .chart-canvas-controls {
     top: 8px;
     right: 8px;
     bottom: auto;
-    opacity: 0.9;
+    opacity: 0.94;
     pointer-events: auto;
+    transform: translateY(0);
   }
 }
 
 /* 复制成功反馈 */
-.mermaid-canvas-btn.copied {
+.mermaid-canvas-btn.copied,
+.chart-canvas-btn.copied {
   color: hsl(var(--primary));
 }
 
 /* 导出成功反馈 */
-.mermaid-canvas-btn.exported {
+.mermaid-canvas-btn.exported,
+.chart-canvas-btn.exported {
   color: hsl(var(--primary));
 }
 
@@ -1068,5 +1107,54 @@ pre.hljs {
 }
 
 .github-project-markdown .markdown-body ul {
+  padding-left: 1.25rem;
+}
+
+/* 视频转写解析视图：与 GitHub 项目视图保持一致的 Markdown 排版 */
+.video-transcript-markdown .markdown-body {
+  max-width: none;
+  background-color: transparent !important;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.video-transcript-markdown .markdown-body h1:first-child {
+  display: none;
+}
+
+.video-transcript-markdown .markdown-body h2 {
+  margin-top: 24px !important;
+  padding-bottom: 8px !important;
+  border-bottom-color: hsl(var(--border)) !important;
+  font-size: 18px !important;
+}
+
+.video-transcript-markdown .markdown-body h2:first-of-type {
+  margin-top: 0 !important;
+}
+
+.video-transcript-markdown .markdown-body h3 {
+  margin-top: 18px !important;
+  font-size: 15px !important;
+}
+
+.video-transcript-markdown .markdown-body table {
+  display: table;
+  min-width: 100%;
+  overflow: auto;
+  font-size: 13px;
+}
+
+.video-transcript-markdown .markdown-body pre {
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.video-transcript-markdown .markdown-body code {
+  font-size: 13px;
+}
+
+.video-transcript-markdown .markdown-body ul {
   padding-left: 1.25rem;
 }

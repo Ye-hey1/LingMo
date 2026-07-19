@@ -3,6 +3,7 @@ import type { Priority } from "./todo-form"
 import type { Subtask } from "./todo-form"
 import { getGitHubProjectDisplayName } from "@/lib/github-project"
 import { isVideoTranscriptMark, parseVideoTranscriptRecord } from "@/lib/video-transcript-record"
+import { getAudioRecordingListPresentation } from '@/lib/audio-recording-record'
 
 export type ParsedTodoMark = {
   title: string
@@ -123,12 +124,7 @@ export function getMarkListItemContent(mark: Mark): MarkListItemContent {
     }
   }
   case 'recording': {
-    const desc = compactText(mark.desc)
-    const { title, preview } = splitTitleAndPreview(mark.content)
-    return {
-      title: desc || title,
-      preview: preview || title || desc,
-    }
+    return getAudioRecordingListPresentation(mark)
   }
   case 'scan':
   case 'image': {

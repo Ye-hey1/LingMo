@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import useMarkStore, { type MarkQueue } from '@/stores/mark'
 import { cn } from '@/lib/utils'
 import {
@@ -17,7 +17,6 @@ import {
   Sparkles,
   Video,
 } from 'lucide-react'
-import { useTranslations } from 'next-intl'
 import { retryLinkCaptureJob } from '@/lib/link-pipeline/capture-runner'
 
 type ProgressStep = {
@@ -233,77 +232,12 @@ function formatRunTime(timeNow: number, startTime: number) {
   return `${minutes}:${String(restSeconds).padStart(2, '0')}`
 }
 
-function StepRail({
-  steps,
-  statuses,
-}: {
-  steps: ProgressStep[]
-  statuses: StepStatus[]
-}) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center">
-        {steps.map((step, index) => {
-          const status = statuses[index]
-          const lineStatus = statuses[index + 1]
-
-          return (
-            <React.Fragment key={step.label}>
-              <span
-                className={cn(
-                  'flex size-2.5 shrink-0 items-center justify-center rounded-full border transition-colors',
-                  status === 'done' && 'border-foreground/35 bg-foreground/35',
-                  status === 'active' && 'border-foreground/55 bg-background ring-2 ring-foreground/10',
-                  status === 'pending' && 'border-border bg-muted/50'
-                )}
-              >
-                {status === 'active' ? (
-                  <span className="size-1 rounded-full bg-foreground/60" />
-                ) : null}
-              </span>
-              {index < steps.length - 1 ? (
-                <span
-                  className={cn(
-                    'mx-1 h-px flex-1 rounded-full bg-border/70 transition-colors',
-                    (status === 'done' && lineStatus !== 'pending') && 'bg-foreground/25',
-                    status === 'active' && 'bg-foreground/15'
-                  )}
-                />
-              ) : null}
-            </React.Fragment>
-          )
-        })}
-      </div>
-      <div
-        className="grid gap-1"
-        style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))` }}
-      >
-        {steps.map((step, index) => (
-          <span
-            key={step.label}
-            className={cn(
-              'truncate text-center text-[10px] leading-4 transition-colors',
-              statuses[index] === 'active' && 'font-medium text-foreground',
-              statuses[index] === 'done' && 'text-muted-foreground',
-              statuses[index] === 'pending' && 'text-muted-foreground/45'
-            )}
-            title={step.label}
-          >
-            {step.label}
-          </span>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 export function GlobalProgress() {
   const { queues } = useMarkStore()
   const [isExpanded, setIsExpanded] = useState(false)
   const [timeNow, setTimeNow] = useState(Date.now())
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
-  const t = useTranslations('record.mark.type')
 
   useEffect(() => {
     if (queues && queues.length > 0) {
@@ -346,71 +280,59 @@ export function GlobalProgress() {
   }
 
   return (
-    <div className="pointer-events-none fixed bottom-5 left-1/2 z-50 w-[430px] max-w-[calc(100vw-32px)] -translate-x-1/2 animate-in fade-in slide-in-from-bottom-3 duration-200 motion-reduce:animate-none">
+    <div className="pointer-events-none fixed bottom-5 left-1/2 z-50 w-[360px] max-w-[calc(100vw-32px)] -translate-x-1/2 animate-in fade-in slide-in-from-bottom-3 duration-200 motion-reduce:animate-none">
       <section
-        className="pointer-events-auto overflow-hidden rounded-xl border border-border/75 bg-background text-foreground"
+        className="pointer-events-auto overflow-hidden rounded-full border border-border/60 bg-background/95 text-foreground shadow-sm backdrop-blur-sm"
         aria-live="polite"
         aria-label={getTaskTitle(activeQueue, totalCount)}
       >
-        <div className="px-3 py-2.5">
-          <div className="flex items-start gap-2.5">
-            <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-              {activeQueue.status === 'failed' ? (
-                <AlertCircle className="size-3.5 text-red-500" />
-              ) : totalCount === 1 ? (
-                getTaskIcon(activeQueue.type, 'size-3.5')
-              ) : (
-                <Sparkles className="size-3.5" />
-              )}
-            </div>
+        <div className="flex items-center gap-2 px-3.5 py-2">
+          {activeQueue.status === 'failed' ? (
+            <AlertCircle className="size-3.5 shrink-0 text-red-500" />
+          ) : activeQueue.status === 'queued' || activeQueue.status === 'running' ? (
+            <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+          ) : totalCount === 1 ? (
+            <span className="shrink-0 text-muted-foreground">{getTaskIcon(activeQueue.type, 'size-3.5')}</span>
+          ) : (
+            <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
 
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <h2 className="truncate text-xs font-medium leading-5 text-foreground">
-                  {getTaskTitle(activeQueue, totalCount)}
-                </h2>
-                {hasAvgPercent ? (
-                  <span className="ml-auto shrink-0 text-[11px] leading-5 tabular-nums text-muted-foreground">
-                    {avgPercent}%
-                  </span>
-                ) : null}
-              </div>
-              <p className="truncate text-[11px] leading-4 text-muted-foreground" title={activeMessage}>
-                {activeMessage}
-              </p>
-            </div>
+          <span className="min-w-0 flex-1 truncate text-[11px] leading-4 text-foreground/80" title={`${getTaskTitle(activeQueue, totalCount)} · ${activeMessage}`}>
+            <span className="font-medium text-foreground">{getTaskTitle(activeQueue, totalCount)}</span>
+            <span className="mx-1 text-muted-foreground/50">·</span>
+            <span className="text-muted-foreground">{activeMessage}</span>
+          </span>
 
-            {totalCount > 1 ? (
-              <button
-                type="button"
-                onClick={() => setIsExpanded(value => !value)}
-                className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label={isExpanded ? '收起明细' : '展开明细'}
-              >
-                {isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
-              </button>
-            ) : null}
-          </div>
+          {activeQueue.status === 'failed' ? (
+            <button
+              type="button"
+              onClick={() => void retryCapture(activeQueue)}
+              disabled={!activeQueue.jobId || retryingJobId === activeQueue.jobId}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium text-red-600 transition-colors hover:bg-red-500/10 disabled:opacity-60 dark:text-red-400"
+            >
+              <RefreshCw className={cn('size-3', retryingJobId === activeQueue.jobId && 'animate-spin')} />
+              重试
+            </button>
+          ) : hasAvgPercent ? (
+            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+              {avgPercent}%
+            </span>
+          ) : null}
 
-          <div className="mt-2.5">
-            {activeQueue.status === 'failed' ? (
-              <button
-                type="button"
-                onClick={() => void retryCapture(activeQueue)}
-                disabled={!activeQueue.jobId || retryingJobId === activeQueue.jobId}
-                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-red-500/25 bg-red-500/5 py-1.5 text-[11px] text-red-600 transition-colors hover:bg-red-500/10 disabled:opacity-60 dark:text-red-400"
-              >
-                <RefreshCw className={cn('size-3', retryingJobId === activeQueue.jobId && 'animate-spin')} />
-                {retryingJobId === activeQueue.jobId ? '正在重试' : '重新抓取'}
-              </button>
-            ) : (
-              <StepRail steps={steps} statuses={stepStatuses} />
-            )}
-          </div>
+          {totalCount > 1 ? (
+            <button
+              type="button"
+              onClick={() => setIsExpanded(value => !value)}
+              className="flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label={isExpanded ? '收起明细' : '展开明细'}
+            >
+              {isExpanded ? <ChevronDown className="size-3" /> : <ChevronUp className="size-3" />}
+            </button>
+          ) : null}
         </div>
 
         {isExpanded && totalCount > 1 ? (
-          <div className="max-h-36 overflow-y-auto border-t border-border/70 px-3 py-1.5">
+          <div className="max-h-32 overflow-y-auto rounded-b-full border-t border-border/50 px-3.5 py-1">
             {queues.map((queue) => {
               const percent = parsePercent(queue.progress)
               const itemSteps = getProgressSteps(queue)
@@ -418,36 +340,23 @@ export function GlobalProgress() {
               const message = cleanProgressMessage(queue.progress) || getFallbackMessage(itemSteps, itemStatuses)
 
               return (
-                <div key={queue.queueId} className="flex items-center gap-2 py-1.5 text-[11px] leading-4">
+                <div key={queue.queueId} className="flex items-center gap-2 py-1 text-[10px] leading-4">
                   {queue.status === 'failed' ? (
-                    <AlertCircle className="size-3 shrink-0 text-red-500" />
+                    <AlertCircle className="size-2.5 shrink-0 text-red-500" />
                   ) : (
-                    <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+                    <LoaderCircle className="size-2.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
                   )}
-                  <span className="shrink-0 text-muted-foreground">
-                    {t(queue.type) || queue.type}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-foreground/80" title={message}>
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground" title={message}>
                     {message}
                   </span>
                   {percent !== null ? (
-                    <span className="shrink-0 tabular-nums text-muted-foreground">
+                    <span className="shrink-0 tabular-nums text-muted-foreground/70">
                       {percent}%
                     </span>
                   ) : null}
-                  <span className="w-8 shrink-0 text-right tabular-nums text-muted-foreground/70">
+                  <span className="w-7 shrink-0 text-right tabular-nums text-muted-foreground/50">
                     {formatRunTime(timeNow, queue.startTime)}
                   </span>
-                  {queue.status === 'failed' && queue.jobId ? (
-                    <button
-                      type="button"
-                      onClick={() => void retryCapture(queue)}
-                      disabled={Boolean(retryingJobId)}
-                      className="shrink-0 text-red-600 hover:underline disabled:opacity-60 dark:text-red-400"
-                    >
-                      重试
-                    </button>
-                  ) : null}
                 </div>
               )
             })}
@@ -455,7 +364,7 @@ export function GlobalProgress() {
         ) : null}
 
         <div
-          className="h-px w-full bg-border/70"
+          className="h-px w-full bg-border/50"
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
@@ -464,7 +373,7 @@ export function GlobalProgress() {
         >
           <div
             className={cn(
-              'h-full bg-foreground/35 transition-[width] duration-500 ease-out',
+              'h-full bg-foreground/30 transition-[width] duration-500 ease-out',
               !hasAvgPercent && 'animate-pulse motion-reduce:animate-none'
             )}
             style={{ width: `${progressWidth}%` }}

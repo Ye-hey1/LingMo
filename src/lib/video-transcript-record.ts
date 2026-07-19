@@ -256,14 +256,152 @@ export function parseVideoTranscriptRecord(mark: Mark): VideoTranscriptRecord {
   }
 }
 
+// 提取模型输出中的 JSON 对象：兼容 ```json``` 代码块包裹与前后说明文字
+function extractJsonBlock(text: string): string | null {
+  const trimmed = text.trim()
+  // 优先匹配 ```json ... ``` / ``` ... ``` 代码块
+  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fenceMatch) {
+    const inner = fenceMatch[1].trim()
+    const firstBrace = inner.indexOf('{')
+    const lastBrace = inner.lastIndexOf('}')
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      return inner.slice(firstBrace, lastBrace + 1)
+    }
+  }
+  // 回退到首个 { 到末个 } 之间的内容
+  const firstBrace = trimmed.indexOf('{')
+  const lastBrace = trimmed.lastIndexOf('}')
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1)
+  }
+  return null
+}
+
+// 修复大模型常见的 JSON 格式瑕疵：字符串内未转义的双引号、裸露换行、尾随逗号等
+function repairJson(raw: string): string {
+  let result = raw
+
+  // 1. 去除尾部多余的逗号（}, ] 之前）
+  result = result.replace(/,\s*([}\]])/g, '$1')
+
+  // 2. 移除单行注释与块注释（部分模型会注入）
+  result = result.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+
+  // 3. 逐字符扫描，仅在「字符串字面量内部」修复未转义的控制字符与双引号
+  //    思路：遍历字符，遇到 " 进入字符串模式；在字符串内遇到原始换行用 \n 替换，
+  //    遇到可能未转义的 " 时用启发式判断（后接 , : ] } 或换行结尾才认定为字符串结束）
+  let out = ''
+  let inString = false
+  for (let i = 0; i < result.length; i++) {
+    const ch = result[i]
+    if (inString) {
+      if (ch === '\\') {
+        // 转义序列原样保留（连同下一字符）
+        out += ch + (result[i + 1] || '')
+        i += 1
+        continue
+      }
+      if (ch === '"') {
+        // 判断这个引号是字符串结束，还是字符串内部未转义的引号：
+        // 若其后的首个非空白字符是 JSON 结构符（, } ] :）或已到末尾，则视为字符串结束
+        const rest = result.slice(i + 1).trimStart()
+        if (/^([,}\]:]|$)/.test(rest)) {
+          out += '"'
+          inString = false
+        } else {
+          // 字符串内部的裸引号 → 转义
+          out += '\\"'
+        }
+        continue
+      }
+      if (ch === '\n') {
+        out += '\\n'
+        continue
+      }
+      if (ch === '\r') {
+        out += '\\r'
+        continue
+      }
+      if (ch === '\t') {
+        out += '\\t'
+        continue
+      }
+      out += ch
+    } else {
+      if (ch === '"') {
+        inString = true
+      }
+      out += ch
+    }
+  }
+  return out
+}
+
+// 规范化解析结果：确保字段类型符合 VideoTranscriptMeta，丢弃畸形片段
+function normalizeSummaryJson(parsed: any): Partial<VideoTranscriptMeta> {
+  const result: Partial<VideoTranscriptMeta> = {}
+  if (typeof parsed?.summary === 'string' && parsed.summary.trim()) {
+    result.summary = parsed.summary.trim()
+  }
+  if (Array.isArray(parsed?.chapters)) {
+    result.chapters = parsed.chapters
+      .map((item: any) => {
+        if (!item || typeof item !== 'object') return null
+        const points = Array.isArray(item.points)
+          ? item.points.map((p: any) => String(p ?? '').trim()).filter(Boolean)
+          : []
+        return {
+          time: typeof item.time === 'string' ? item.time.trim() : '',
+          title: String(item.title ?? '').trim(),
+          points,
+        }
+      })
+      .filter((item: any): item is { time: string; title: string; points: string[] } =>
+        Boolean(item) && Boolean(item.title))
+  }
+  const toStringArray = (value: any): string[] =>
+    Array.isArray(value)
+      ? value.map((v: any) => (typeof v === 'string' ? v : String(v ?? '')).trim()).filter(Boolean)
+      : []
+  result.highlights = toStringArray(parsed?.highlights)
+  result.viewpoints = toStringArray(parsed?.viewpoints)
+  result.reflections = toStringArray(parsed?.reflections)
+  result.notes = toStringArray(parsed?.notes)
+  result.actionItems = toStringArray(parsed?.actionItems)
+  result.questions = toStringArray(parsed?.questions)
+  if (Array.isArray(parsed?.terms)) {
+    result.terms = parsed.terms
+      .map((item: any) => {
+        if (!item || typeof item !== 'object') return null
+        return {
+          term: String(item.term ?? '').trim(),
+          explanation: String(item.explanation ?? '').trim(),
+        }
+      })
+      .filter((item: any): item is { term: string; explanation: string } =>
+        Boolean(item) && (Boolean(item.term) || Boolean(item.explanation)))
+  }
+  return result
+}
+
 function parseSummaryJson(text: string): Partial<VideoTranscriptMeta> {
-  const match = text.trim().match(/\{[\s\S]*\}/)
-  if (!match) {
+  const jsonText = extractJsonBlock(text)
+  if (!jsonText) {
     throw new Error('AI 返回的内容不是有效的 JSON 结构。')
   }
 
+  // 1. 先尝试直接解析（大多数情况下模型输出的 JSON 是合法的）
   try {
-    return JSON.parse(match[0]) as Partial<VideoTranscriptMeta>
+    return normalizeSummaryJson(JSON.parse(jsonText))
+  } catch {
+    // 进入修复流程
+  }
+
+  // 2. 尝试修复常见 JSON 瑕疵后解析
+  try {
+    const repaired = repairJson(jsonText)
+    return normalizeSummaryJson(JSON.parse(repaired))
   } catch (error) {
     throw new Error(`AI 返回的 JSON 解析失败：${error instanceof Error ? error.message : String(error)}`)
   }
