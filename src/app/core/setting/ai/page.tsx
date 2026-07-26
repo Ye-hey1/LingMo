@@ -30,7 +30,7 @@ import { BotMessageSquare, Eye, EyeOff, LoaderCircle, Minus, Plus, Search, Trash
 import { OpenBroswer } from "@/components/open-broswer"
 import ModelCard from "./model-card"
 import CreateConfig from "./create"
-import { getCachedProviderTemplates, getProviderTemplateMatch, loadProviderTemplates } from "@/lib/ai/provider-templates-runtime"
+import { getCachedProviderTemplates, getProviderTemplateMatch, loadProviderTemplates, mapBuiltinTemplates, mergeTemplateLists } from "@/lib/ai/provider-templates-runtime"
 import { getConfiguredProviderDisplayTitle, normalizeProviderConfigTitle } from "@/lib/ai/provider-display"
 import { cn } from "@/lib/utils"
 import { createOpenAIClient } from "@/lib/ai/utils"
@@ -943,13 +943,24 @@ export default function AiPage() {
       const store = await Store.load('store.json')
       const aiModelListFromStore = await store.get<AiConfig[]>('aiModelList')
 
+      const builtinTemplates = mapBuiltinTemplates(builtinProviderTemplates)
+
+      // 立即渲染内置供应商，避免远程请求阻塞首屏。
+      // 远程结果返回后再合并替换。
       const cachedTemplates = await getCachedProviderTemplates()
       if (cachedTemplates.length > 0) {
-        setProviderTemplates(cachedTemplates)
+        setProviderTemplates(mergeTemplateLists(cachedTemplates, builtinTemplates))
+      } else {
+        setProviderTemplates(builtinTemplates)
       }
 
-      const templates = await loadProviderTemplates(builtinProviderTemplates)
-      setProviderTemplates(templates)
+      loadProviderTemplates(builtinProviderTemplates)
+        .then((templates) => {
+          setProviderTemplates(templates)
+        })
+        .catch((error) => {
+          console.warn('[ai-page] loadProviderTemplates failed; keeping cached/builtin templates', error)
+        })
 
       const migratedList = (aiModelListFromStore || []).map(migrateOldConfig)
       if (aiModelListFromStore) {
@@ -992,16 +1003,15 @@ export default function AiPage() {
         </>
       )}
 
-      {allModelConfigs.length > 0 && (
-        <div className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-            <aside className="flex h-[calc(100vh-12rem)] flex-col rounded-xl border bg-card/70 p-3">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div className="text-sm font-medium">{t('modelConfigTitle')}</div>
-                <span className="rounded-full bg-muted/80 px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">
-                  {allModelConfigs.length}
-                </span>
-              </div>
+      <div className="space-y-4">
+        <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <aside className="flex h-[calc(100vh-12rem)] flex-col rounded-xl border bg-card/70 p-3">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="text-sm font-medium">{t('modelConfigTitle')}</div>
+              <span className="rounded-full bg-muted/80 px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">
+                {allModelConfigs.length}
+              </span>
+            </div>
 
               <div className="relative mb-2.5">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/60" />
@@ -1362,15 +1372,15 @@ export default function AiPage() {
                   </div>
                 </div>
               ) : (
-                <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground/40">
-                  ← 选择一个服务商
+                <div className="flex h-[320px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground/40">
+                  <BotMessageSquare className="size-8 text-muted-foreground/30" />
+                  <span>选择左侧供应商开始配置</span>
                 </div>
               )}
               </div>
             </section>
           </div>
         </div>
-      )}
 
       <Dialog open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
         <DialogContent

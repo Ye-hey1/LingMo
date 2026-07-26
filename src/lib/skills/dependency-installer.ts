@@ -6,6 +6,7 @@
 
 import { Command } from '@tauri-apps/plugin-shell'
 import { writeTextFile, exists } from '@tauri-apps/plugin-fs'
+import { escapeShellArg, escapeShellPath } from './path-utils'
 
 /**
  * Parsed dependency information
@@ -122,7 +123,7 @@ export function parseDependencyError(stderr: string): DependencyInfo | null {
  */
 export async function commandExists(cmd: string): Promise<boolean> {
   try {
-    const result = await Command.create('bash', ['-c', `command -v "${cmd}"`]).execute()
+    const result = await Command.create('bash', ['-c', `command -v ${escapeShellArg(cmd)}`]).execute()
     return result.code === 0
   } catch {
     return false
@@ -190,8 +191,8 @@ export async function installDependency(dep: DependencyInfo, targetDir?: string)
         }, null, 2))
       }
 
-      // Install in target directory
-      const installCmd = `cd "${targetDir}" && npm install ${moduleName}`
+      // targetDir 来自 skill 包，双引号包裹不阻止 $(...)/反引号展开，须单引号转义
+      const installCmd = `cd ${escapeShellPath(targetDir)} && npm install ${escapeShellArg(moduleName)}`
 
       const result = await Command.create('bash', ['-c', installCmd]).execute()
 
@@ -225,7 +226,7 @@ export async function installDependency(dep: DependencyInfo, targetDir?: string)
       }
 
       const args = installArgs.map(a => a.replace(installCommand, cmd))
-      const shellCommand = `${cmd} ${args.join(' ')}`
+      const shellCommand = `${escapeShellArg(cmd)} ${args.map(escapeShellArg).join(' ')}`
 
       const result = await Command.create('bash', ['-c', shellCommand]).execute()
 
@@ -287,7 +288,7 @@ export async function ensureDependencyForCommand(
     }
 
     const packageName = dep.installArgs[1]
-    const shellCommand = `cd "${request.workingDirectory}" && ${pythonCommand} -m pip install ${packageName}`
+    const shellCommand = `cd ${escapeShellPath(request.workingDirectory)} && ${escapeShellArg(pythonCommand)} -m pip install ${escapeShellArg(packageName)}`
     const result = await Command.create('bash', ['-c', shellCommand]).execute()
 
     return result.code === 0
@@ -312,10 +313,12 @@ export async function ensureDependencyForCommand(
     }
 
     const packageName = dep.installArgs[dep.installArgs.length - 1]
+    const cdPrefix = `cd ${escapeShellPath(request.workingDirectory)} && `
+    const escapedPackage = escapeShellArg(packageName)
     const installCommands: Record<'pnpm' | 'npm' | 'yarn', string> = {
-      pnpm: `cd "${request.workingDirectory}" && pnpm add ${packageName}`,
-      npm: `cd "${request.workingDirectory}" && npm install ${packageName}`,
-      yarn: `cd "${request.workingDirectory}" && yarn add ${packageName}`,
+      pnpm: `${cdPrefix}pnpm add ${escapedPackage}`,
+      npm: `${cdPrefix}npm install ${escapedPackage}`,
+      yarn: `${cdPrefix}yarn add ${escapedPackage}`,
     }
 
     const result = await Command.create('bash', ['-c', installCommands[packageManager]]).execute()

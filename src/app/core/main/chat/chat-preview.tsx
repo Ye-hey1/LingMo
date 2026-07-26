@@ -18,6 +18,7 @@ import 'highlight.js/styles/github.min.css';
 import './chat.css';
 import { advanceStreamingSmoother } from './streaming-smoother';
 import { getMermaidRenderer } from '@/lib/mermaid';
+import { sanitizeHtml, sanitizeSvg } from '@/lib/sanitize-html';
 import {
   getClawStreamVisibleMarkdown,
   normalizeClawNestedFences,
@@ -332,7 +333,9 @@ function storeMermaidCacheEntry(source: string, theme: 'light' | 'dark', entry: 
 }
 
 function wrapMermaidSvg(svg: string): string {
-  return `<div class="mermaid-canvas-viewport">${svg}</div>`;
+  // Mermaid 的图表源码来自模型输出，节点标签会原样进入 SVG 文本与
+  // foreignObject，因此渲染结果同样按不可信内容处理。
+  return `<div class="mermaid-canvas-viewport">${sanitizeSvg(svg)}</div>`;
 }
 
 function getMermaidDiagramSvg(container: HTMLDivElement): SVGSVGElement | null {
@@ -807,7 +810,13 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
   const { theme } = useTheme()
   const [mdTheme, setMdTheme] = useState<ThemeType>('light')
   const { codeTheme, contentTextScale } = useSettingStore()
-  const [htmlContent, setHtmlContent] = useState<string>('');
+  const [htmlContent, setRawHtmlContent] = useState<string>('');
+  // 渲染内容来自模型输出与抓取的远端页面，属于不可信来源；markdown-it 以
+  // html: true 运行，因此所有写入都必须先净化，避免注入脚本经 Tauri IPC
+  // 升级为本地代码执行。
+  const setHtmlContent = useCallback((value: string) => {
+    setRawHtmlContent(sanitizeHtml(value));
+  }, []);
   const animationRef = useRef<number | null>(null);
   const displayedTextRef = useRef('');
   const targetTextRef = useRef('');
@@ -1879,7 +1888,7 @@ export default function ChatPreview({text, streaming = false, highlightQuery, cl
                 style={{
                   transform: `translate(calc(-50% + ${mermaidViewer.translateX}px), calc(-50% + ${mermaidViewer.translateY}px)) scale(${mermaidViewer.scale})`,
                 }}
-                dangerouslySetInnerHTML={{ __html: mermaidViewer.svg }}
+                dangerouslySetInnerHTML={{ __html: sanitizeSvg(mermaidViewer.svg) }}
               />
             </div>
           </div>

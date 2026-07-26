@@ -1164,12 +1164,18 @@ try {
   assert.equal(getClawStreamVisibleMarkdown('```ts\nconst x = 1\n', true), '')
   assert.equal(getClawStreamVisibleMarkdown('```ts\nconst x = 1\n```\n', true), '```ts\nconst x = 1\n```\n')
   assert.match(normalizeClawNestedFences('```markdown\n```ts\nx\n```\n```'), /^````markdown/)
-  assert.equal(getAdaptiveCharsPerSecond(4), 40)
-  assert.equal(getAdaptiveCharsPerSecond(20), 40)
-  assert.equal(getAdaptiveCharsPerSecond(80), 96)
-  assert.equal(getAdaptiveCharsPerSecond(180), 220)
-  assert.equal(getAdaptiveCharsPerSecond(600), 520)
-  assert.equal(getAdaptiveCharsPerSecond(1200), 1100)
+  // P0-5：低 backlog 档位提速，追求"跟手"而非打字机观感。
+  assert.equal(getAdaptiveCharsPerSecond(4), 260)
+  assert.equal(getAdaptiveCharsPerSecond(20), 260)
+  assert.equal(getAdaptiveCharsPerSecond(80), 420)
+  assert.equal(getAdaptiveCharsPerSecond(180), 640)
+  assert.equal(getAdaptiveCharsPerSecond(600), 900)
+  assert.equal(getAdaptiveCharsPerSecond(1200), 1600)
+  // 速率必须随 backlog 单调不减，保证积压时能追赶。
+  const smootherTiers = [4, 20, 80, 180, 600, 1200].map(getAdaptiveCharsPerSecond)
+  for (let i = 1; i < smootherTiers.length; i += 1) {
+    assert.ok(smootherTiers[i] >= smootherTiers[i - 1], 'smoother 速率应随 backlog 单调不减')
+  }
   assert.equal(
     advanceStreamingSmoother({ carryChars: 0, displayedLength: 0 }, 500, 1000).charsAdded,
     500,

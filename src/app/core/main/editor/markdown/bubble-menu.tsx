@@ -2,6 +2,7 @@
 
 import { Editor } from '@tiptap/react'
 import { TextSelection } from '@tiptap/pm/state'
+import { CellSelection } from '@tiptap/pm/tables'
 import { canSplit } from '@tiptap/pm/transform'
 import {
   AlignCenter,
@@ -140,8 +141,24 @@ function clampPosition(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max))
 }
 
+function findScrollableAncestor(element: HTMLElement | null | undefined): HTMLElement | null {
+  let current = element?.parentElement ?? null
+
+  while (current) {
+    const { overflowY } = window.getComputedStyle(current)
+    if (
+      (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+      current.scrollHeight > current.clientHeight
+    ) {
+      return current
+    }
+    current = current.parentElement
+  }
+
+  return null
+}
+
 type CellSelectionLike = {
-  constructor: { name: string }
   from: number
   to: number
   $anchorCell?: { pos: number }
@@ -150,22 +167,14 @@ type CellSelectionLike = {
   isColSelection?: () => boolean
 }
 
+// 用 instanceof 判断选区类型：生产构建会压缩类名，
+// 依赖 constructor.name === 'CellSelection' 在打包后永远为 false，工具栏会整体消失。
 function isCellSelection(selection: unknown): selection is CellSelectionLike {
-  return Boolean(
-    selection &&
-    typeof selection === 'object' &&
-    'constructor' in selection &&
-    (selection as { constructor?: { name?: string } }).constructor?.name === 'CellSelection'
-  )
+  return selection instanceof CellSelection
 }
 
 function isTextSelection(selection: unknown) {
-  return Boolean(
-    selection &&
-    typeof selection === 'object' &&
-    'constructor' in selection &&
-    (selection as { constructor?: { name?: string } }).constructor?.name === 'TextSelection'
-  )
+  return selection instanceof TextSelection
 }
 
 function getCellSelectionType(editor: Editor) {
@@ -237,7 +246,6 @@ export function BubbleMenu({
   const colorMenuRef = useRef<HTMLDivElement>(null)
   const latestTextSelectionRef = useRef<TextSelectionRange | null>(null)
   const editorDom = editor.view.dom
-  const editorScrollContainer = editorDom?.parentElement
 
   const updateToolMenuPlacement = useCallback(() => {
     const toolbar = menuRef.current
@@ -514,20 +522,35 @@ export function BubbleMenu({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [closeToolSubmenus])
 
-  // Update position on scroll
+  // Update position on scroll / resize
   useEffect(() => {
-    const scrollContainer = editorScrollContainer
-    if (!scrollContainer) return
+    if (!show) return
 
+    let frame: number | null = null
     const handleScroll = () => {
-      if (show) {
+      if (frame !== null) return
+      frame = requestAnimationFrame(() => {
+        frame = null
         updatePosition()
-      }
+      })
     }
 
-    scrollContainer.addEventListener('scroll', handleScroll, { passive: true })
-    return () => scrollContainer.removeEventListener('scroll', handleScroll)
-  }, [editorScrollContainer, show, updatePosition])
+    // editor.view.dom 的直接父级是 EditorContent 容器，本身不滚动，
+    // 需要向上找到真正可滚动的祖先；再叠加捕获阶段的 window 监听兜底，
+    // 避免容器判断失误时工具栏"粘"在原位。
+    const scrollContainer = findScrollableAncestor(editorDom)
+
+    window.addEventListener('scroll', handleScroll, true)
+    window.addEventListener('resize', handleScroll)
+    scrollContainer?.addEventListener('scroll', handleScroll, { passive: true })
+
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+      window.removeEventListener('scroll', handleScroll, true)
+      window.removeEventListener('resize', handleScroll)
+      scrollContainer?.removeEventListener('scroll', handleScroll)
+    }
+  }, [editorDom, show, updatePosition])
 
   useEffect(() => {
     if (!show) return

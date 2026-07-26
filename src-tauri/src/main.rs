@@ -96,6 +96,7 @@ fn main() {
             cancel_ai_request,
             list_ocr_providers,
             run_ocr_provider,
+            app_setup::allow_workspace_asset_scope,
             llm_memory::llm_memory_list_sessions,
             llm_memory::llm_memory_get_session_detail,
             llm_memory::llm_memory_update_message,

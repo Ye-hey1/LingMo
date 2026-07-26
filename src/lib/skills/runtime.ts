@@ -2,7 +2,7 @@ import { appDataDir } from '@tauri-apps/api/path'
 import { BaseDirectory, exists, mkdir, readDir, rename } from '@tauri-apps/plugin-fs'
 import { Command } from '@tauri-apps/plugin-shell'
 import { skillManager } from './manager'
-import { buildShellCommand, resolveSkillDirectory } from './path-utils'
+import { buildShellCommand, escapeShellEnvAssignment, escapeShellPath, resolveSkillDirectory } from './path-utils'
 import { detectPythonCommand, ensureDependencyForCommand } from './dependency-installer'
 import { getFilePathOptions } from '@/lib/workspace'
 import { classifySkillScriptPath } from './runtime-paths'
@@ -462,20 +462,25 @@ export async function executeSkillRuntime(
     }
   }
 
+  // 目录来自 skill 包（可远程安装），必须走单引号转义：双引号包裹仍会让路径里的
+  // $(...)、反引号、${} 被 shell 展开。
   const envPrefix = [
     'LANG=C.UTF-8',
     'LC_ALL=C.UTF-8',
     'PYTHONIOENCODING=utf-8',
-    `SKILL_OUTPUT_DIR="${context.outputDir}"`,
-    `SKILL_RUNTIME_DIR="${context.runtimeDir}"`,
-    `SKILL_ROOT_DIR="${context.skillDir}"`,
-    `LINGMO_OUTPUT_DIR="${context.outputDir}"`,
+    escapeShellEnvAssignment('SKILL_OUTPUT_DIR', context.outputDir),
+    escapeShellEnvAssignment('SKILL_RUNTIME_DIR', context.runtimeDir),
+    escapeShellEnvAssignment('SKILL_ROOT_DIR', context.skillDir),
+    escapeShellEnvAssignment('LINGMO_OUTPUT_DIR', context.outputDir),
   ].join(' ')
   const workingDirectory = determineWorkingDirectory(context, normalizedCommand, processedArgs)
+  const cdPrefix = `cd ${escapeShellPath(workingDirectory)} && `
 
   const shellCommand = parsed.cmd === 'bash' && processedArgs[0] === '-c'
-    ? `cd "${workingDirectory}" && ${envPrefix} ${processedArgs.slice(1).join(' ')}`
-    : `cd "${workingDirectory}" && ${envPrefix} ${buildShellCommand(workingDirectory, workingDirectory, normalizedCommand, processedArgs).replace(`cd "${workingDirectory}" && `, '')}`
+    // skill 自带脚本体本身就是任意 shell 代码，转义它会破坏功能；这里只保证宿主
+    // 拼接的 cd 与环境变量部分安全，脚本体的信任边界由安装期审核与会话审批把关。
+    ? `${cdPrefix}${envPrefix} ${processedArgs.slice(1).join(' ')}`
+    : `${cdPrefix}${envPrefix} ${buildShellCommand(workingDirectory, workingDirectory, normalizedCommand, processedArgs).replace(cdPrefix, '')}`
 
   const stdoutChunks: Array<string | Uint8Array | ArrayBuffer | ArrayBufferView | number[]> = []
   const stderrChunks: Array<string | Uint8Array | ArrayBuffer | ArrayBufferView | number[]> = []

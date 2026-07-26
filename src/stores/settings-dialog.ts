@@ -23,7 +23,8 @@ export type SettingsDialogPage =
   | "imageMethod"
   | "audio"
   | "webSearch"
-  | "dev";
+  | "dev"
+  | "structured-knowledge";
 
 const DEFAULT_SETTINGS_PAGE: SettingsDialogPage = "about";
 
@@ -49,6 +50,7 @@ const VALID_SETTINGS_PAGES = new Set<SettingsDialogPage>([
   "audio",
   "webSearch",
   "dev",
+  "structured-knowledge",
 ]);
 
 function normalizeSettingsPage(page?: string): SettingsDialogPage {

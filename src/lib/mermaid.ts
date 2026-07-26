@@ -144,6 +144,10 @@ export async function getMermaidRenderer(theme: 'light' | 'dark' | 'system' = 'l
     theme: 'base',
     themeVariables: getCleanMermaidThemeVariables(theme),
     securityLevel: 'strict',
+    // 标签改用 SVG <text> 渲染而非 <foreignObject>。
+    // 出图后要经 sanitizeSvg 净化，而 DOMPurify 会无条件清空 foreignObject 的子节点
+    // （它是已知 mXSS 向量，无配置可绕），继续用 HTML 标签会导致所有标签文字消失。
+    htmlLabels: false,
     fontFamily: 'inherit',
     fontSize: 14,
     timeline: {

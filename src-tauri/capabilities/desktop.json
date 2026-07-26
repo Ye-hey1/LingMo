@@ -27,13 +27,10 @@
     "notification:default",
     "updater:default",
     "process:default",
-    "global-shortcut:allow-is-registered",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister",
     "core:window:allow-unminimize",
-    "os:default",
     "shell:default",
     {
+      "_comment": "Skills 运行时以 bash -c <脚本> 执行技能，args 无法枚举。该授权仅限桌面平台的 main 窗口；参数拼接必须经 src/lib/skills/path-utils.ts 的 escapeShellArg 转义。",
       "identifier": "shell:allow-execute",
       "allow": [
         {

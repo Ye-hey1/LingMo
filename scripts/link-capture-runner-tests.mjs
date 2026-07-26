@@ -41,7 +41,12 @@ assert.match(store, /event\.status === 'failed'/)
 const desktopProgress = await source('src/app/core/main/global-progress.tsx')
 const mobileProgress = await source('src/app/mobile/record/mobile-record-stream.tsx')
 assert.match(desktopProgress, /retryLinkCaptureJob/)
-assert.match(desktopProgress, /重新抓取/)
+// 断言重试按钮的接线而非文案：文案是随时可改的 UI 措辞，原先断言 /重新抓取/
+// 就因为改成「重试」而误报失败。这里检查失败态下确实渲染了触发 retryCapture
+// 的按钮，且重试进行中会禁用它。
+assert.match(desktopProgress, /activeQueue\.status === 'failed'/)
+assert.match(desktopProgress, /onClick=\{\(\) => void retryCapture\(activeQueue\)\}/)
+assert.match(desktopProgress, /disabled=\{!activeQueue\.jobId \|\| retryingJobId === activeQueue\.jobId\}/)
 assert.match(mobileProgress, /retryLinkCaptureJob/)
 
 console.log('link capture runner tests passed')

@@ -383,16 +383,103 @@ export async function buildWebSearchContext(
 }
 
 /**
+ * P0-2：RAG 检索的纯 IO 结果（不消耗上下文预算）
+ */
+export type RagPrefetch = {
+  rawContext: string
+  sources: string[]
+  sourceDetails: ChatCitationSource[]
+  keywords: string[]
+  warnings: string[]
+}
+
+/**
+ * 预取 RAG 检索结果：关键词抽取 + 向量检索，可与其他上下文源并发执行。
+ */
+export async function prefetchRagContext(
+  query: string,
+  linkedFolders: LinkedResource[],
+  isRagEnabled: boolean,
+): Promise<RagPrefetch> {
+  const empty: RagPrefetch = { rawContext: '', sources: [], sourceDetails: [], keywords: [], warnings: [] }
+  if (!isRagEnabled) return empty
+
+  const sources: string[] = []
+  const sourceDetails: ChatCitationSource[] = []
+  const warnings: string[] = []
+
+  try {
+    let keywords = await invoke<{ text: string; weight: number }[]>('rank_keywords', {
+      text: query,
+      topK: 15,
+    })
+    keywords = filterRAGKeywords(keywords)
+    const keywordTexts = keywords.map(keyword => keyword.text)
+
+    if (keywords.length === 0) {
+      warnings.push('RAG 未提取到有效关键词')
+      return { ...empty, keywords: keywordTexts, warnings }
+    }
+
+    const linkedFolder = linkedFolders[0]
+    const ragResult = linkedFolder
+      ? await getContextForQueryInFolder(keywords, linkedFolder.relativePath)
+      : await getContextForQuery(keywords)
+
+    ragResult.sourceDetails.forEach(sourceDetail => {
+      addCitationSource(sources, sourceDetails, { ...sourceDetail, sourceType: 'rag' })
+    })
+    ragResult.sources.forEach(source => {
+      if (!sources.includes(source)) sources.push(source)
+    })
+
+    if (!ragResult.context) {
+      const searchScope = linkedFolder ? `在关联文件夹"${linkedFolder.name}"中` : '在知识库中'
+      warnings.push(`${searchScope}未命中相关内容`)
+    }
+
+    return {
+      rawContext: ragResult.context || '',
+      sources,
+      sourceDetails,
+      keywords: keywordTexts,
+      warnings,
+    }
+  } catch (error) {
+    console.error('Failed to get RAG context:', error)
+    warnings.push(`RAG 检索失败：${error instanceof Error ? error.message : String(error)}`)
+    return { ...empty, sources, sourceDetails, warnings }
+  }
+}
+
+/**
  * 构建 RAG 检索上下文
  */
 export async function buildRagContext(
   query: string,
   linkedFolders: LinkedResource[],
   isRagEnabled: boolean,
-  contextBudget: { remaining: number }
+  contextBudget: { remaining: number },
+  prefetched?: RagPrefetch,
 ): Promise<{ context: string; sources: string[]; sourceDetails: ChatCitationSource[]; keywords: string[]; warnings: string[] }> {
   if (!isRagEnabled) {
     return { context: '', sources: [], sourceDetails: [], keywords: [], warnings: [] }
+  }
+
+  // P0-2：检索阶段（关键词抽取 + 向量检索）可提前并发完成，这里只消耗预算。
+  if (prefetched) {
+    const { rawContext, sources: preSources, sourceDetails: preDetails, keywords, warnings: preWarnings } = prefetched
+    if (!rawContext) {
+      return { context: '', sources: preSources, sourceDetails: preDetails, keywords, warnings: preWarnings }
+    }
+    const ragContext = takeContent(rawContext, 4000, contextBudget, 'RAG results')
+    return {
+      context: `## 知识库检索结果\n\n已在知识库中找到与用户问题相关的笔记内容。请优先使用以下信息回答用户问题：\n\n${ragContext}\n`,
+      sources: preSources,
+      sourceDetails: preDetails,
+      keywords,
+      warnings: preWarnings,
+    }
   }
 
   const sources: string[] = []
@@ -506,7 +593,62 @@ export function buildCurrentNoteContext(
 }
 
 /**
- * 构建关联文件上下文
+ * P0-2：关联文件的纯 IO 预取结果。
+ * 读盘与预算消耗解耦，读取可并发，预算仍按原顺序串行消耗。
+ */
+export type LinkedFilePrefetch = {
+  resource: LinkedResource
+  index: number
+  preview: string | null
+  isPdf: boolean
+  isActiveResource: boolean
+  content: string
+  error?: string
+}
+
+/**
+ * 并发预取关联文件内容（不消耗上下文预算）
+ */
+export async function prefetchLinkedFileContents(
+  linkedFiles: LinkedResource[],
+  linkedResourcePreviews: Record<string, string | null>,
+  linkedResourcePreview: string | null,
+  activeFilePath: string | undefined,
+  currentArticle: string | undefined,
+): Promise<LinkedFilePrefetch[]> {
+  if (linkedFiles.length === 0) return []
+  const workspace = await getWorkspacePath()
+
+  return Promise.all(linkedFiles.map(async (resource, index): Promise<LinkedFilePrefetch> => {
+    const resourceKey = getLinkedResourceKey(resource)
+    const resourcePath = resource.relativePath || resource.path
+    const isActiveResource = isActiveLinkedResource(activeFilePath, currentArticle, resource)
+    const preview = linkedResourcePreviews[resourceKey] ?? (index === 0 ? linkedResourcePreview : null)
+    const isPdf = /\.pdf$/i.test(resourcePath)
+    const base = { resource, index, preview, isPdf, isActiveResource }
+
+    if (isPdf) return { ...base, content: '' }
+
+    try {
+      let content = ''
+      if (isActiveResource && currentArticle) {
+        content = currentArticle
+      } else if (workspace.isCustom) {
+        content = await readTextFile(resource.path)
+      } else {
+        const { path, baseDir } = await getFilePathOptions(resource.path || resource.relativePath)
+        content = baseDir ? await readTextFile(path, { baseDir }) : await readTextFile(path)
+      }
+      return { ...base, content }
+    } catch (error) {
+      console.error('Failed to read linked file:', error)
+      return { ...base, content: '', error: error instanceof Error ? error.message : String(error) }
+    }
+  }))
+}
+/**
+ * 构建关联文件上下文。
+ * P0-2：读盘已在 prefetchLinkedFileContents 中并发完成，这里只按原顺序消耗预算。
  */
 export async function buildLinkedFilesContext(
   linkedFiles: LinkedResource[],
@@ -514,7 +656,8 @@ export async function buildLinkedFilesContext(
   linkedResourcePreview: string | null,
   activeFilePath: string | undefined,
   currentArticle: string | undefined,
-  contextBudget: { remaining: number }
+  contextBudget: { remaining: number },
+  prefetched?: LinkedFilePrefetch[],
 ): Promise<{ context: string; sources: string[]; sourceDetails: ChatCitationSource[]; warnings: string[]; injectedCount: number }> {
   if (linkedFiles.length === 0) {
     return { context: '', sources: [], sourceDetails: [], warnings: [], injectedCount: 0 }
@@ -525,65 +668,57 @@ export async function buildLinkedFilesContext(
   const sourceDetails: ChatCitationSource[] = []
   const warnings: string[] = []
   let injectedCount = 0
-  const workspace = await getWorkspacePath()
 
-  for (const [index, resource] of linkedFiles.entries()) {
-    try {
-      const resourceKey = getLinkedResourceKey(resource)
-      const resourcePath = resource.relativePath || resource.path
-      const isActiveResource = isActiveLinkedResource(activeFilePath, currentArticle, resource)
-      const preview = linkedResourcePreviews[resourceKey] ?? (index === 0 ? linkedResourcePreview : null)
-      const isPdf = /\.pdf$/i.test(resourcePath)
+  const entries = prefetched ?? await prefetchLinkedFileContents(
+    linkedFiles,
+    linkedResourcePreviews,
+    linkedResourcePreview,
+    activeFilePath,
+    currentArticle,
+  )
 
-      if (preview) {
-        context += `\n${takeContent(preview, 1500, contextBudget, `linked preview ${resource.name || resourcePath}`)}\n`
-      }
+  for (const entry of entries) {
+    const { resource, index, preview, isPdf, isActiveResource, content, error } = entry
+    const resourcePath = resource.relativePath || resource.path
 
-      if (isPdf) {
-        if (isActiveResource && currentArticle) {
-          const pdfContext = takeContent(currentArticle, 12000, contextBudget, `linked PDF ${resource.name || resourcePath}`)
-          context += `\n## 关联文件内容 ${index + 1}（PDF 文本提取）\n\n文件: "${resource.name}" (${resource.relativePath})\n\n---\n${pdfContext}\n---\n`
-          addCitationSource(sources, sourceDetails, {
-            filepath: resource.relativePath || resource.path,
-            filename: resource.name || getLinkedFileName(resource.relativePath || resource.path),
-            content: currentArticle,
-            sourceType: 'linked',
-          })
-          injectedCount += 1
-        } else {
-          warnings.push(`PDF 关联文件缺少已提取正文：${resource.name || resourcePath}`)
-        }
-        continue
-      }
+    if (error) {
+      warnings.push(`关联文件读取失败：${resource.name || resourcePath} (${error})`)
+      continue
+    }
 
-      let linkedFileContent = ''
+    if (preview) {
+      context += `\n${takeContent(preview, 1500, contextBudget, `linked preview ${resource.name || resourcePath}`)}\n`
+    }
+
+    if (isPdf) {
       if (isActiveResource && currentArticle) {
-        linkedFileContent = currentArticle
-      } else if (workspace.isCustom) {
-        linkedFileContent = await readTextFile(resource.path)
-      } else {
-        const { path, baseDir } = await getFilePathOptions(resource.path || resource.relativePath)
-        linkedFileContent = baseDir
-          ? await readTextFile(path, { baseDir })
-          : await readTextFile(path)
-      }
-
-      if (linkedFileContent) {
-        const linkedContext = takeContent(linkedFileContent, 12000, contextBudget, `linked file ${resource.name || resourcePath}`)
-        context += `\n## 关联文件内容 ${index + 1}\n\n文件: "${resource.name}" (${resource.relativePath})\n\n---\n${linkedContext}\n---\n`
+        const pdfContext = takeContent(currentArticle, 12000, contextBudget, `linked PDF ${resource.name || resourcePath}`)
+        context += `\n## 关联文件内容 ${index + 1}（PDF 文本提取）\n\n文件: "${resource.name}" (${resource.relativePath})\n\n---\n${pdfContext}\n---\n`
         addCitationSource(sources, sourceDetails, {
           filepath: resource.relativePath || resource.path,
           filename: resource.name || getLinkedFileName(resource.relativePath || resource.path),
-          content: linkedFileContent,
+          content: currentArticle,
           sourceType: 'linked',
         })
         injectedCount += 1
       } else {
-        warnings.push(`关联文件为空或无法读取：${resource.name || resourcePath}`)
+        warnings.push(`PDF 关联文件缺少已提取正文：${resource.name || resourcePath}`)
       }
-    } catch (error) {
-      console.error('Failed to read linked file:', error)
-      warnings.push(`关联文件读取失败：${resource.name || resource.relativePath || resource.path} (${error instanceof Error ? error.message : String(error)})`)
+      continue
+    }
+
+    if (content) {
+      const linkedContext = takeContent(content, 12000, contextBudget, `linked file ${resource.name || resourcePath}`)
+      context += `\n## 关联文件内容 ${index + 1}\n\n文件: "${resource.name}" (${resource.relativePath})\n\n---\n${linkedContext}\n---\n`
+      addCitationSource(sources, sourceDetails, {
+        filepath: resource.relativePath || resource.path,
+        filename: resource.name || getLinkedFileName(resource.relativePath || resource.path),
+        content,
+        sourceType: 'linked',
+      })
+      injectedCount += 1
+    } else {
+      warnings.push(`关联文件为空或无法读取：${resource.name || resourcePath}`)
     }
   }
 
@@ -724,6 +859,15 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
   const sections: NonNullable<ContextBuildResult['sections']> = {}
   const ragSources: string[] = []
   const ragSourceDetails: ChatCitationSource[] = []
+
+  // P0-2：三个 IO 密集操作（网络搜索 / 磁盘读取 / RAG 检索）之间无数据依赖，
+  // 并发启动，先到先得；预算消耗仍按原优先级顺序串行进行。
+  const ragQuery = buildRagSearchQuery({ userQuery, activeFilePath, currentArticle, linkedResources, quoteData })
+  const [webSearchPrefetch, linkedFilePrefetch, ragPrefetch] = await Promise.allSettled([
+    webSearchEnabled && webSearchQuery ? buildWebSearchContext(webSearchQuery) : Promise.resolve(null),
+    prefetchLinkedFileContents(linkedFiles, linkedResourcePreviews, linkedResourcePreview, activeFilePath, currentArticle),
+    strategyResult.strategy === 'supplement' ? prefetchRagContext(ragQuery, linkedFolders, isRagEnabled) : Promise.resolve(null),
+  ])
   const diagnostics: ContextBuildDiagnostics = {
     strategy: strategyResult.strategy,
     ragEnabled: isRagEnabled,
@@ -747,21 +891,17 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
     warnings: [],
   }
 
-  // 1. Web 搜索
+  // 1. Web 搜索（已在并发预取中完成，直接消耗结果）
   if (webSearchEnabled && webSearchQuery) {
-    try {
-      const webSearchContext = await buildWebSearchContext(webSearchQuery)
+    if (webSearchPrefetch.status === 'fulfilled' && webSearchPrefetch.value) {
+      const webSearchContext = webSearchPrefetch.value
       context += webSearchContext.context
-      if (webSearchContext.context.trim()) {
-        sections.web = webSearchContext.context.trim()
-      }
+      if (webSearchContext.context.trim()) sections.web = webSearchContext.context.trim()
       diagnostics.injectedChars.web += countChars(webSearchContext.context)
-      webSearchContext.sources.forEach(source => {
-        addCitationSource(ragSources, ragSourceDetails, source)
-      })
-    } catch (error) {
-      console.error('Failed to get web search context:', error)
-      diagnostics.warnings.push(`Web 搜索失败：${error instanceof Error ? error.message : String(error)}`)
+      webSearchContext.sources.forEach(source => addCitationSource(ragSources, ragSourceDetails, source))
+    } else if (webSearchPrefetch.status === 'rejected') {
+      console.error('Failed to get web search context:', webSearchPrefetch.reason)
+      diagnostics.warnings.push(`Web 搜索失败：${webSearchPrefetch.reason instanceof Error ? webSearchPrefetch.reason.message : String(webSearchPrefetch.reason)}`)
     }
   }
 
@@ -785,14 +925,16 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
     }
   }
 
-  // 3. 关联文件
+  // 3. 关联文件（文件内容已在并发预取中完成，直接消耗预算）
+  const prefetchedLinkedFiles = linkedFilePrefetch.status === 'fulfilled' ? linkedFilePrefetch.value : undefined
   const linkedResult = await buildLinkedFilesContext(
     linkedFiles,
     linkedResourcePreviews,
     linkedResourcePreview,
     activeFilePath,
     currentArticle,
-    budget
+    budget,
+    prefetchedLinkedFiles
   )
   context += linkedResult.context
   if (linkedResult.context.trim()) {
@@ -820,23 +962,11 @@ export async function buildChatContext(options: ContextBuildOptions): Promise<Co
     }
   }
 
-  // 5. RAG 检索。文档加工类任务默认跳过，关联/扩展类任务作为补充。
+  // 5. RAG 检索（关键词抽取+向量检索已在并发预取中完成，直接消耗预算）
   if (strategyResult.strategy === 'supplement') {
-    const ragQuery = buildRagSearchQuery({
-      userQuery,
-      activeFilePath,
-      currentArticle,
-      linkedResources,
-      quoteData,
-    })
     diagnostics.ragQuery = ragQuery
-
-    const ragResult = await buildRagContext(
-      ragQuery,
-      linkedFolders,
-      isRagEnabled,
-      budget
-    )
+    const prefetchedRag = ragPrefetch.status === 'fulfilled' ? ragPrefetch.value ?? undefined : undefined
+    const ragResult = await buildRagContext(ragQuery, linkedFolders, isRagEnabled, budget, prefetchedRag)
     context += ragResult.context
     if (ragResult.context.trim()) {
       sections.rag = ragResult.context.trim()

@@ -211,6 +211,32 @@ const builtinProviderTemplates: AiConfig[] = [
     apiKeyUrl: 'https://cloud.siliconflow.cn/account/ak',
   },
   {
+    key: 'deepseek',
+    title: 'DeepSeek',
+    baseURL: 'https://api.deepseek.com/v1',
+    icon: 'https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/deepseek-color.svg',
+    apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+  },
+  {
+    key: 'openrouter',
+    title: 'OpenRouter',
+    baseURL: 'https://openrouter.ai/api/v1',
+    icon: 'https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/openrouter.svg',
+    apiKeyUrl: 'https://openrouter.ai/settings/keys',
+  },
+  {
+    key: 'dashscope',
+    title: '通义千问',
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    icon: 'https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/qwen-color.svg',
+    apiKeyUrl: 'https://dashscope.console.aliyun.com/apiKey',
+  },
+  {
+    key: 'openai-compatible',
+    title: 'OpenAI 兼容',
+    baseURL: 'https://api.example.com/v1',
+  },
+  {
     key: 'zhipu',
     title: '智谱 AI',
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',

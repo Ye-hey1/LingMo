@@ -802,6 +802,11 @@ export function TipTapEditor({
   const richInteractionsEnabled = !performanceMode
   const documentEnhancementsEnabled = !performanceMode
   const highFrequencyDecorationsEnabled = !performanceMode
+  // 选中文字后的悬浮工具栏只在 selectionUpdate 时计算，开销与文档大小无关，
+  // 所以大文档进入性能模式时也保留，否则长文里没法做任何格式化操作。
+  const selectionToolbarEnabled = !isMobile
+  // 工具栏里的 AI 动作依赖这个浮层承接流式结果；它空闲时返回 null，挂载成本可忽略。
+  const aiSuggestionSurfaceEnabled = richInteractionsEnabled || selectionToolbarEnabled
   const editorInitialContent = useMemo(
     () => performanceMode ? initialContent : normalizeEditorMarkdown(initialContent),
     [initialContent, performanceMode],
@@ -3610,7 +3615,7 @@ export function TipTapEditor({
         <EditorContent editor={editor} className="h-full relative">
           {richInteractionsEnabled && !isMobile && <ImageBubbleMenu editor={editor} />}
 
-          {richInteractionsEnabled && <AISuggestionFloating editor={editor} />}
+          {aiSuggestionSurfaceEnabled && <AISuggestionFloating editor={editor} />}
 
           {richInteractionsEnabled && (
             <InlineAIPanel
@@ -3637,7 +3642,7 @@ export function TipTapEditor({
 
           {richInteractionsEnabled && highFrequencyDecorationsEnabled && !isMobile && <WikiLinkDiagramBubbleMenu editor={editor} />}
 
-          {richInteractionsEnabled && !isMobile && (
+          {selectionToolbarEnabled && (
             <BubbleMenuComponent
               editor={editor}
               onAIPolish={handleAIPolish}

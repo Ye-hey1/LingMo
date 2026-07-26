@@ -106,3 +106,7 @@ LingMo-Dev-Rebuild.cmd
 # Playwright CLI / screenshot artifacts
 .playwright-cli/
 output/
+
+# 从 public/drawio 移出的未用资源（Java servlet 配置 + 零引用 js 包）。
+# 留在本地便于回滚，不进版本库也不进构建产物。见 scripts/drawio-assets-tests.mjs
+.drawio-removed/

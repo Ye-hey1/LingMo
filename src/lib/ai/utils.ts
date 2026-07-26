@@ -9,6 +9,32 @@ import { buildXiaoMoChatSystemPrompt } from "./xiaomo-prompt";
 import { matchesConfiguredModelSelection } from "./model-selection";
 import { formatError } from "./error-handler";
 
+// P0-4：Store.load('store.json') 是异步文件 IO，原本在每个 AI 请求内被重复调用。
+// 此处缓存 Store 实例：初始化只跑一次，后续请求直接复用同一 handle。
+// 如需在运行时强制刷新（例如用户更改了 API 配置），调用 invalidateStoreCache()。
+let _storeInstance: Store | null = null
+let _storeLoadPromise: Promise<Store> | null = null
+
+export async function getSharedStore(): Promise<Store> {
+  if (_storeInstance) return _storeInstance
+  if (!_storeLoadPromise) {
+    _storeLoadPromise = Store.load('store.json').then(store => {
+      _storeInstance = store
+      return store
+    }).catch(err => {
+      _storeLoadPromise = null
+      throw err
+    })
+  }
+  return _storeLoadPromise
+}
+
+/** 配置变更后调用此函数使缓存失效（如 SettingPage 保存时）。 */
+export function invalidateStoreCache() {
+  _storeInstance = null
+  _storeLoadPromise = null
+}
+
 function isChunkLoadFailure(error: unknown) {
   const message = error instanceof Error
     ? `${error.name} ${error.message}`
@@ -39,7 +65,7 @@ For Mermaid flowcharts:
  * 获取当前的prompt内容
  */
 export async function getPromptContent(): Promise<string> {
-  const store = await Store.load('store.json')
+  const store = await getSharedStore()
   const currentPromptId = await store.get<string>('currentPromptId')
   let promptContent = ''
   
@@ -60,7 +86,7 @@ export async function getPromptContent(): Promise<string> {
  * 获取AI设置
  */
 export async function getAISettings(modelType?: string, modelSelectionOverride?: string): Promise<AiConfig | undefined> {
-  const store = await Store.load('store.json')
+  const store = await getSharedStore()
   const aiConfigs = await store.get<AiConfig[]>('aiModelList')
   const defaultModelId = await store.get<string>(modelType || 'primaryModel')
 
@@ -315,12 +341,12 @@ export async function prepareMessages(
  * 创建OpenAI客户端，适用于所有AI类型
  */
 export async function createOpenAIClient(AiConfig?: AiConfig): Promise<OpenAICompatibleClient> {
-  const store = await Store.load('store.json')
-
+  // P0-4：已有显式配置时无需触碰 store，避免一次无谓的加载。
   if (AiConfig) {
     return createTauriOpenAIClient(AiConfig)
   }
 
+  const store = await getSharedStore()
   const baseURL = await store.get<string>('baseURL')
   const apiKey = await store.get<string>('apiKey')
 

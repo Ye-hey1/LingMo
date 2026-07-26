@@ -23,7 +23,7 @@ export interface ProviderTemplateCache {
   }
 }
 
-function mapBuiltinTemplates(templates: AiConfig[]): AiConfig[] {
+export function mapBuiltinTemplates(templates: AiConfig[]): AiConfig[] {
   return templates.map((template) => ({
     ...template,
     title: normalizeProviderDisplayTitle(template.title),
@@ -191,7 +191,7 @@ function mapRemoteTemplates(content: ProviderTemplateCache['content'] | undefine
   }))
 }
 
-function mergeTemplateLists(primaryTemplates: AiConfig[], fallbackTemplates: AiConfig[]) {
+export function mergeTemplateLists(primaryTemplates: AiConfig[], fallbackTemplates: AiConfig[]) {
   const seen = new Set(primaryTemplates.map((template) => template.key))
   const missingFallbackTemplates = fallbackTemplates.filter((template) => !seen.has(template.key))
   return [...primaryTemplates, ...missingFallbackTemplates]

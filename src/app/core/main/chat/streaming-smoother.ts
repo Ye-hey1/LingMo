@@ -7,11 +7,15 @@ export type SmootherStepResult = SmootherState & {
   charsAdded: number;
 };
 
-const MIN_CHARS_PER_SECOND = 40;
-const SLOW_CHARS_PER_SECOND = 96;
-const MID_CHARS_PER_SECOND = 220;
-const HIGH_CHARS_PER_SECOND = 520;
-const MAX_CHARS_PER_SECOND = 1100;
+// P0-5：弱化打字机、追求跟手。
+// 旧策略在 backlog <= 24 时强制 40 字/秒，而模型本身常有 30-60 字/秒，
+// 叠加下游 markdown 渲染节流后会让"模型已经输出、界面还在慢慢吐字"。
+// 新策略把低 backlog 档位提到接近实时（跟手），仅在明显积压时才平滑追赶。
+const MIN_CHARS_PER_SECOND = 260;
+const SLOW_CHARS_PER_SECOND = 420;
+const MID_CHARS_PER_SECOND = 640;
+const HIGH_CHARS_PER_SECOND = 900;
+const MAX_CHARS_PER_SECOND = 1600;
 
 export function getAdaptiveCharsPerSecond(backlog: number): number {
   if (backlog > 1000) return MAX_CHARS_PER_SECOND;

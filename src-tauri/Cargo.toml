@@ -18,13 +18,19 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [ "macos-private-api", "protocol-asset", "image-png", "devtools", "tray-icon" ] }
+# 不启用 devtools feature：Tauri 的门控是 any(debug_assertions, feature = "devtools")，
+# 因此 debug 构建仍自带检查器，而 release 包不再内置，避免把它发给最终用户。
+tauri = { version = "2", features = [ "macos-private-api", "protocol-asset", "image-png", "tray-icon" ] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "=1"
 tauri-plugin-store = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
+# unsafe-headers 为必需项，不可移除：S3 图床签名需要设置 Host（src/lib/imageHosting/s3.ts），
+# 热点源需要 Origin/Referer 过反爬（src/lib/ai-hotspots/fetchers/），视频与小红书提取需要
+# User-Agent 与 Sec-Fetch-*（src/lib/video-transcript.ts、src/lib/xhs-extractor.ts）。
+# 该 feature 的风险边界取决于「谁能调到 plugin-http」，由 CSP 与 HTML 净化层共同约束。
 tauri-plugin-http = { version = "=2.3.0", features = ["unsafe-headers"] }
 tauri-plugin-os = "2"
 tauri-plugin-single-instance = "2"

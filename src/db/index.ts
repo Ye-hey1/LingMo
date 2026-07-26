@@ -195,4 +195,18 @@ export async function initAllDatabases() {
   await initKnowledgeObjectsDb()
   await initStructuredKnowledgeDb()
   await initKnowledgeGraphDb()
+
+  // 基线表就位后再跑版本化迁移：init 负责建表，迁移负责基线之后的有序演进。
+  // 迁移失败不阻断启动——基线表已存在，应用仍可用，把错误暴露出来即可。
+  try {
+    const { runMigrations } = await import('./migrations')
+    const result = await runMigrations(await getDb())
+    if (result.applied.length > 0) {
+      console.info(
+        `[DB] schema v${result.fromVersion} -> v${result.toVersion}，已应用: ${result.applied.join(', ')}`,
+      )
+    }
+  } catch (error) {
+    console.error('[DB] 迁移失败，应用继续以现有 schema 启动:', error)
+  }
 }

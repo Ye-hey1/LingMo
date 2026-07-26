@@ -11,7 +11,10 @@
     "start": "next start -p 3457",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-all-tests.mjs",
     "test:agent": "node scripts/agent-core-tests.mjs",
+    "test:shell-escaping": "node scripts/shell-escaping-tests.mjs",
+    "test:sanitize": "node scripts/sanitize-html-tests.mjs",
     "test:github-stars-agent": "node scripts/github-star-agent-service-tests.mjs",
     "test:ai-hotspots": "node scripts/ai-hotspots-core-tests.mjs",
     "test:web-content": "node scripts/web-content-extractor-tests.mjs",
@@ -129,6 +132,7 @@
     "crypto-js": "^4.2.0",
     "dayjs": "^1.11.13",
     "diff": "^7.0.0",
+    "dompurify": "3.3.1",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
     "embla-carousel-react": "^8.6.0",
@@ -192,6 +196,7 @@
     "@types/turndown": "^5.0.6",
     "eslint": "^8",
     "eslint-config-next": "15.0.3",
+    "jsdom": "26.1.0",
     "tailwindcss": "^4.1.18",
     "typescript": "^5"
   }

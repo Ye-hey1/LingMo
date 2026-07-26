@@ -94,6 +94,36 @@ export function escapeShellArg(arg: string): string {
 }
 
 /**
+ * 转义用于 shell 的路径。
+ *
+ * 与 escapeShellArg 同源，但语义上专用于目录/文件路径。此前这些位置直接用
+ * 双引号包裹，导致路径中的 `$(...)`、反引号、`${}` 仍会被 shell 展开；而 Skills
+ * 可从远程仓库安装，路径可被攻击者影响，属于供应链面。
+ *
+ * @param path - 原始路径
+ * @returns 可安全嵌入 shell 命令的路径
+ */
+export function escapeShellPath(path: string): string {
+  return escapeShellArg(path)
+}
+
+/**
+ * 转义 `KEY=value` 形式的环境变量赋值。
+ *
+ * 只转义 value 部分；key 必须是合法标识符，否则抛错而非静默拼接。
+ *
+ * @param key - 环境变量名
+ * @param value - 环境变量值
+ * @returns 形如 `KEY='value'` 的可安全嵌入片段
+ */
+export function escapeShellEnvAssignment(key: string, value: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    throw new Error(`非法环境变量名: ${key}`)
+  }
+  return `${key}=${escapeShellArg(value)}`
+}
+
+/**
  * 构建 shell 命令
  * 包含工作目录切换和参数转义
  *
@@ -113,15 +143,16 @@ export function buildShellCommand(
 
   // 检查是否所有参数都是绝对路径
   // 如果是绝对路径，需要 cd 到脚本所在目录，但用 NODE_PATH 指向模块目录
-  const allAbsolutePaths = args.every(arg => arg.startsWith('/'))
+  // 注意 args 为空时 every 恒真，必须显式排除，否则下面读 args[0] 会抛异常
+  const allAbsolutePaths = args.length > 0 && args.every(arg => arg.startsWith('/'))
 
   if (allAbsolutePaths) {
     // 获取第一个绝对路径的目录作为工作目录
     // 例如：/path/to/article/generate.js -> /path/to/article
     const scriptDir = args[0].substring(0, args[0].lastIndexOf('/'))
     // 使用脚本所在目录作为工作目录，但用 NODE_PATH 指向 skill 的 node_modules
-    return `cd "${scriptDir}" && NODE_PATH="${moduleDir}/node_modules" ${command} ${escapedArgs.join(' ')}`
+    return `cd ${escapeShellPath(scriptDir)} && ${escapeShellEnvAssignment('NODE_PATH', `${moduleDir}/node_modules`)} ${escapeShellArg(command)} ${escapedArgs.join(' ')}`
   }
 
-  return `cd "${workingDirectory}" && ${command} ${escapedArgs.join(' ')}`
+  return `cd ${escapeShellPath(workingDirectory)} && ${escapeShellArg(command)} ${escapedArgs.join(' ')}`
 }

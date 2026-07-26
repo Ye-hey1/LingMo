@@ -1,6 +1,7 @@
 'use client'
 
 import { Editor } from '@tiptap/react'
+import { CellSelection } from '@tiptap/pm/tables'
 import { Plus } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -180,8 +181,9 @@ function getVisibleRect(rect: DOMRect, bounds: Bounds): RectStyle {
   }
 }
 
+// 同上：不能用 constructor.name，生产构建压缩后判断会失效
 function isCellSelection(editor: Editor) {
-  return editor.state.selection.constructor.name === 'CellSelection'
+  return editor.state.selection instanceof CellSelection
 }
 
 function clearNativeTableSelection(editor: Editor) {

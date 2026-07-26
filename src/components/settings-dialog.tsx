@@ -31,6 +31,7 @@ const settingsPageComponents: Record<SettingsDialogPage, ComponentType> = {
   skills: dynamic(() => import("@/app/core/setting/skills/page"), { loading: pageLoadingFallback, ssr: false }),
   prompt: dynamic(() => import("@/app/core/setting/prompt/page"), { loading: pageLoadingFallback, ssr: false }),
   memories: dynamic(() => import("@/app/core/setting/memories/page"), { loading: pageLoadingFallback, ssr: false }),
+  "structured-knowledge": dynamic(() => import("@/app/core/setting/structured-knowledge/page"), { loading: pageLoadingFallback, ssr: false }),
   template: dynamic(() => import("@/app/core/setting/template/page"), { loading: pageLoadingFallback, ssr: false }),
   file: dynamic(() => import("@/app/core/setting/file/page"), { loading: pageLoadingFallback, ssr: false }),
   shortcuts: dynamic(() => import("@/app/core/setting/shortcuts/page"), { loading: pageLoadingFallback, ssr: false }),

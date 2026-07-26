@@ -1,6 +1,7 @@
 import { Store } from '@tauri-apps/plugin-store'
 import { create } from 'zustand'
 import { getVersion } from '@tauri-apps/api/app'
+import { invoke } from '@tauri-apps/api/core'
 import { AiConfig, builtinProviderTemplates, cleanupConfiguredModels, mergeProviderTemplateModels } from '@/app/core/setting/config'
 import { GitlabInstanceType } from '@/lib/sync/gitlab.types'
 import { GiteaInstanceType } from '@/lib/sync/gitea.types'
@@ -1155,6 +1156,16 @@ const useSettingStore = create<SettingState>((set, get) => ({
     set({ workspacePath: path })
     const store = await Store.load('store.json');
     await store.set('workspacePath', path)
+
+    // asset: 协议的静态作用域只覆盖标准目录，自定义工作区需运行时补授权，
+    // 否则该目录下的图片/附件无法在 webview 中加载。
+    if (path) {
+      try {
+        await invoke('allow_workspace_asset_scope', { path })
+      } catch (error) {
+        console.error('追加工作区 asset 作用域失败:', error)
+      }
+    }
     
     // 如果路径不为空且不在历史记录中，则添加到历史记录
     if (path && !get().workspaceHistory.includes(path)) {
