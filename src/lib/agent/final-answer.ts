@@ -193,24 +193,16 @@ export function getAutoFinalAnswerDescriptor(
   }
 }
 // ============================================================================
-// Final Answer Format — 统一 Final Answer 格式模块
+// Final Answer 校验 — 防"伪完成"
 // ============================================================================
 //
-// 改进点：
-// 1. 统一要求 JSON 格式输出
-// 2. 移除自然语言 Final Answer 检测
-// 3. 简化正则匹配
-// 4. 更清晰的格式指导
+// harness 用 OpenAI 原生 function calling，完成判定 = 模型不再发起 tool call，
+// 不存在文本协议解析。本节负责的是完成时的内容校验：拒绝空答案、内部工具日志、
+// 纯进度话术、复述用户问题，以及"声称已落盘但没有成功工具记录"的情况。
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-export interface FinalAnswerResult {
-  isFinalAnswer: boolean
-  content: string
-  format: 'json' | 'none'
-}
 
 export interface FinalAnswerValidation {
   ok: boolean
@@ -221,92 +213,10 @@ export interface FinalAnswerValidation {
 // Final Answer detection (JSON only)
 // ---------------------------------------------------------------------------
 
-/**
- * 检测并提取 Final Answer
- * 
- * 只支持 JSON 格式：
- * - {"final_answer": "..."}
- * - {"thought": "...", "final_answer": "..."}
- */
-export function detectFinalAnswer(content: string): FinalAnswerResult {
-  if (!content || !content.trim()) {
-    return { isFinalAnswer: false, content: '', format: 'none' }
-  }
-
-  const trimmed = content.trim()
-
-  // 1. 尝试直接解析 JSON
-  try {
-    const parsed = JSON.parse(trimmed)
-    if (typeof parsed.final_answer === 'string' && parsed.final_answer.trim()) {
-      return {
-        isFinalAnswer: true,
-        content: parsed.final_answer.trim(),
-        format: 'json',
-      }
-    }
-  } catch {
-    // 不是完整 JSON，继续
-  }
-
-  // 2. 尝试从文本中提取 JSON
-  const jsonMatch = trimmed.match(/\{[\s\S]*?"final_answer"\s*:\s*"([\s\S]*?)"[\s\S]*\}/)
-  if (jsonMatch && jsonMatch[1]) {
-    try {
-      // 尝试解析完整的 JSON
-      const jsonStr = trimmed.match(/\{[\s\S]*\}/)?.[0]
-      if (jsonStr) {
-        const parsed = JSON.parse(jsonStr)
-        if (typeof parsed.final_answer === 'string' && parsed.final_answer.trim()) {
-          return {
-            isFinalAnswer: true,
-            content: parsed.final_answer.trim(),
-            format: 'json',
-          }
-        }
-      }
-    } catch {
-      // JSON 解析失败，使用正则匹配的结果
-      return {
-        isFinalAnswer: true,
-        content: jsonMatch[1].trim(),
-        format: 'json',
-      }
-    }
-  }
-
-  return { isFinalAnswer: false, content: '', format: 'none' }
-}
-
-/**
- * 从流式内容中检测 Final Answer（用于实时渲染）
- */
-export function detectFinalAnswerStreaming(content: string): {
-  hasFinalAnswer: boolean
-  partialContent?: string
-} {
-  if (!content) return { hasFinalAnswer: false }
-
-  // 检查是否包含 final_answer 字段
-  const faMatch = content.match(/"final_answer"\s*:\s*"([\s\S]*?)"/)
-  if (faMatch) {
-    return {
-      hasFinalAnswer: true,
-      partialContent: faMatch[1],
-    }
-  }
-
-  // 检查是否有未闭合的 final_answer（流式接收中）
-  const partialMatch = content.match(/"final_answer"\s*:\s*"([\s\S]*)/)
-  if (partialMatch && !content.includes('"}')) {
-    return {
-      hasFinalAnswer: true,
-      partialContent: partialMatch[1],
-    }
-  }
-
-  return { hasFinalAnswer: false }
-}
+// 说明：原先此处还有 detectFinalAnswer / detectFinalAnswerStreaming，
+// 用于从模型输出里解析 {"final_answer": "..."} JSON 协议。harness 已改为
+// OpenAI 原生 function calling，完成判定不再依赖文本协议解析，两者已无调用方，
+// 故移除。本文件保留的是"内容校验"能力（validateFinalAnswer 等），与协议解析无关。
 
 // ---------------------------------------------------------------------------
 // Final Answer validation
@@ -367,46 +277,7 @@ export function validateFinalAnswer(
   return { ok: true }
 }
 
-// ---------------------------------------------------------------------------
-// Format guidance
-// ---------------------------------------------------------------------------
-
-/**
- * 生成 Final Answer 格式指导（用于 System Prompt）
- */
-export function getFinalAnswerFormatGuidance(): string {
-  return `## Output Format
-
-When you have completed the task or can answer the user's question directly, respond with a JSON object:
-
-\`\`\`json
-{"final_answer": "Your complete answer here (supports Markdown formatting)"}
-\`\`\`
-
-**Rules**:
-- The \`final_answer\` field is REQUIRED for task completion
-- Use Markdown formatting for rich text (headers, lists, code blocks, etc.)
-- Do NOT include source citations or boilerplate text - the UI handles that
-- Do NOT claim actions were performed if no tools were successfully executed
-- If you need to use tools, use the standard action format instead
-
-**Examples**:
-
-Simple answer:
-\`\`\`json
-{"final_answer": "The capital of France is Paris."}
-\`\`\`
-
-Formatted answer:
-\`\`\`json
-{"final_answer": "## Summary\\n\\nHere are the key points:\\n\\n1. **Point 1**: Description\\n2. **Point 2**: Description\\n\\n### Code Example\\n\\n\\\`\\\`\\\`javascript\\nconsole.log('hello');\\n\\\`\\\`\\\`"}
-\`\`\`
-`
-}
-
-/**
- * 生成简化的格式指导（用于错误恢复）
- */
-export function getSimpleFormatGuidance(): string {
-  return `Please respond with: {"final_answer": "your answer"}`
-}
+// 说明：原先此处有 getFinalAnswerFormatGuidance / getSimpleFormatGuidance，
+// 用于指导模型输出 {"final_answer": "..."} JSON。harness 已改为 OpenAI 原生
+// function calling（完成 = 不再发起 tool call），且 prompt-assembler 明确禁止
+// final_answer 包装，这两个函数已无调用方，故移除以避免协议层自相矛盾。

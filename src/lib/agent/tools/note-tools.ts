@@ -195,7 +195,17 @@ async function registerMarkdownKnowledgeObject(filePath: string, content: string
 
 export const listMarkdownFilesTool: Tool = {
   name: 'list_markdown_files',
-  description: 'List all Markdown files in the workspace.',
+  description: `List all Markdown notes in the workspace.
+
+When to use:
+- Getting an overview of available notes before choosing one to act on.
+- Resolving a note the user referred to by name rather than by path.
+
+Do NOT use this tool to:
+- Search note CONTENTS — use safe_grep for text, or query_knowledge for semantic search.
+- List non-Markdown files — use safe_list_files.
+
+MUST: only act on paths this tool returned. NEVER invent or guess a note path.`,
   category: 'note',
   requiresConfirmation: false,
   parameters: [],
@@ -226,7 +236,19 @@ export const listMarkdownFilesTool: Tool = {
 // Prefer get_editor_content for the currently open note so unsaved/runtime state is included.
 export const readMarkdownFileTool: Tool = {
   name: 'read_markdown_file',
-  description: 'Read the saved on-disk content of a Markdown note by path. Prefer `get_editor_content` for the currently open note.',
+  description: `Read the saved on-disk content of a Markdown note by path.
+
+When to use:
+- Reading a note that is NOT currently open in the editor.
+- Reading a note before you modify it with update_markdown_file.
+- Reading the specific files safe_grep reported in candidateFiles.
+
+Do NOT use this tool to:
+- Read the note currently open in the editor — use get_editor_content, which includes unsaved changes and line numbers.
+- Read several notes one at a time — use read_markdown_files_batch in a single call.
+- Re-read a note you already read this turn and have not changed.
+
+MUST: call this before update_markdown_file on an existing note. NEVER overwrite content you have not read.`,
   category: 'note',
   requiresConfirmation: false,
   parameters: [
@@ -301,6 +323,9 @@ export const readMarkdownFileTool: Tool = {
       return {
         success: false,
         error: `读取文件失败: ${errorMessage}`,
+        modelHint: normalizedFilePath
+          ? 'The note path may not exist. Confirm it with list_markdown_files or safe_grep and retry with the exact path returned. If this note is currently open in the editor, use get_editor_content instead. Do NOT guess variations of the path.'
+          : 'Pass a workspace-relative path such as folder/note.md. Use list_markdown_files to find the real path first.',
         data: {
           filePath: params.filePath,
           normalizedFilePath,
@@ -316,7 +341,20 @@ export const readMarkdownFileTool: Tool = {
 
 export const createFileTool: Tool = {
   name: 'create_file',
-  description: 'Create a new file in the file system. Returns filePath (relative) and fullPath (absolute for script execution).',
+  description: `Create a NEW file in the workspace.
+
+When to use:
+- The user explicitly asked for a new note or file to be created.
+- You need a real artifact on disk to satisfy a deliverable.
+
+Do NOT use this tool to:
+- Modify an existing file — use update_markdown_file, or replace_editor_content for the open note.
+- Save a note the user did not ask you to save. "Summarize this" is NOT a request to create a file; ask first if unsure.
+- Create a duplicate. Check with list_markdown_files or safe_grep whether the content already exists.
+
+MUST: after creating, report the returned path to the user. NEVER claim a file was created without a successful result from this tool.
+
+Returns: filePath (workspace-relative) and fullPath (absolute, for script execution).`,
   category: 'note',
   requiresConfirmation: true,
   parameters: [
@@ -479,7 +517,19 @@ export const createFileTool: Tool = {
 
 export const updateMarkdownFileTool: Tool = {
   name: 'update_markdown_file',
-  description: 'Update the content of a Markdown note file. Optionally provide `expectedModifiedAt` to avoid overwriting a file that changed since it was last read.',
+  description: `Replace the content of an existing Markdown note. This is a WHOLE-FILE write.
+
+When to use:
+- Modifying a note that is NOT currently open in the editor.
+
+Do NOT use this tool to:
+- Edit the note currently open in the editor — use replace_editor_content, which supports ranged edits and preserves unsaved state.
+- Make a small localized change without having read the file. This call replaces everything; unread content will be lost.
+- Create a new file — use create_file.
+
+MUST:
+- Call read_markdown_file first and build the new content from what you actually read. NEVER pass partial content to this tool.
+- Pass \`expectedModifiedAt\` from the read so a concurrent change cannot be silently overwritten. If rejected, re-read and rebuild rather than retrying the same payload.`,
   category: 'note',
   requiresConfirmation: true,
   parameters: [
@@ -527,6 +577,7 @@ export const updateMarkdownFileTool: Tool = {
           return {
             success: false,
             error: `文件已在磁盘上发生变化，已取消更新: ${normalizedFilePath}`,
+            modelHint: 'The file changed on disk after you read it, so the update was cancelled to protect the newer content. Call read_markdown_file again, rebuild your new content from what it returns, and retry with the fresh expectedModifiedAt. NEVER retry the same payload — that would discard the change you have not seen.',
             data: {
               filePath: normalizedFilePath,
               conflict: true,
@@ -616,7 +667,19 @@ export const updateMarkdownFileTool: Tool = {
 
 export const deleteMarkdownFileTool: Tool = {
   name: 'delete_markdown_file',
-  description: 'Move a Markdown file to the trash.',
+  description: `Move one Markdown note to the trash. Recoverable, but still destructive.
+
+When to use:
+- The user explicitly asked to delete a specific note.
+
+Do NOT use this tool to:
+- Delete several notes one at a time — use delete_markdown_files_batch in a single call.
+- Clean up files the user did not name. NEVER delete on your own initiative.
+- Replace a note's content — use update_markdown_file.
+
+MUST:
+- Only delete a path the user named or confirmed. If the target is ambiguous, ask which note they mean instead of guessing.
+- Report exactly which file was trashed.`,
   category: 'note',
   requiresConfirmation: true,
   parameters: [
@@ -682,7 +745,14 @@ Two modes:
 - keyword (default): Fast exact matching for specific terms like "useState", "React", "API"
 - rag: Semantic search - ONLY use when user explicitly asks for semantic/AI search (e.g., "语义搜索" / "AI搜索" / "相关笔记")
 
-Use folderPath to limit scope to a specific folder.`,
+Use folderPath to limit scope to a specific folder.
+
+**Do NOT use this tool to:**
+- Answer a question the user asked without requesting a search. Answer from context instead.
+- Search code symbols — use code_search_symbols.
+- Search non-Markdown files — use safe_grep.
+
+**MUST:** act only on the paths this tool returns. NEVER infer a note path from a search snippet.`,
   category: 'search',
   requiresConfirmation: false,
   parameters: [
@@ -882,7 +952,13 @@ Use folderPath to limit scope to a specific folder.`,
 // @deprecated since content is saved in real-time, use replace_editor_content instead
 export const modifyCurrentNoteTool: Tool = {
   name: 'modify_current_note',
-  description: '**DEPRECATED**: Use replace_editor_content from editor-tools instead. This tool writes to disk, but replace_editor_content provides better performance for real-time saved content.',
+  description: `**DEPRECATED — do not use.**
+
+Use replace_editor_content instead for the note open in the editor, or update_markdown_file for a note on disk.
+
+This tool writes straight to disk and bypasses the editor's unsaved state, which can silently discard the user's in-progress edits.
+
+Do NOT use this tool under any circumstance. It is retained only for backward compatibility.`,
   category: 'note',
   requiresConfirmation: true,
   parameters: [],
@@ -896,7 +972,17 @@ export const modifyCurrentNoteTool: Tool = {
 
 export const readMarkdownFilesBatchTool: Tool = {
   name: 'read_markdown_files_batch',
-  description: 'Batch read the saved on-disk contents of multiple Markdown notes. Prefer `get_editor_content` for any note that is currently open in the editor.',
+  description: `Read the saved on-disk content of MULTIPLE Markdown notes in one call.
+
+When to use:
+- You need two or more notes. Always prefer this over repeated read_markdown_file calls.
+- Reading the candidateFiles that safe_grep returned.
+
+Do NOT use this tool to:
+- Read a note open in the editor — use get_editor_content for that one, which includes unsaved changes.
+- Read a single note — use read_markdown_file.
+
+MUST: batch the paths into ONE call. Calling read_markdown_file in a loop wastes iterations and is treated as a repeated-tool anti-pattern.`,
   category: 'note',
   requiresConfirmation: false,
   risk: 'low',
@@ -984,7 +1070,19 @@ export const readMarkdownFilesBatchTool: Tool = {
 
 export const deleteMarkdownFilesBatchTool: Tool = {
   name: 'delete_markdown_files_batch',
-  description: 'Batch move multiple Markdown note files to the trash to avoid loop calls.',
+  description: `Move MULTIPLE Markdown notes to the trash in one call. Recoverable, but destructive and wide-reaching.
+
+When to use:
+- The user explicitly asked to delete several specific notes.
+
+Do NOT use this tool to:
+- Delete notes the user did not enumerate or confirm. NEVER infer a deletion set on your own.
+- Delete one note — use delete_markdown_file.
+- Bulk-clean a folder based on your own judgement of what looks obsolete.
+
+MUST:
+- Confirm the exact list with the user before calling when the set was not explicitly given. A wrong list here removes multiple files at once.
+- Report every path that was trashed, and any that failed.`,
   category: 'note',
   requiresConfirmation: true,
   risk: 'high',
@@ -1071,7 +1169,17 @@ export const deleteMarkdownFilesBatchTool: Tool = {
 
 export const listMarkdownFilesByDateTool: Tool = {
   name: 'list_markdown_files_by_date',
-  description: 'List Markdown note files updated within a specified time range. Supports filtering by relative time (e.g., last N days, N days ago) or absolute time range.',
+  description: `List Markdown notes by last-modified time. Supports relative ranges (last N days, N days ago) and absolute ranges.
+
+When to use:
+- Time-scoped questions: "what did I write this week", "notes from yesterday", "recent changes".
+- Narrowing a large workspace to recently touched notes before searching them.
+
+Do NOT use this tool to:
+- List every note regardless of date — use list_markdown_files.
+- Search note contents — this filters by timestamp only. Combine with read_markdown_files_batch to inspect what it returns.
+
+Returns: matching note paths with their modification times.`,
   category: 'note',
   requiresConfirmation: false,
   parameters: [
@@ -1200,7 +1308,17 @@ export const listMarkdownFilesByDateTool: Tool = {
 
 export const renameFileTool: Tool = {
   name: 'rename_file',
-  description: 'Rename the specified Markdown file. Only changes the filename, not the folder containing the file.',
+  description: `Rename one Markdown note. Changes the filename only; the containing folder is unchanged.
+
+When to use:
+- The user asked to rename a specific note.
+
+Do NOT use this tool to:
+- Move a note to a different folder — use move_file.
+- Rename several notes — use rename_files_batch in one call.
+- Tidy up naming on your own initiative. Rename only what the user asked for.
+
+MUST: be aware that renaming can break links from other notes that reference the old filename. Run safe_grep on the old name first when the note may be linked, and tell the user what you found.`,
   category: 'note',
   requiresConfirmation: true,
   parameters: [
@@ -1308,7 +1426,18 @@ export const renameFileTool: Tool = {
 
 export const moveFileTool: Tool = {
   name: 'move_file',
-  description: 'Move the specified Markdown file to another folder. The filename remains unchanged.',
+  description: `Move one Markdown note to another folder. The filename is unchanged.
+
+When to use:
+- The user asked to relocate a specific note.
+
+Do NOT use this tool to:
+- Rename a note — use rename_file.
+- Duplicate a note — use copy_file; this removes it from the original location.
+- Move several notes — use move_files_batch in one call.
+- Reorganize the workspace on your own initiative.
+
+MUST: verify the destination folder exists (safe_list_files) before moving. Moving can also break links that reference the old path; check with safe_grep when the note may be linked.`,
   category: 'note',
   requiresConfirmation: true,
   parameters: [
@@ -1426,7 +1555,17 @@ export const moveFileTool: Tool = {
 
 export const copyFileTool: Tool = {
   name: 'copy_file',
-  description: 'Copy the specified Markdown file to another folder. The original file remains unchanged.',
+  description: `Copy one Markdown note to another folder. The original stays in place.
+
+When to use:
+- The user asked to duplicate a note, or wants a variant while keeping the original.
+
+Do NOT use this tool to:
+- Relocate a note — use move_file; this leaves a duplicate behind.
+- Copy several notes — use copy_files_batch in one call.
+- Create a backup before editing. Editing tools already guard against lost updates via version and expectedModifiedAt.
+
+MUST: verify the destination folder exists (safe_list_files) first, and confirm you are not creating an unwanted duplicate of content that already exists there.`,
   category: 'note',
   requiresConfirmation: true,
   parameters: [
@@ -1567,7 +1706,20 @@ export const copyFileTool: Tool = {
 
 export const moveFilesBatchTool: Tool = {
   name: 'move_files_batch',
-  description: 'Batch move multiple Markdown files to another folder to avoid loop calls. The filenames remain unchanged.',
+  description: `Move MULTIPLE Markdown notes to another folder in one call. Filenames unchanged.
+
+When to use:
+- The user asked to relocate several specific notes.
+
+Do NOT use this tool to:
+- Move one note — use move_file.
+- Copy notes — use copy_files_batch; this removes them from their original locations.
+- Reorganize a folder based on your own judgement of where things belong.
+
+MUST:
+- Verify the destination folder exists before moving.
+- Confirm the exact file list with the user when it was not explicitly given. This relocates many files at once and can break many links.
+- Report which paths moved and which failed.`,
   category: 'note',
   requiresConfirmation: true,
   risk: 'medium',
@@ -1699,7 +1851,17 @@ export const moveFilesBatchTool: Tool = {
 
 export const copyFilesBatchTool: Tool = {
   name: 'copy_files_batch',
-  description: 'Batch copy multiple Markdown files to other folders to avoid loop calls. The original files remain unchanged.',
+  description: `Copy MULTIPLE Markdown notes to other folders in one call. Originals stay in place.
+
+When to use:
+- The user asked to duplicate several specific notes.
+
+Do NOT use this tool to:
+- Copy one note — use copy_file.
+- Relocate notes — use move_files_batch; this leaves duplicates behind.
+- Create bulk backups on your own initiative. That clutters the workspace.
+
+MUST: verify destination folders exist, and report which paths were copied and which failed.`,
   category: 'note',
   requiresConfirmation: true,
   risk: 'medium',
@@ -1849,7 +2011,20 @@ export const copyFilesBatchTool: Tool = {
 
 export const renameFilesBatchTool: Tool = {
   name: 'rename_files_batch',
-  description: 'Batch rename multiple Markdown files to avoid loop calls. Only changes the filenames, not the folders containing the files.',
+  description: `Rename MULTIPLE Markdown notes in one call. Filenames only; folders unchanged.
+
+When to use:
+- The user asked to rename several specific notes, or to apply a naming convention they described.
+
+Do NOT use this tool to:
+- Rename one note — use rename_file.
+- Move notes between folders — use move_files_batch.
+- Apply a naming scheme you invented. Use the convention the user specified.
+
+MUST:
+- Confirm the full old→new mapping with the user before calling when it was not explicitly given.
+- Renaming in bulk can break many inter-note links at once. Run safe_grep on the old names first and report what would break.
+- Report each rename that succeeded and each that failed.`,
   category: 'note',
   requiresConfirmation: true,
   risk: 'medium',

@@ -34,6 +34,12 @@ export interface ToolResult {
   error?: string
   message?: string
   status?: ToolCallStatus
+  /**
+   * 方案E：面向模型的下一步指引（不展示给用户）。
+   * error/message 面向用户，说明"发生了什么"；modelHint 面向模型，说明"接下来该怎么做"。
+   * 由 harness 拼接进回灌给模型的 tool 结果，避免模型用同样参数盲目重试。
+   */
+  modelHint?: string
 }
 
 export type ToolCallStatus =

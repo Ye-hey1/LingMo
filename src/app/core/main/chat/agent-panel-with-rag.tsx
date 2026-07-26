@@ -1,4 +1,8 @@
 "use client"
+// 未接入：本组件当前没有任何 import 引用，不在运行链路上。
+// 实际生效的 agent 执行展示走 AgentExecutionStatus → AgentLiveStream → AgentRunSummary。
+// 其中的任务规划进度已抽成 ./agent-task-plan-panel.tsx 并接入 live 链路。
+// 保留此文件仅作为 RAG 来源面板的参考实现，改动前请先确认是否真的需要它。
 import * as React from "react"
 import { AgentPlan } from "@/components/ui/agent-plan"
 import { FileText, ChevronRight, Database, ExternalLink } from "lucide-react"

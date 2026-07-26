@@ -359,7 +359,20 @@ function isBlockedUrl(url: URL): boolean {
 
 export const safeListFilesTool: Tool = {
   name: 'safe_list_files',
-  description: 'Safely list files and folders inside the current note workspace. Cannot access paths outside the workspace.',
+  description: `List files and folders inside the note workspace. Sandboxed: paths outside the workspace are rejected.
+
+When to use:
+- Discovering what exists in the workspace or a folder before acting on it.
+- Confirming a folder path is real before writing into it.
+
+Do NOT use this tool to:
+- Search file CONTENTS — use safe_grep instead.
+- Enumerate only Markdown notes — use list_markdown_files, which is already filtered.
+- Read a file's content — this returns names only, not content.
+
+MUST: never invent a file path from a listing you have not actually seen. Only act on paths this tool returned.
+
+Returns: entries (name, path, isDirectory), truncated flag, missingFolder flag when the folder does not exist.`,
   category: 'filesystem',
   requiresConfirmation: false,
   risk: 'low',
@@ -428,7 +441,21 @@ export const safeListFilesTool: Tool = {
 
 export const safeReadFileTool: Tool = {
   name: 'safe_read_file',
-  description: 'Safely read a UTF-8 text file inside the current note workspace. Cannot read outside the workspace.',
+  description: `Read a UTF-8 text file inside the note workspace. Sandboxed: paths outside the workspace are rejected.
+
+When to use:
+- You know the exact path and need its content.
+- Reading the specific files that safe_grep reported in candidateFiles.
+- Inspecting non-Markdown files (config, code, data).
+
+Do NOT use this tool to:
+- Read the note currently open in the editor — use get_editor_content, which returns live unsaved content plus line numbers.
+- Read a Markdown note you intend to edit — use read_markdown_file instead.
+- Locate a file whose path you are unsure about — use safe_grep or safe_list_files first.
+
+MUST: check the truncated flag. When true you have only seen the head of the file; raise maxChars or narrow what you need rather than assuming you saw everything.
+
+Returns: content, totalChars, truncated flag.`,
   category: 'filesystem',
   requiresConfirmation: false,
   risk: 'low',
@@ -469,6 +496,7 @@ export const safeReadFileTool: Tool = {
       return {
         success: false,
         error: `Failed to read workspace file: ${error instanceof Error ? error.message : String(error)}`,
+        modelHint: 'The path may not exist or may sit outside the workspace. Locate the real path with safe_list_files or safe_grep and retry with the path they returned. Do NOT guess a different path.',
       }
     }
   },
@@ -476,7 +504,21 @@ export const safeReadFileTool: Tool = {
 
 export const safeWriteFileTool: Tool = {
   name: 'safe_write_file',
-  description: 'Safely write a UTF-8 text file inside the current note workspace. Requires confirmation and cannot write outside the workspace.',
+  description: `Write a UTF-8 text file inside the note workspace. Requires user confirmation. Sandboxed to the workspace.
+
+When to use:
+- Producing a non-Markdown artifact the user asked for (config, data, script, export).
+
+Do NOT use this tool to:
+- Edit the note currently open in the editor — use replace_editor_content.
+- Modify an existing Markdown note — use update_markdown_file.
+- Save a note the user did not explicitly ask to save. Summarizing does not imply saving.
+
+MUST:
+- Use mode='create' for new files so an existing file is never silently destroyed. Switch to 'overwrite' only after you have read the current content and intend to replace it.
+- Read the existing file before overwriting it. NEVER overwrite content you have not seen.
+
+Returns: filePath, bytesWritten, mode applied.`,
   category: 'filesystem',
   requiresConfirmation: true,
   risk: 'medium',
@@ -516,6 +558,7 @@ export const safeWriteFileTool: Tool = {
         return {
           success: false,
           error: `File already exists: ${filePath}. Use mode="overwrite" or a note-specific update tool if replacement is intended.`,
+          modelHint: 'Read the existing file first to see what would be lost. If the user wants it replaced, retry with mode="overwrite"; if they wanted a separate file, pick a different path. Do NOT overwrite content you have not read.',
         }
       }
 
@@ -559,7 +602,24 @@ export const safeWriteFileTool: Tool = {
 
 export const safeGrepTool: Tool = {
   name: 'safe_grep',
-  description: 'Safely search text files inside the current note workspace without shell access. Supports literal or regex search.',
+  description: `Search file contents across the note workspace by text or regex. No shell access required.
+
+When to use:
+- You need to locate WHERE something appears but do not know which file holds it.
+- Establishing understanding of existing content before editing or creating anything.
+- Verifying whether something already exists before you create a duplicate.
+
+Do NOT use this tool to:
+- Read a file whose path you already know — use safe_read_file or read_markdown_file instead.
+- List a directory's structure — use safe_list_files instead.
+- Find code symbols (functions, classes, types) — use code_search_symbols, which is far more precise.
+- Search the knowledge base semantically — use query_knowledge instead.
+
+MUST:
+- When results come back with truncated=true, read the specific files listed in candidateFiles. NEVER retry with a broader query — that loops without progress.
+- Narrow the search with folderPath and includeExtensions when the workspace is large.
+
+Returns: matches (filePath, line number, matched line text), candidateFiles (top files by hit count), truncated flag.`,
   category: 'search',
   requiresConfirmation: false,
   risk: 'low',
@@ -568,7 +628,7 @@ export const safeGrepTool: Tool = {
     {
       name: 'query',
       type: 'string',
-      description: 'Search text or regex pattern.',
+      description: 'Text to find, or a regex pattern when regex=true. Keep it specific; overly broad queries return truncated results.',
       required: true,
     },
     {
@@ -696,12 +756,17 @@ export const safeGrepTool: Tool = {
           candidateFiles,
           sampleMatches: matches.slice(0, 12),
         },
-        message: `safe_grep found ${matches.length} matches${truncated ? ' (truncated)' : ''}.`,
+        // 方案E：截断是成功结果但信息不完整，把下一步指引直接写进 message，
+        // 防止模型改用更宽的 query 反复重搜（这是实测中最常见的空转模式）。
+        message: truncated
+          ? `safe_grep found ${matches.length} matches (truncated). Results are incomplete: read the files in candidateFiles with read_markdown_files_batch or safe_read_file instead of searching again with a broader query.`
+          : `safe_grep found ${matches.length} matches.`,
       }
     } catch (error) {
       return {
         success: false,
         error: `Failed to search workspace files: ${error instanceof Error ? error.message : String(error)}`,
+        modelHint: 'Verify the folderPath exists with safe_list_files, and if the query used regex=true check the pattern is valid. Narrow the scope rather than repeating the same search.',
       }
     }
   },
@@ -781,7 +846,20 @@ export const webFetchTool: Tool = {
 
 export const webSearchTool: Tool = {
   name: 'web_search',
-  description: 'Search the public web through Tavily Search API. Use for current external information when web access is enabled or needed. For latest/recent/current/news queries, provide days or a date range and only treat dated in-window results as current evidence.',
+  description: `Search the public web (Tavily API) for external, current information.
+
+When to use:
+- Facts that change over time: current events, prices, releases, version-specific behavior.
+- External information that provably does not exist in the user's own notes.
+
+Do NOT use this tool to:
+- Answer questions about the user's own notes or past work — use query_knowledge first.
+- Substitute for a specialized tool. GitHub stars → github_list_starred. Trending repos → github_trending. Code symbols → code_search_symbols. Using web_search where a specialized tool exists produces worse results.
+- Look up stable knowledge you already know reliably.
+
+MUST:
+- For latest/recent/current/news queries, pass \`days\` or an explicit date range, and treat ONLY dated in-window results as current evidence.
+- Cite what you actually found. NEVER present a search result as fact without noting its source.`,
   category: 'web',
   requiresConfirmation: false,
   risk: 'low',

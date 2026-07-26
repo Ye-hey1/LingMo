@@ -1,5 +1,10 @@
 "use client";
 
+// 未接入：本组件唯一的宿主 agent-panel-with-rag.tsx 也未被引用，因此整个文件不在运行链路上。
+// 其中的 renderTaskPlan（任务规划进度面板）已抽成
+// src/app/core/main/chat/agent-task-plan-panel.tsx 并接入实际生效的 live 渲染链路。
+// 保留此文件作为步骤时间线等其他视图的参考实现。
+
 import * as React from "react";
 import {
   CheckCircle2,

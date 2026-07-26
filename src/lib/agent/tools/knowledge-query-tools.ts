@@ -49,9 +49,19 @@ function formatObjectLine(object: { type: string; title: string; path?: string; 
 
 export const queryKnowledgeTool: Tool = {
   name: 'query_knowledge',
-  description:
-    'Unified LingMo knowledge query entrypoint. Searches knowledge objects and can include current-note context, evidence blocks, and structured graph context. ' +
-    'Use this first for knowledge base, note relationship, evidence, GraphRAG, previous work, memory, and related-material questions.',
+  description: `Unified knowledge query entrypoint. Semantic search over the user's own knowledge base: notes, marks, memories, evidence blocks, and graph relations.
+
+When to use:
+- ANY question about the user's own notes, past work, or previously discussed material. Try this FIRST.
+- "What do I already know about X", "what did we decide before", "what relates to this note".
+- Semantic/conceptual lookup where exact wording is unknown.
+
+Do NOT use this tool to:
+- Find an exact literal string — use safe_grep, which is precise for known text.
+- Search the public internet — use web_search. This tool only sees local knowledge.
+- Look up code symbols — use code_search_symbols.
+
+MUST: try this before web_search for anything that could plausibly live in the user's own notes. NEVER go to the public web for questions about the user's private material.`,
   category: 'note',
   requiresConfirmation: false,
   risk: 'low',

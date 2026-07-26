@@ -236,7 +236,18 @@ async function getCandidateFiles(params: {
 export const codeNavigationTools: Tool[] = [
   {
     name: 'code_search_symbols',
-    description: 'Search LSP-style workspace symbols by name across code files in the current workspace.',
+    description: `Find code symbols (functions, classes, types, constants) by name across the workspace. Symbol-aware, so it beats plain text search for code.
+
+When to use:
+- Locating where a function/class/type lives when you only know its name.
+- The entry point for any "how does X work in this code" question.
+
+Do NOT use this tool to:
+- Search prose or Markdown notes — use safe_grep.
+- Find every call site of a symbol — use code_find_references.
+- Read a specific region of code — use code_read_context.
+
+Typical workflow: code_search_symbols → code_file_outline (see file structure) → code_read_context (read the region).`,
     category: 'filesystem',
     requiresConfirmation: false,
     risk: 'low',
@@ -329,7 +340,17 @@ export const codeNavigationTools: Tool[] = [
   },
   {
     name: 'code_file_outline',
-    description: 'Return an LSP-style symbol outline for one workspace file.',
+    description: `Return the symbol outline (functions, classes, types with their line numbers) of one code file.
+
+When to use:
+- Understanding a file's structure before reading it, especially a large file.
+- Finding the line range of a symbol so you can read just that part.
+
+Do NOT use this tool to:
+- Read actual code bodies — this returns signatures and line numbers only. Use code_read_context.
+- Outline a Markdown note — this is for code files.
+
+MUST: prefer this over reading a whole large file. Outline first, then read only the region you need.`,
     category: 'filesystem',
     requiresConfirmation: false,
     risk: 'low',
@@ -376,7 +397,17 @@ export const codeNavigationTools: Tool[] = [
   },
   {
     name: 'code_find_definition',
-    description: 'Find likely LSP-style symbol definitions across code files in the current workspace.',
+    description: `Find where a symbol is DEFINED (its declaration site).
+
+When to use:
+- You have a symbol name and need its implementation, not its usages.
+- Tracing a call chain downward into the code that implements it.
+
+Do NOT use this tool to:
+- Find who CALLS the symbol — use code_find_references, which is the opposite direction.
+- Search by partial or fuzzy name — use code_search_symbols.
+
+Note: results are heuristic ("likely" definitions). Verify with code_read_context before relying on a match.`,
     category: 'filesystem',
     requiresConfirmation: false,
     risk: 'low',
@@ -467,7 +498,18 @@ export const codeNavigationTools: Tool[] = [
   },
   {
     name: 'code_find_references',
-    description: 'Find likely LSP-style references to a symbol across code files in the current workspace.',
+    description: `Find every place a symbol is USED (its call sites and imports).
+
+When to use:
+- Assessing the blast radius of a change before you make it.
+- Understanding how an API is consumed across the codebase.
+
+Do NOT use this tool to:
+- Find where the symbol is declared — use code_find_definition, which is the opposite direction.
+
+MUST: run this before changing any shared function or type signature, so you know what else is affected.
+
+Note: results are heuristic ("likely" references) and may include same-named symbols from unrelated scopes. Verify before acting.`,
     category: 'filesystem',
     requiresConfirmation: false,
     risk: 'low',
@@ -568,7 +610,17 @@ export const codeNavigationTools: Tool[] = [
   },
   {
     name: 'code_read_context',
-    description: 'Read line-numbered code context around a line number or first query match in one workspace file.',
+    description: `Read a line-numbered window of code around a given line or the first match of a query, in one file.
+
+When to use:
+- Reading the actual implementation after code_search_symbols / code_file_outline told you where to look.
+- Confirming a heuristic match from code_find_definition or code_find_references is the real thing.
+
+Do NOT use this tool to:
+- Read an entire file — request the specific region instead; it exists to avoid dumping whole files.
+- Search across multiple files — use code_search_symbols or safe_grep first to narrow to one file.
+
+MUST: verify code with this tool before making claims about how it behaves. NEVER describe implementation you have not read.`,
     category: 'filesystem',
     requiresConfirmation: false,
     risk: 'low',

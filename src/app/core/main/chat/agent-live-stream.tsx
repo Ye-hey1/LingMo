@@ -4,6 +4,7 @@ import * as React from "react"
 import type { AgentActivity, AgentEvent, AgentState, AgentTurnTelemetry, ToolCall, AgentPartSnapshot } from "@/lib/agent"
 import { isSupportOnlyToolName } from "@/lib/agent/support-tools"
 import { AgentRunSummary } from "./agent-run-summary"
+import { AgentTaskPlanPanel } from "./agent-task-plan-panel"
 
 type AgentLiveStreamProps = {
   isRunning: boolean
@@ -61,6 +62,7 @@ export function AgentLiveStream({
   activity,
   telemetry,
   currentStepStartTime,
+  taskPlan,
   partSnapshot,
 }: AgentLiveStreamProps) {
   const visibleToolCalls = React.useMemo(
@@ -72,19 +74,22 @@ export function AgentLiveStream({
   if (!isRunning) return null
 
   return (
-    <AgentRunSummary
-      elapsedMs={elapsedMs}
-      telemetry={telemetry}
-      visibleOutput={visibleOutput}
-      steps={steps}
-      toolCalls={visibleToolCalls}
-      events={agentEvents}
-      activity={activity}
-      currentThought={currentThought}
-      currentAction={currentAction}
-      currentObservation={currentObservation}
-      partSnapshot={partSnapshot}
-      live
-    />
+    <>
+      <AgentTaskPlanPanel taskPlan={taskPlan} />
+      <AgentRunSummary
+        elapsedMs={elapsedMs}
+        telemetry={telemetry}
+        visibleOutput={visibleOutput}
+        steps={steps}
+        toolCalls={visibleToolCalls}
+        events={agentEvents}
+        activity={activity}
+        currentThought={currentThought}
+        currentAction={currentAction}
+        currentObservation={currentObservation}
+        partSnapshot={partSnapshot}
+        live
+      />
+    </>
   )
 }

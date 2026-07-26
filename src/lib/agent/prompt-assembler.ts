@@ -374,6 +374,27 @@ function buildStaticRuntimeDiscipline() {
 }
 
 /**
+ * 探索优先原则：
+ * 对涉及已有文件/代码/笔记的任务，先建立对现状的理解再动手，
+ * 避免"没读就改"导致的错误编辑与返工。同时给出可直接回答的豁免条件，
+ * 防止把简单请求也拖成多轮工具调用。
+ */
+function buildExploreFirstPrinciple() {
+  return section(
+    'Explore Before Acting',
+    [
+      'When a request touches existing files, notes, or code, understand the current state BEFORE you modify or create anything.',
+      'Read the target with get_editor_content (open note), read_markdown_file / read_markdown_files_batch (notes on disk), or code_read_context (code). Locate it first with safe_grep, code_search_symbols, or query_knowledge when you do not know where it lives.',
+      'NEVER edit, overwrite, rename, move, or delete content you have not actually read in this run. Do not infer a file\'s structure — verify it.',
+      'NEVER state how existing code or notes behave unless you have read them. Say what you checked, and say what you could not verify.',
+      'Batch independent lookups instead of reading one item per iteration.',
+      'Skip exploration and answer directly when: the provided context already answers the request; the task is pure explanation, translation, summarization, or rewriting of text already given to you; or the user asked a general-knowledge question with no reference to their workspace.',
+      'Exploration is preparation, not the deliverable. Once you have enough to act, act — do not keep gathering.',
+    ].join('\n')
+  )
+}
+
+/**
  * 笔记保存策略（用户明确偏好）：
  * 默认禁止 agent 自主把内容整理/保存为笔记文件。
  * 这避免了工作区被自动生成的 .md 污染，把文件创建权完全交给用户。
@@ -425,7 +446,8 @@ function buildOutputRules() {
     [
       'Use the model tool-calling protocol whenever a tool is needed.',
       'Do not emit ReAct JSON, Action/Observation text, or final_answer wrappers.',
-      'Independent read-only lookups may be batched up to 3 tool calls in one model step.',
+      'When you need several independent read-only lookups, request them TOGETHER in one step (up to 6) rather than one per step. Batched reads run concurrently and are much faster.',
+      'Independent means no call depends on another\'s result. If lookup B needs B\'s target identified by lookup A, run A first.',
       'Writes, deletes, execution, and uncertain operations require exactly one tool call followed by observation.',
       'Only when the user explicitly asked to save/write into a note/file, completion requires a successful write/create/edit tool result before the final Markdown answer. For research/summary/analysis requests without an explicit save instruction, keep the answer inline in chat (see Note Saving Policy).',
       'When complete, answer in Markdown with only user-visible results and important verification caveats.',
@@ -483,6 +505,14 @@ export async function buildAgentSystemPrompt(options: AgentPromptOptions) {
     {
       id: 'runtime-discipline',
       content: buildStaticRuntimeDiscipline(),
+      priority: 100,
+      truncateStrategy: 'drop-subsection',
+      minTokens: 80,
+    },
+    // 100 — 必保留：Explore Before Acting（方案B：探索优先顶层原则）
+    {
+      id: 'explore-before-acting',
+      content: buildExploreFirstPrinciple(),
       priority: 100,
       truncateStrategy: 'drop-subsection',
       minTokens: 80,

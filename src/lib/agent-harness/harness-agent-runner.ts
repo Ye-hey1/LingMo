@@ -166,9 +166,15 @@ function normalizeToolCalls(toolCalls: ModelToolCall[]): ModelToolCall[] {
 }
 
 function buildToolResultMessage(toolCallId: string, result: ToolResult, observation: string): OpenAI.Chat.ChatCompletionMessageParam {
-  const content = result.success
+  let content = result.success
     ? observation
     : `Error: ${result.error || result.message || observation || 'Tool failed'}`
+  // 方案E：把面向模型的下一步指引附在失败结果后，让模型知道"接下来该怎么做"，
+  // 而不是用同样的参数重试。
+  const hint = typeof result.modelHint === 'string' ? result.modelHint.trim() : ''
+  if (!result.success && hint) {
+    content += `\nNext step: ${hint}`
+  }
   return {
     role: 'tool',
     tool_call_id: toolCallId,
@@ -761,6 +767,8 @@ export class HarnessAgentRunner {
   private selectedSkillIds = new Set<string>()
   private currentIteration = 0
   private taskPlan: TaskPlan | null = null
+  // P0-3: 任务规划在后台生成，句柄用于在需要 plan 的边界处（迭代预算重算）等待其完成。
+  private taskPlanPromise: Promise<void> | null = null
   private visibleToolsByName = new Map<string, Tool>()
   private outputLengthContinuations = 0
   private invalidOutputContinuations = 0
@@ -1492,6 +1500,8 @@ export class HarnessAgentRunner {
     this.abortController = new AbortController()
     this.stopped = false
     this.steps = []
+    this.taskPlan = null
+    this.taskPlanPromise = null
     this.currentIteration = 0
     this.outputLengthContinuations = 0
     this.invalidOutputContinuations = 0
@@ -1533,35 +1543,48 @@ export class HarnessAgentRunner {
     }
 
     try {
-      try {
-        const { ensureMcpReadyForAgent } = await import('@/lib/mcp/agent-ready')
-        const mcpWarmup = await ensureMcpReadyForAgent({ timeoutMs: 1200, background: true })
-        this.emitEvent('mcp.runtime.warmup', mcpWarmup as unknown as Record<string, any>)
-      } catch {
-        await reloadMcpTools().catch(() => {})
-      }
-
-      try {
-        const { ensureSkillsReadyForAgent } = await import('@/lib/skills/agent-ready')
-        await ensureSkillsReadyForAgent()
-      } catch (error) {
-        console.warn('[AgentHarness] Failed to prepare Skills runtime:', error)
-      }
-
-      if (routeDecision.allowPlanning && isTaskLikelyComplex(userInput)) {
-        try {
-          const toolNames = getAllToolsSync().map(tool => tool.name)
-          this.taskPlan = await generateTaskPlan(userInput, toolNames, this.abortController.signal)
-          if (this.taskPlan.isComplex) {
-            this.emitEvent('agent.planning', { plan: this.taskPlan })
+      // P0-3: MCP 与 Skills 预热并行，且不再各自串行等待完整就绪。
+      // 两者都有内部降级路径，预热失败只影响首轮可用工具集，不影响正确性。
+      await Promise.allSettled([
+        (async () => {
+          try {
+            const { ensureMcpReadyForAgent } = await import('@/lib/mcp/agent-ready')
+            const mcpWarmup = await ensureMcpReadyForAgent({ timeoutMs: 1200, background: true })
+            this.emitEvent('mcp.runtime.warmup', mcpWarmup as unknown as Record<string, any>)
+          } catch {
+            await reloadMcpTools().catch(() => {})
           }
-        } catch {
-          this.taskPlan = null
-        }
+        })(),
+        (async () => {
+          try {
+            const { ensureSkillsReadyForAgent } = await import('@/lib/skills/agent-ready')
+            await ensureSkillsReadyForAgent()
+          } catch (error) {
+            console.warn('[AgentHarness] Failed to prepare Skills runtime:', error)
+          }
+        })(),
+      ])
+
+      // P0-3: 任务规划是一次完整的 LLM round-trip，不再阻塞首字。
+      // 后台生成，完成后由后续迭代通过 taskPlan 读取到。
+      if (routeDecision.allowPlanning && isTaskLikelyComplex(userInput)) {
+        this.taskPlanPromise = (async () => {
+          try {
+            const toolNames = getAllToolsSync().map(tool => tool.name)
+            const plan = await generateTaskPlan(userInput, toolNames, this.abortController?.signal)
+            this.taskPlan = plan
+            if (plan.isComplex) this.emitEvent('agent.planning', { plan })
+          } catch {
+            this.taskPlan = null
+          }
+        })()
       }
 
       const upstreamSystemPrompt = getHarnessUpstreamSystemPrompt(contextOrMessages)
       let systemPrompt = await this.buildSystemPrompt(userInput, intentPolicy)
+      // P0-1: 循环外已构建过一次 system prompt（含长期记忆/知识图谱检索与历史压缩）。
+      // 首轮迭代直接复用该结果，避免同一份上下文在首字路径上被构建两次。
+      let reusableSystemPrompt: string | null = systemPrompt
       const messages = this.buildMessages(systemPrompt, userInput, contextOrMessages)
 
       const contextItems = messages.map((message, index) => ({
@@ -1583,12 +1606,9 @@ export class HarnessAgentRunner {
         })
       const contextPackRef = this.config.runControl?.getSnapshot().contextPackRef
 
-      const maxIterations = resolveReActMaxIterations(
-        userInput,
-        this.config.maxIterations || routeDecision.maxIterations,
-        this.taskPlan,
-      )
-      const maxToolIterations = Math.max(1, maxIterations - FINAL_ANSWER_RESERVE_ITERATIONS)
+      const baseMaxIterations = this.config.maxIterations || routeDecision.maxIterations
+      let maxIterations = resolveReActMaxIterations(userInput, baseMaxIterations, this.taskPlan)
+      let maxToolIterations = Math.max(1, maxIterations - FINAL_ANSWER_RESERVE_ITERATIONS)
       let finalAnswer = ''
 
       while (this.currentIteration < maxIterations) {
@@ -1596,10 +1616,15 @@ export class HarnessAgentRunner {
         this.currentIteration += 1
         this.emitEvent('iteration.started')
 
-        systemPrompt = mergeHarnessSystemPrompts(
-          await this.buildSystemPrompt(userInput, intentPolicy),
-          upstreamSystemPrompt,
-        )
+        // P0-3: 后台规划可能在首轮之后才就绪，这里按最新 plan 重算迭代预算。
+        if (this.taskPlan) {
+          maxIterations = resolveReActMaxIterations(userInput, baseMaxIterations, this.taskPlan)
+          maxToolIterations = Math.max(1, maxIterations - FINAL_ANSWER_RESERVE_ITERATIONS)
+        }
+
+        const basePrompt = reusableSystemPrompt ?? await this.buildSystemPrompt(userInput, intentPolicy)
+        reusableSystemPrompt = null
+        systemPrompt = mergeHarnessSystemPrompts(basePrompt, upstreamSystemPrompt)
         messages[0] = { role: 'system', content: systemPrompt }
         const allTools = getAllToolsSync()
         const preparedStep = await this.prepareHarnessModelStep({ allTools, userInput, intentPolicy })
@@ -1771,6 +1796,57 @@ export class HarnessAgentRunner {
         toolNames: response.toolCalls.map(call => call.name).filter(Boolean),
       })
       let finishedToolCount = 0
+
+      // 方案D-2：只读批次并行执行。
+      // 安全性依据：readOnlyBatch 已保证批内全为只读工具，因此不存在写冲突，
+      // 也不会触发 requestConfirmation（确认弹窗并发会导致 UI 混乱）。
+      // 顺序性：并行拿到结果后按原始 tool_call 顺序回填 messages，
+      // 保证与 assistant.tool_calls 的 id 顺序一致。
+      if (readOnlyBatch && callsToRun.length > 1) {
+        const guardedResults = await Promise.all(
+          callsToRun.map(async toolCall => {
+            const params = parseToolArguments(toolCall)
+            const tool = this.getVisibleToolByName(toolCall.name)
+            const loopGuard = getToolLoopGuardDecision({
+              tool,
+              toolName: toolCall.name,
+              params,
+              steps: this.steps,
+            })
+            if (loopGuard) {
+              return { toolCall, params, loopGuard, message: null as OpenAI.Chat.ChatCompletionMessageParam | null }
+            }
+            this.lifecycle.enterToolPhase()
+            const message = await this.executeModelToolCall({ toolCall, userInput, intentPolicy })
+            return { toolCall, params, loopGuard: null, message }
+          })
+        )
+
+        for (const entry of guardedResults) {
+          if (entry.loopGuard) {
+            messages.push(buildSkippedToolResultMessage(entry.toolCall, entry.loopGuard.reason))
+            this.emitEvent('tool.execution.finished', {
+              toolName: entry.toolCall.name,
+              toolCallId: entry.toolCall.id,
+              success: false,
+              status: 'skipped',
+              message: entry.loopGuard.reason,
+              error: entry.loopGuard.error,
+              retryable: entry.loopGuard.retryable,
+              loopGuard: true,
+            })
+            this.completeStep({
+              thought: `Skipped repeated tool call: ${entry.toolCall.name}`,
+              action: { tool: entry.toolCall.name, params: entry.params },
+              observation: entry.loopGuard.reason,
+            })
+          } else if (entry.message) {
+            messages.push(entry.message)
+          }
+          finishedToolCount += 1
+        }
+        if (this.stopped) throw new Error('USER_STOPPED')
+      } else {
       for (const toolCall of callsToRun) {
         const params = parseToolArguments(toolCall)
         const tool = this.getVisibleToolByName(toolCall.name)
@@ -1824,6 +1900,7 @@ export class HarnessAgentRunner {
         messages.push(await this.executeModelToolCall({ toolCall, userInput, intentPolicy }))
         finishedToolCount += 1
         if (this.stopped) throw new Error('USER_STOPPED')
+      }
       }
       for (const toolCall of callsToSkip) {
         const reason = readOnlyBatch

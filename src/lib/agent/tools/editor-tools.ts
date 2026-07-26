@@ -85,6 +85,7 @@ function replaceEditorContentWithStore(params: Record<string, any>): ToolResult 
       success: false,
       error: 'Content has changed, please get editor content again',
       message: '编辑器内容已变化，请重新获取内容后再操作',
+      modelHint: 'The document changed since you read it, so your line numbers are stale. Call get_editor_content again, rebuild the edit against the new numberedLines and version, then retry. Do NOT retry with the same range.',
     }
   }
 
@@ -122,6 +123,7 @@ function replaceEditorContentWithStore(params: Record<string, any>): ToolResult 
         success: false,
         error: `找不到文本 "${params.searchContent}"`,
         message: `找不到文本 "${params.searchContent}"`,
+        modelHint: 'The searchContent did not match the document exactly, or the requested occurrence does not exist. Call get_editor_content, copy the target text verbatim from numberedLines, and prefer line-based mode (startLine/endLine) over text search. Do NOT retry the same searchContent.',
       }
     }
 
@@ -215,6 +217,12 @@ export const getEditorContentTool: Tool = {
 - \`version\`: Version number for content verification (use this when calling replace_editor_content)
 
 **Recommended workflow for document-wide edits:** Read \`numberedLines\`, then call \`replace_editor_content\` with \`startLine: 1\`, \`endLine: totalLines\`, and \`version\`.
+
+**Do NOT use this tool to:**
+- Read a different file than the one open in the editor — use read_markdown_file or safe_read_file.
+- Re-read content you already retrieved this turn and have not modified. Reuse what you have.
+
+**MUST:** call this before any replace_editor_content on the open note, so you edit against real line numbers and pass a current \`version\`.
 
 **Note:** Prefer this tool for the currently open file. Use read_markdown_file only when you specifically need the saved on-disk content of another file.`,
   category: 'editor',
@@ -354,7 +362,17 @@ When the user quotes content from the editor and exact selection positions are p
 - \`from\`: Start position (0-indexed, optional)
 - \`to\`: End position (0-indexed, optional)
 
-**Note:** Use \`get_editor_content\` only when necessary. Prefer exact quoted positions (\`from\`/\`to\`) when they are available from the user's selection.`,
+**Do NOT use this tool to:**
+- Edit a file that is not currently open in the editor — use update_markdown_file instead.
+- Replace the whole document when the user asked for a localized change. Scope the range to what was requested.
+- Guess line numbers or text you have not verified in this turn.
+
+**MUST:**
+- Read the target content first (\`get_editor_content\` for line numbers, or the user's quoted \`from\`/\`to\`) before replacing. NEVER edit blind.
+- Pass \`version\` from \`get_editor_content\`. If the call is rejected for a version mismatch, the document changed underneath you: re-read it and rebuild the edit. Do NOT retry with the same stale range.
+- In text-based mode, \`searchContent\` must be long enough to be unambiguous. If the text may appear multiple times, set \`occurrence\` deliberately rather than relying on the default.
+
+**Note:** Prefer exact quoted positions (\`from\`/\`to\`) when they are available from the user's selection.`,
   category: 'editor',
   requiresConfirmation: false,
   parameters: [
@@ -455,6 +473,7 @@ When the user quotes content from the editor and exact selection positions are p
           success: false,
           error: 'Missing replacement target',
           message: '请提供 from/to、searchContent 或 startLine/endLine 来明确替换范围',
+          modelHint: 'You did not specify WHERE to replace. Call get_editor_content first, then pass startLine/endLine from numberedLines (or from/to if the user quoted an exact selection) together with the version.',
         });
         return;
       }
